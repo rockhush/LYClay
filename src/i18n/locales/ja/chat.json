@@ -74,7 +74,9 @@
     },
     "sidebar": {
         "sessionSwitchBlockedWhilePreparing": "Agent が最初の応答を準備中です。完了まで会話の切り替えや新規チャットは少しお待ちください。",
-        "workspaceChats": "このフォルダーのチャット"
+        "workspaceChats": "このフォルダーのチャット",
+        "expandWorkspaceChats": "このワークスペースのチャットを表示",
+        "collapseWorkspaceChats": "このワークスペースのチャットを隠す"
     },
     "historyBuckets": {
         "today": "今日",

@@ -228,8 +228,8 @@ module.exports = {
         // mode and stays vivid in dark mode), so no CSS variable needed.
         // Pair with `brand-hover` for the hover state.
         brand: {
-          DEFAULT: '#0a84ff',
-          hover: '#007aff',
+          DEFAULT: '#FF7B00',
+          hover: '#FF6A00',
         },
 
         // Highlight blue for inline /skill chips in the chat input.

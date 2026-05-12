@@ -1579,6 +1579,11 @@ export class GatewayManager extends EventEmitter {
         }
         logger.warn(`[Gateway stderr] ${classified.normalized}`);
       },
+      onStdoutLine: (line) => {
+        const normalized = line.replace(/\r$/, '').trimEnd();
+        if (!normalized.trim()) return;
+        logger.debug(`[Gateway stdout] ${normalized.trim()}`);
+      },
       onSpawn: (pid) => {
         this.setStatus({ pid });
       },

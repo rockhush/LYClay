@@ -133,7 +133,7 @@ export const ChatMessage = memo(function ChatMessage({
       {/* Content */}
       <div
         className={cn(
-          'flex flex-col w-full min-w-0 max-w-[80%] space-y-2',
+          'flex flex-col w-full min-w-0 space-y-2',
           isUser ? 'items-end' : 'items-start',
         )}
       >
@@ -385,7 +385,7 @@ function MessageBubble({
         'relative rounded-2xl px-4 py-3',
         !isUser && 'w-full',
         isUser
-          ? 'bg-[#0a84ff] text-white shadow-sm'
+          ? 'bg-[#FF7B00] text-white shadow-sm'
           : 'bg-black/5 dark:bg-white/5 text-foreground',
       )}
     >
@@ -408,7 +408,7 @@ function MessageBubble({
                   );
                 }
                 return (
-                  <pre className="bg-background/50 rounded-lg p-4 overflow-x-auto">
+                  <pre className="bg-background/50 rounded-lg p-4 whitespace-pre-wrap break-all overflow-x-auto">
                     <code className={cn('text-sm font-mono', className)} {...props}>
                       {children}
                     </code>

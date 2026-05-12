@@ -13,7 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 
-const COMPANY_API_BASE = 'http://100.0.4.203/aihome/api/skill';
+const COMPANY_API_BASE = 'http://portal.srv.lstech.com/aihome/api/skill';
 
 interface CompanySkill {
   id: number;

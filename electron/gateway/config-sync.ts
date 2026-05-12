@@ -370,25 +370,25 @@ async function resolveChannelStartupPolicy(): Promise<{
   skipChannels: boolean;
   channelStartupSummary: string;
 }> {
-  // OPTIMIZATION: Always skip channels on first startup for faster response time
-  // Channels will be initialized lazily when actually needed
+  // Skip channel adapters only when nothing is configured: faster cold start.
+  // If openclaw.json already has channels (e.g. dingtalk Stream), we must not set
+  // OPENCLAW_SKIP_CHANNELS — lazy init may never attach and the UI stays disconnected.
   try {
     const rawCfg = await readOpenClawConfig();
     const configuredChannels = await listConfiguredChannelsFromConfig(rawCfg);
-    
-    // Skip channels to speed up initial startup
-    // Users can enable channels later if needed
+    const skipChannels = configuredChannels.length === 0;
+
     return {
-      skipChannels: true,
-      channelStartupSummary: configuredChannels.length > 0 
-        ? `deferred(${configuredChannels.join(',')})` 
-        : 'skipped(no configured channels)',
+      skipChannels,
+      channelStartupSummary: skipChannels
+        ? 'skipped(no configured channels)'
+        : `startup(${configuredChannels.join(',')})`,
     };
   } catch (error) {
     logger.warn('Failed to determine configured channels for gateway launch:', error);
     return {
       skipChannels: true,
-      channelStartupSummary: 'deferred(unknown)',
+      channelStartupSummary: 'skipped(unknown)',
     };
   }
 }
@@ -439,8 +439,9 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
     ...uvEnv,
     ...proxyEnv,
     OPENCLAW_GATEWAY_TOKEN: appSettings.gatewayToken,
-    OPENCLAW_SKIP_CHANNELS: skipChannels ? '1' : '',
-    CLAWDBOT_SKIP_CHANNELS: skipChannels ? '1' : '',
+    ...(skipChannels
+      ? { OPENCLAW_SKIP_CHANNELS: '1', CLAWDBOT_SKIP_CHANNELS: '1' }
+      : {}),
     OPENCLAW_NO_RESPAWN: '1',
     OPENCLAW_DISABLE_BONJOUR: '1',
     OPENCLAW_DISABLE_MODEL_PRICING: '1',

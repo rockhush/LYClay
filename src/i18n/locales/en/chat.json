@@ -72,7 +72,9 @@
     },
     "sidebar": {
         "sessionSwitchBlockedWhilePreparing": "The agent is preparing its first reply. Please wait before switching threads or starting a new chat.",
-        "workspaceChats": "Chats in this folder"
+        "workspaceChats": "Chats in this folder",
+        "expandWorkspaceChats": "Show chats in this workspace",
+        "collapseWorkspaceChats": "Hide chats in this workspace"
     },
     "historyBuckets": {
         "today": "Today",

@@ -683,8 +683,8 @@ export function Chat() {
             <div
               ref={contentRef}
               className={cn(
-                "space-y-4 transition-all duration-300",
-                isEmpty ? "mx-auto w-full max-w-3xl" : "max-w-4xl",
+                "space-y-4 transition-all duration-300 mx-auto",
+                isEmpty ? "w-full max-w-3xl" : "w-full max-w-4xl",
               )}
             >
               {isEmpty ? (

@@ -279,3 +279,13 @@ export async function getDingTalkUser(): Promise<{ success: boolean; user: DingT
 export async function logoutDingTalk(): Promise<{ success: boolean }> {
   return hostApiFetch<{ success: boolean }>('/api/dingtalk/logout', { method: 'POST' });
 }
+
+/** True when `.env` provides OpenClaw dingtalk channel credentials (auto-provision after login). */
+export async function getDingTalkChannelAutoFromEnv(): Promise<{ success: boolean; active: boolean }> {
+  return hostApiFetch<{ success: boolean; active: boolean }>('/api/dingtalk/channel-auto-from-env');
+}
+
+/** BFF single-chat welcome — only after DingTalk sign-in; no-op server-side if not logged in. */
+export async function sendDingTalkWorkspaceWelcome(): Promise<{ success: boolean; skipped?: boolean }> {
+  return hostApiFetch<{ success: boolean; skipped?: boolean }>('/api/dingtalk/welcome/send', { method: 'POST' });
+}

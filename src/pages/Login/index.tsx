@@ -47,7 +47,7 @@ export function Login() {
       });
 
       if (result.success && result.user) {
-        setUser(result.user);
+        setUser(result.user, true);
         navigate('/', { replace: true });
         return;
       }
@@ -86,7 +86,7 @@ export function Login() {
         }
         if (result.success && result.status === 'success' && result.user) {
           window.clearInterval(interval);
-          setUser(result.user);
+          setUser(result.user, true);
           navigate('/', { replace: true });
         } else if (result.status === 'error' || result.status === 'expired') {
           window.clearInterval(interval);

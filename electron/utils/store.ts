@@ -56,7 +56,7 @@ export interface AppSettings {
   selectedBundles: string[];
   enabledSkills: string[];
   disabledSkills: string[];
-    // DingTalk Login
+  // DingTalk Login
   dingtalkUser: {
     openId: string;
     unionId: string;
@@ -144,7 +144,7 @@ function createDefaultSettings(): AppSettings {
     selectedBundles: ['productivity', 'developer'],
     enabledSkills: [],
     disabledSkills: [],
-        // DingTalk Login
+    // DingTalk Login
     dingtalkUser: null,
 
   };

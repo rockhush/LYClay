@@ -115,6 +115,14 @@ test.describe('DingTalk startup login gate', () => {
             ok: true,
             data: { status: 200, ok: true, json: { success: true, user: mockUser } },
           },
+          [stableStringify(['/api/dingtalk/channel-auto-from-env', 'GET'])]: {
+            ok: true,
+            data: { status: 200, ok: true, json: { success: true, active: false } },
+          },
+          [stableStringify(['/api/dingtalk/welcome/send', 'POST'])]: {
+            ok: true,
+            data: { status: 200, ok: true, json: { success: true } },
+          },
         },
       });
 
@@ -153,6 +161,14 @@ test.describe('DingTalk startup login gate', () => {
           [stableStringify(['/api/dingtalk/user', 'GET'])]: {
             ok: true,
             data: { status: 200, ok: true, json: { success: true, user: mockUser } },
+          },
+          [stableStringify(['/api/dingtalk/channel-auto-from-env', 'GET'])]: {
+            ok: true,
+            data: { status: 200, ok: true, json: { success: true, active: false } },
+          },
+          [stableStringify(['/api/dingtalk/welcome/send', 'POST'])]: {
+            ok: true,
+            data: { status: 200, ok: true, json: { success: true } },
           },
           [stableStringify(['/api/dingtalk/logout', 'POST'])]: {
             ok: true,

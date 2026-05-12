@@ -61,6 +61,7 @@ resources/bin
 *.pem
 *.key
 
+build/
 artifacts/
 docs/pr-session-notes-*.md
 

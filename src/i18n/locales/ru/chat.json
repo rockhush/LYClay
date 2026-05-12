@@ -73,7 +73,9 @@
     },
     "sidebar": {
         "sessionSwitchBlockedWhilePreparing": "Агент готовит первый ответ. Подождите, прежде чем переключать чат или начинать новый.",
-        "workspaceChats": "Чаты в этой папке"
+        "workspaceChats": "Чаты в этой папке",
+        "expandWorkspaceChats": "Показать чаты в этой рабочей области",
+        "collapseWorkspaceChats": "Скрыть чаты в этой рабочей области"
     },
     "historyBuckets": {
         "today": "Сегодня",

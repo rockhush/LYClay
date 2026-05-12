@@ -1464,19 +1464,11 @@ function registerOpenClawHandlers(gatewayManager: GatewayManager): void {
   const forceRestartChannels = new Set(['dingtalk', 'wecom', 'whatsapp', 'feishu', 'qqbot']);
 
   const scheduleGatewayChannelRestart = (reason: string): void => {
-    if (gatewayManager.getStatus().state !== 'stopped') {
-      logger.info(`Scheduling Gateway restart after ${reason}`);
-      gatewayManager.debouncedRestart(150);
-    } else {
-      logger.info(`Gateway is stopped; skip immediate restart after ${reason}`);
-    }
+    logger.info(`Scheduling Gateway restart after ${reason}`);
+    gatewayManager.debouncedRestart(150);
   };
 
   const scheduleGatewayChannelSaveRefresh = (channelType: string, reason: string): void => {
-    if (gatewayManager.getStatus().state === 'stopped') {
-      logger.info(`Gateway is stopped; skip immediate refresh after ${reason}`);
-      return;
-    }
     if (forceRestartChannels.has(channelType)) {
       logger.info(`Scheduling Gateway restart after ${reason}`);
       gatewayManager.debouncedRestart(150);

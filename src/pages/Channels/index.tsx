@@ -533,7 +533,7 @@ export function Channels() {
               variant="outline"
               onClick={handleRefresh}
               disabled={gatewayStatus.state !== 'running'}
-              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground transition-colors"
+              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-md shadow-black/10 text-foreground/80 hover:text-foreground transition-colors"
             >
               <RefreshCw className={cn('h-3.5 w-3.5 mr-2', isUsingStableValue && 'animate-spin')} />
               {t('refresh')}

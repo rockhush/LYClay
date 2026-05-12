@@ -72,7 +72,9 @@
     },
     "sidebar": {
         "sessionSwitchBlockedWhilePreparing": "Agent 正在准备首次回复，请稍候再切换会话或新建对话。",
-        "workspaceChats": "此工作空间对话"
+        "workspaceChats": "此工作空间对话",
+        "expandWorkspaceChats": "展开此工作空间的会话",
+        "collapseWorkspaceChats": "收起此工作空间的会话"
     },
     "historyBuckets": {
         "today": "今天",

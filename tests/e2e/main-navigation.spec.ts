@@ -52,7 +52,7 @@ test.describe('ClawX main navigation without setup flow', () => {
     }
   });
 
-  test('shows a manual refresh button for user-created workspace directories', async ({ launchElectronApp, homeDir }) => {
+  test('sidebar workspace row has no directory refresh control', async ({ launchElectronApp, homeDir }) => {
     const app = await launchElectronApp({ skipSetup: true });
 
     try {
@@ -80,9 +80,8 @@ test.describe('ClawX main navigation without setup flow', () => {
       await page.reload();
 
       await expect(page.getByTestId('sidebar-workspaces-section')).toBeVisible();
-      await page.getByTestId('sidebar-workspace-row-temp-e2e-workspace').hover();
-      await expect(page.getByTestId('sidebar-workspace-refresh-temp-e2e-workspace')).toBeVisible();
-      await page.getByTestId('sidebar-workspace-refresh-temp-e2e-workspace').click();
+      await expect(page.getByTestId('sidebar-workspace-row-temp-e2e-workspace')).toBeVisible();
+      await expect(page.getByTestId('sidebar-workspace-refresh-temp-e2e-workspace')).toHaveCount(0);
     } finally {
       await closeElectronApp(app);
     }
@@ -171,6 +170,11 @@ test.describe('ClawX main navigation without setup flow', () => {
       await expect(page.getByTestId('sidebar-workspaces-section')).toBeVisible({ timeout: 30_000 });
       const nested = page.getByTestId('sidebar-workspace-sessions-temp-e2e-workspace');
       await expect(nested).toBeVisible();
+      await expect(nested.getByTestId(`sidebar-session-${MAIN_SESSION_KEY}`)).toBeVisible();
+
+      await page.getByTestId('sidebar-workspace-chats-toggle-temp-e2e-workspace').click();
+      await expect(nested.getByTestId(`sidebar-session-${MAIN_SESSION_KEY}`)).toHaveCount(0);
+      await page.getByTestId('sidebar-workspace-chats-toggle-temp-e2e-workspace').click();
       await expect(nested.getByTestId(`sidebar-session-${MAIN_SESSION_KEY}`)).toBeVisible();
     } finally {
       await closeElectronApp(app);

@@ -8,17 +8,23 @@ import {
 
 interface DingTalkAuthState {
   user: DingTalkUserInfo | null;
+  /** True after a completed DingTalk OAuth login; consumed when workspace welcome is sent. */
+  dingTalkWelcomeAfterWorkspacePending: boolean;
   initialized: boolean;
   loading: boolean;
   error: string | null;
   init: () => Promise<void>;
-  setUser: (user: DingTalkUserInfo | null) => void;
+  /** @param fromFreshDingTalkOAuth pass true only when user was just obtained from OAuth (not init restore). */
+  setUser: (user: DingTalkUserInfo | null, fromFreshDingTalkOAuth?: boolean) => void;
   login: (force?: boolean) => Promise<DingTalkUserInfo | null>;
   logout: () => Promise<void>;
+  /** Returns whether a post-workspace BFF welcome should run once, then clears the flag. */
+  consumeDingTalkLoginWelcomePending: () => boolean;
 }
 
 export const useDingTalkAuthStore = create<DingTalkAuthState>((set, get) => ({
   user: null,
+  dingTalkWelcomeAfterWorkspacePending: false,
   initialized: false,
   loading: false,
   error: null,
@@ -30,12 +36,14 @@ export const useDingTalkAuthStore = create<DingTalkAuthState>((set, get) => ({
       const result = await getDingTalkUser();
       set({
         user: result.success ? result.user : null,
+        dingTalkWelcomeAfterWorkspacePending: false,
         initialized: true,
         loading: false,
       });
     } catch (error) {
       set({
         user: null,
+        dingTalkWelcomeAfterWorkspacePending: false,
         initialized: true,
         loading: false,
         error: error instanceof Error ? error.message : String(error),
@@ -43,14 +51,22 @@ export const useDingTalkAuthStore = create<DingTalkAuthState>((set, get) => ({
     }
   },
 
-  setUser: (user) => set({ user, initialized: true, error: null }),
+  setUser: (user, fromFreshDingTalkOAuth = false) =>
+    set({
+      user,
+      initialized: true,
+      error: null,
+      dingTalkWelcomeAfterWorkspacePending: Boolean(user) && fromFreshDingTalkOAuth,
+    }),
 
   login: async (force = false) => {
     set({ loading: true, error: null });
     try {
       const result = await loginWithDingTalk(force);
       const user = result.success ? result.user : null;
-      set({ user, initialized: true, loading: false });
+      const dingTalkWelcomeAfterWorkspacePending =
+        Boolean(user) && result.alreadyLoggedIn !== true;
+      set({ user, initialized: true, loading: false, dingTalkWelcomeAfterWorkspacePending });
       return user;
     } catch (error) {
       set({
@@ -65,7 +81,7 @@ export const useDingTalkAuthStore = create<DingTalkAuthState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       await logoutDingTalk();
-      set({ user: null, initialized: true, loading: false });
+      set({ user: null, dingTalkWelcomeAfterWorkspacePending: false, initialized: true, loading: false });
     } catch (error) {
       set({
         loading: false,
@@ -73,5 +89,11 @@ export const useDingTalkAuthStore = create<DingTalkAuthState>((set, get) => ({
       });
       throw error;
     }
+  },
+
+  consumeDingTalkLoginWelcomePending: () => {
+    if (!get().dingTalkWelcomeAfterWorkspacePending) return false;
+    set({ dingTalkWelcomeAfterWorkspacePending: false });
+    return true;
   },
 }));

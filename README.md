@@ -114,6 +114,8 @@ For custom channel account IDs, ClawX enforces OpenClaw-compatible canonical IDs
 ClawX now also bundles Tencent's official personal WeChat channel plugin, so you can link WeChat directly from the Channels page with an in-app QR flow.
 ClawX requires DingTalk sign-in before entering the workspace. The startup login screen embeds the DingTalk QR authorization flow, and logging out from Settings returns the app to that login screen. Development builds include a default enterprise app configuration; override it with `LYCLAW_DINGTALK_CLIENT_ID`, `LYCLAW_DINGTALK_CLIENT_SECRET`, and `LYCLAW_DINGTALK_CALLBACK_PORT` when needed.
 
+Single-tenant auto integration (optional): after a successful DingTalk login, ClawX can write the OpenClaw DingTalk channel from `LYCLAW_DINGTALK_CHANNEL_CLIENT_ID` / `LYCLAW_DINGTALK_CHANNEL_CLIENT_SECRET` (if unset, falls back to `LYCLAW_DINGTALK_CLIENT_*` then `DINGTALK_CLIENT_*` so the same keys as OAuth work). When `LYCLAW_DINGTALK_BFF_BASE_URL` and `LYCLAW_DINGTALK_BFF_API_KEY` are set, the app POSTs the staff `userId` to the Python BFF **after the post-login loading screen finishes and the workspace is shown**, so the BFF can push a proactive single-chat message in DingTalk. If env-based DingTalk auto-provision is active, the loading screen waits (up to ~90s) for the gateway DingTalk runtime to look ready before entering the workspace. If those BFF variables are unset, no BFF call is made.
+
 ### ⏰ Cron-Based Automation
 Schedule AI tasks to run automatically. Define triggers, set intervals, and let your AI agents work around the clock without manual intervention.
 The Cron page now lets you configure external delivery directly in the task form with separate sender-account and recipient-target selectors. For supported channels, recipient targets are discovered automatically from channel directories or known session history, so you no longer need to edit `jobs.json` by hand.
@@ -277,6 +279,8 @@ ClawX employs a **dual-process architecture** with a unified host API layer. The
 - During rolling upgrades, mixed old/new app versions can still have asymmetric protection behavior. For best reliability, upgrade all desktop clients to the same version.
 - The OpenClaw Gateway listener should still be **single-owner**: only one process should listen on `127.0.0.1:18789`.
 - Gateway readiness is based on OpenClaw core signals such as `system-presence`, `health`, and `status`; memory, Dreams, or channel failures are shown as capability degradation instead of global Gateway failure.
+- When `openclaw.json` lists at least one configured channel, ClawX does **not** set `OPENCLAW_SKIP_CHANNELS`, so Gateway loads channel adapters at process start (needed for DingTalk Stream and similar). With no channels configured, startup stays fast by skipping channel adapters.
+- **Gateway log visibility**: OpenClaw often writes routine channel logs to **stdout** and warnings to **stderr**. ClawX forwards stderr to the app log as `[Gateway stderr]`; stdout is mirrored at **debug** level as `[Gateway stdout]`. Enable verbose/debug logging (or inspect the log file under the app userData directory) to see stdout lines, or run the OpenClaw `gateway` command manually in a terminal for a full raw stream.
 - To verify the active listener:
   - macOS/Linux: `lsof -nP -iTCP:18789 -sTCP:LISTEN`
   - Windows (PowerShell): `Get-NetTCPConnection -LocalPort 18789 -State Listen`

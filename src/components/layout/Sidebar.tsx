@@ -18,11 +18,9 @@ import {
   ExternalLink,
   Trash2,
   Cpu,
-  RefreshCw,
   Folder,
   FolderOpen,
   ChevronRight,
-  File,
   Loader2,
   X,
   LogOut,
@@ -92,18 +90,18 @@ function NavItem({ to, icon, label, badge, collapsed, onClick, testId }: NavItem
       data-testid={testId}
       className={({ isActive }) =>
         cn(
-          'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-colors',
-          'hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80',
+          'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-all',
+          'hover:bg-[#FF7B00] hover:text-white hover:shadow-md hover:shadow-[#FF7B00]/30 dark:hover:bg-white/5 dark:hover:text-foreground/80',
           isActive
-            ? 'bg-black/5 dark:bg-white/10 text-foreground'
-            : '',
+            ? 'bg-[#FF7B00] text-white shadow-md shadow-[#FF7B00]/30 dark:bg-white/10 dark:text-foreground dark:shadow-none'
+            : 'text-foreground/80',
           collapsed && 'justify-center px-0'
         )
       }
     >
       {({ isActive }) => (
         <>
-          <div className={cn("flex shrink-0 items-center justify-center", isActive ? "text-foreground" : "text-muted-foreground")}>
+          <div className={cn("flex shrink-0 items-center justify-center transition-colors", isActive ? "text-white dark:text-foreground" : "text-muted-foreground group-hover:text-white dark:group-hover:text-foreground")}>
             {icon}
           </div>
           {!collapsed && (
@@ -241,14 +239,10 @@ export function Sidebar() {
 
   // 工作空间区域折叠状态
   const [workspacesCollapsed, setWorkspacesCollapsed] = useState(false);
-  // 每个工作空间的目录展开状态
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
-  // 目录内容缓存
-  const [dirContents, setDirContents] = useState<Record<string, any[]>>({});
-  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
-  // 文件预览状态
-  const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  /** Workspace ids whose per-workspace chat list is collapsed (default: expanded). */
+  const [workspaceChatsCollapsedIds, setWorkspaceChatsCollapsedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -256,53 +250,13 @@ export function Sidebar() {
     setWorkspacesCollapsed(!workspacesCollapsed);
   };
 
-  const loadWorkspaceDir = (workspaceId: string, workspacePath: string, force = false) => {
-    if (!force && dirContents[workspacePath]) return;
-    if (loadingDirs.has(workspaceId)) return;
-
-    setLoadingDirs(prev => new Set(prev).add(workspaceId));
-    window.electron.ipcRenderer.invoke('fs:readdir', workspacePath)
-      .then((result: any) => {
-        if (result.success) {
-          setDirContents(prev => ({ ...prev, [workspacePath]: result.items }));
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to load directory:', error);
-      })
-      .finally(() => {
-        setLoadingDirs(prev => {
-          const next = new Set(prev);
-          next.delete(workspaceId);
-          return next;
-        });
-      });
-  };
-
-  const toggleDirExpand = (workspaceId: string, workspacePath: string) => {
-    setExpandedDirs(prev => {
+  const toggleWorkspaceChatsCollapsed = (workspaceId: string) => {
+    setWorkspaceChatsCollapsedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(workspaceId)) {
-        next.delete(workspaceId);
-      } else {
-        next.add(workspaceId);
-        loadWorkspaceDir(workspaceId, workspacePath);
-      }
+      if (next.has(workspaceId)) next.delete(workspaceId);
+      else next.add(workspaceId);
       return next;
     });
-  };
-
-  const openFilePreview = async (filePath: string, fileName: string) => {
-    setPreviewLoading(true);
-    try {
-      const result = await window.electron.ipcRenderer.invoke('fs:readFile', filePath);
-      if (result.success) {
-        setPreviewFile({ name: fileName, content: result.content });
-      }
-    } catch (error) {
-      console.error('Failed to read file:', error);
-    }
-    setPreviewLoading(false);
   };
 
   const selectWorkspace = (workspaceId: string) => {
@@ -487,7 +441,7 @@ export function Sidebar() {
             'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors pr-7',
             'hover:bg-black/5 dark:hover:bg-white/5',
             isOnChat && currentSessionKey === s.key
-              ? 'bg-black/5 dark:bg-white/10 text-foreground font-medium'
+              ? 'bg-black/5 dark:bg-white/10 text-[#FF7B00] font-medium dark:text-foreground'
               : 'text-foreground/75',
             firstResponsePreparingLocksSwitch && s.key !== currentSessionKey && 'opacity-50 cursor-not-allowed',
           )}
@@ -566,7 +520,7 @@ export function Sidebar() {
     <aside
       data-testid="sidebar"
       className={cn(
-        'flex min-h-0 shrink-0 flex-col overflow-hidden border-r bg-[#eae8e1]/60 dark:bg-background transition-all duration-300',
+        'flex min-h-0 shrink-0 flex-col overflow-hidden border-r bg-[#f8f8f6]/50 dark:bg-background transition-all duration-300',
         sidebarCollapsed ? 'w-16' : 'w-64'
       )}
     >
@@ -657,60 +611,80 @@ export function Sidebar() {
               {allWorkspaces
                 .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
                 .map((workspace) => {
-                  const isExpanded = expandedDirs.has(workspace.id);
-                  const isLoading = loadingDirs.has(workspace.id);
-                  const contents = dirContents[workspace.path] || [];
                   const displayName = workspace.name;
                   const isSelected = currentWorkspaceId === workspace.id;
+                  const sessionCount = sessionsByWorkspaceId[workspace.id]?.length ?? 0;
+                  const chatsExpanded =
+                    sessionCount > 0 && !workspaceChatsCollapsedIds.has(workspace.id);
+
+                  const handleWorkspaceBodyClick = () => {
+                    const wid = workspace.id;
+                    const alreadySelected = currentWorkspaceId === wid;
+                    selectWorkspace(wid);
+                    if (sessionCount === 0) return;
+                    if (alreadySelected) {
+                      toggleWorkspaceChatsCollapsed(wid);
+                    } else {
+                      setWorkspaceChatsCollapsedIds((prev) => {
+                        const next = new Set(prev);
+                        next.delete(wid);
+                        return next;
+                      });
+                    }
+                  };
 
                   return (
                     <div key={workspace.id}>
                       <div
                         data-testid={`sidebar-workspace-row-${workspace.id}`}
                         className={cn(
-                          'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors flex items-center gap-2 cursor-pointer group',
+                          'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors flex items-center gap-1 group',
                           'hover:bg-black/5 dark:hover:bg-white/5',
                           isSelected
                             ? 'bg-black/5 dark:bg-white/10 text-foreground font-medium'
                             : 'text-foreground/75',
                         )}
-                        onClick={() => selectWorkspace(workspace.id)}
-                        title={workspace.path}
                       >
-                        <button
-                          className="flex shrink-0 items-center justify-center w-4 h-4 hover:bg-black/10 dark:hover:bg-white/10 rounded"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleDirExpand(workspace.id, workspace.path);
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          data-testid={
+                            sessionCount > 0
+                              ? `sidebar-workspace-chats-toggle-${workspace.id}`
+                              : undefined
+                          }
+                          aria-expanded={sessionCount > 0 ? chatsExpanded : undefined}
+                          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                          onClick={handleWorkspaceBodyClick}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleWorkspaceBodyClick();
+                            }
                           }}
+                          title={workspace.path}
                         >
-                          <ChevronRight
-                            className={cn(
-                              'h-3 w-3 text-muted-foreground transition-transform',
-                              isExpanded && 'rotate-90',
-                            )}
-                          />
-                        </button>
-                        {isSelected ? (
-                          <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-                        ) : (
-                          <Folder className="h-3.5 w-3.5 shrink-0" />
-                        )}
-                        <span className="truncate flex-1">{displayName}</span>
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {sessionCount > 0 ? (
+                            <ChevronRight
+                              className={cn(
+                                'h-3 w-3 shrink-0 text-muted-foreground transition-transform pointer-events-none',
+                                chatsExpanded && 'rotate-90',
+                              )}
+                              aria-hidden
+                            />
+                          ) : (
+                            <span className="inline-flex h-3 w-3 shrink-0" aria-hidden />
+                          )}
+                          {isSelected ? (
+                            <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                          ) : (
+                            <Folder className="h-3.5 w-3.5 shrink-0" />
+                          )}
+                          <span className="truncate">{displayName}</span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                           <button
-                            data-testid={`sidebar-workspace-refresh-${workspace.id}`}
-                            className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              loadWorkspaceDir(workspace.id, workspace.path, true);
-                            }}
-                            title="刷新目录"
-                            disabled={isLoading}
-                          >
-                            <RefreshCw className={cn('h-3 w-3 text-muted-foreground', isLoading && 'animate-spin')} />
-                          </button>
-                          <button
+                            type="button"
                             className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -721,6 +695,7 @@ export function Sidebar() {
                             <ExternalLink className="h-3 w-3 text-muted-foreground" />
                           </button>
                           <button
+                            type="button"
                             className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -733,56 +708,18 @@ export function Sidebar() {
                         </div>
                       </div>
 
-                      {sessionsByWorkspaceId[workspace.id]?.length ? (
+                      {sessionCount > 0 ? (
                         <div
                           data-testid={`sidebar-workspace-sessions-${workspace.id}`}
-                          className="ml-6 mt-1 max-h-40 space-y-0.5 overflow-y-auto scrollbar-thin"
+                          className="ml-6 mt-1"
                         >
-                          <div className="px-2 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                            {t('chat:sidebar.workspaceChats')}
-                          </div>
-                          {sessionsByWorkspaceId[workspace.id]!.map(renderChatSessionRow)}
+                          {chatsExpanded ? (
+                            <div className="max-h-40 space-y-0.5 overflow-y-auto overflow-x-hidden scrollbar-thin">
+                              {sessionsByWorkspaceId[workspace.id]!.map(renderChatSessionRow)}
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
-
-                      {/* 展开的目录内容 */}
-                      {isExpanded && (
-                        <div className="ml-6 mt-0.5 max-h-48 overflow-y-auto space-y-0.5 scrollbar-thin">
-                          {isLoading && (
-                            <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-muted-foreground">
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              <span>加载中...</span>
-                            </div>
-                          )}
-                          {contents.length === 0 && !isLoading && (
-                            <div className="px-2 py-1 text-[11px] text-muted-foreground/50">
-                              空目录
-                            </div>
-                          )}
-                          {contents.map((item: any) => (
-                            <div
-                              key={item.path}
-                              className={cn(
-                                'flex items-center gap-1.5 px-2 py-1 rounded text-[12px] transition-colors cursor-pointer',
-                                'hover:bg-black/5 dark:hover:bg-white/5 text-foreground/60',
-                              )}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (!item.isDirectory) {
-                                  openFilePreview(item.path, item.name);
-                                }
-                              }}
-                            >
-                              {item.isDirectory ? (
-                                <Folder className="h-3 w-3 shrink-0 text-amber-500/70" />
-                              ) : (
-                                <File className="h-3 w-3 shrink-0 text-muted-foreground" />
-                              )}
-                              <span className="truncate">{item.name}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -823,23 +760,33 @@ export function Sidebar() {
                   data-testid="sidebar-nav-settings"
                   type="button"
                   onClick={handleUserSettings}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[14px] font-medium text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10',
+                    sidebarCollapsed ? 'justify-center px-0 w-10 h-10' : 'text-left w-full'
+                  )}
                 >
-                  <SettingsIcon className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={2} />
-                  <span>{t('common:sidebar.settings')}</span>
+                  <div className="flex shrink-0 items-center justify-center text-muted-foreground">
+                    <SettingsIcon className="h-[18px] w-[18px]" strokeWidth={2} />
+                  </div>
+                  {!sidebarCollapsed && <span>{t('common:sidebar.settings')}</span>}
                 </button>
                 <button
                   type="button"
                   onClick={handleDingTalkLogout}
                   disabled={dingtalkLoading}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[14px] font-medium text-red-500 transition-colors hover:bg-red-500/10 disabled:opacity-60"
-                >
-                  {dingtalkLoading ? (
-                    <Loader2 className="h-[18px] w-[18px] shrink-0 animate-spin" strokeWidth={2} />
-                  ) : (
-                    <LogOut className="h-[18px] w-[18px] shrink-0" strokeWidth={2} />
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium text-[#FF7B00] transition-colors hover:bg-[#FF7B00]/10 disabled:opacity-60',
+                    sidebarCollapsed ? 'justify-center px-0 w-10 h-10' : 'text-left w-full'
                   )}
-                  <span>{t('settings:dingtalk.logout')}</span>
+                >
+                  <div className="flex shrink-0 items-center justify-center text-[#FF7B00]">
+                    {dingtalkLoading ? (
+                      <Loader2 className="h-[18px] w-[18px] animate-spin" strokeWidth={2} />
+                    ) : (
+                      <LogOut className="h-[18px] w-[18px]" strokeWidth={2} />
+                    )}
+                  </div>
+                  {!sidebarCollapsed && <span>{t('settings:dingtalk.logout')}</span>}
                 </button>
               </div>
             )}
@@ -881,7 +828,7 @@ export function Sidebar() {
                 'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-colors',
                 'hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80',
                 isActive && 'bg-black/5 dark:bg-white/10 text-foreground',
-                sidebarCollapsed ? 'justify-center px-0' : ''
+                sidebarCollapsed ? 'justify-center px-0 w-full' : ''
               )
             }
           >
@@ -935,41 +882,6 @@ export function Sidebar() {
         }}
         onCancel={() => setSessionToDelete(null)}
       />
-
-      {/* File Preview Dialog */}
-      {previewFile && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={() => setPreviewFile(null)}
-        >
-          <div
-            className="mx-4 max-w-2xl w-full max-h-[80vh] rounded-lg border bg-card shadow-lg flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b">
-              <h3 className="text-sm font-medium truncate">{previewFile.name}</h3>
-              <button
-                onClick={() => setPreviewFile(null)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="overflow-auto p-4 flex-1">
-              {previewLoading ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>加载中...</span>
-                </div>
-              ) : (
-                <pre className="text-[12px] whitespace-pre-wrap break-all text-foreground/80 font-mono">
-                  {previewFile.content}
-                </pre>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </aside>
   );
 }

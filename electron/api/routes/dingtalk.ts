@@ -5,6 +5,8 @@
  *   POST /api/dingtalk/login   - Start DingTalk OAuth login flow
  *   GET  /api/dingtalk/user    - Get current logged-in user info
  *   POST /api/dingtalk/logout  - Logout and clear user data
+ *   GET  /api/dingtalk/channel-auto-from-env - Whether env drives OpenClaw dingtalk auto-provision
+ *   POST /api/dingtalk/welcome/send - BFF welcome after workspace (post-login)
  */
 import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
@@ -23,6 +25,11 @@ import {
   writeDingTalkUserToWorkspace,
   type DingTalkUserMinimal,
 } from '../../utils/openclaw-workspace';
+import {
+  hasDingTalkChannelAutoProvisionFromEnv,
+  runDingTalkChannelProvisionAfterLogin,
+  sendDingTalkBffWelcomeForUserId,
+} from '../../utils/dingtalk-auto-provision';
 
 type DingTalkUserStore = NonNullable<AppSettings['dingtalkUser']>;
 type LoginSessionRecord = {
@@ -127,8 +134,6 @@ export async function handleDingTalkRoutes(
   url: URL,
   ctx: HostApiContext,
 ): Promise<boolean> {
-  void ctx;
-
   if (url.pathname === '/api/dingtalk/login' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{ force?: boolean } | undefined>(req);
@@ -163,6 +168,7 @@ export async function handleDingTalkRoutes(
 
       await setSetting('dingtalkUser', userStore);
       await syncDingTalkUserToWorkspaceIfNeeded(previousUser, result.user);
+      await runDingTalkChannelProvisionAfterLogin(ctx);
 
       logger.info('[DingTalkAPI] User info saved to electron-store');
 
@@ -223,6 +229,7 @@ export async function handleDingTalkRoutes(
           const userStore = toUserStore(result.user);
           await setSetting('dingtalkUser', userStore);
           await syncDingTalkUserToWorkspaceIfNeeded(previousUser, result.user);
+          await runDingTalkChannelProvisionAfterLogin(ctx);
           if (activeLoginSession?.id === id) {
             activeLoginSession.status = 'success';
             activeLoginSession.statusMessage = '登录成功！';
@@ -282,6 +289,34 @@ export async function handleDingTalkRoutes(
         user: user || null,
       });
     } catch (error) {
+      sendJson(res, 500, {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/dingtalk/channel-auto-from-env' && req.method === 'GET') {
+    sendJson(res, 200, {
+      success: true,
+      active: hasDingTalkChannelAutoProvisionFromEnv(),
+    });
+    return true;
+  }
+
+  if (url.pathname === '/api/dingtalk/welcome/send' && req.method === 'POST') {
+    try {
+      const user = await getSetting('dingtalkUser');
+      // Only send when a DingTalk staff session is persisted (no anonymous / logged-out calls).
+      if (!user || !user.userId?.trim()) {
+        sendJson(res, 200, { success: true, skipped: true, reason: 'not_logged_in' });
+        return true;
+      }
+      await sendDingTalkBffWelcomeForUserId(user.userId.trim());
+      sendJson(res, 200, { success: true });
+    } catch (error) {
+      logger.error('[DingTalkAPI] welcome/send failed:', error);
       sendJson(res, 500, {
         success: false,
         error: error instanceof Error ? error.message : String(error),

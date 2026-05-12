@@ -67,6 +67,7 @@ import {
   normalizeWhatsAppMessagingTarget,
 } from '../../utils/openclaw-sdk';
 import { logger } from '../../utils/logger';
+import { scheduleGatewayChannelSaveRefresh } from '../../utils/gateway-channel-refresh';
 import { buildGatewayHealthSummary } from '../../utils/gateway-health';
 import type { GatewayHealthSummary } from '../../gateway/manager';
 
@@ -240,39 +241,7 @@ async function awaitWeChatQrLogin(
 }
 
 function scheduleGatewayChannelRestart(ctx: HostApiContext, reason: string): void {
-  if (ctx.gatewayManager.getStatus().state === 'stopped') {
-    return;
-  }
   ctx.gatewayManager.debouncedRestart();
-  void reason;
-}
-
-// Plugin-based channels require a full Gateway process restart to properly
-// initialize / tear-down plugin connections.  SIGUSR1 in-process reload is
-// not sufficient for channel plugins (see restartGatewayForAgentDeletion).
-// OpenClaw 3.23+ does not reliably support in-process channel reload for any
-// channel type.  All channel config saves must trigger a full Gateway process
-// restart to ensure the channel adapter properly initializes with the new config.
-const FORCE_RESTART_CHANNELS = new Set([
-  'dingtalk', 'wecom', 'whatsapp', 'feishu', 'qqbot', OPENCLAW_WECHAT_CHANNEL_TYPE,
-  'discord', 'telegram', 'signal', 'imessage', 'matrix', 'line', 'msteams', 'googlechat', 'mattermost',
-]);
-
-function scheduleGatewayChannelSaveRefresh(
-  ctx: HostApiContext,
-  channelType: string,
-  reason: string,
-): void {
-  const storedChannelType = resolveStoredChannelType(channelType);
-  if (ctx.gatewayManager.getStatus().state === 'stopped') {
-    return;
-  }
-  if (FORCE_RESTART_CHANNELS.has(storedChannelType)) {
-    ctx.gatewayManager.debouncedRestart(150);
-    void reason;
-    return;
-  }
-  ctx.gatewayManager.debouncedReload(150);
   void reason;
 }
 

@@ -113,6 +113,8 @@ ClawX 直接基于官方 **OpenClaw** 核心构建。无需单独安装，我们
 ClawX 现在还内置了腾讯官方个人微信渠道插件，可直接在 Channels 页面通过内置二维码流程完成微信连接。
 ClawX 进入工作台前需要先完成钉钉登录。启动登录页会内嵌钉钉二维码授权流程；在设置页退出登录后，应用会回到该登录页。开发构建已内置默认企业应用配置；如需覆盖应用 AppKey、应用密钥或回调端口，可设置 `LYCLAW_DINGTALK_CLIENT_ID`、`LYCLAW_DINGTALK_CLIENT_SECRET` 和 `LYCLAW_DINGTALK_CALLBACK_PORT`。
 
+单企业自动集成（可选）：钉钉登录成功后，若设置了 `LYCLAW_DINGTALK_CHANNEL_CLIENT_ID` / `LYCLAW_DINGTALK_CHANNEL_CLIENT_SECRET`（用于 OpenClaw 钉钉通道；未设置时会依次回退读取 `LYCLAW_DINGTALK_CLIENT_*`、`DINGTALK_CLIENT_*`，与 OAuth 同名即可），会自动写入 `openclaw.json` 的钉钉通道并触发网关重启；若同时设置 `LYCLAW_DINGTALK_BFF_BASE_URL` 与 `LYCLAW_DINGTALK_BFF_API_KEY`，则在**进入工作台（post-login 加载结束）之后**再按员工 `userId` 调用 Python BFF 推送钉钉单聊消息。当环境变量启用自动钉钉通道时，加载页会尽量等待网关侧钉钉就绪（最长约 90 秒）再进入工作台。未设置上述 BFF 变量时不会调用 BFF。
+
 ### ⏰ 定时任务自动化
 调度 AI 任务自动执行。定义触发器、设置时间间隔，让 AI 智能体 7×24 小时不间断工作。
 现在定时任务页面已经可以直接配置外部投递，统一拆成“发送账号”和“接收目标”两个下拉选择。对于已支持的通道，接收目标会从通道目录能力或已知会话历史中自动发现，不需要再手动修改 `jobs.json`。
@@ -275,6 +277,8 @@ ClawX 采用 **双进程 + Host API 统一接入架构**。渲染进程只调用
 - 滚动升级期间若新旧版本混跑，单实例保护仍可能出现不对称行为。为保证稳定性，建议桌面客户端尽量统一升级到同一版本。
 - 但 OpenClaw Gateway 监听应始终保持**单实例**：`127.0.0.1:18789` 只能有一个监听者。
 - Gateway readiness 以 OpenClaw 的 `system-presence`、`health`、`status` 等核心信号为准；memory、Dreams 或频道失败会显示为能力降级，而不是全局 Gateway 故障。
+- 当 `openclaw.json` 中至少配置了一个频道时，ClawX **不会**设置 `OPENCLAW_SKIP_CHANNELS`，Gateway 会在进程启动时加载频道适配器（钉钉 Stream 等依赖于此）；若未配置任何频道，则仍跳过频道以加快冷启动。
+- **网关日志可见性**：OpenClaw 常把日常频道日志写到 **stdout**，把告警写到 **stderr**。ClawX 会把 stderr 记入应用日志（前缀 `[Gateway stderr]`）；stdout 仅在 **debug** 级别镜像为 `[Gateway stdout]`。需要查看钉钉等 stdout 细节时，请打开更详细的日志级别，或直接在终端手动运行 OpenClaw 的 `gateway` 子命令查看完整输出。
 - 可用以下命令确认监听进程：
   - macOS/Linux：`lsof -nP -iTCP:18789 -sTCP:LISTEN`
   - Windows（PowerShell）：`Get-NetTCPConnection -LocalPort 18789 -State Listen`

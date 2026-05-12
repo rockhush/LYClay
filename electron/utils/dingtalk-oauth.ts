@@ -80,6 +80,11 @@ function getEnv(name: string): string {
   return process.env[name]?.trim() || getLocalEnv()[name]?.trim() || '';
 }
 
+/** Same resolution as DingTalk OAuth (`process.env` then repo-root `.env.local` / `.env`). */
+export function getLyclawEnvVariable(name: string): string {
+  return getEnv(name);
+}
+
 function getDingTalkConfig(): DingTalkOAuthConfig {
   const clientId = getEnv('LYCLAW_DINGTALK_CLIENT_ID')
     || getEnv('DINGTALK_CLIENT_ID')

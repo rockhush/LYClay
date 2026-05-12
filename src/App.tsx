@@ -29,9 +29,12 @@ import { useChatStore } from './stores/chat';
 import { applyGatewayTransportPreference } from './lib/api-client';
 import { rendererExtensionRegistry } from './extensions/registry';
 import { loadExternalRendererExtensions } from './extensions/_ext-bridge.generated';
-import { hostApiFetch } from './lib/host-api';
+import { hostApiFetch, getDingTalkChannelAutoFromEnv, sendDingTalkWorkspaceWelcome } from './lib/host-api';
 import { estimateGatewayWarmupProgress } from './lib/gateway-warmup-progress';
-
+import {
+  isOpenClawDingTalkChannelRuntimeReady,
+  type ChannelsStatusRpcPayload,
+} from './lib/dingtalk-channels-runtime';
 
 /**
  * Error Boundary to catch and display React rendering errors
@@ -118,6 +121,8 @@ function App() {
   const [postLoginWarmupDone, setPostLoginWarmupDone] = useState(false);
   const [postLoginWarmupSeconds, setPostLoginWarmupSeconds] = useState(0);
   const postLoginBootstrapRef = useRef<string | null>(null);
+  const [autoDingTalkChannelFromEnv, setAutoDingTalkChannelFromEnv] = useState<boolean | null>(null);
+  const [dingTalkChannelRuntimeReady, setDingTalkChannelRuntimeReady] = useState(false);
 
   useEffect(() => {
     initSettings();
@@ -199,8 +204,63 @@ function App() {
     if (!dingtalkUser) {
       setPostLoginWarmupDone(false);
       postLoginBootstrapRef.current = null;
+      setAutoDingTalkChannelFromEnv(null);
+      setDingTalkChannelRuntimeReady(false);
     }
   }, [dingtalkUser]);
+
+  useEffect(() => {
+    if (!requireDingTalkLogin || !dingtalkUser) return;
+    let cancelled = false;
+    void getDingTalkChannelAutoFromEnv()
+      .then((r) => {
+        if (!cancelled) setAutoDingTalkChannelFromEnv(!!r.active);
+      })
+      .catch(() => {
+        if (!cancelled) setAutoDingTalkChannelFromEnv(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [requireDingTalkLogin, dingtalkUser]);
+
+  useEffect(() => {
+    if (!requireDingTalkLogin || !dingtalkUser || postLoginWarmupDone) return;
+    if (autoDingTalkChannelFromEnv !== true) {
+      setDingTalkChannelRuntimeReady(false);
+      return;
+    }
+    if (gatewayStatus.state !== 'running' || !gatewayStatus.gatewayReady) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const data = await useGatewayStore.getState().rpc<ChannelsStatusRpcPayload>('channels.status', {
+          probe: false,
+        });
+        if (!cancelled && isOpenClawDingTalkChannelRuntimeReady(data)) {
+          setDingTalkChannelRuntimeReady(true);
+        }
+      } catch {
+        /* Gateway may still be restarting; retry on interval */
+      }
+    };
+
+    void poll();
+    const id = window.setInterval(() => void poll(), 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [
+    requireDingTalkLogin,
+    dingtalkUser,
+    postLoginWarmupDone,
+    autoDingTalkChannelFromEnv,
+    gatewayStatus.state,
+    gatewayStatus.gatewayReady,
+  ]);
 
   useEffect(() => {
     if (!requireDingTalkLogin || !dingtalkUser || postLoginWarmupDone) return;
@@ -224,19 +284,32 @@ function App() {
       && gatewayStatus.gatewayReady === true
       && warmupStatus === 'idle'
       && postLoginWarmupSeconds >= 7;
-    const shouldProceed = warmupStatus === 'ready'
+    const needDingTalkRuntime = autoDingTalkChannelFromEnv === true;
+    const dingTalkRuntimeOk = !needDingTalkRuntime || dingTalkChannelRuntimeReady || postLoginWarmupSeconds >= 90;
+    const shouldProceed =
+      (warmupStatus === 'ready'
       || warmupStatus === 'failed'
       || warmupDisabledOrIdle
       || gatewayUnavailable
-      || postLoginWarmupSeconds >= 90;
+      || postLoginWarmupSeconds >= 90)
+      && dingTalkRuntimeOk;
 
     if (!shouldProceed) return;
+
+    const dtSeg = !needDingTalkRuntime
+      ? 'na'
+      : dingTalkChannelRuntimeReady
+        ? 'ok'
+        : postLoginWarmupSeconds >= 90
+          ? 'force'
+          : 'wait';
 
     const bootstrapKey = [
       dingtalkUser.userId || dingtalkUser.unionId || dingtalkUser.name || 'user',
       gatewayStatus.state,
       gatewayStatus.gatewayReady ? 'ready' : 'not-ready',
       warmupStatus || 'unknown',
+      dtSeg,
     ].join('|');
     if (postLoginBootstrapRef.current === bootstrapKey) return;
     postLoginBootstrapRef.current = bootstrapKey;
@@ -268,7 +341,20 @@ function App() {
     gatewayStatus.gatewayReady,
     gatewayStatus.warmupStatus,
     postLoginWarmupSeconds,
+    autoDingTalkChannelFromEnv,
+    dingTalkChannelRuntimeReady,
   ]);
+
+  useEffect(() => {
+    if (!requireDingTalkLogin) return;
+    if (!dingtalkAuthInitialized) return;
+    if (!dingtalkUser?.userId?.trim()) return;
+    if (!postLoginWarmupDone) return;
+    // BFF welcome only once per completed DingTalk OAuth (not on refresh / restored session).
+    if (!useDingTalkAuthStore.getState().consumeDingTalkLoginWelcomePending()) return;
+
+    void sendDingTalkWorkspaceWelcome().catch(() => {});
+  }, [requireDingTalkLogin, dingtalkAuthInitialized, dingtalkUser, postLoginWarmupDone]);
 
   const extraRoutes = rendererExtensionRegistry.getExtraRoutes();
 
