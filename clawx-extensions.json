@@ -1,0 +1,9 @@
+{
+  "extensions": {
+    "main": [
+      "builtin/company-marketplace",
+      "builtin/diagnostics"
+    ],
+    "renderer": []
+  }
+}
