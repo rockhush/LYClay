@@ -1,0 +1,63 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: |
+          pnpm install --no-frozen-lockfile
+
+      - name: Prepare bundled uv and Python
+        run: |
+          pnpm run uv:download
+          cp resources/bin/darwin-arm64/uv resources/bin/uv
+          chmod +x resources/bin/uv
+
+          mkdir -p resources/python
+          export UV_PYTHON_INSTALL_DIR=$PWD/resources/python
+          ./resources/bin/uv python install 3.12
+
+          echo "==== symlinks before fix ===="
+          find resources/python -type l -exec ls -la {} \;
+
+          echo "==== dereference python symlinks ===="
+          rm -rf resources/python-real
+          mkdir -p resources/python-real
+          rsync -aL resources/python/ resources/python-real/
+          rm -rf resources/python
+          mv resources/python-real resources/python
+
+          echo "==== symlinks after fix ===="
+          find resources/python -type l -exec ls -la {} \; || true
+
+      - name: Build macOS package
+        run: |
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          export ELECTRON_BUILDER_DISABLE_CODE_SIGNING=true
+          pnpm run package:mac
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LYClaw-mac
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.pkg
+            release/*.blockmap
