@@ -91,7 +91,8 @@ function NavItem({ to, icon, label, badge, collapsed, onClick, testId }: NavItem
       className={({ isActive }) =>
         cn(
           'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-all',
-          'hover:bg-[#FF7B00] hover:text-white hover:shadow-md hover:shadow-[#FF7B00]/30 dark:hover:bg-white/5 dark:hover:text-foreground/80',
+          !isActive &&
+            'hover:bg-black/10 hover:shadow-md hover:shadow-black/[0.12] dark:hover:bg-white/10 dark:hover:shadow-md dark:hover:shadow-white/[0.12]',
           isActive
             ? 'bg-[#FF7B00] text-white shadow-md shadow-[#FF7B00]/30 dark:bg-white/10 dark:text-foreground dark:shadow-none'
             : 'text-foreground/80',
@@ -101,7 +102,12 @@ function NavItem({ to, icon, label, badge, collapsed, onClick, testId }: NavItem
     >
       {({ isActive }) => (
         <>
-          <div className={cn("flex shrink-0 items-center justify-center transition-colors", isActive ? "text-white dark:text-foreground" : "text-muted-foreground group-hover:text-white dark:group-hover:text-foreground")}>
+          <div
+            className={cn(
+              'flex shrink-0 items-center justify-center transition-colors',
+              isActive ? 'text-white dark:text-foreground' : 'text-muted-foreground',
+            )}
+          >
             {icon}
           </div>
           {!collapsed && (
@@ -439,15 +445,15 @@ export function Sidebar() {
           }
           className={cn(
             'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors pr-7',
-            'hover:bg-black/5 dark:hover:bg-white/5',
+            'hover:bg-black/10 dark:hover:bg-white/10',
             isOnChat && currentSessionKey === s.key
-              ? 'bg-black/5 dark:bg-white/10 text-[#FF7B00] font-medium dark:text-foreground'
+              ? 'bg-black/10 dark:bg-white/10 text-[#FF7B00] font-medium dark:text-foreground'
               : 'text-foreground/75',
             firstResponsePreparingLocksSwitch && s.key !== currentSessionKey && 'opacity-50 cursor-not-allowed',
           )}
         >
           <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 rounded-full bg-black/[0.04] px-2 py-0.5 text-[10px] font-medium text-foreground/70 dark:bg-white/[0.08]">
+            <span className="shrink-0 rounded-full bg-black/[0.14] px-2 py-0.5 text-[10px] font-medium text-foreground/70 dark:bg-white/[0.12]">
               {agentName}
             </span>
             <span className="truncate">{getSessionLabel(s.key, s.displayName, s.label)}</span>
@@ -537,7 +543,7 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10"
+          className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-black/10 dark:hover:bg-white/10"
           onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
         >
           {sidebarCollapsed ? (
@@ -569,7 +575,7 @@ export function Sidebar() {
           }
           className={cn(
             'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-colors mb-2',
-            'bg-black/5 dark:bg-accent shadow-none border border-transparent text-foreground',
+            'bg-black/10 dark:bg-accent shadow-none border border-transparent text-foreground',
             sidebarCollapsed && 'justify-center px-0',
             firstResponsePreparingLocksSwitch && messages.length > 0 && 'opacity-50 cursor-not-allowed',
           )}
@@ -593,7 +599,7 @@ export function Sidebar() {
       {!sidebarCollapsed && allWorkspaces.length > 0 && (
         <div data-testid="sidebar-workspaces-section" className="px-2 pt-4 pb-2">
           <div
-            className="flex items-center justify-between px-2.5 pb-1 cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 rounded-lg"
+            className="flex items-center justify-between px-2.5 pb-1 cursor-pointer hover:bg-black/10 dark:hover:bg-white/10 rounded-lg"
             onClick={toggleWorkspaceSection}
           >
             <span className="text-[14px] font-medium text-foreground tracking-tight">
@@ -638,10 +644,12 @@ export function Sidebar() {
                       <div
                         data-testid={`sidebar-workspace-row-${workspace.id}`}
                         className={cn(
+                          'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors flex items-center gap-2 cursor-pointer group',
+                          'hover:bg-black/10 dark:hover:bg-white/10',
                           'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors flex items-center gap-1 group',
                           'hover:bg-black/5 dark:hover:bg-white/5',
                           isSelected
-                            ? 'bg-black/5 dark:bg-white/10 text-foreground font-medium'
+                            ? 'bg-black/10 dark:bg-white/10 text-foreground font-medium'
                             : 'text-foreground/75',
                         )}
                       >
@@ -720,6 +728,7 @@ export function Sidebar() {
                           ) : null}
                         </div>
                       ) : null}
+
                     </div>
                   );
                 })}
@@ -761,7 +770,7 @@ export function Sidebar() {
                   type="button"
                   onClick={handleUserSettings}
                   className={cn(
-                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10',
+                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium text-foreground/85 transition-colors hover:bg-black/10 dark:hover:bg-white/10',
                     sidebarCollapsed ? 'justify-center px-0 w-10 h-10' : 'text-left w-full'
                   )}
                 >
@@ -796,7 +805,7 @@ export function Sidebar() {
               data-testid="sidebar-user-profile"
               onClick={() => setUserMenuOpen((open) => !open)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5',
+                'flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-black/10 dark:hover:bg-white/10',
                 sidebarCollapsed ? 'justify-center' : '',
               )}
             >
@@ -826,8 +835,8 @@ export function Sidebar() {
             className={({ isActive }) =>
               cn(
                 'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-colors',
-                'hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80',
-                isActive && 'bg-black/5 dark:bg-white/10 text-foreground',
+                'hover:bg-black/10 dark:hover:bg-white/10 text-foreground/80',
+                isActive && 'bg-black/10 dark:bg-white/10 text-foreground',
                 sidebarCollapsed ? 'justify-center px-0 w-full' : ''
               )
             }
@@ -849,7 +858,7 @@ export function Sidebar() {
             variant="ghost"
             className={cn(
               'flex items-center gap-2.5 rounded-lg px-2.5 py-2 h-auto text-[14px] font-medium transition-colors w-full mt-1',
-              'hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80',
+              'hover:bg-black/10 dark:hover:bg-white/10 text-foreground/80',
               sidebarCollapsed ? 'justify-center px-0' : 'justify-start'
             )}
             onClick={openDevConsole}

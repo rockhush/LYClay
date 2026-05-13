@@ -30,6 +30,7 @@ import {
   type SessionStreamingState,
   type ToolStatus,
 } from './chat/types';
+import { attachmentFileNameFromPath } from './chat/helpers';
 
 export type {
   AttachedFileMeta,
@@ -611,11 +612,14 @@ function extractImagesAsAttachedFiles(content: unknown): AttachedFileMeta[] {
 /**
  * Build an AttachedFileMeta entry for a file ref, using cache if available.
  */
-function makeAttachedFile(ref: { filePath: string; mimeType: string }): AttachedFileMeta {
+function makeAttachedFile(
+  ref: { filePath: string; mimeType: string },
+  source: AttachedFileMeta['source'] = 'message-ref',
+): AttachedFileMeta {
   const cached = _imageCache.get(ref.filePath);
-  if (cached) return { ...cached, filePath: ref.filePath };
-  const fileName = ref.filePath.split(/[\\/]/).pop() || 'file';
-  return { fileName, mimeType: ref.mimeType, fileSize: 0, preview: null, filePath: ref.filePath };
+  if (cached) return { ...cached, filePath: ref.filePath, source };
+  const fileName = attachmentFileNameFromPath(ref.filePath);
+  return { fileName, mimeType: ref.mimeType, fileSize: 0, preview: null, filePath: ref.filePath, source };
 }
 
 /**
@@ -724,11 +728,11 @@ function enrichWithToolResultFiles(messages: RawMessage[]): RawMessage[] {
         for (const f of imageFiles) {
           if (!f.filePath) {
             f.filePath = matchedPath;
-            f.fileName = matchedPath.split(/[\\/]/).pop() || 'image';
+            f.fileName = attachmentFileNameFromPath(matchedPath);
           }
         }
       }
-      pending.push(...imageFiles);
+      pending.push(...imageFiles.map((file) => (file.source ? file : { ...file, source: 'tool-result' as const })));
 
       // 2. [media attached: ...] patterns in tool result text output
       const text = getMessageText(msg.content);
@@ -736,12 +740,12 @@ function enrichWithToolResultFiles(messages: RawMessage[]): RawMessage[] {
         const mediaRefs = extractMediaRefs(text);
         const mediaRefPaths = new Set(mediaRefs.map(r => r.filePath));
         for (const ref of mediaRefs) {
-          pending.push(makeAttachedFile(ref));
+          pending.push(makeAttachedFile(ref, 'tool-result'));
         }
         // 3. Raw file paths in tool result text (documents, audio, video, etc.)
         for (const ref of extractRawFilePaths(text)) {
           if (!mediaRefPaths.has(ref.filePath)) {
-            pending.push(makeAttachedFile(ref));
+            pending.push(makeAttachedFile(ref, 'tool-result'));
           }
         }
       }
@@ -818,9 +822,9 @@ function enrichWithCachedImages(messages: RawMessage[]): RawMessage[] {
 
     const files: AttachedFileMeta[] = allRefs.map(ref => {
       const cached = _imageCache.get(ref.filePath);
-      if (cached) return { ...cached, filePath: ref.filePath };
-      const fileName = ref.filePath.split(/[\\/]/).pop() || 'file';
-      return { fileName, mimeType: ref.mimeType, fileSize: 0, preview: null, filePath: ref.filePath };
+      if (cached) return { ...cached, filePath: ref.filePath, source: 'message-ref' };
+      const fileName = attachmentFileNameFromPath(ref.filePath);
+      return { fileName, mimeType: ref.mimeType, fileSize: 0, preview: null, filePath: ref.filePath, source: 'message-ref' };
     });
     return { ...msg, _attachedFiles: files };
   });
@@ -2778,14 +2782,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
               : undefined;
 
             // Mirror enrichWithToolResultFiles: collect images + file refs for next assistant msg
-            const toolFiles: AttachedFileMeta[] = [
-              ...extractImagesAsAttachedFiles(normalizedFinalMessage.content),
-            ];
+            const toolFiles: AttachedFileMeta[] = extractImagesAsAttachedFiles(normalizedFinalMessage.content).map(
+              (file) => (file.source ? file : { ...file, source: 'tool-result' as const }),
+            );
             if (matchedPath) {
               for (const f of toolFiles) {
                 if (!f.filePath) {
                   f.filePath = matchedPath;
-                  f.fileName = matchedPath.split(/[\\/]/).pop() || 'image';
+                  f.fileName = attachmentFileNameFromPath(matchedPath);
                 }
               }
             }
@@ -2793,9 +2797,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (text) {
               const mediaRefs = extractMediaRefs(text);
               const mediaRefPaths = new Set(mediaRefs.map(r => r.filePath));
-              for (const ref of mediaRefs) toolFiles.push(makeAttachedFile(ref));
+              for (const ref of mediaRefs) toolFiles.push(makeAttachedFile(ref, 'tool-result'));
               for (const ref of extractRawFilePaths(text)) {
-                if (!mediaRefPaths.has(ref.filePath)) toolFiles.push(makeAttachedFile(ref));
+                if (!mediaRefPaths.has(ref.filePath)) toolFiles.push(makeAttachedFile(ref, 'tool-result'));
               }
             }
             set((s) => {

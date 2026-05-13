@@ -7,7 +7,7 @@
  * are sent with the message (no base64 over WebSocket).
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check } from 'lucide-react';
+import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { WorkspacePicker } from '@/components/workspace/WorkspacePicker';
@@ -15,12 +15,47 @@ import { ModelPicker } from '@/components/workspace/ModelPicker';
 import { hostApiFetch } from '@/lib/host-api';
 import { invokeIpc } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
+
+// 5种随机颜色用于技能图标背景
+const SKILL_COLORS = [
+  'bg-cyan-500',
+  'bg-orange-500',
+  'bg-blue-500',
+  'bg-pink-500',
+  'bg-purple-500',
+];
+
+// 根据技能名称生成哈希值
+function getSkillHash(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    const char = name.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+}
+
+// 获取技能名称的首字母
+function getSkillInitial(name: string): string {
+  if (!name) return 'S';
+  const trimmed = name.trim();
+  const firstChar = trimmed.charAt(0).toUpperCase();
+  return firstChar.match(/[A-Za-z一-龥]/) ? firstChar : 'S';
+}
+
+// 根据技能名称获取颜色
+function getSkillColor(name: string): string {
+  const hash = getSkillHash(name);
+  return SKILL_COLORS[hash % SKILL_COLORS.length];
+}
 import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
 import { useChatStore } from '@/stores/chat';
 import type { ReasoningMode } from '@/stores/chat';
 import type { AgentSummary } from '@/types/agent';
 import { useTranslation } from 'react-i18next';
+import { useSkillsStore } from '@/stores/skills';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -33,6 +68,15 @@ export interface FileAttachment {
   preview: string | null;    // data URL for images, null for others
   status: 'staging' | 'ready' | 'error';
   error?: string;
+}
+
+export interface SkillAttachment {
+  id: string;
+  skillId: string;
+  skillName: string;
+  skillDescription: string;
+  skillIcon: string;
+  baseDir?: string;
 }
 
 interface ChatInputProps {
@@ -91,9 +135,15 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   const { t } = useTranslation('chat');
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+  const [skillAttachments, setSkillAttachments] = useState<SkillAttachment[]>([]);
   const [targetAgentId, setTargetAgentId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reasoningOpen, setReasoningOpen] = useState(false);
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+  const skillPickerRef = useRef<HTMLDivElement>(null);
+
+  const skills = useSkillsStore((s) => s.skills);
+  const fetchSkills = useSkillsStore((s) => s.fetchSkills);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const reasoningRef = useRef<HTMLDivElement>(null);
@@ -205,6 +255,23 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
       document.removeEventListener('mousedown', handlePointerDown);
     };
   }, [reasoningOpen]);
+
+  useEffect(() => {
+    if (!skillPickerOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!skillPickerRef.current?.contains(event.target as Node)) {
+        setSkillPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [skillPickerOpen]);
+
+  useEffect(() => {
+    void fetchSkills();
+  }, [fetchSkills]);
 
   // ── File staging via native dialog ─────────────────────────────
 
@@ -338,9 +405,31 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     setAttachments(prev => prev.filter(a => a.id !== id));
   }, []);
 
+  const removeSkillAttachment = useCallback((id: string) => {
+    setSkillAttachments(prev => prev.filter(s => s.id !== id));
+  }, []);
+
+  const addSkillAttachment = useCallback((skillId: string) => {
+    const skill = skills.find(s => s.id === skillId);
+    if (!skill) return;
+    
+    const existing = skillAttachments.find(s => s.skillId === skillId);
+    if (existing) return;
+
+    setSkillAttachments(prev => [...prev, {
+      id: crypto.randomUUID(),
+      skillId: skill.id,
+      skillName: skill.name,
+      skillDescription: skill.description,
+      skillIcon: skill.icon || '📦',
+      baseDir: skill.baseDir,
+    }]);
+    setSkillPickerOpen(false);
+  }, [skills, skillAttachments]);
+
   const allReady = attachments.length === 0 || attachments.every(a => a.status === 'ready');
   const hasFailedAttachments = attachments.some((a) => a.status === 'error');
-  const canSend = (input.trim() || attachments.length > 0) && allReady && !disabled && !sending;
+  const canSend = (input.trim() || attachments.length > 0 || skillAttachments.length > 0) && allReady && !disabled && !sending;
   const canStop = sending && !disabled && !!onStop;
 
   const handleSend = useCallback(() => {
@@ -350,22 +439,45 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     // but keep attachments available for the async send
     const textToSend = input.trim();
     const attachmentsToSend = readyAttachments.length > 0 ? readyAttachments : undefined;
-    console.log(`[handleSend] text="${textToSend.substring(0, 50)}", attachments=${attachments.length}, ready=${readyAttachments.length}, sending=${!!attachmentsToSend}`);
+    
+    // 如果有选中的技能，构建技能提示文本
+    let skillPrompt = '';
+    if (skillAttachments.length > 0) {
+      const skillNames = skillAttachments.map(s => s.skillName).join(', ');
+      skillPrompt = `\n\n请使用以下技能进行问答：${skillNames}`;
+      
+      // 如果有技能描述，添加到提示中
+      skillAttachments.forEach(skill => {
+        if (skill.skillDescription) {
+          skillPrompt += `\n\n${skill.skillName}: ${skill.skillDescription}`;
+        }
+      });
+    }
+    
+    const finalText = textToSend + skillPrompt;
+    
+    console.log(`[handleSend] text="${finalText.substring(0, 50)}", attachments=${attachments.length}, ready=${readyAttachments.length}, skills=${skillAttachments.length}, sending=${!!attachmentsToSend}`);
     if (attachmentsToSend) {
       console.log('[handleSend] Attachment details:', attachmentsToSend.map(a => ({
         id: a.id, fileName: a.fileName, mimeType: a.mimeType, fileSize: a.fileSize,
         stagedPath: a.stagedPath, status: a.status, hasPreview: !!a.preview,
       })));
     }
+    if (skillAttachments.length > 0) {
+      console.log('[handleSend] Skill details:', skillAttachments.map(s => ({
+        id: s.id, skillId: s.skillId, skillName: s.skillName,
+      })));
+    }
     setInput('');
     setAttachments([]);
+    setSkillAttachments([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    onSend(textToSend, attachmentsToSend, targetAgentId);
+    onSend(finalText, attachmentsToSend, targetAgentId);
     setTargetAgentId(null);
     setPickerOpen(false);
-  }, [input, attachments, canSend, onSend, targetAgentId]);
+  }, [input, attachments, skillAttachments, canSend, onSend, targetAgentId]);
 
   const handleStop = useCallback(() => {
     if (!canStop) return;
@@ -457,6 +569,19 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                 key={att.id}
                 attachment={att}
                 onRemove={() => removeAttachment(att.id)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Skill Previews */}
+        {skillAttachments.length > 0 && (
+          <div className="flex gap-2 mb-3 flex-wrap">
+            {skillAttachments.map((skillAtt) => (
+              <SkillAttachmentPreview
+                key={skillAtt.id}
+                skill={skillAtt}
+                onRemove={() => removeSkillAttachment(skillAtt.id)}
               />
             ))}
           </div>
@@ -564,6 +689,40 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
             >
               <Paperclip className="h-3.5 w-3.5" />
             </Button>
+
+            {/* Skill Picker */}
+            <div ref={skillPickerRef} className="relative shrink-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  'h-8 w-8 rounded-lg text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors',
+                  skillPickerOpen && 'bg-primary/10 text-primary hover:bg-primary/20'
+                )}
+                onClick={() => setSkillPickerOpen((open) => !open)}
+                disabled={disabled || sending}
+                title={t('composer.pickSkill')}
+              >
+                <Puzzle className="h-3.5 w-3.5" />
+              </Button>
+              {skillPickerOpen && (
+                <div className="absolute left-0 bottom-full z-20 mb-2 w-72 overflow-hidden rounded-2xl border border-black/10 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-card">
+                  <div className="px-3 py-2 text-[11px] font-medium text-muted-foreground/80">
+                    {t('composer.skillPickerTitle')}
+                  </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    {skills.filter(s => s.enabled).map((skill) => (
+                      <SkillPickerItem
+                        key={skill.id}
+                        skill={skill}
+                        selected={skillAttachments.some(s => s.skillId === skill.id)}
+                        onSelect={() => addSkillAttachment(skill.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Workspace Picker */}
             <WorkspacePicker disabled={disabled || sending} />
@@ -746,6 +905,87 @@ function AgentPickerItem({
       <span className="text-[11px] text-muted-foreground">
         {agent.modelDisplay}
       </span>
+    </button>
+  );
+}
+
+// ── Skill Attachment Preview ──────────────────────────────────────
+
+function SkillAttachmentPreview({
+  skill,
+  onRemove,
+}: {
+  skill: SkillAttachment;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="relative group rounded-lg overflow-hidden border border-primary/20 bg-primary/5 px-3 py-2 max-w-[200px]">
+      <div className="flex items-center gap-2">
+        <div className={`w-6 h-6 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white rounded-md ${getSkillColor(skill.skillName)}`}>
+          {getSkillInitial(skill.skillName)}
+        </div>
+        <div className="min-w-0 overflow-hidden">
+          <p className="text-xs font-medium truncate text-foreground">{skill.skillName}</p>
+          <p className="text-[10px] text-muted-foreground truncate">{skill.skillDescription}</p>
+        </div>
+      </div>
+
+      {/* Remove button */}
+      <button
+        onClick={onRemove}
+        className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+// ── Skill Picker Item ────────────────────────────────────────────
+
+function SkillPickerItem({
+  skill,
+  selected,
+  onSelect,
+}: {
+  skill: Skill;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        'relative flex w-full flex-col items-start rounded-xl px-3 py-2 text-left transition-colors',
+        selected ? 'bg-primary/10 text-foreground' : 'hover:bg-black/5 dark:hover:bg-white/5'
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <div className={`w-5 h-5 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white rounded-md ${getSkillColor(skill.name)}`}>
+          {getSkillInitial(skill.name)}
+        </div>
+        <span className="text-[14px] font-medium text-foreground">{skill.name}</span>
+      </div>
+      {skill.description && (
+        <p
+          className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2 leading-[1.5]"
+          style={{
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }}
+          title={skill.description}
+        >
+          {skill.description}
+        </p>
+      )}
+      {selected && (
+        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+          <Check className="h-4 w-4 text-primary" />
+        </div>
+      )}
     </button>
   );
 }

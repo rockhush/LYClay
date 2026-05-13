@@ -465,17 +465,21 @@ describe('sanitizeOpenClawConfig', () => {
     expect(telegram.botToken).toBe('telegram-token');
   });
 
-  it('strips defaultAccount (but preserves accounts) from dingtalk during sanitize', async () => {
+  it('strips schema-invalid LYClaw metadata from dingtalk during sanitize', async () => {
     await writeOpenClawJson({
       channels: {
         dingtalk: {
           enabled: true,
           defaultAccount: 'default',
+          managedBy: 'lyclaw',
+          scope: 'official-shared',
           accounts: {
             default: {
               clientId: 'dt-client-id-nested',
               clientSecret: 'dt-secret-nested',
               enabled: true,
+              managedBy: 'lyclaw',
+              scope: 'official-shared',
             },
           },
           clientId: 'dt-client-id',
@@ -500,6 +504,8 @@ describe('sanitizeOpenClawConfig', () => {
       },
     });
     expect(dingtalk.defaultAccount).toBeUndefined();
+    expect(dingtalk.managedBy).toBeUndefined();
+    expect(dingtalk.scope).toBeUndefined();
     // Top-level credentials preserved (were already there + mirrored)
     expect(dingtalk.clientId).toBe('dt-client-id');
     expect(dingtalk.clientSecret).toBe('dt-secret');

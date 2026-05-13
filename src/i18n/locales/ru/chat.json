@@ -41,6 +41,8 @@
     },
     "composer": {
         "attachFiles": "Прикрепить файлы",
+        "pickSkill": "Выбрать навык",
+        "skillPickerTitle": "Выбрать навыки для использования",
         "pickAgent": "Выбрать агента",
         "clearTarget": "Очистить целевого агента",
         "targetChip": "@{{agent}}",

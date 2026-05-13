@@ -2,7 +2,7 @@
  * Skills Page
  * Browse and manage AI skills
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Search,
   Puzzle,
@@ -41,6 +41,40 @@ import type { TFunction } from 'i18next';
 const INSTALL_ERROR_CODES = new Set(['installTimeoutError', 'installRateLimitError']);
 const FETCH_ERROR_CODES = new Set(['fetchTimeoutError', 'fetchRateLimitError', 'timeoutError', 'rateLimitError']);
 const SEARCH_ERROR_CODES = new Set(['searchTimeoutError', 'searchRateLimitError', 'timeoutError', 'rateLimitError']);
+
+// 5种随机颜色用于技能图标背景
+const SKILL_COLORS = [
+  'bg-cyan-500',
+  'bg-orange-500',
+  'bg-blue-500',
+  'bg-pink-500',
+  'bg-purple-500',
+];
+
+// 根据技能名称生成哈希值
+function getSkillHash(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    const char = name.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash);
+}
+
+// 获取技能名称的首字母
+function getSkillInitial(name: string): string {
+  if (!name) return 'S';
+  const trimmed = name.trim();
+  const firstChar = trimmed.charAt(0).toUpperCase();
+  return firstChar.match(/[A-Za-z一-龥]/) ? firstChar : 'S';
+}
+
+// 根据技能名称获取颜色
+function getSkillColor(name: string): string {
+  const hash = getSkillHash(name);
+  return SKILL_COLORS[hash % SKILL_COLORS.length];
+}
 
 
 
@@ -403,6 +437,9 @@ export function Skills() {
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [selectedType, setSelectedType] = useState<string>('');
   const [selectedSource, setSelectedSource] = useState<'all' | 'built-in' | 'marketplace'>('all');
+  const [installFilter, setInstallFilter] = useState<'all' | 'installed' | 'uninstalled'>('installed');
+  const [scrollPosition, setScrollPosition] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const isGatewayRunning = gatewayStatus.state === 'running';
   const [showGatewayWarning, setShowGatewayWarning] = useState(false);
@@ -609,12 +646,21 @@ export function Skills() {
 
   const handleInstall = useCallback(async (slug: string) => {
     try {
+      // 保存当前滚动位置
+      const currentScroll = listRef.current?.scrollTop || 0;
+      
       await installSkill(slug);
       await enableSkill(slug);
       // 安装成功后刷新技能列表，确保新安装的技能显示在列表中
       await fetchSkills();
       // 重新搜索市场，更新搜索结果中的安装状态
       await searchSkills(installQuery.trim(), selectedType);
+      
+      // 恢复滚动位置
+      setTimeout(() => {
+        listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
+      }, 0);
+      
       toast.success(t('toast.installed'));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -628,6 +674,9 @@ export function Skills() {
 
   const handleUninstall = useCallback(async (slug: string) => {
     try {
+      // 保存当前滚动位置
+      const currentScroll = listRef.current?.scrollTop || 0;
+      
       await uninstallSkill(slug);
       // 手动刷新技能列表（确保列表更新）
       await fetchSkills();
@@ -635,6 +684,12 @@ export function Skills() {
       await searchSkills(installQuery.trim(), selectedType);
       // 关闭技能详情弹窗
       setSelectedSkill(null);
+      
+      // 恢复滚动位置
+      setTimeout(() => {
+        listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
+      }, 0);
+      
       toast.success(t('toast.uninstalled'));
     } catch (err) {
       toast.error(t('toast.failedUninstall') + ': ' + String(err));
@@ -799,8 +854,8 @@ export function Skills() {
                   onClick={() => setSelectedSkill(skill)}
                 >
                   <div className="flex items-start gap-4 flex-1 overflow-hidden pr-4">
-                    <div className="h-10 w-10 shrink-0 flex items-center justify-center text-2xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-xl overflow-hidden">
-                      {skill.icon || '🧩'}
+                    <div className={`w-10 h-10 shrink-0 flex items-center justify-center text-lg font-bold text-white rounded-xl overflow-hidden flex-shrink-0 ${getSkillColor(skill.name)}`}>
+                      {getSkillInitial(skill.name)}
                     </div>
                     <div className="flex flex-col overflow-hidden">
                       <div className="flex items-center gap-2 mb-1">
@@ -857,7 +912,7 @@ export function Skills() {
 
       <Sheet open={installSheetOpen} onOpenChange={setInstallSheetOpen}>
         <SheetContent
-          className="w-full sm:max-w-[560px] p-0 flex flex-col border-l border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-[0_0_40px_rgba(0,0,0,0.2)]"
+          className="w-full sm:max-w-[800px] p-0 flex flex-col border-l border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-[0_0_40px_rgba(0,0,0,0.2)]"
           side="right"
         >
           <div className="px-7 py-6 border-b border-black/10 dark:border-white/10">
@@ -868,8 +923,8 @@ export function Skills() {
               </span>
             </SheetTitle>
             <p className="mt-1 text-[13px] text-foreground/70">{t('marketplace.installDialogSubtitle')}</p>
-            <div className="mt-4 flex flex-col md:flex-row gap-2">
-              <div className="relative w-full md:w-[120px]">
+            <div className="mt-4 grid grid-cols-5 gap-2">
+              <div className="relative">
                 <select
                   value={selectedType}
                   onChange={(e) => setSelectedType(e.target.value)}
@@ -890,7 +945,7 @@ export function Skills() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </div>
-              <div className="relative flex items-center bg-black/5 dark:bg-white/5 rounded-xl px-3 py-2 border border-black/10 dark:border-white/10 flex-1">
+              <div className="relative flex items-center bg-black/5 dark:bg-white/5 rounded-xl px-3 py-2 border border-black/10 dark:border-white/10 col-span-2">
                 <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <Input
                   placeholder={t('searchMarketplace')}
@@ -908,10 +963,42 @@ export function Skills() {
                   </button>
                 )}
               </div>
+              <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 p-1 col-span-2">
+                {(['all', 'installed', 'uninstalled'] as const).map((filter) => {
+                  const installedCount = searchResults.filter(skill => 
+                    safeSkills.some(s => s.id === skill.slug || s.slug === skill.slug || s.name === skill.name || s.baseDir?.includes(skill.slug))
+                  ).length;
+                  const uninstalledCount = searchResults.length - installedCount;
+                  const counts = {
+                    all: searchResults.length,
+                    installed: installedCount,
+                    uninstalled: uninstalledCount,
+                  };
+                  const labels = {
+                    all: '全部',
+                    installed: '已安装',
+                    uninstalled: '未安装',
+                  };
+                  return (
+                    <button
+                      key={filter}
+                      onClick={() => setInstallFilter(filter)}
+                      className={cn(
+                        "flex-1 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all text-center",
+                        installFilter === filter
+                          ? "bg-[#FF7B00] text-white shadow-md shadow-[#FF7B00]/30"
+                          : "text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+                      )}
+                    >
+                      {labels[filter]} ({counts[filter]})
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div ref={listRef} className="flex-1 overflow-y-auto px-6 py-4">
             {searchError && (
               <div className="mb-4 p-4 rounded-xl border border-destructive/50 bg-destructive/10 text-destructive text-sm font-medium flex items-center gap-2">
                 <AlertCircle className="h-5 w-5 shrink-0" />
@@ -932,13 +1019,25 @@ export function Skills() {
 
             {!searching && searchResults.length > 0 && (
               <div className="flex flex-col gap-1">
-                {searchResults.map((skill) => {
-                  const isInstalled = safeSkills.some(s => 
-                    s.id === skill.slug || 
-                    s.slug === skill.slug || 
-                    s.name === skill.name ||
-                    s.baseDir?.includes(skill.slug)
-                  );
+                {searchResults
+                  .filter((skill) => {
+                    const isInstalled = safeSkills.some(s => 
+                      s.id === skill.slug || 
+                      s.slug === skill.slug || 
+                      s.name === skill.name ||
+                      s.baseDir?.includes(skill.slug)
+                    );
+                    if (installFilter === 'installed') return isInstalled;
+                    if (installFilter === 'uninstalled') return !isInstalled;
+                    return true;
+                  })
+                  .map((skill) => {
+                    const isInstalled = safeSkills.some(s => 
+                      s.id === skill.slug || 
+                      s.slug === skill.slug || 
+                      s.name === skill.name ||
+                      s.baseDir?.includes(skill.slug)
+                    );
                   const isInstallLoading = !!installing[skill.slug];
 
                   return (
@@ -947,8 +1046,8 @@ export function Skills() {
                       className="group flex flex-row items-center justify-between py-3.5 px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors border-b border-black/5 dark:border-white/5 last:border-0"
                     >
                       <div className="flex items-start gap-4 flex-1 overflow-hidden pr-4">
-                        <div className="h-10 w-10 shrink-0 flex items-center justify-center text-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-xl overflow-hidden">
-                          📦
+                        <div className={`w-10 h-10 shrink-0 flex items-center justify-center text-lg font-bold text-white rounded-xl overflow-hidden flex-shrink-0 ${getSkillColor(skill.name)}`}>
+                          {getSkillInitial(skill.name)}
                         </div>
                         <div className="flex flex-col overflow-hidden">
                           <div className="flex items-center gap-2 mb-1">

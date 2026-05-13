@@ -138,14 +138,14 @@ export function UpdateSettings() {
         );
       case 'error':
         return (
-          <Button onClick={handleCheckForUpdates} variant="outline" size="sm">
+          <Button onClick={handleCheckForUpdates} variant="outline" size="sm" className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
             <RefreshCw className="h-4 w-4 mr-2" />
             {t('updates.action.retry')}
           </Button>
         );
       default:
         return (
-          <Button onClick={handleCheckForUpdates} variant="outline" size="sm">
+          <Button onClick={handleCheckForUpdates} variant="outline" size="sm" className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
             <RefreshCw className="h-4 w-4 mr-2" />
             {t('updates.action.check')}
           </Button>

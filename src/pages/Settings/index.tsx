@@ -512,7 +512,7 @@ export function Settings() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant={theme === 'light' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10", theme === 'light' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'light' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('light')}
                   >
                     <Sun className="h-4 w-4 mr-2" />
@@ -520,7 +520,7 @@ export function Settings() {
                   </Button>
                   <Button
                     variant={theme === 'dark' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10", theme === 'dark' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'dark' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('dark')}
                   >
                     <Moon className="h-4 w-4 mr-2" />
@@ -528,7 +528,7 @@ export function Settings() {
                   </Button>
                   <Button
                     variant={theme === 'system' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10", theme === 'system' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'system' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('system')}
                   >
                     <Monitor className="h-4 w-4 mr-2" />
@@ -543,7 +543,7 @@ export function Settings() {
                     <Button
                       key={lang.code}
                       variant={language === lang.code ? 'secondary' : 'outline'}
-                      className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10", language === lang.code ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                      className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", language === lang.code ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                       onClick={() => setLanguage(lang.code)}
                     >
                       {lang.label}
@@ -583,10 +583,10 @@ export function Settings() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium border",
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium border shadow-md shadow-black/10",
                     gatewayStatus.state === 'running' ? "bg-green-500/10 text-green-600 dark:text-green-500 border-green-500/20" :
                       gatewayStatus.state === 'error' ? "bg-red-500/10 text-red-600 dark:text-red-500 border-red-500/20" :
-                        "bg-black/5 dark:bg-white/5 text-muted-foreground border-transparent"
+                        "bg-white text-muted-foreground border-black/10"
                   )}>
                     <div className={cn("w-1.5 h-1.5 rounded-full",
                       gatewayStatus.state === 'running' ? "bg-green-500" :
@@ -594,11 +594,11 @@ export function Settings() {
                     )} />
                     {gatewayStatus.state}
                   </div>
-                  <Button variant="outline" size="sm" onClick={restartGateway} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5">
+                  <Button variant="outline" size="sm" onClick={restartGateway} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
                     <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
                     {t('common:actions.restart')}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleShowLogs} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5">
+                  <Button variant="outline" size="sm" onClick={handleShowLogs} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
                     <FileText className="h-3.5 w-3.5 mr-1.5" />
                     {t('gateway.logs')}
                   </Button>

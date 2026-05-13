@@ -41,6 +41,8 @@
     },
     "composer": {
         "attachFiles": "添加文件",
+        "pickSkill": "选择技能",
+        "skillPickerTitle": "选择要使用的技能",
         "pickAgent": "选择 Agent",
         "clearTarget": "清除目标 Agent",
         "targetChip": "@{{agent}}",

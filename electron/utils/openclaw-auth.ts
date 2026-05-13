@@ -1974,9 +1974,8 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
     // credentials from the top level of `channels.<type>`.  Mirror them
     // there so the runtime can discover them.
     //
-    // Channels whose top-level schema (additionalProperties:false) does NOT
-    // include `defaultAccount` but DOES include `accounts`.  Strip only
-    // `defaultAccount` to allow multi-account support.
+    // Channels whose schema (additionalProperties:false) rejects LYClaw-only
+    // metadata. Strip only keys we know were written by older LYClaw builds.
     const channelsObj = config.channels as Record<string, Record<string, unknown>> | undefined;
     const CHANNELS_OMIT_DEFAULT_ACCOUNT_KEY = new Set(['dingtalk']);
 
@@ -1990,6 +1989,30 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
           delete section['defaultAccount'];
           modified = true;
           console.log(`[sanitize] Removed incompatible 'defaultAccount' from channels.${channelType}`);
+        }
+
+        if (channelType === 'dingtalk') {
+          for (const key of ['managedBy', 'scope']) {
+            if (key in section) {
+              delete section[key];
+              modified = true;
+              console.log(`[sanitize] Removed incompatible '${key}' from channels.${channelType}`);
+            }
+          }
+
+          const accounts = section.accounts as Record<string, Record<string, unknown>> | undefined;
+          if (accounts && typeof accounts === 'object') {
+            for (const [accountId, account] of Object.entries(accounts)) {
+              if (!account || typeof account !== 'object') continue;
+              for (const key of ['managedBy', 'scope']) {
+                if (key in account) {
+                  delete account[key];
+                  modified = true;
+                  console.log(`[sanitize] Removed incompatible '${key}' from channels.${channelType}.accounts.${accountId}`);
+                }
+              }
+            }
+          }
         }
 
         // Mirror missing keys from default account to top level.

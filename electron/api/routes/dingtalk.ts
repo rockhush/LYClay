@@ -30,6 +30,7 @@ import {
   runDingTalkChannelProvisionAfterLogin,
   sendDingTalkBffWelcomeForUserId,
 } from '../../utils/dingtalk-auto-provision';
+import { getDingTalkUserBinding } from '../../utils/dingtalk-user-bindings';
 
 type DingTalkUserStore = NonNullable<AppSettings['dingtalkUser']>;
 type LoginSessionRecord = {
@@ -168,7 +169,7 @@ export async function handleDingTalkRoutes(
 
       await setSetting('dingtalkUser', userStore);
       await syncDingTalkUserToWorkspaceIfNeeded(previousUser, result.user);
-      await runDingTalkChannelProvisionAfterLogin(ctx);
+      await runDingTalkChannelProvisionAfterLogin(ctx, result.user);
 
       logger.info('[DingTalkAPI] User info saved to electron-store');
 
@@ -229,7 +230,7 @@ export async function handleDingTalkRoutes(
           const userStore = toUserStore(result.user);
           await setSetting('dingtalkUser', userStore);
           await syncDingTalkUserToWorkspaceIfNeeded(previousUser, result.user);
-          await runDingTalkChannelProvisionAfterLogin(ctx);
+          await runDingTalkChannelProvisionAfterLogin(ctx, result.user);
           if (activeLoginSession?.id === id) {
             activeLoginSession.status = 'success';
             activeLoginSession.statusMessage = '登录成功！';
@@ -313,7 +314,8 @@ export async function handleDingTalkRoutes(
         sendJson(res, 200, { success: true, skipped: true, reason: 'not_logged_in' });
         return true;
       }
-      await sendDingTalkBffWelcomeForUserId(user.userId.trim());
+      const binding = await getDingTalkUserBinding(user.userId.trim());
+      await sendDingTalkBffWelcomeForUserId(user.userId.trim(), binding ?? undefined);
       sendJson(res, 200, { success: true });
     } catch (error) {
       logger.error('[DingTalkAPI] welcome/send failed:', error);

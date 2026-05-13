@@ -41,6 +41,8 @@
     },
     "composer": {
         "attachFiles": "Attach files",
+        "pickSkill": "Choose skill",
+        "skillPickerTitle": "Select skills to use",
         "pickAgent": "Choose agent",
         "clearTarget": "Clear target agent",
         "targetChip": "@{{agent}}",

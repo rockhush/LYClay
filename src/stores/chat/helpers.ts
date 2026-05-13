@@ -384,37 +384,72 @@ function extractImagesAsAttachedFiles(content: unknown): AttachedFileMeta[] {
   return files;
 }
 
+function isReasonableAttachmentBaseName(s: string): boolean {
+  if (!s || s.length > 255) return false;
+  if (/[\x00-\x1f<>:"|?*]/.test(s)) return false;
+  if (s.includes('\uFFFD')) return false;
+  return true;
+}
+
 /**
- * Decode filename with potential encoding issues (e.g., GBK encoded filenames in UTF-8 context)
+ * When UTF-8 filename bytes were mis-decoded as Latin-1 / ANSI (each byte → one BMP char),
+ * re-pack code units 0–255 as bytes and strict-decode as UTF-8. Fixes common Chinese/European
+ * mojibake in tool paths before they reach the UI.
  */
-function decodeFileName(fileName: string): string {
-  try {
-    // First try to decode URL-encoded filename
-    const decoded = decodeURIComponent(fileName);
-    
-    // Check if the decoded string contains common GBK encoding patterns
-    // that appear as garbled characters in UTF-8
-    const hasGarbledChars = /[\uFFFD|\x80-\xFF]/.test(decoded);
-    
-    if (hasGarbledChars) {
-      // Try to convert from GBK to UTF-8 using iconv-lite if available
-      try {
-        const iconv = require('iconv-lite');
-        const buffer = Buffer.from(decoded, 'binary');
-        const converted = iconv.decode(buffer, 'GBK');
-        // If conversion produced valid Chinese characters, use it
-        if (/[\u4e00-\u9fa5]/.test(converted)) {
-          return converted;
-        }
-      } catch {
-        // iconv-lite not available, fall through
-      }
-    }
-    
-    return decoded;
-  } catch {
-    return fileName;
+function tryRecoverUtf8FromByteWiseLatin1(fileName: string): string | null {
+  if (!fileName || fileName.includes('\uFFFD')) return null;
+  const bytes: number[] = [];
+  for (let i = 0; i < fileName.length; i++) {
+    const c = fileName.charCodeAt(i);
+    if (c > 255) return null;
+    bytes.push(c);
   }
+  if (!bytes.some((b) => b >= 0x80)) return null;
+  try {
+    const recovered = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
+    if (recovered === fileName || !isReasonableAttachmentBaseName(recovered)) return null;
+    return recovered;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalize a path basename for display on attachment cards (URL parts, UTF-8/Latin1 mixups, GBK).
+ */
+export function normalizeAttachmentBaseName(fileName: string): string {
+  let s = fileName;
+  try {
+    s = decodeURIComponent(fileName);
+  } catch {
+    s = fileName;
+  }
+
+  const utf8Recovered = tryRecoverUtf8FromByteWiseLatin1(s);
+  if (utf8Recovered) s = utf8Recovered;
+
+  // GBK bytes shown in a Latin/UTF-8 context (heuristic; optional iconv-lite)
+  const hasGarbledChars = /\uFFFD|[\u0080-\u00ff]/.test(s);
+  if (hasGarbledChars) {
+    try {
+      const iconv = require('iconv-lite') as { decode: (buf: Buffer, enc: string) => string };
+      const buffer = Buffer.from(s, 'binary');
+      const converted = iconv.decode(buffer, 'GBK');
+      if (/[\u4e00-\u9fff]/.test(converted) && isReasonableAttachmentBaseName(converted)) {
+        return converted;
+      }
+    } catch {
+      /* iconv-lite unavailable or decode failed */
+    }
+  }
+
+  return s;
+}
+
+/** Last segment of `filePath`, normalized for display (encoding fixes). */
+export function attachmentFileNameFromPath(filePath: string): string {
+  const base = filePath.split(/[\\/]/).pop() || 'file';
+  return normalizeAttachmentBaseName(base);
 }
 
 /**
@@ -426,9 +461,7 @@ function makeAttachedFile(
 ): AttachedFileMeta {
   const cached = _imageCache.get(ref.filePath);
   if (cached) return { ...cached, filePath: ref.filePath, source };
-  let fileName = ref.filePath.split(/[\\/]/).pop() || 'file';
-  // Decode filename to handle Chinese character encoding issues
-  fileName = decodeFileName(fileName);
+  const fileName = attachmentFileNameFromPath(ref.filePath);
   return { fileName, mimeType: ref.mimeType, fileSize: 0, preview: null, filePath: ref.filePath, source };
 }
 
@@ -538,7 +571,7 @@ function enrichWithToolResultFiles(messages: RawMessage[]): RawMessage[] {
         for (const f of imageFiles) {
           if (!f.filePath) {
             f.filePath = matchedPath;
-            f.fileName = matchedPath.split(/[\\/]/).pop() || 'image';
+            f.fileName = attachmentFileNameFromPath(matchedPath);
           }
         }
       }
@@ -633,7 +666,7 @@ function enrichWithCachedImages(messages: RawMessage[]): RawMessage[] {
     const files: AttachedFileMeta[] = allRefs.map(ref => {
       const cached = _imageCache.get(ref.filePath);
       if (cached) return { ...cached, filePath: ref.filePath, source: 'message-ref' };
-      const fileName = ref.filePath.split(/[\\/]/).pop() || 'file';
+      const fileName = attachmentFileNameFromPath(ref.filePath);
       return { fileName, mimeType: ref.mimeType, fileSize: 0, preview: null, filePath: ref.filePath, source: 'message-ref' };
     });
     return { ...msg, _attachedFiles: files };

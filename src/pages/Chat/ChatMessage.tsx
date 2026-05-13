@@ -386,7 +386,7 @@ function MessageBubble({
         !isUser && 'w-full',
         isUser
           ? 'bg-[#FF7B00] text-white shadow-sm'
-          : 'bg-black/5 dark:bg-white/5 text-foreground',
+          : 'bg-[#f8f8f6]/50 dark:bg-white/5 text-foreground',
       )}
     >
       {isUser ? (

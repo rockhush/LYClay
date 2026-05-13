@@ -23,6 +23,7 @@ import { Setup } from './pages/Setup';
 import { Login } from './pages/Login';
 import { useSettingsStore } from './stores/settings';
 import { useGatewayStore } from './stores/gateway';
+import { ParticleNetwork } from '@/components/common/ParticleNetwork';
 import { useProviderStore } from './stores/providers';
 import { useDingTalkAuthStore } from './stores/dingtalk-auth';
 import { useChatStore } from './stores/chat';
@@ -476,6 +477,7 @@ function PostLoginWarmup({
     <div data-testid="post-login-warmup" className="flex h-screen flex-col overflow-hidden bg-[#f7f6f0] text-[#1f1f1f] dark:bg-[#11110f] dark:text-foreground">
       <TitleBar />
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <ParticleNetwork />
         <div
           className="pointer-events-none absolute inset-0 opacity-[0.08]"
           style={{

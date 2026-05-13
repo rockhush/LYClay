@@ -931,7 +931,7 @@ export function Cron() {
   }
 
   return (
-    <div className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
+    <div className="flex flex-col -m-6 bg-white dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
       <div className="w-full max-w-5xl mx-auto flex flex-col h-full p-10 pt-16">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-start justify-between mb-12 shrink-0 gap-4">
@@ -994,7 +994,7 @@ export function Cron() {
 
           {/* Statistics */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <div className="p-5 rounded-[24px] bg-black/5 dark:bg-white/5 border border-transparent flex flex-col justify-between min-h-[130px] relative overflow-hidden group hover:bg-black/10 dark:hover:bg-white/10 transition-colors">
+<div className="p-5 rounded-[24px] bg-white dark:bg-card flex flex-col justify-between min-h-[130px] relative overflow-hidden group transition-colors">
               <div className="flex items-center justify-between">
                 <div className="h-11 w-11 rounded-full bg-primary/10 flex items-center justify-center">
                   <Clock className="h-5 w-5 text-primary" />
@@ -1006,7 +1006,7 @@ export function Cron() {
               </div>
             </div>
 
-            <div className="p-5 rounded-[24px] bg-black/5 dark:bg-white/5 border border-transparent flex flex-col justify-between min-h-[130px] relative overflow-hidden group hover:bg-black/10 dark:hover:bg-white/10 transition-colors">
+            <div className="p-5 rounded-[24px] bg-white dark:bg-card flex flex-col justify-between min-h-[130px] relative overflow-hidden group transition-colors">
               <div className="flex items-center justify-between">
                 <div className="h-11 w-11 rounded-full bg-green-500/10 flex items-center justify-center">
                   <Play className="h-5 w-5 text-green-600 dark:text-green-500 ml-0.5" />
@@ -1018,7 +1018,7 @@ export function Cron() {
               </div>
             </div>
 
-            <div className="p-5 rounded-[24px] bg-black/5 dark:bg-white/5 border border-transparent flex flex-col justify-between min-h-[130px] relative overflow-hidden group hover:bg-black/10 dark:hover:bg-white/10 transition-colors">
+            <div className="p-5 rounded-[24px] bg-white dark:bg-card flex flex-col justify-between min-h-[130px] relative overflow-hidden group transition-colors">
               <div className="flex items-center justify-between">
                 <div className="h-11 w-11 rounded-full bg-yellow-500/10 flex items-center justify-center">
                   <Pause className="h-5 w-5 text-yellow-600 dark:text-yellow-500" />
@@ -1030,7 +1030,7 @@ export function Cron() {
               </div>
             </div>
 
-            <div className="p-5 rounded-[24px] bg-black/5 dark:bg-white/5 border border-transparent flex flex-col justify-between min-h-[130px] relative overflow-hidden group hover:bg-black/10 dark:hover:bg-white/10 transition-colors">
+            <div className="p-5 rounded-[24px] bg-white dark:bg-card flex flex-col justify-between min-h-[130px] relative overflow-hidden group transition-colors">
               <div className="flex items-center justify-between">
                 <div className="h-11 w-11 rounded-full bg-destructive/10 flex items-center justify-center">
                   <XCircle className="h-5 w-5 text-destructive" />
@@ -1045,7 +1045,7 @@ export function Cron() {
 
           {/* Jobs List */}
           {safeJobs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground bg-black/5 dark:bg-white/5 rounded-3xl border border-transparent border-dashed">
+            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground bg-white dark:bg-card rounded-3xl border border-dashed border-black/10 dark:border-white/10">
               <Clock className="h-10 w-10 mb-4 opacity-50" />
               <h3 className="text-lg font-medium mb-2 text-foreground">{t('empty.title')}</h3>
               <p className="text-[14px] text-center mb-6 max-w-md">

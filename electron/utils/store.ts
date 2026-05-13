@@ -92,6 +92,17 @@ export interface AppSettings {
     leaderUserId: string;
     loginAt: string;
   } | null;
+  dingtalkUserBindings: Record<string, {
+    dingUserId: string;
+    unionId: string;
+    officialAccountId: string;
+    personalAccountIds: string[];
+    defaultAccountId: string;
+    agentId: string;
+    sessionKey: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
 
 }
 
@@ -146,6 +157,7 @@ function createDefaultSettings(): AppSettings {
     disabledSkills: [],
     // DingTalk Login
     dingtalkUser: null,
+    dingtalkUserBindings: {},
 
   };
 }

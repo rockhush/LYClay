@@ -12,6 +12,7 @@ import {
   isToolOnlyMessage,
   isToolResultRole,
   makeAttachedFile,
+  attachmentFileNameFromPath,
   normalizeStreamingMessage,
   setErrorRecoveryTimer,
   snapshotStreamingAssistantMessage,
@@ -82,7 +83,8 @@ export function handleRuntimeEventState(
                 // 过滤 NO_REPLY 和 HEARTBEAT_OK 消息
                 const msgContent = String(msgObj.content || '');
                 if (/^(NO_REPLY|HEARTBEAT_OK)\s*$/.test(msgContent)) {
-                  return s.streamingMessage;
+                  // Clear streaming message to prevent stale content from flashing
+                  return null;
                 }
               }
               return normalizeStreamingMessage(event.message ?? s.streamingMessage);
@@ -101,7 +103,13 @@ export function handleRuntimeEventState(
             // 过滤 NO_REPLY 和 HEARTBEAT_OK 消息，不添加到消息列表
             const finalMsgContent = String(normalizedFinalMessage.content || '');
             if (/^(NO_REPLY|HEARTBEAT_OK)\s*$/.test(finalMsgContent)) {
-              set({ streamingText: '', streamingMessage: null, pendingFinal: true });
+              // 如果已经有流式消息，保留它而不是清空
+              // 这可以防止 NO_REPLY 消息覆盖已经显示的结果
+              set((s) => ({
+                streamingText: '',
+                streamingMessage: s.streamingMessage,  // 保留现有的流式消息
+                pendingFinal: true,
+              }));
               break;
             }
             const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
@@ -119,7 +127,7 @@ export function handleRuntimeEventState(
                 for (const f of toolFiles) {
                   if (!f.filePath) {
                     f.filePath = matchedPath;
-                    f.fileName = matchedPath.split(/[\\/]/).pop() || 'image';
+                    f.fileName = attachmentFileNameFromPath(matchedPath);
                   }
                 }
               }

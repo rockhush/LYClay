@@ -41,6 +41,8 @@
     },
     "composer": {
         "attachFiles": "ファイルを添付",
+        "pickSkill": "スキルを選択",
+        "skillPickerTitle": "使用するスキルを選択",
         "pickAgent": "Agent を選択",
         "clearTarget": "送信先 Agent をクリア",
         "targetChip": "@{{agent}}",

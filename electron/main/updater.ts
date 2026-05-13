@@ -14,7 +14,7 @@ import { setQuitting } from './app-state';
 const fetch = globalThis.fetch;
 
 /** Internal update server base URL */
-const INTERNAL_UPDATE_URL = 'http://100.0.4.203';
+const INTERNAL_UPDATE_URL = 'http://portal.srv.lstech.com';
 
 /** Internal API response types */
 interface CheckUpdateResponse {
