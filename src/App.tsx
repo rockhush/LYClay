@@ -458,7 +458,7 @@ function PostLoginWarmup({
   useEffect(() => {
     let cancelled = false;
     void hostApiFetch<{ success: boolean; dataUrl?: string }>(
-      '/api/app/icon?name=512x512.png',
+      '/api/app/icon?name=1.png',
     )
       .then((result) => {
         if (!cancelled && result.success && result.dataUrl) {

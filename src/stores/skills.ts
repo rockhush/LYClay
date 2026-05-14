@@ -171,6 +171,32 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
             // Merge with direct config if available
             const directConfig = configResult[s.skillKey] || {};
 
+            // 获取版本号：优先使用 Gateway 返回的版本号，否则尝试从 package.json 读取
+            let version = s.version || 'unknown';
+            if (version === 'unknown' || !version) {
+              try {
+                const fs = require('fs');
+                const path = require('path');
+                if (s.baseDir) {
+                  const pkgPath = path.join(s.baseDir, 'package.json');
+                  if (fs.existsSync(pkgPath)) {
+                    const pkgContent = fs.readFileSync(pkgPath, 'utf-8');
+                    const pkg = JSON.parse(pkgContent);
+                    if (pkg.version) {
+                      version = pkg.version;
+                    }
+                  }
+                }
+              } catch (err) {
+                // 忽略读取错误
+                console.log(`Failed to read package.json for skill ${s.skillKey}:`, err);
+              }
+            }
+            // 如果还是未知，使用默认版本号
+            if (version === 'unknown' || !version) {
+              version = '1.0.0';
+            }
+
             return {
               id: s.skillKey,
               slug: s.slug || s.skillKey,
@@ -178,7 +204,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
               description: s.description || '',
               enabled: !s.disabled,
               icon: s.emoji || '📦',
-              version: s.version || '1.0.0',
+              version,
               author: s.author,
               config: {
                 ...(s.config || {}),
@@ -316,9 +342,6 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
           return { skills: [...state.skills, newSkill] };
         }
       });
-      
-      // 刷新技能列表以获取完整信息
-      await get().fetchSkills();
     } catch (error) {
       console.error('Install error:', error);
       throw error;
@@ -341,8 +364,6 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       if (!result.success) {
         throw new Error(result.error || 'Uninstall failed');
       }
-      // Refresh skills after uninstall
-      await get().fetchSkills();
     } catch (error) {
       console.error('Uninstall error:', error);
       throw error;
@@ -393,4 +414,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       ),
     }));
   },
+
+  // 本地更新搜索结果，用于安装/卸载后的即时状态更新
+  setSearchResults: (results) => set({ searchResults: results }),
 }));

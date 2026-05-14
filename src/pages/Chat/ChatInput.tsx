@@ -10,6 +10,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { WorkspacePicker } from '@/components/workspace/WorkspacePicker';
 import { ModelPicker } from '@/components/workspace/ModelPicker';
 import { hostApiFetch } from '@/lib/host-api';
@@ -85,6 +86,7 @@ interface ChatInputProps {
   disabled?: boolean;
   sending?: boolean;
   isEmpty?: boolean;
+  initialText?: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -131,18 +133,27 @@ function readFileAsBase64(file: globalThis.File): Promise<string> {
 
 // ── Component ────────────────────────────────────────────────────
 
-export function ChatInput({ onSend, onStop, disabled = false, sending = false, isEmpty = false }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, disabled = false, sending = false, isEmpty = false, initialText }: ChatInputProps) {
   const { t } = useTranslation('chat');
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(initialText || '');
+
+  // Sync initialText changes to input
+  useEffect(() => {
+    if (initialText !== undefined) {
+      setInput(initialText);
+    }
+  }, [initialText]);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [skillAttachments, setSkillAttachments] = useState<SkillAttachment[]>([]);
   const [targetAgentId, setTargetAgentId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+  const [skillSearchQuery, setSkillSearchQuery] = useState('');
   const skillPickerRef = useRef<HTMLDivElement>(null);
 
   const skills = useSkillsStore((s) => s.skills);
+  const skillsLoading = useSkillsStore((s) => s.loading);
   const fetchSkills = useSkillsStore((s) => s.fetchSkills);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -261,6 +272,8 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     const handlePointerDown = (event: MouseEvent) => {
       if (!skillPickerRef.current?.contains(event.target as Node)) {
         setSkillPickerOpen(false);
+    setSkillSearchQuery('');
+        setSkillSearchQuery('');
       }
     };
     document.addEventListener('mousedown', handlePointerDown);
@@ -699,7 +712,12 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                   'h-8 w-8 rounded-lg text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors',
                   skillPickerOpen && 'bg-primary/10 text-primary hover:bg-primary/20'
                 )}
-                onClick={() => setSkillPickerOpen((open) => !open)}
+                onClick={() => {
+                  setSkillPickerOpen((open) => !open);
+                  if (!skillPickerOpen) {
+                    setSkillSearchQuery('');
+                  }
+                }}
                 disabled={disabled || sending}
                 title={t('composer.pickSkill')}
               >
@@ -710,15 +728,42 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                   <div className="px-3 py-2 text-[11px] font-medium text-muted-foreground/80">
                     {t('composer.skillPickerTitle')}
                   </div>
+                  <div className="px-3 pb-2">
+                    <Input
+                      placeholder="搜索技能..."
+                      value={skillSearchQuery}
+                      onChange={(e) => setSkillSearchQuery(e.target.value)}
+                      className="h-8 text-sm border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5"
+                    />
+                  </div>
                   <div className="max-h-64 overflow-y-auto">
-                    {skills.filter(s => s.enabled).map((skill) => (
-                      <SkillPickerItem
-                        key={skill.id}
-                        skill={skill}
-                        selected={skillAttachments.some(s => s.skillId === skill.id)}
-                        onSelect={() => addSkillAttachment(skill.id)}
-                      />
-                    ))}
+                    {skillsLoading ? (
+                      <div className="flex items-center justify-center py-8 text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        <span className="text-xs">加载中...</span>
+                      </div>
+                    ) : Array.isArray(skills) && skills.length === 0 ? (
+                      <div className="flex items-center justify-center py-8 text-muted-foreground">
+                        <span className="text-xs">暂无可用技能</span>
+                      </div>
+                    ) : (
+                      skills.filter(s => s.enabled).filter(skill => {
+                        const q = skillSearchQuery.toLowerCase().trim();
+                        if (!q) {
+                          return true;
+                        }
+                        const nameMatch = skill.name.toLowerCase().includes(q);
+                        const descMatch = skill.description ? skill.description.toLowerCase().includes(q) : false;
+                        return nameMatch || descMatch;
+                      }).map((skill) => (
+                        <SkillPickerItem
+                          key={skill.id}
+                          skill={skill}
+                          selected={skillAttachments.some(s => s.skillId === skill.id)}
+                          onSelect={() => addSkillAttachment(skill.id)}
+                        />
+                      ))
+                    )}
                   </div>
                 </div>
               )}

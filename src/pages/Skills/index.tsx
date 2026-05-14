@@ -425,6 +425,8 @@ export function Skills() {
     searchSkills,
     installSkill,
     uninstallSkill,
+    setSearchResults,
+    setSkills,
     searching,
     searchError,
     installing
@@ -633,16 +635,24 @@ export function Skills() {
     if (!installSheetOpen) {
       return;
     }
-
+    // 每次重新进入对话框都需要调用接口
     searchSkills(installQuery.trim(), selectedType);
-  }, [installSheetOpen, searchSkills, selectedType]);
+  }, [installSheetOpen]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      searchSkills(installQuery.trim(), selectedType);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [installQuery, searchSkills, selectedType]);
+    // 下拉框选择时立即调用接口
+    searchSkills(installQuery.trim(), selectedType);
+  }, [selectedType]);
+
+  const handleSearch = useCallback(() => {
+    searchSkills(installQuery.trim(), selectedType);
+  }, [installQuery, selectedType, searchSkills]);
+
+  const handleInstallQueryKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSearch();
+    }
+  }, [handleSearch]);
 
   const handleInstall = useCallback(async (slug: string) => {
     try {
@@ -651,10 +661,41 @@ export function Skills() {
       
       await installSkill(slug);
       await enableSkill(slug);
-      // 安装成功后刷新技能列表，确保新安装的技能显示在列表中
-      await fetchSkills();
-      // 重新搜索市场，更新搜索结果中的安装状态
-      await searchSkills(installQuery.trim(), selectedType);
+      
+      // 本地更新搜索结果，标记技能为已安装
+      const updatedSearchResults = searchResults.map(skill => {
+        if (skill.slug === slug) {
+          return { ...skill, __installed: true };
+        }
+        return skill;
+      });
+      setSearchResults(updatedSearchResults);
+      
+      // 在 safeSkills 中添加新安装的技能
+      const installedSkill = searchResults.find(s => s.slug === slug);
+      if (installedSkill) {
+        const newSkill: Skill = {
+          id: installedSkill.slug,
+          slug: installedSkill.slug,
+          name: installedSkill.name,
+          description: installedSkill.description || '',
+          enabled: true,
+          icon: getSkillInitial(installedSkill.name),
+          version: installedSkill.version || 'unknown',
+          author: installedSkill.author,
+          config: {},
+          isCore: false,
+          isBundled: false,
+          source: 'openclaw-managed',
+          baseDir: undefined,
+          filePath: undefined,
+        };
+        // 检查是否已存在，避免重复添加
+        const exists = safeSkills.some(s => s.id === slug || s.slug === slug);
+        if (!exists) {
+          setSkills([...safeSkills, newSkill]);
+        }
+      }
       
       // 恢复滚动位置
       setTimeout(() => {
@@ -670,7 +711,7 @@ export function Skills() {
         toast.error(t('toast.failedInstall') + ': ' + errorMessage);
       }
     }
-  }, [installSkill, enableSkill, fetchSkills, searchSkills, installQuery, t, skillsDirPath]);
+  }, [installSkill, enableSkill, searchResults, safeSkills, setSkills, setSearchResults, t, skillsDirPath]);
 
   const handleUninstall = useCallback(async (slug: string) => {
     try {
@@ -678,23 +719,37 @@ export function Skills() {
       const currentScroll = listRef.current?.scrollTop || 0;
       
       await uninstallSkill(slug);
-      // 手动刷新技能列表（确保列表更新）
-      await fetchSkills();
-      // 重新搜索市场（更新安装弹窗中的状态）
-      await searchSkills(installQuery.trim(), selectedType);
+      
+      // 本地更新搜索结果，标记技能为未安装
+      const updatedSearchResults = searchResults.map(skill => {
+        if (skill.slug === slug) {
+          return { ...skill, __installed: false };
+        }
+        return skill;
+      });
+      setSearchResults(updatedSearchResults);
+      
+      // 从 safeSkills 中移除已卸载的技能
+      const updatedSkills = safeSkills.filter(s => 
+        !(s.id === slug || s.slug === slug || s.name === slug || s.baseDir?.includes(slug))
+      );
+      setSkills(updatedSkills);
+      
       // 关闭技能详情弹窗
       setSelectedSkill(null);
       
       // 恢复滚动位置
       setTimeout(() => {
-        listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
+        if (listRef.current) {
+          listRef.current.scrollTop = currentScroll;
+        }
       }, 0);
       
       toast.success(t('toast.uninstalled'));
     } catch (err) {
       toast.error(t('toast.failedUninstall') + ': ' + String(err));
     }
-  }, [uninstallSkill, fetchSkills, searchSkills, installQuery, t]);
+  }, [uninstallSkill, searchResults, safeSkills, setSkills, setSearchResults, t]);
 
   if (loading) {
     return (
@@ -910,7 +965,13 @@ export function Skills() {
         </div>
       </div>
 
-      <Sheet open={installSheetOpen} onOpenChange={setInstallSheetOpen}>
+      <Sheet open={installSheetOpen} onOpenChange={(open) => {
+            setInstallSheetOpen(open);
+            // 当弹窗关闭时，刷新技能列表
+            if (!open) {
+              fetchSkills();
+            }
+          }}>
         <SheetContent
           className="w-full sm:max-w-[800px] p-0 flex flex-col border-l border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-[0_0_40px_rgba(0,0,0,0.2)]"
           side="right"
@@ -951,12 +1012,16 @@ export function Skills() {
                   placeholder={t('searchMarketplace')}
                   value={installQuery}
                   onChange={(e) => setInstallQuery(e.target.value)}
+                  onKeyDown={handleInstallQueryKeyDown}
                   className="ml-2 h-auto border-0 bg-transparent p-0 shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 text-[13px]"
                 />
                 {installQuery && (
                   <button
                     type="button"
-                    onClick={() => setInstallQuery('')}
+                    onClick={() => {
+                      setInstallQuery('');
+                      searchSkills('', selectedType);
+                    }}
                     className="text-foreground/50 hover:text-foreground shrink-0 ml-1"
                   >
                     <X className="h-3.5 w-3.5" />

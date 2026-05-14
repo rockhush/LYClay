@@ -5,7 +5,7 @@
  * surfaced via ExecutionGraphCard, not inside message bubbles.
  */
 import { useState, useCallback, useEffect, memo } from 'react';
-import { Sparkles, Copy, Check, ChevronDown, ChevronRight, Wrench, FileText, Film, Music, FileArchive, File, X, FolderOpen, ZoomIn, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Sparkles, Copy, Check, ChevronDown, ChevronRight, Wrench, FileText, Film, Music, FileArchive, File, X, FolderOpen, ZoomIn, Loader2, CheckCircle2, AlertCircle, Edit3 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -39,6 +39,8 @@ interface ChatMessageProps {
     durationMs?: number;
     summary?: string;
   }>;
+  onEditMessage?: (text: string) => void;
+  showEditButton?: boolean;
 }
 
 interface ExtractedImage { url?: string; data?: string; mimeType: string; }
@@ -88,6 +90,8 @@ export const ChatMessage = memo(function ChatMessage({
   suppressAssistantText = false,
   isStreaming = false,
   streamingTools = [],
+  onEditMessage,
+  showEditButton = true,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const role = typeof message.role === 'string' ? message.role.toLowerCase() : '';
@@ -262,11 +266,23 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
-        {/* Hover row for user messages — timestamp only */}
+        {/* Hover row for user messages — timestamp + edit button */}
         {isUser && message.timestamp && (
-          <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
-            {formatTimestamp(message.timestamp)}
-          </span>
+          <div className="flex items-center justify-between w-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
+            <span className="text-xs text-muted-foreground">
+              {formatTimestamp(message.timestamp)}
+            </span>
+            {onEditMessage && showEditButton && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 -ml-5"
+                onClick={() => onEditMessage(text)}
+              >
+                <Edit3 className="h-3 w-3" />
+              </Button>
+            )}
+          </div>
         )}
 
         {/* Hover row for assistant messages — only when there is real text content */}

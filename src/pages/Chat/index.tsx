@@ -76,6 +76,7 @@ export function Chat() {
   const isGatewayRunning = gatewayStatus.state === 'running';
   const warmupStatus = gatewayStatus.warmupStatus;
 
+  const [editingText, setEditingText] = useState<string | null>(null);
   const messages = useChatStore((s) => s.messages);
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
@@ -113,6 +114,27 @@ export function Chat() {
   // Otherwise the Welcome screen flashes and looks “stuck” until messages arrive.
   const minLoading = useMinLoading(loading);
   const { contentRef, scrollRef } = useStickToBottomInstant(currentSessionKey);
+
+  // Auto scroll to bottom during sending/streaming, and when new messages arrive
+  useEffect(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement) return;
+
+    // During sending or streaming, always scroll to bottom immediately
+    // Use requestAnimationFrame to ensure DOM is updated before scrolling
+    requestAnimationFrame(() => {
+      if (sending || streamingText || streamingTools.length > 0) {
+        scrollElement.scrollTop = scrollElement.scrollHeight;
+        return;
+      }
+
+      // When not sending/streaming, only scroll if we're already near the bottom (within 100px)
+      const isNearBottom = scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 100;
+      if (isNearBottom) {
+        scrollElement.scrollTop = scrollElement.scrollHeight;
+      }
+    });
+  }, [sending, streamingText, streamingTools.length, messages.length, scrollRef]);
 
   // Load data when gateway is running.
   // When the store already holds messages for this session (i.e. the user
@@ -706,6 +728,8 @@ export function Chat() {
                         textOverride={replyTextOverrides.get(idx)}
                         suppressToolCards={suppressToolCards}
                         suppressProcessAttachments={suppressToolCards}
+                        onEditMessage={setEditingText}
+                        showEditButton={!sending && !hasActiveExecutionGraph}
                       />
                       {(userRunCardsByTriggerIndex.get(idx) ?? [])
                         .map((card) => {
@@ -827,6 +851,7 @@ export function Chat() {
         disabled={!isGatewayRunning}
         sending={sending || hasActiveExecutionGraph}
         isEmpty={isEmpty}
+        initialText={editingText || undefined}
       />
 
       {/* Transparent loading overlay */}
