@@ -128,6 +128,9 @@ Skills 页面可展示来自多个 OpenClaw 来源的技能（托管目录、wor
 重点搜索技能所需环境变量：
 - `TAVILY_API_KEY`：用于 `tavily-search`（上游运行时也可能支持 OAuth）
 
+### 🔌 MCP 连接器
+在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。
+
 ### 🔐 安全的供应商集成
 连接多个 AI 供应商（OpenAI、Anthropic 等），凭证安全存储在系统原生密钥链中。OpenAI 同时支持 API Key 与浏览器 OAuth（Codex 订阅）登录。
 如果你通过 **自定义（Custom）Provider** 对接 OpenAI-compatible 网关，可以在 **设置 → AI Providers → 编辑 Provider** 中配置自定义 `User-Agent`，以提高兼容性。

@@ -14,7 +14,7 @@ import * as path from 'path';
 import { app } from 'electron';
 
 const COMPANY_API_BASE = 'http://portal.srv.lstech.com/aihome/api/skill';
-
+// const COMPANY_API_BASE = 'http://100.0.4.203/aihome/api/skill';
 interface CompanySkill {
   id: number;
   name: string;
@@ -77,8 +77,31 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
 
   async search(params: ClawHubSearchParams): Promise<ClawHubSkillResult[]> {
     try {
-      const url = `${COMPANY_API_BASE}/list/`;
-      console.log('[CompanyMarketplace] Search called with params:', params);
+      // 获取当前操作系统
+      const os = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? '' : 'linux';
+      
+      // 构建完整的参数对象（包含os）
+      const fullParams = {
+        ...params,
+        os,
+      };
+      
+      // 构建带参数的URL
+      const sort = params.sort || '';
+      const paramsArray: string[] = [];
+      if (params.query) {
+        paramsArray.push(`query=${encodeURIComponent(params.query)}`);
+      }
+      if (params.category) {
+        paramsArray.push(`category=${encodeURIComponent(params.category)}`);
+      }
+      if (sort) {
+        paramsArray.push(`sort=${encodeURIComponent(sort)}`);
+      }
+      paramsArray.push(`os=${os}`);
+      
+      const url = `${COMPANY_API_BASE}/list/?${paramsArray.join('&')}`;
+      console.log('[CompanyMarketplace] Search called with params:', fullParams);
       console.log('[CompanyMarketplace] Calling API:', url);
 
       const response = await fetch(url, {

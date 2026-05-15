@@ -14,6 +14,7 @@ import { setQuitting } from './app-state';
 const fetch = globalThis.fetch;
 
 /** Internal update server base URL */
+// const INTERNAL_UPDATE_URL = 'http://100.0.4.203';
 const INTERNAL_UPDATE_URL = 'http://portal.srv.lstech.com';
 
 /** Internal API response types */
@@ -207,7 +208,12 @@ export class AppUpdater extends EventEmitter {
       }
     } catch (error) {
       logger.error('[Updater] Check for updates failed:', error);
-      this.updateStatus({ status: 'error', error: (error as Error).message || String(error) });
+      // 检查是否为 JSON 解析错误（通常是断网或外网导致返回 HTML 页面）
+      const errorMsg = (error as Error).message || String(error);
+      const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
+        ? '请使用内网检测'
+        : errorMsg;
+      this.updateStatus({ status: 'error', error: friendlyError });
       throw error;
     }
   }

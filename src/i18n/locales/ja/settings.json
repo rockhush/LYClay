@@ -206,7 +206,9 @@
       }
     },
     "devMode": "開発者モード",
-    "devModeDesc": "開発者ツールとショートカットを表示"
+    "devModeDesc": "開発者ツールとショートカットを表示",
+    "telemetry": "匿名の利用データ",
+    "telemetryDesc": "LYClaw の改善のため、匿名の基本的な利用データの提供を許可します"
   },
   "developer": {
     "title": "開発者",

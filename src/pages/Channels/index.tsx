@@ -681,7 +681,7 @@ export function Channels() {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-8 text-xs rounded-full"
+                          className="h-8 text-xs rounded-full shadow-md shadow-black/10"
                           onClick={() => {
                             const shouldUseGeneratedAccountId = !usesPluginManagedQrAccounts(group.channelType);
                             const nextAccountId = shouldUseGeneratedAccountId
@@ -754,7 +754,7 @@ export function Channels() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-8 text-xs rounded-full"
+                                className="h-8 text-xs rounded-full shadow-md shadow-black/10"
                                   onClick={() => {
                                     void (async () => {
                                       try {

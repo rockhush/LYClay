@@ -1,0 +1,93 @@
+{
+  "title": "Коннекторы",
+  "subtitle": "Подключайте внешние сервисы и расширяйте возможности агента.",
+  "customConnector": "Пользовательский коннектор",
+  "tabs": {
+    "builtIn": "Встроенные",
+    "custom": "Пользовательские"
+  },
+  "builtIn": {
+    "notion": {
+      "title": "Notion",
+      "desc": "Страницы, базы и совместная работа в Notion."
+    },
+    "github": {
+      "title": "GitHub",
+      "desc": "Репозитории, задачи и PR через официальный GitHub MCP."
+    }
+  },
+  "custom": {
+    "empty": "Пользовательских MCP пока нет. Добавьте через кнопку выше или отредактируйте OpenClaw mcp.servers.",
+    "emptyCta": "Добавить MCP"
+  },
+  "card": {
+    "install": "Установить или настроить",
+    "open": "Подробнее",
+    "addAnother": "Добавить ещё"
+  },
+  "toast": {
+    "installed": "Сохранено в mcp.servers",
+    "customSaved": "MCP-сервер добавлен"
+  },
+  "dialog": {
+    "cancel": "Отмена",
+    "save": "Сохранить",
+    "install": "Установить",
+    "github": {
+      "title": "Установить GitHub MCP",
+      "token": "Personal access token GitHub"
+    },
+    "notion": {
+      "title": "Установить Notion MCP",
+      "key": "API-ключ Notion (секрет интеграции)"
+    },
+    "custom": {
+      "title": "Добавить MCP-сервер",
+      "name": "Имя (ключ в mcp.servers)",
+      "type": "Транспорт",
+      "command": "Команда",
+      "args": "Аргументы (через запятую)",
+      "url": "HTTPS URL",
+      "env": "Переменные среды (строка KEY=value)",
+      "disabled": "Создать отключённым",
+      "badEnv": "Каждая строка env должна быть KEY=value",
+      "reservedName": "Имена notion и github зарезервированы для встроенных коннекторов."
+    }
+  },
+  "mcp": {
+    "title": "Службы MCP",
+    "subtitle": "Серверы из файла mcp.servers OpenClaw.",
+    "editJson": "Редактировать JSON",
+    "searchPlaceholder": "Поиск серверов…",
+    "summary": "{{count}} серверов · {{enabled}} включено",
+    "none": "Нет совпадений.",
+    "toolsLine": "Инструменты {{used}} / {{total}}",
+    "toolsUnknown": "Счётчики инструментов зависят от Gateway",
+    "openJson": "Редактировать JSON"
+  },
+  "editor": {
+    "title": "Конфигурация MCP",
+    "back": "К списку",
+    "save": "Сохранить",
+    "revert": "Откатить",
+    "saved": "Сохранено",
+    "invalidJson": "Некорректный JSON."
+  },
+  "customCard": {
+    "add": "Добавить",
+    "refresh": "Обновить",
+    "deleteServer": "Удалить",
+    "toggle": "Вкл / выкл",
+    "loadingTools": "Загрузка инструментов…",
+    "toolsUnknownShort": "Список инструментов пуст",
+    "toolsEnabledLine": "{{enabled}} / {{total}} инструментов включено",
+    "emptyToolsHint": "Запустите Gateway и нажмите «Обновить», либо настройте tools.allow / tools.deny в mcp.servers.",
+    "toolClickDisable": "Нажмите, чтобы отключить (tools.deny; список не перезагружается)",
+    "toolClickRestore": "Нажмите снова, чтобы включить",
+    "deleteConfirmTitle": "Удалить «{{name}}»?",
+    "deleteConfirmMessage": "Запись MCP-сервера будет удалена из mcp.servers.",
+    "deleteConfirm": "Удалить",
+    "cancel": "Отмена",
+    "deletedServer": "Сервер MCP удалён"
+  }
+}

@@ -127,6 +127,9 @@ Skills ページでは OpenClaw の複数ソース（管理ディレクトリ、
 主な検索スキルで必要な環境変数:
 - `TAVILY_API_KEY`: `tavily-search` 用（上流ランタイムで OAuth 対応の場合あり）
 
+### 🔌 MCP コネクタ
+サイドバーの **コネクタ** から Model Context Protocol サーバーを管理できます（内蔵の Notion / GitHub セットアップとカスタム MCP）。**`#/settings/mcp`**（MCP サービス）や **`#/settings/mcp/config`**（MCP JSON 編集）からも同じ `~/.openclaw/mcp.json` を扱え、保存時に可能な範囲でローカルの OpenClaw Gateway を再読み込みします。
+
 ### 🔐 セキュアなプロバイダー統合
 複数のAIプロバイダー（OpenAI、Anthropicなど）に接続でき、資格情報はシステムのネイティブキーチェーンに安全に保存されます。OpenAI は API キーとブラウザ OAuth（Codex サブスクリプション）の両方に対応しています。
 OpenAI-compatible ゲートウェイを **Custom プロバイダー** で使う場合、**設定 → AI Providers → Provider 編集** でカスタム `User-Agent` を設定でき、互換性が必要なエンドポイントで有効です。

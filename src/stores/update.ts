@@ -160,10 +160,20 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
           error: result.status.error || null,
         });
       } else if (!result.success) {
-        set({ status: 'error', error: result.error || 'Failed to check for updates' });
+        // 检查是否为 JSON 解析错误，如果是则显示友好提示
+        const errorMsg = result.error || 'Failed to check for updates';
+        const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
+          ? '请使用内网检测'
+          : errorMsg;
+        set({ status: 'error', error: friendlyError });
       }
     } catch (error) {
-      set({ status: 'error', error: String(error) });
+      // 检查是否为 JSON 解析错误，如果是则显示友好提示
+      const errorMsg = String(error);
+      const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
+        ? '请使用内网检测'
+        : errorMsg;
+      set({ status: 'error', error: friendlyError });
     } finally {
       // In dev mode autoUpdater skips without emitting events, so the
       // status may still be 'checking' or even 'idle'. Catch both.

@@ -18,6 +18,8 @@ import {
   FileCode,
   Globe,
   Copy,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -440,6 +442,8 @@ export function Skills() {
   const [selectedType, setSelectedType] = useState<string>('');
   const [selectedSource, setSelectedSource] = useState<'all' | 'built-in' | 'marketplace'>('all');
   const [installFilter, setInstallFilter] = useState<'all' | 'installed' | 'uninstalled'>('installed');
+  const [sortBy, setSortBy] = useState<'download_count' | 'update_time'>('download_count');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [scrollPosition, setScrollPosition] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -636,17 +640,24 @@ export function Skills() {
       return;
     }
     // 每次重新进入对话框都需要调用接口
-    searchSkills(installQuery.trim(), selectedType);
+    // 服务器端规则：带-号是降序，不带是升序
+    const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+    searchSkills(installQuery.trim(), selectedType, sort);
   }, [installSheetOpen]);
 
   useEffect(() => {
-    // 下拉框选择时立即调用接口
-    searchSkills(installQuery.trim(), selectedType);
-  }, [selectedType]);
+    // 下拉框选择或排序变化时立即调用接口
+    // 服务器端规则：带-号是降序，不带是升序
+    const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+    console.log('[Skills] Search triggered with params:', { query: installQuery.trim(), category: selectedType, sort });
+    searchSkills(installQuery.trim(), selectedType, sort);
+  }, [selectedType, sortBy, sortOrder, installQuery]);
 
   const handleSearch = useCallback(() => {
-    searchSkills(installQuery.trim(), selectedType);
-  }, [installQuery, selectedType, searchSkills]);
+    // 服务器端规则：带-号是降序，不带是升序
+    const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+    searchSkills(installQuery.trim(), selectedType, sort);
+  }, [installQuery, selectedType, sortBy, sortOrder, searchSkills]);
 
   const handleInstallQueryKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -973,18 +984,39 @@ export function Skills() {
             }
           }}>
         <SheetContent
-          className="w-full sm:max-w-[800px] p-0 flex flex-col border-l border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-[0_0_40px_rgba(0,0,0,0.2)]"
+          className="w-full sm:max-w-[1070px] p-0 flex flex-col border-l border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-[0_0_40px_rgba(0,0,0,0.2)]"
           side="right"
         >
+          {/* 安装过程中的遮罩层 */}
+          {Object.values(installing).some(Boolean) && (
+            <div className="absolute inset-0 bg-white/80 dark:bg-card/80 flex items-center justify-center z-10 backdrop-blur-sm">
+              <div className="flex flex-col items-center">
+                <LoadingSpinner size="lg" />
+                <p className="mt-4 text-sm text-muted-foreground">{t('marketplace.installing')}</p>
+              </div>
+            </div>
+          )}
           <div className="px-7 py-6 border-b border-black/10 dark:border-white/10">
-            <SheetTitle className="text-[24px] font-serif text-foreground font-normal tracking-tight">
-              {t('marketplace.installDialogTitle')}
-              <span className="inline-flex items-baseline font-mono text-lg text-foreground/80">
-                ({searchResults.length})
-              </span>
-            </SheetTitle>
-            <p className="mt-1 text-[13px] text-foreground/70">{t('marketplace.installDialogSubtitle')}</p>
-            <div className="mt-4 grid grid-cols-5 gap-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <SheetTitle className="text-[24px] font-serif text-foreground font-normal tracking-tight">
+                  {t('marketplace.installDialogTitle')}
+                  <span className="inline-flex items-baseline font-mono text-lg text-foreground/80">
+                    ({searchResults.length})
+                  </span>
+                </SheetTitle>
+                <p className="mt-1 text-[13px] text-foreground/70">{t('marketplace.installDialogSubtitle')}</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setInstallSheetOpen(false)}
+                className="h-10 w-10 rounded-full bg-black/5 dark:bg-white/5 text-foreground/70 hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 shadow-sm transition-all"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+            <div className="mt-4 grid grid-cols-[1fr_4fr_3fr_2fr] gap-2">
               <div className="relative">
                 <select
                   value={selectedType}
@@ -1006,7 +1038,7 @@ export function Skills() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </div>
-              <div className="relative flex items-center bg-black/5 dark:bg-white/5 rounded-xl px-3 py-2 border border-black/10 dark:border-white/10 col-span-2">
+              <div className="relative flex items-center bg-black/5 dark:bg-white/5 rounded-xl px-3 py-2 border border-black/10 dark:border-white/10">
                 <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <Input
                   placeholder={t('searchMarketplace')}
@@ -1028,7 +1060,7 @@ export function Skills() {
                   </button>
                 )}
               </div>
-              <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 p-1 col-span-2">
+              <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 p-1">
                 {(['all', 'installed', 'uninstalled'] as const).map((filter) => {
                   const installedCount = searchResults.filter(skill => 
                     safeSkills.some(s => s.id === skill.slug || s.slug === skill.slug || s.name === skill.name || s.baseDir?.includes(skill.slug))
@@ -1056,6 +1088,44 @@ export function Skills() {
                       )}
                     >
                       {labels[filter]} ({counts[filter]})
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 p-1">
+                {(['download_count', 'update_time'] as const).map((sort) => {
+                  const labels = {
+                    download_count: '下载量',
+                    update_time: '时间',
+                  };
+                  const isSelected = sortBy === sort;
+                  return (
+                    <button
+                      key={sort}
+                      onClick={() => {
+                        if (sortBy === sort) {
+                          // 切换排序方向
+                          setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
+                        } else {
+                          // 切换排序字段，默认降序
+                          setSortBy(sort);
+                          setSortOrder('desc');
+                        }
+                      }}
+                      className={cn(
+                        "flex-1 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all flex items-center justify-center gap-1.5",
+                        isSelected
+                          ? "text-[#FF7B00]"
+                          : "text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+                      )}
+                    >
+                      {labels[sort]}
+                      {isSelected && sortOrder === 'desc' && (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                      {isSelected && sortOrder === 'asc' && (
+                        <ChevronUp className="h-4 w-4" />
+                      )}
                     </button>
                   );
                 })}
@@ -1134,11 +1204,18 @@ export function Skills() {
                         </div>
                       </div>
                       <div className="flex items-center gap-4 shrink-0" onClick={e => e.stopPropagation()}>
-                        {skill.version && (
-                          <span className="text-[13px] font-mono text-muted-foreground mr-2">
-                            v{skill.version}
-                          </span>
-                        )}
+                        <div className="flex flex-col items-end gap-0.5">
+                          {skill.version && (
+                            <span className="text-[13px] font-mono text-muted-foreground">
+                              v{skill.version}
+                            </span>
+                          )}
+                          {skill.downloads !== undefined && skill.downloads !== null && (
+                            <span className="text-[11px] text-muted-foreground">
+                              {skill.downloads} 次下载
+                            </span>
+                          )}
+                        </div>
                         {isInstalled ? (
                           <Button
                             variant="destructive"
@@ -1155,9 +1232,9 @@ export function Skills() {
                             size="sm"
                             onClick={() => handleInstall(skill.slug)}
                             disabled={isInstallLoading}
-                            className="h-8 px-4 rounded-full shadow-none font-medium text-xs"
+                            className="h-8 shadow-none"
                           >
-                            {isInstallLoading ? <LoadingSpinner size="sm" /> : t('marketplace.install', 'Install')}
+                            {isInstallLoading ? <LoadingSpinner size="sm" /> : <Package className="h-3.5 w-3.5" />}
                           </Button>
                         )}
                       </div>

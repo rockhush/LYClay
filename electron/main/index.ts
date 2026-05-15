@@ -49,6 +49,7 @@ import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { syncAllProviderAuthToRuntime } from '../services/providers/provider-runtime-sync';
 
 const WINDOWS_APP_USER_MODEL_ID = 'app.LYClaw.desktop';
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'dingtalk:']);
 const isE2EMode = process.env.CLAWX_E2E === '1';
 const requestedUserDataDir = process.env.CLAWX_USER_DATA_DIR?.trim();
 
@@ -219,7 +220,7 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url);
-      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      if (ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
         shell.openExternal(url);
       } else {
         logger.warn(`Blocked openExternal for disallowed protocol: ${parsed.protocol}`);

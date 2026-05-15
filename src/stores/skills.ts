@@ -93,7 +93,7 @@ interface SkillsState {
 
   // Actions
   fetchSkills: () => Promise<void>;
-  searchSkills: (query: string, category?: string) => Promise<void>;
+  searchSkills: (query: string, category?: string, sort?: string) => Promise<void>;
   installSkill: (slug: string, version?: string) => Promise<void>;
   uninstallSkill: (slug: string) => Promise<void>;
   enableSkill: (skillId: string) => Promise<void>;
@@ -274,14 +274,18 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     }
   },
 
-  searchSkills: async (query: string, category = '') => {
+  searchSkills: async (query: string, category = '', sort = '') => {
     set({ searching: true, searchError: null });
     try {
+      const requestBody = { query, category, sort };
+      console.log('[Skills Store] Request URL: /api/clawhub/search, Method: POST, Body:', requestBody);
       const result = await hostApiFetch<{ success: boolean; results?: MarketplaceSkill[]; error?: string }>('/api/clawhub/search', {
         method: 'POST',
-        body: JSON.stringify({ query, category }),
+        body: JSON.stringify(requestBody),
       });
       if (result.success) {
+        console.log('[Skills Store] Search results:', result.results);
+        console.log('[Skills Store] First 5 results:', result.results?.slice(0, 5));
         set({ searchResults: result.results || [] });
       } else {
         throw normalizeAppError(new Error(result.error || 'Search failed'), {

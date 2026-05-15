@@ -18,7 +18,10 @@ import { Agents } from './pages/Agents';
 import { Channels } from './pages/Channels';
 import { Skills } from './pages/Skills';
 import { Cron } from './pages/Cron';
+import { Connectors } from './pages/Connectors';
 import { Settings } from './pages/Settings';
+import { McpSettings } from './pages/Settings/McpSettings';
+import { McpConfigEditor } from './pages/Settings/McpConfigEditor';
 import { Setup } from './pages/Setup';
 import { Login } from './pages/Login';
 import { useSettingsStore } from './stores/settings';
@@ -424,7 +427,10 @@ function App() {
             <Route path="/agents" element={<Agents />} />
             <Route path="/channels" element={<Channels />} />
             <Route path="/skills" element={<Skills />} />
+            <Route path="/connectors" element={<Connectors />} />
             <Route path="/cron" element={<Cron />} />
+            <Route path="/settings/mcp/config" element={<McpConfigEditor />} />
+            <Route path="/settings/mcp" element={<McpSettings />} />
             <Route path="/settings/*" element={<Settings />} />
             {extraRoutes.map((r) => (
               <Route key={r.path} path={r.path} element={<r.component />} />

@@ -4,9 +4,9 @@
  * with markdown, images, and tool cards. Thinking output is
  * surfaced via ExecutionGraphCard, not inside message bubbles.
  */
-import { useState, useCallback, useEffect, memo } from 'react';
+import { useState, useCallback, useEffect, memo, type MouseEvent, type ReactNode } from 'react';
 import { Sparkles, Copy, Check, ChevronDown, ChevronRight, Wrench, FileText, Film, Music, FileArchive, File, X, FolderOpen, ZoomIn, Loader2, CheckCircle2, AlertCircle, Edit3 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -44,6 +44,26 @@ interface ChatMessageProps {
 }
 
 interface ExtractedImage { url?: string; data?: string; mimeType: string; }
+
+const EXTERNAL_LINK_PROTOCOLS = new Set(['http:', 'https:', 'dingtalk:']);
+
+function getExternalLinkProtocol(url: string): string | null {
+  try {
+    const protocol = new URL(url).protocol;
+    return EXTERNAL_LINK_PROTOCOLS.has(protocol) ? protocol : null;
+  } catch {
+    return null;
+  }
+}
+
+function transformMessageUrl(url: string): string {
+  return getExternalLinkProtocol(url) === 'dingtalk:' ? url : defaultUrlTransform(url);
+}
+
+function linkifyDingTalkDeepLinks(input: string): string {
+  if (!input.includes('dingtalk://')) return input;
+  return input.replace(/(?<!\]\()dingtalk:\/\/[^\s<>()]+/g, (url) => `[${url}](${url})`);
+}
 
 /**
  * Normalize LaTeX delimiters so `remark-math` can detect them.
@@ -433,14 +453,13 @@ function MessageBubble({
               },
               a({ href, children }) {
                 return (
-                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-words break-all">
-                    {children}
-                  </a>
+                  <MessageLink href={href}>{children}</MessageLink>
                 );
               },
             }}
+            urlTransform={transformMessageUrl}
           >
-            {normalizeLatexDelimiters(text)}
+            {linkifyDingTalkDeepLinks(normalizeLatexDelimiters(text))}
           </ReactMarkdown>
           {isStreaming && (
             <span className="inline-block w-2 h-4 bg-foreground/50 animate-pulse ml-0.5" />
@@ -449,6 +468,20 @@ function MessageBubble({
       )}
 
     </div>
+  );
+}
+
+function MessageLink({ href, children }: { href?: string; children: ReactNode }) {
+  const handleClick = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
+    if (!href || !getExternalLinkProtocol(href)) return;
+    event.preventDefault();
+    invokeIpc('shell:openExternal', href);
+  }, [href]);
+
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-words break-all" onClick={handleClick}>
+      {children}
+    </a>
   );
 }
 

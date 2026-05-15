@@ -11,6 +11,7 @@ import { getOpenClawConfigDir, ensureDir, getClawHubCliBinPath, getClawHubCliEnt
 export interface ClawHubSearchParams {
     query: string;
     limit?: number;
+    sort?: string;
 }
 
 export interface ClawHubInstallParams {
@@ -222,7 +223,14 @@ export class ClawHubService {
         
         if (this.marketplaceProvider) {
             console.log('[ClawHub] Using marketplace provider for search');
-            const result = await this.marketplaceProvider.search(params);
+            // 添加 os 参数
+            const os = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? '' : 'linux';
+            const paramsWithOs = {
+                ...params,
+                os,
+            };
+            console.log('[ClawHub] search params with os:', paramsWithOs);
+            const result = await this.marketplaceProvider.search(paramsWithOs);
             console.log('[ClawHub] Marketplace search result count:', result?.length || 0);
             return result;
         }
