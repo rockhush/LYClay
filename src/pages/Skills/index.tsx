@@ -1016,7 +1016,7 @@ export function Skills() {
                 <X className="h-5 w-5" />
               </Button>
             </div>
-            <div className="mt-4 grid grid-cols-[1fr_4fr_3fr_2fr] gap-2">
+            <div className={`mt-4 grid gap-2 ${navigator.platform.toLowerCase().includes('mac') ? 'grid-cols-[1fr_4fr_4fr_3fr]' : 'grid-cols-[1fr_4fr_3fr_2fr]'}`}>
               <div className="relative">
                 <select
                   value={selectedType}
