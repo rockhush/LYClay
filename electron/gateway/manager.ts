@@ -879,11 +879,11 @@ export class GatewayManager extends EventEmitter {
 
         const crypto = await import('crypto');
         // Send a real chat request to trigger AI provider initialization.
-        // The RPC returns when the run is accepted, so wait for first output
+        // The RPC returns when the run is accepted, so wait for completion
         // before declaring warmup complete.
         const warmupResult = await this.rpc('chat.send', {
           sessionKey: warmupSessionKey,
-          message: 'warmup',
+          message: '请用一句话回复 ready。',
           deliver: true,
           idempotencyKey: crypto.randomUUID(),
         }, 120000);
@@ -898,7 +898,7 @@ export class GatewayManager extends EventEmitter {
         if (this.status.state === 'running' && !this.status.gatewayReady) {
           this.setStatus({ gatewayReady: true });
         }
-        await this.waitForWarmupFirstOutput(warmupRunId);
+        await this.waitForWarmupCompletion(warmupRunId);
 
         this.isWarmedUp = true;
         this.setStatus({ warmupStatus: 'ready' });
@@ -1151,12 +1151,12 @@ export class GatewayManager extends EventEmitter {
     return typeof runId === 'string' && runId.trim() ? runId : null;
   }
 
-  private waitForWarmupFirstOutput(runId: string): Promise<void> {
+  private waitForWarmupCompletion(runId: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
       const timeout = setTimeout(() => {
         this.warmupRunWaiters.delete(runId);
-        reject(new Error(`Warmup first output timeout after ${Date.now() - startedAt}ms`));
+        reject(new Error(`Warmup completion timeout after ${Date.now() - startedAt}ms`));
       }, GatewayManager.WARMUP_FIRST_OUTPUT_TIMEOUT_MS);
 
       this.warmupRunWaiters.set(runId, {
@@ -1168,7 +1168,7 @@ export class GatewayManager extends EventEmitter {
     });
   }
 
-  private resolveWarmupFirstOutput(runId: string, state: string): void {
+  private resolveWarmupCompletion(runId: string, state: string): void {
     const waiter = this.warmupRunWaiters.get(runId);
     if (!waiter) {
       return;
@@ -1176,7 +1176,7 @@ export class GatewayManager extends EventEmitter {
 
     clearTimeout(waiter.timeout);
     this.warmupRunWaiters.delete(runId);
-    logger.info('[perf:first-session] gateway.warmup.first_output', {
+    logger.info('[perf:first-session] gateway.warmup.run_completed', {
       runId,
       state,
       waitedMs: Date.now() - waiter.startedAt,
@@ -1293,9 +1293,6 @@ export class GatewayManager extends EventEmitter {
         sinceFirstEventMs: metrics.firstEventAt ? now - metrics.firstEventAt : null,
         rpcDurationMs: metrics.rpcDurationMs,
       });
-      if (metrics.kind === 'warmup') {
-        this.resolveWarmupFirstOutput(runId, state);
-      }
       if (metrics.kind === 'user' && !this.isWarmedUp) {
         this.isWarmedUp = true;
         this.setStatus({ warmupStatus: 'ready' });
@@ -1310,7 +1307,7 @@ export class GatewayManager extends EventEmitter {
 
     if (state === 'final' || state === 'error' || state === 'aborted') {
       if (metrics.kind === 'warmup') {
-        this.resolveWarmupFirstOutput(runId, state);
+        this.resolveWarmupCompletion(runId, state);
       }
       if (metrics.firstEventWatchdogTimers) {
         for (const timer of metrics.firstEventWatchdogTimers) {
@@ -1346,36 +1343,18 @@ export class GatewayManager extends EventEmitter {
       return;
     }
 
-    if (this.warmupRequestPromise) {
-      logger.info('[perf:first-session] gateway.warmup.user_chat_priority', {
-        reason: 'do_not_block_user_chat_on_warmup_first_output',
-      });
-    }
-  }
-
-  private async prepareForWarmupExclusiveRpc(method: string, params?: unknown): Promise<void> {
-    if (!this.warmupRequestPromise || this.isWarmupChatSend(method, params) || this.isUserChatSend(method, params)) {
+    if (!this.warmupRequestPromise) {
       return;
     }
 
     const waitStart = Date.now();
-    logger.info('[perf:first-session] gateway.warmup.waiting_before_background_rpc', {
-      method,
-      reason: 'avoid_background_rpc_during_warmup',
+    logger.info('[perf:first-session] gateway.warmup.waiting_before_user_chat', {
+      reason: 'reuse_inflight_warmup_before_user_chat',
     });
     await this.warmupRequestPromise;
-    const releaseAfterWarmup = this.warmupBackgroundReleaseChain.then(
-      () => new Promise<void>((resolve) => {
-        setTimeout(resolve, GatewayManager.WARMUP_BACKGROUND_RPC_RELEASE_GAP_MS);
-      }),
-    );
-    this.warmupBackgroundReleaseChain = releaseAfterWarmup.catch(() => {});
-    await releaseAfterWarmup;
-    logger.info('[perf:first-session] gateway.warmup.waited_before_background_rpc', {
-      method,
+    logger.info('[perf:first-session] gateway.warmup.waited_before_user_chat', {
       waitedMs: Date.now() - waitStart,
       warmupReady: this.isWarmedUp,
-      releaseGapMs: GatewayManager.WARMUP_BACKGROUND_RPC_RELEASE_GAP_MS,
     });
   }
 
@@ -1392,7 +1371,6 @@ export class GatewayManager extends EventEmitter {
    */
   async rpc<T>(method: string, params?: unknown, timeoutMs = 30000): Promise<T> {
     await this.prepareForUserChatSend(method, params);
-    await this.prepareForWarmupExclusiveRpc(method, params);
     const rpcStart = Date.now();
     logger.info(`[rpc] ${method} started (timeout=${timeoutMs}ms)`);
 

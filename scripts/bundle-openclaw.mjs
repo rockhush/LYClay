@@ -944,22 +944,86 @@ function patchBundledRuntime(outputDir) {
     'If this was a transient error (timeout, network), you may retry once. If the same error persists after retry, try an alternative approach and let the user know.';
   const ORIGINAL_SHORT = 'Do NOT retry the browser tool.';
   const PATCHED_SHORT = 'You may retry once if this was a transient error.';
+  const pricingBootstrapOriginal = [
+    'function startGatewayModelPricingRefresh(params) {',
+    '\tlet stopped = false;',
+    '\tqueueMicrotask(() => {',
+    '\t\tif (stopped) return;',
+    '\t\trefreshGatewayModelPricingCache(params).catch((error) => {',
+    '\t\t\tlog.warn(`pricing bootstrap failed: ${String(error)}`);',
+    '\t\t});',
+    '\t});',
+    '\treturn () => {',
+    '\t\tstopped = true;',
+    '\t\tclearRefreshTimer();',
+    '\t};',
+    '}',
+  ].join('\n');
+  const pricingBootstrapPatched = [
+    'function startGatewayModelPricingRefresh(params) {',
+    '\tlet stopped = false;',
+    '\trefreshTimer = setTimeout(() => {',
+    '\t\trefreshTimer = null;',
+    '\t\tif (stopped) return;',
+    '\t\trefreshGatewayModelPricingCache(params).catch((error) => {',
+    '\t\t\tlog.warn(`pricing bootstrap failed: ${String(error)}`);',
+    '\t\t});',
+    '\t}, 9e4);',
+    '\treturn () => {',
+    '\t\tstopped = true;',
+    '\t\tclearRefreshTimer();',
+    '\t};',
+    '}',
+  ].join('\n');
+  const channelPrewarmOriginal = [
+    '\t\tif (!skipChannels) try {',
+    '\t\t\tawait prewarmConfiguredPrimaryModel({',
+    '\t\t\t\tcfg: params.cfg,',
+    '\t\t\t\tlog: params.log',
+    '\t\t\t});',
+    '\t\t\tawait params.startChannels();',
+    '\t\t} catch (err) {',
+  ].join('\n');
+  const channelPrewarmPatched = [
+    '\t\tif (!skipChannels) try {',
+    '\t\t\tsetTimeout(() => {',
+    '\t\t\t\tprewarmConfiguredPrimaryModel({',
+    '\t\t\t\t\tcfg: params.cfg,',
+    '\t\t\t\t\tlog: params.log',
+    '\t\t\t\t}).catch((err) => {',
+    '\t\t\t\t\tparams.log.warn(`startup model warmup failed: ${String(err)}`);',
+    '\t\t\t\t});',
+    '\t\t\t}, 3e4);',
+    '\t\t\tawait params.startChannels();',
+    '\t\t} catch (err) {',
+  ].join('\n');
 
   const distDir = path.join(outputDir, 'dist');
   let hintCount = 0;
+  let pricingBootstrapCount = 0;
+  let channelPrewarmCount = 0;
   if (fs.existsSync(distDir)) {
     for (const file of fs.readdirSync(distDir)) {
       if (!file.endsWith('.js')) continue;
       const filePath = path.join(distDir, file);
       try {
         const content = fs.readFileSync(filePath, 'utf8');
-        if (!content.includes(ORIGINAL_HINT) && !content.includes(ORIGINAL_SHORT)) continue;
-        const patched = content
+        let patched = content
           .replaceAll(ORIGINAL_HINT, PATCHED_HINT)
           .replaceAll(ORIGINAL_SHORT, PATCHED_SHORT);
         if (patched !== content) {
-          fs.writeFileSync(filePath, patched, 'utf8');
           hintCount++;
+        }
+        if (patched.includes(pricingBootstrapOriginal)) {
+          patched = patched.replace(pricingBootstrapOriginal, pricingBootstrapPatched);
+          pricingBootstrapCount++;
+        }
+        if (patched.includes(channelPrewarmOriginal)) {
+          patched = patched.replace(channelPrewarmOriginal, channelPrewarmPatched);
+          channelPrewarmCount++;
+        }
+        if (patched !== content) {
+          fs.writeFileSync(filePath, patched, 'utf8');
         }
       } catch { /* skip on error */ }
     }
@@ -967,6 +1031,12 @@ function patchBundledRuntime(outputDir) {
 
   if (hintCount > 0) {
     echo`   🩹 Patched ${hintCount} browser tool hint(s) to allow transient error retry`;
+  }
+  if (pricingBootstrapCount > 0) {
+    echo`   🩹 Patched ${pricingBootstrapCount} model pricing bootstrap(s) to run after startup`;
+  }
+  if (channelPrewarmCount > 0) {
+    echo`   🩹 Patched ${channelPrewarmCount} channel model prewarm(s) to run after startup`;
   }
 }
 

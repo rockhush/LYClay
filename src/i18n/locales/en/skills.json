@@ -107,5 +107,24 @@
         "noResults": "No skills found matching your search.",
         "emptyPrompt": "Search for new skills to expand your capabilities.",
         "searchError": "Company marketplace search failed. Check your connection or contact administrator."
+    },
+    "upload": {
+        "title": "Upload Skill",
+        "subtitle": "Install skill from local ZIP file",
+        "dragDrop": "Drag file or click to upload",
+        "browse": "Browse Files",
+        "autoInstall": "Auto-install non-high-risk skills",
+        "requirements": "File Requirements",
+        "requirement1": "Folder or .zip must contain SKILL.md file",
+        "requirement2": "SKILL.md file must contain skill name and description in YAML format",
+        "cancel": "Cancel",
+        "upload": "Upload",
+        "uploading": "Uploading...",
+        "success": "Upload Successful",
+        "successDesc": "Skill {{name}} has been installed successfully",
+        "failed": "Upload Failed",
+        "failedDesc": "Unable to complete upload, please try again",
+        "invalidFileType": "Invalid file type",
+        "zipOnly": "Only ZIP files are supported"
     }
 }

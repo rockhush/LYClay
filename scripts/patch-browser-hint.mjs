@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
-const REPLACEMENTS = [
+const BROWSER_HINT_REPLACEMENTS = [
   [
     'Do NOT retry the browser tool \u2014 it will keep failing. Use an alternative approach or inform the user that the browser is currently unavailable.',
     'If this was a transient error (timeout, network), you may retry once. If the same error persists after retry, try an alternative approach and let the user know.',
@@ -21,6 +21,75 @@ const REPLACEMENTS = [
     'Do NOT retry the browser tool.',
     'You may retry once if this was a transient error.',
   ],
+];
+
+const PRICING_BOOTSTRAP_REPLACEMENTS = [
+  [
+    [
+      'function startGatewayModelPricingRefresh(params) {',
+      '\tlet stopped = false;',
+      '\tqueueMicrotask(() => {',
+      '\t\tif (stopped) return;',
+      '\t\trefreshGatewayModelPricingCache(params).catch((error) => {',
+      '\t\t\tlog.warn(`pricing bootstrap failed: ${String(error)}`);',
+      '\t\t});',
+      '\t});',
+      '\treturn () => {',
+      '\t\tstopped = true;',
+      '\t\tclearRefreshTimer();',
+      '\t};',
+      '}',
+    ].join('\n'),
+    [
+      'function startGatewayModelPricingRefresh(params) {',
+      '\tlet stopped = false;',
+      '\trefreshTimer = setTimeout(() => {',
+      '\t\trefreshTimer = null;',
+      '\t\tif (stopped) return;',
+      '\t\trefreshGatewayModelPricingCache(params).catch((error) => {',
+      '\t\t\tlog.warn(`pricing bootstrap failed: ${String(error)}`);',
+      '\t\t});',
+      '\t}, 9e4);',
+      '\treturn () => {',
+      '\t\tstopped = true;',
+      '\t\tclearRefreshTimer();',
+      '\t};',
+      '}',
+    ].join('\n'),
+  ],
+];
+
+const CHANNEL_PREWARM_REPLACEMENTS = [
+  [
+    [
+      '\t\tif (!skipChannels) try {',
+      '\t\t\tawait prewarmConfiguredPrimaryModel({',
+      '\t\t\t\tcfg: params.cfg,',
+      '\t\t\t\tlog: params.log',
+      '\t\t\t});',
+      '\t\t\tawait params.startChannels();',
+      '\t\t} catch (err) {',
+    ].join('\n'),
+    [
+      '\t\tif (!skipChannels) try {',
+      '\t\t\tsetTimeout(() => {',
+      '\t\t\t\tprewarmConfiguredPrimaryModel({',
+      '\t\t\t\t\tcfg: params.cfg,',
+      '\t\t\t\t\tlog: params.log',
+      '\t\t\t\t}).catch((err) => {',
+      '\t\t\t\t\tparams.log.warn(`startup model warmup failed: ${String(err)}`);',
+      '\t\t\t\t});',
+      '\t\t\t}, 3e4);',
+      '\t\t\tawait params.startChannels();',
+      '\t\t} catch (err) {',
+    ].join('\n'),
+  ],
+];
+
+const REPLACEMENTS = [
+  ...BROWSER_HINT_REPLACEMENTS,
+  ...PRICING_BOOTSTRAP_REPLACEMENTS,
+  ...CHANNEL_PREWARM_REPLACEMENTS,
 ];
 
 const distDir = join(process.cwd(), 'node_modules', 'openclaw', 'dist');

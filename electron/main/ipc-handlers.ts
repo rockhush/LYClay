@@ -3,10 +3,12 @@
  * Registers all IPC handlers for main-renderer communication
  */
 import { ipcMain, BrowserWindow, shell, dialog, app, nativeImage } from 'electron';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, extname, basename } from 'node:path';
 import crypto from 'node:crypto';
+import { readFile as fsReadFile, writeFile as fsWriteFile, access as fsAccess, mkdir as fsMkdir, rm as fsRm } from 'fs/promises';
+import * as fsP from 'fs/promises';
 import { GatewayManager } from '../gateway/manager';
 import { ClawHubService, ClawHubSearchParams, ClawHubInstallParams, ClawHubUninstallParams } from '../gateway/clawhub';
 import {
@@ -138,6 +140,9 @@ export function registerIpcHandlers(
 
   // File staging handlers (upload/send separation)
   registerFileHandlers();
+
+  // Skill upload handlers
+  registerSkillUploadHandlers();
 }
 
 function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
@@ -2694,4 +2699,96 @@ function registerSessionHandlers(): void {
       return { success: false, error: String(err) };
     }
   });
+}
+
+/**
+ * Skill upload IPC handlers
+ * Handles ZIP file upload and extraction to skills directory
+ */
+function registerSkillUploadHandlers(): void {
+  ipcMain.handle('skill:uploadZip', async (_, params: {
+    fileName: string;
+    base64Data: string;
+    autoInstall: boolean;
+  }) => {
+    try {
+      const skillsDir = getOpenClawSkillsDir();
+      const tempZipPath = join(skillsDir, `.upload_${Date.now()}.zip`);
+
+      // Ensure skills directory exists
+      await ensureDir(skillsDir);
+
+      // Decode base64 and write temp zip file
+      const buffer = Buffer.from(params.base64Data, 'base64');
+      await fsWriteFile(tempZipPath, buffer);
+
+      // Extract zip file
+      const isWin = process.platform === 'win32';
+      const { execSync } = await import('child_process');
+      const unzipCmd = isWin
+        ? `powershell -Command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${skillsDir}' -Force"`
+        : `unzip -o "${tempZipPath}" -d "${skillsDir}"`;
+
+      try {
+        execSync(unzipCmd, { stdio: 'pipe' });
+      } catch (unzipError) {
+        // Fallback to manual extraction
+        logger.warn('Zip extraction failed, trying manual extraction:', unzipError);
+        await manualExtractZip(tempZipPath, skillsDir);
+      }
+
+      // Clean up temp file
+      await fsRm(tempZipPath, { force: true });
+
+      // Try to extract skill name from SKILL.md
+      let skillName = params.fileName.replace(/\.zip$/i, '');
+      try {
+        const entries = await fsP.readdir(skillsDir);
+        const skillDirs = entries.filter(entry => {
+          const fullPath = join(skillsDir, entry);
+          return existsSync(fullPath) && existsSync(join(fullPath, 'SKILL.md'));
+        });
+        
+        // Find the most recently modified skill directory
+        if (skillDirs.length > 0) {
+          const stats = await Promise.all(
+            skillDirs.map(async (dir) => {
+              const stat = await fsP.stat(join(skillsDir, dir));
+              return { dir, mtime: stat.mtime };
+            })
+          );
+          stats.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+          skillName = stats[0].dir;
+        }
+      } catch (e) {
+        logger.warn('Could not extract skill name from SKILL.md:', e);
+      }
+
+      return {
+        success: true,
+        skillName,
+      };
+    } catch (error) {
+      logger.error('Skill upload error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Upload failed',
+      };
+    }
+  });
+}
+
+/**
+ * Manual zip extraction fallback (when system tools are unavailable)
+ */
+async function manualExtractZip(zipPath: string, destDir: string): Promise<void> {
+  try {
+    // Try to use node-unzipper if available, otherwise throw
+    const AdmZip = (await import('adm-zip')).default;
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(destDir, true);
+  } catch (error) {
+    logger.error('Manual zip extraction failed:', error);
+    throw new Error('Failed to extract zip file');
+  }
 }

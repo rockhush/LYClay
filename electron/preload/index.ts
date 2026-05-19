@@ -119,6 +119,7 @@ const electronAPI = {
         'skill:updateConfig',
         'skill:getConfig',
         'skill:getAllConfigs',
+        'skill:uploadZip',
         // Logs
         'log:getRecent',
         'log:readFile',

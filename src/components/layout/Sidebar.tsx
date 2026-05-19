@@ -3,7 +3,8 @@
  * Navigation sidebar with menu items.
  * No longer fixed - sits inside the flex layout below the title bar.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { version } from '@/../package.json';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Network,
@@ -18,6 +19,7 @@ import {
   Terminal,
   ExternalLink,
   Trash2,
+  Pencil,
   Cpu,
   Folder,
   FolderOpen,
@@ -37,6 +39,7 @@ import { useWorkspacesStore } from '@/stores/workspaces';
 import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { hostApiFetch } from '@/lib/host-api';
 import { toUserMessage } from '@/lib/api-client';
@@ -163,11 +166,13 @@ export function Sidebar() {
   const sessions = useChatStore((s) => s.sessions);
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
   const sessionLabels = useChatStore((s) => s.sessionLabels);
+  const customSessionLabels = useChatStore((s) => s.customSessionLabels);
   const sessionLastActivity = useChatStore((s) => s.sessionLastActivity);
   const sessionWorkspaceIds = useChatStore((s) => s.sessionWorkspaceIds);
   const switchSession = useChatStore((s) => s.switchSession);
   const newSession = useChatStore((s) => s.newSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
+  const renameSession = useChatStore((s) => s.renameSession);
   const loadSessions = useChatStore((s) => s.loadSessions);
   const chatSending = useChatStore((s) => s.sending);
   const activeRunId = useChatStore((s) => s.activeRunId);
@@ -268,7 +273,6 @@ export function Sidebar() {
 
   const selectWorkspace = (workspaceId: string) => {
     setCurrentWorkspace(workspaceId);
-    useChatStore.getState().bindCurrentSessionWorkspace(workspaceId);
 
     // 切换到对应 Agent 的主会话
     const agentsStore = useAgentsStore.getState();
@@ -347,7 +351,7 @@ export function Sidebar() {
   const isOnChat = useLocation().pathname === '/';
 
   const getSessionLabel = (key: string, displayName?: string, label?: string) =>
-    sessionLabels[key] ?? label ?? displayName ?? key;
+    customSessionLabels[key] ?? sessionLabels[key] ?? label ?? displayName ?? key;
 
   const openDevConsole = async () => {
     try {
@@ -368,6 +372,10 @@ export function Sidebar() {
 
   const { t } = useTranslation(['common', 'chat', 'settings']);
   const [sessionToDelete, setSessionToDelete] = useState<{ key: string; label: string } | null>(null);
+  const [sessionToRename, setSessionToRename] = useState<{ key: string; label: string } | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
   const [nowMs, setNowMs] = useState(INITIAL_NOW_MS);
 
   useEffect(() => {
@@ -376,6 +384,55 @@ export function Sidebar() {
     }, 60 * 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (sessionToRename) {
+      const id = window.setTimeout(() => {
+        renameInputRef.current?.focus();
+        renameInputRef.current?.select();
+      }, 0);
+      return () => window.clearTimeout(id);
+    }
+  }, [sessionToRename]);
+
+  const closeRenameDialog = () => {
+    if (renameSaving) return;
+    setSessionToRename(null);
+    setRenameDraft('');
+  };
+
+  const submitRename = async () => {
+    if (!sessionToRename || renameSaving) return;
+    const trimmed = renameDraft.trim();
+    if (!trimmed) {
+      toast.error(t('common:sidebar.renameSessionEmpty'));
+      return;
+    }
+    if (trimmed === sessionToRename.label) {
+      closeRenameDialog();
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      await renameSession(sessionToRename.key, trimmed);
+      setSessionToRename(null);
+      setRenameDraft('');
+    } catch (error) {
+      toast.error(`${t('common:sidebar.renameSessionFailed')}: ${toUserMessage(error)}`);
+    } finally {
+      setRenameSaving(false);
+    }
+  };
+
+  const handleRenameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void submitRename();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeRenameDialog();
+    }
+  };
 
   useEffect(() => {
     void fetchAgents();
@@ -429,7 +486,8 @@ export function Sidebar() {
         <button
           type="button"
           data-testid={`sidebar-session-${s.key}`}
-          onClick={() => {
+          onClick={(e) => {
+            e.stopPropagation(); // 阻止事件冒泡到工作空间
             if (s.key === currentSessionKey) {
               navigate('/');
               return;
@@ -445,7 +503,7 @@ export function Sidebar() {
               : undefined
           }
           className={cn(
-            'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors pr-7',
+            'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors pr-12',
             'hover:bg-black/10 dark:hover:bg-white/10',
             isOnChat && currentSessionKey === s.key
               ? 'bg-black/10 dark:bg-white/10 text-[#FF7B00] font-medium dark:text-foreground'
@@ -460,23 +518,43 @@ export function Sidebar() {
             <span className="truncate">{getSessionLabel(s.key, s.displayName, s.label)}</span>
           </div>
         </button>
-        <button
-          aria-label="Delete session"
-          onClick={(e) => {
-            e.stopPropagation();
-            setSessionToDelete({
-              key: s.key,
-              label: getSessionLabel(s.key, s.displayName, s.label),
-            });
-          }}
+        <div
           className={cn(
-            'absolute right-1 flex items-center justify-center rounded p-0.5 transition-opacity',
-            'opacity-0 group-hover:opacity-100',
-            'text-muted-foreground hover:text-destructive hover:bg-destructive/10',
+            'absolute right-1 flex items-center gap-0.5 transition-opacity',
+            'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
           )}
         >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
+          <button
+            type="button"
+            aria-label={t('common:sidebar.renameSession')}
+            title={t('common:sidebar.renameSession')}
+            data-testid={`sidebar-session-rename-${s.key}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              const currentLabel = getSessionLabel(s.key, s.displayName, s.label);
+              setSessionToRename({ key: s.key, label: currentLabel });
+              setRenameDraft(currentLabel);
+            }}
+            className="flex items-center justify-center rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={t('common:actions.delete')}
+            title={t('common:actions.delete')}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSessionToDelete({
+                key: s.key,
+                label: getSessionLabel(s.key, s.displayName, s.label),
+              });
+            }}
+            className="flex items-center justify-center rounded p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     );
   };
@@ -537,9 +615,14 @@ export function Sidebar() {
         {!sidebarCollapsed && (
           <div className="flex items-center gap-2 px-2 overflow-hidden">
             <img src={logoSvg} alt="LYClaw" className="h-5 w-auto shrink-0" />
-            <span className="text-sm font-semibold truncate whitespace-nowrap text-foreground/90">
-              LYClaw
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm font-semibold truncate whitespace-nowrap text-foreground/90">
+                LYClaw
+              </span>
+              <span className="text-[10px] font-medium text-muted-foreground/70">
+                v{version}
+              </span>
+            </div>
           </div>
         )}
         <Button
@@ -893,6 +976,62 @@ export function Sidebar() {
         }}
         onCancel={() => setSessionToDelete(null)}
       />
+
+      {sessionToRename && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rename-session-title"
+          data-testid="sidebar-session-rename-dialog"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              closeRenameDialog();
+            }
+          }}
+        >
+          <div
+            className="mx-4 w-full max-w-md rounded-lg border bg-card p-6 shadow-lg focus:outline-none"
+            tabIndex={-1}
+          >
+            <h2 id="rename-session-title" className="text-lg font-semibold">
+              {t('common:sidebar.renameSessionTitle')}
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('common:sidebar.renameSessionDescription')}
+            </p>
+            <div className="mt-4">
+              <Input
+                ref={renameInputRef}
+                value={renameDraft}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onKeyDown={handleRenameKeyDown}
+                placeholder={t('common:sidebar.renameSessionPlaceholder')}
+                maxLength={120}
+                disabled={renameSaving}
+                data-testid="sidebar-session-rename-input"
+              />
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={closeRenameDialog}
+                disabled={renameSaving}
+                data-testid="sidebar-session-rename-cancel"
+              >
+                {t('common:actions.cancel')}
+              </Button>
+              <Button
+                onClick={() => void submitRename()}
+                disabled={renameSaving || !renameDraft.trim()}
+                data-testid="sidebar-session-rename-save"
+              >
+                {renameSaving ? t('common:status.saving') : t('common:actions.save')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

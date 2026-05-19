@@ -77,6 +77,8 @@ export function Chat() {
   const warmupStatus = gatewayStatus.warmupStatus;
 
   const [editingText, setEditingText] = useState<string | null>(null);
+  const prefilledInput = useChatStore((s) => s.prefilledInput);
+  const setPrefilledInput = useChatStore((s) => s.setPrefilledInput);
   const messages = useChatStore((s) => s.messages);
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
@@ -851,7 +853,12 @@ export function Chat() {
         disabled={!isGatewayRunning}
         sending={sending || hasActiveExecutionGraph}
         isEmpty={isEmpty}
-        initialText={editingText || undefined}
+        initialText={editingText || prefilledInput || undefined}
+        onTextChange={(text) => {
+          if (prefilledInput && text !== prefilledInput) {
+            setPrefilledInput(null);
+          }
+        }}
       />
 
       {/* Transparent loading overlay */}

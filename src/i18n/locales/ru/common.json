@@ -13,6 +13,12 @@
         "models": "Модели",
         "workspaces": "Рабочие области",
         "deleteSessionConfirm": "Вы уверены, что хотите удалить сессию \"{{label}}\"?",
+        "renameSession": "Переименовать сессию",
+        "renameSessionTitle": "Изменить название чата",
+        "renameSessionDescription": "Выберите удобное имя — оно сохраняется после перезапуска приложения.",
+        "renameSessionPlaceholder": "Введите новое название чата",
+        "renameSessionEmpty": "Название чата не может быть пустым",
+        "renameSessionFailed": "Не удалось переименовать сессию",
         "openClawPage": "Страница OpenClaw"
     },
     "actions": {

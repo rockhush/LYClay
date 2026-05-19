@@ -154,6 +154,7 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
         description: skill.skill_detail,
         author: skill.author,
         downloads: skill.download_count,
+        category: skill.category,
       }));
 
       // 过滤掉内置技能，这些技能已经捆绑在openclaw包中

@@ -108,5 +108,24 @@
         "emptyPrompt": "暂无数据",
         "searchError": "领益广场搜索失败。请使用公司内网连接",
         "installing": "安装中..."
+    },
+    "upload": {
+        "title": "上传技能",
+        "subtitle": "从本地 ZIP 文件安装技能",
+        "dragDrop": "拖拽文件或点击上传",
+        "browse": "浏览文件",
+        "autoInstall": "非高风险自动安装",
+        "requirements": "文件要求",
+        "requirement1": "文件夹或者.zip需要包含SKILL.md文件",
+        "requirement2": "SKILL.md 文件需包含 YAML 格式的技能名称和描述",
+        "cancel": "取消",
+        "upload": "上传",
+        "uploading": "上传中...",
+        "success": "上传成功",
+        "successDesc": "技能 {{name}} 已成功安装",
+        "failed": "上传失败",
+        "failedDesc": "无法完成上传，请重试",
+        "invalidFileType": "无效的文件类型",
+        "zipOnly": "仅支持 ZIP 格式的文件"
     }
 }

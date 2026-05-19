@@ -7,7 +7,7 @@
  * are sent with the message (no base64 over WebSocket).
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle } from 'lucide-react';
+import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
@@ -57,6 +57,7 @@ import type { ReasoningMode } from '@/stores/chat';
 import type { AgentSummary } from '@/types/agent';
 import { useTranslation } from 'react-i18next';
 import { useSkillsStore } from '@/stores/skills';
+import { UploadSkillDialog } from '@/components/skills/UploadSkillDialog';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ interface ChatInputProps {
   sending?: boolean;
   isEmpty?: boolean;
   initialText?: string;
+  onTextChange?: (text: string) => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -133,7 +135,7 @@ function readFileAsBase64(file: globalThis.File): Promise<string> {
 
 // ── Component ────────────────────────────────────────────────────
 
-export function ChatInput({ onSend, onStop, disabled = false, sending = false, isEmpty = false, initialText }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, disabled = false, sending = false, isEmpty = false, initialText, onTextChange }: ChatInputProps) {
   const { t } = useTranslation('chat');
   const [input, setInput] = useState(initialText || '');
 
@@ -143,6 +145,11 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
       setInput(initialText);
     }
   }, [initialText]);
+
+  const handleInputChange = (value: string) => {
+    setInput(value);
+    onTextChange?.(value);
+  };
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [skillAttachments, setSkillAttachments] = useState<SkillAttachment[]>([]);
   const [targetAgentId, setTargetAgentId] = useState<string | null>(null);
@@ -150,12 +157,18 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillSearchQuery, setSkillSearchQuery] = useState('');
+  const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
   const skillPickerRef = useRef<HTMLDivElement>(null);
+  
+  // 斜杠搜索模式状态
+  const [slashSearchOpen, setSlashSearchOpen] = useState(false);
+  const slashSearchRef = useRef<HTMLDivElement>(null);
 
   const skills = useSkillsStore((s) => s.skills);
   const skillsLoading = useSkillsStore((s) => s.loading);
   const fetchSkills = useSkillsStore((s) => s.fetchSkills);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messages = useChatStore((s) => s.messages);
   const pickerRef = useRef<HTMLDivElement>(null);
   const reasoningRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
@@ -272,7 +285,6 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     const handlePointerDown = (event: MouseEvent) => {
       if (!skillPickerRef.current?.contains(event.target as Node)) {
         setSkillPickerOpen(false);
-    setSkillSearchQuery('');
         setSkillSearchQuery('');
       }
     };
@@ -282,9 +294,55 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     };
   }, [skillPickerOpen]);
 
+  // 斜杠搜索的外部点击关闭
+  useEffect(() => {
+    if (!slashSearchOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!slashSearchRef.current?.contains(event.target as Node)) {
+        setSlashSearchOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [slashSearchOpen]);
+
+  // 监听输入变化，检测斜杠搜索
+  useEffect(() => {
+    if (input.startsWith('/') && input.length >= 1) {
+      setSlashSearchOpen(true);
+    } else {
+      setSlashSearchOpen(false);
+    }
+  }, [input]);
+
   useEffect(() => {
     void fetchSkills();
   }, [fetchSkills]);
+
+  // 监听消息变化，当skill-creator工具执行完成后自动刷新技能列表
+  useEffect(() => {
+    if (messages.length === 0) return;
+    
+    // 获取最后一条消息
+    const lastMessage = messages[messages.length - 1];
+    
+    // 检查是否是工具结果消息
+    if (lastMessage.role === 'toolresult' || lastMessage.role === 'tool_result') {
+      // 检查是否包含skill-creator相关的工具调用
+      const content = lastMessage.content;
+      if (typeof content === 'object' && content !== null) {
+        // 检查工具名称
+        if ('toolName' in content && content.toolName === 'skill-creator') {
+          // 延迟刷新，确保技能已经保存到磁盘
+          setTimeout(() => {
+            void fetchSkills();
+          }, 1000);
+        }
+      }
+    }
+  }, [messages, fetchSkills]);
 
   // ── File staging via native dialog ─────────────────────────────
 
@@ -440,6 +498,14 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     setSkillPickerOpen(false);
   }, [skills, skillAttachments]);
 
+  // 斜杠搜索选择技能后插入到输入框
+  const handleSlashSkillSelect = useCallback((skill: Skill) => {
+    // 替换 /xxx 为 @技能名
+    const newInput = input.replace(/^\/[^\s]*/, `@${skill.name}`);
+    handleInputChange(newInput);
+    setSlashSearchOpen(false);
+  }, [input]);
+
   const allReady = attachments.length === 0 || attachments.every(a => a.status === 'ready');
   const hasFailedAttachments = attachments.some((a) => a.status === 'error');
   const canSend = (input.trim() || attachments.length > 0 || skillAttachments.length > 0) && allReady && !disabled && !sending;
@@ -481,7 +547,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
         id: s.id, skillId: s.skillId, skillName: s.skillName,
       })));
     }
-    setInput('');
+    handleInputChange('');
     setAttachments([]);
     setSkillAttachments([]);
     if (textareaRef.current) {
@@ -501,6 +567,13 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     (e: React.KeyboardEvent) => {
       if (e.key === 'Backspace' && !input && targetAgentId) {
         setTargetAgentId(null);
+        return;
+      }
+      // 输入 / 时，不做特殊处理，让输入正常显示在输入框中
+      // 斜杠搜索框会通过 useEffect 监听 input 变化自动显示
+      if (e.key === '/') {
+        // 确保原有技能选择器被关闭
+        setSkillPickerOpen(false);
         return;
       }
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -563,6 +636,9 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     [stageBufferFiles],
   );
 
+  // 获取斜杠搜索的关键词（去掉开头的 /）
+  const slashSearchKeyword = input.startsWith('/') ? input.slice(1) : '';
+
   return (
     <div
       className={cn(
@@ -574,6 +650,60 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
       onDrop={handleDrop}
     >
       <div className="w-full">
+        {/* 斜杠搜索技能列表 */}
+        {slashSearchOpen && (
+          <div ref={slashSearchRef} className="mb-3 w-full max-w-4xl mx-auto">
+            <div className="rounded-xl border border-black/10 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-card">
+              <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground/80 border-b border-black/5">
+                Skills
+              </div>
+              <div className="max-h-48 overflow-y-auto">
+                {skillsLoading ? (
+                  <div className="flex items-center justify-center py-4 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    <span className="text-xs">加载中...</span>
+                  </div>
+                ) : Array.isArray(skills) && skills.length === 0 ? (
+                  <div className="flex items-center justify-center py-4 text-muted-foreground">
+                    <span className="text-xs">暂无可用技能</span>
+                  </div>
+                ) : (
+                  skills.filter(s => s.enabled).filter(skill => {
+                    const q = slashSearchKeyword.toLowerCase().trim();
+                    if (!q) {
+                      return true;
+                    }
+                    const nameMatch = skill.name.toLowerCase().includes(q);
+                    const descMatch = skill.description ? skill.description.toLowerCase().includes(q) : false;
+                    return nameMatch || descMatch;
+                  }).map((skill, index) => (
+                    <button
+                      key={skill.id}
+                      type="button"
+                      onClick={() => handleSlashSkillSelect(skill)}
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors',
+                        index === 0 ? 'bg-primary/5' : 'hover:bg-black/5 dark:hover:bg-white/5'
+                      )}
+                    >
+                      <div className={`w-5 h-5 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white rounded-md ${getSkillColor(skill.name)}`}>
+                        {getSkillInitial(skill.name)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-foreground">{skill.name}</span>
+                        {skill.description && (
+                          <p className="text-xs text-muted-foreground truncate mt-0.5">{skill.description}</p>
+                        )}
+                      </div>
+                      <span className="text-xs text-muted-foreground">@</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Attachment Previews */}
         {attachments.length > 0 && (
           <div className="flex gap-2 mb-3 flex-wrap">
@@ -620,7 +750,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
           <Textarea
             ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
             onCompositionStart={() => {
               isComposingRef.current = true;
@@ -834,6 +964,18 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                 <SendHorizontal className="h-4 w-4" strokeWidth={2} />
               )}
             </Button>
+
+            {/* Upload Skill Button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0 h-8 w-8 rounded-lg text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors"
+              onClick={() => setUploadSkillOpen(true)}
+              disabled={disabled || sending}
+              title={t('actions.uploadSkill')}
+            >
+              <Upload className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
         <div className="mt-2.5 flex items-center justify-between gap-2 text-[11px] text-muted-foreground/60 px-4">
@@ -864,6 +1006,16 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
           )}
         </div>
       </div>
+
+      {/* Upload Skill Dialog */}
+      <UploadSkillDialog
+        open={uploadSkillOpen}
+        onOpenChange={setUploadSkillOpen}
+        onUploadComplete={() => {
+          // Refresh skills after upload
+          void fetchSkills();
+        }}
+      />
     </div>
   );
 }

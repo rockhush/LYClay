@@ -164,6 +164,34 @@ function persistSessionWorkspaceIdsIfChanged(ids: Record<string, string>): void 
 
 _lastPersistedSessionWorkspaceIds = JSON.stringify(loadSessionWorkspaceIdsFromStorage());
 
+const CUSTOM_SESSION_LABELS_STORAGE_KEY = 'LYClaw:chat:custom-session-labels';
+
+function loadCustomSessionLabelsFromStorage(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_SESSION_LABELS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof k === 'string' && k && typeof v === 'string' && v) {
+        out[k] = v;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function persistCustomSessionLabelsToStorage(labels: Record<string, string>): void {
+  try {
+    window.localStorage.setItem(CUSTOM_SESSION_LABELS_STORAGE_KEY, JSON.stringify(labels));
+  } catch {
+    // Ignore quota / private mode failures; in-memory state still reflects the change.
+  }
+}
+
 function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' | 'high' {
   if (mode === 'fast') return 'off';
   if (mode === 'expert') return 'high';
@@ -1143,6 +1171,8 @@ function buildSessionSwitchPatch(
     sessionWorkspaceIds: leavingEmpty
       ? clearSessionEntryFromMap(state.sessionWorkspaceIds, state.currentSessionKey)
       : state.sessionWorkspaceIds,
+    // customSessionLabels is purely user-driven persisted state; preserved
+    // across switches and only pruned in `deleteSession`/`renameSession`.
     sessionStreamingStates: finalStreamingStates,
     // Restore messages snapshot if there's an active stream, otherwise clear for loadHistory
     messages: nextSessionState.messagesSnapshot.length > 0 ? nextSessionState.messagesSnapshot : [],
@@ -1630,6 +1660,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   loading: false,
   error: null,
+  prefilledInput: null,
   sending: false,
   aborting: false,
   activeRunId: null,
@@ -1644,6 +1675,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentSessionKey: DEFAULT_SESSION_KEY,
   currentAgentId: 'main',
   sessionLabels: {},
+  customSessionLabels: loadCustomSessionLabelsFromStorage(),
   sessionLastActivity: {},
   sessionWorkspaceIds: loadSessionWorkspaceIdsFromStorage(),
   sessionStreamingStates: {},
@@ -1917,9 +1949,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           && nextState.messagesSnapshot.length > 0
             ? nextState.messagesSnapshot
             : [];
+        const nextCustomLabels = Object.fromEntries(
+          Object.entries(s.customSessionLabels).filter(([k]) => k !== key),
+        );
+        if (s.customSessionLabels[key]) {
+          persistCustomSessionLabelsToStorage(nextCustomLabels);
+        }
         return {
           sessions: remaining,
           sessionLabels: Object.fromEntries(Object.entries(s.sessionLabels).filter(([k]) => k !== key)),
+          customSessionLabels: nextCustomLabels,
           sessionLastActivity: Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== key)),
           sessionWorkspaceIds: Object.fromEntries(Object.entries(s.sessionWorkspaceIds).filter(([k]) => k !== key)),
           sessionStreamingStates: Object.fromEntries(Object.entries(s.sessionStreamingStates).filter(([k]) => k !== key)),
@@ -1948,14 +1987,45 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
     } else {
-      set((s) => ({
-        sessions: remaining,
-        sessionLabels: Object.fromEntries(Object.entries(s.sessionLabels).filter(([k]) => k !== key)),
-        sessionLastActivity: Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== key)),
-        sessionWorkspaceIds: Object.fromEntries(Object.entries(s.sessionWorkspaceIds).filter(([k]) => k !== key)),
-        sessionStreamingStates: Object.fromEntries(Object.entries(s.sessionStreamingStates).filter(([k]) => k !== key)),
-      }));
+      set((s) => {
+        const nextCustomLabels = Object.fromEntries(
+          Object.entries(s.customSessionLabels).filter(([k]) => k !== key),
+        );
+        if (s.customSessionLabels[key]) {
+          persistCustomSessionLabelsToStorage(nextCustomLabels);
+        }
+        return {
+          sessions: remaining,
+          sessionLabels: Object.fromEntries(Object.entries(s.sessionLabels).filter(([k]) => k !== key)),
+          customSessionLabels: nextCustomLabels,
+          sessionLastActivity: Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== key)),
+          sessionWorkspaceIds: Object.fromEntries(Object.entries(s.sessionWorkspaceIds).filter(([k]) => k !== key)),
+          sessionStreamingStates: Object.fromEntries(Object.entries(s.sessionStreamingStates).filter(([k]) => k !== key)),
+        };
+      });
     }
+  },
+
+  // ── Rename session (persisted user-edited title) ──
+  //
+  // We store the override in `customSessionLabels` (mirrored to localStorage),
+  // not in the JSONL transcript or `sessions.json`, so we don't interfere with
+  // OpenClaw's session metadata file. The Sidebar prefers this map over the
+  // discovered first-user-message preview / `sessionLabels`.
+
+  renameSession: async (key: string, newLabel: string) => {
+    if (!key) return;
+    const trimmed = (newLabel ?? '').trim();
+    set((s) => {
+      const next: Record<string, string> = { ...s.customSessionLabels };
+      if (trimmed) {
+        next[key] = trimmed;
+      } else {
+        delete next[key];
+      }
+      persistCustomSessionLabelsToStorage(next);
+      return { customSessionLabels: next };
+    });
   },
 
   // ── New session ──
@@ -2040,6 +2110,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // (effect guards on `!loading`) or if the user expects the same load path as a
     // sidebar session switch.
     void get().loadHistory();
+  },
+
+  // ── Set prefilled input text ──
+
+  setPrefilledInput: (text: string | null) => {
+    set((s) => ({ ...s, prefilledInput: text }));
   },
 
   // ── Cleanup empty session on navigate away ──

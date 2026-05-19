@@ -82,6 +82,9 @@ export interface ChatState {
   loading: boolean;
   error: string | null;
 
+  // Pre-filled input text (for skill creation, etc.)
+  prefilledInput: string | null;
+
   // Streaming
   sending: boolean;
   aborting: boolean;
@@ -104,6 +107,12 @@ export interface ChatState {
   currentAgentId: string;
   /** First user message text per session key, used as display label */
   sessionLabels: Record<string, string>;
+  /**
+   * User-edited custom titles per session key. Persisted to localStorage so the
+   * rename survives session switches and app restarts. When present, this value
+   * takes precedence over `sessionLabels` / discovered previews in the UI.
+   */
+  customSessionLabels: Record<string, string>;
   /** Last message timestamp (ms) per session key, used for sorting */
   sessionLastActivity: Record<string, number>;
   /** Workspace entry id per session key (sidebar: nest history under that folder) */
@@ -119,9 +128,17 @@ export interface ChatState {
   loadSessions: (force?: boolean) => Promise<void>;
   switchSession: (key: string) => void;
   newSession: () => void;
+  /** Set pre-filled input text for the chat input box */
+  setPrefilledInput: (text: string | null) => void;
   /** Associate the active chat session with a workspace id (or clear). */
   bindCurrentSessionWorkspace: (workspaceId: string | null) => void;
   deleteSession: (key: string) => Promise<void>;
+  /**
+   * Rename a chat session. Stores the new title under `customSessionLabels`
+   * and persists it to localStorage so it survives reloads/restarts.
+   * An empty/whitespace-only label clears the custom title (reverts to default).
+   */
+  renameSession: (key: string, newLabel: string) => Promise<void>;
   cleanupEmptySession: () => void;
   loadHistory: (
     quiet?: boolean,

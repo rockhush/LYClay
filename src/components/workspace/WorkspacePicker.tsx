@@ -30,9 +30,10 @@ export function WorkspacePicker({ disabled = false, onWorkspaceChange }: Workspa
   const allWorkspaces = [...temporaryWorkspaces, ...workspaces];
   const currentWorkspace = allWorkspaces.find(w => w.id === currentWorkspaceId);
 
-  useEffect(() => {
-    bindCurrentSessionWorkspace(currentWorkspaceId ?? null);
-  }, [currentWorkspaceId, currentSessionKey, bindCurrentSessionWorkspace]);
+  // 移除自动绑定的useEffect，只在会话内主动选择工作空间时才绑定
+  // useEffect(() => {
+  //   bindCurrentSessionWorkspace(currentWorkspaceId ?? null);
+  // }, [currentWorkspaceId, currentSessionKey, bindCurrentSessionWorkspace]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -49,6 +50,8 @@ export function WorkspacePicker({ disabled = false, onWorkspaceChange }: Workspa
 
   const handleSelectWorkspace = (workspaceId: string) => {
     setCurrentWorkspace(workspaceId);
+    // 只在会话内主动选择工作空间时才绑定
+    bindCurrentSessionWorkspace(workspaceId);
     setPickerOpen(false);
     onWorkspaceChange?.(workspaceId);
   };
@@ -75,6 +78,8 @@ export function WorkspacePicker({ disabled = false, onWorkspaceChange }: Workspa
         
         addTemporaryWorkspace(newWorkspace);
         setCurrentWorkspace(newWorkspace.id);
+        // 选择新文件夹时也绑定会话到工作空间
+        bindCurrentSessionWorkspace(newWorkspace.id);
         onWorkspaceChange?.(newWorkspace.id);
         
         toast.success(t('workspace.folderSelected', { name: folderName }));

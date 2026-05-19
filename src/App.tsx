@@ -284,19 +284,12 @@ function App() {
 
     const warmupStatus = gatewayStatus.warmupStatus;
     const gatewayUnavailable = gatewayInitialized && (gatewayStatus.state === 'error' || gatewayStatus.state === 'stopped');
-    const warmupDisabledOrIdle = gatewayStatus.state === 'running'
-      && gatewayStatus.gatewayReady === true
-      && warmupStatus === 'idle'
-      && postLoginWarmupSeconds >= 7;
+    const gatewayReady = gatewayStatus.state === 'running' && gatewayStatus.gatewayReady === true;
+    const warmupComplete = warmupStatus === 'ready' || warmupStatus === 'failed';
+    const warmupWaitSatisfied = warmupComplete || postLoginWarmupSeconds >= 60;
     const needDingTalkRuntime = autoDingTalkChannelFromEnv === true;
-    const dingTalkRuntimeOk = !needDingTalkRuntime || dingTalkChannelRuntimeReady || postLoginWarmupSeconds >= 90;
-    const shouldProceed =
-      (warmupStatus === 'ready'
-      || warmupStatus === 'failed'
-      || warmupDisabledOrIdle
-      || gatewayUnavailable
-      || postLoginWarmupSeconds >= 90)
-      && dingTalkRuntimeOk;
+    const dingTalkRuntimeOk = !needDingTalkRuntime || dingTalkChannelRuntimeReady || postLoginWarmupSeconds >= 12;
+    const shouldProceed = (gatewayUnavailable || (gatewayReady && warmupWaitSatisfied)) && dingTalkRuntimeOk;
 
     if (!shouldProceed) return;
 
@@ -304,7 +297,7 @@ function App() {
       ? 'na'
       : dingTalkChannelRuntimeReady
         ? 'ok'
-        : postLoginWarmupSeconds >= 90
+        : postLoginWarmupSeconds >= 12
           ? 'force'
           : 'wait';
 
@@ -312,13 +305,11 @@ function App() {
       dingtalkUser.userId || dingtalkUser.unionId || dingtalkUser.name || 'user',
       gatewayStatus.state,
       gatewayStatus.gatewayReady ? 'ready' : 'not-ready',
-      warmupStatus || 'unknown',
       dtSeg,
     ].join('|');
     if (postLoginBootstrapRef.current === bootstrapKey) return;
     postLoginBootstrapRef.current = bootstrapKey;
 
-    const delay = warmupStatus === 'ready' ? 500 : 0;
     window.setTimeout(() => {
       void (async () => {
         const chat = useChatStore.getState();
@@ -335,7 +326,7 @@ function App() {
           }
         }
       })();
-    }, delay);
+    }, 0);
   }, [
     requireDingTalkLogin,
     dingtalkUser,

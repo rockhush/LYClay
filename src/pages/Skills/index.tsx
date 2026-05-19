@@ -3,6 +3,8 @@
  * Browse and manage AI skills
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useChatStore } from '@/stores/chat';
 import {
   Search,
   Puzzle,
@@ -20,6 +22,7 @@ import {
   Copy,
   ChevronUp,
   ChevronDown,
+  Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,6 +42,7 @@ import type { Skill } from '@/types/skill';
 import { rendererExtensionRegistry } from '@/extensions/registry';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import { UploadSkillDialog } from '@/components/skills/UploadSkillDialog';
 
 const INSTALL_ERROR_CODES = new Set(['installTimeoutError', 'installRateLimitError']);
 const FETCH_ERROR_CODES = new Set(['fetchTimeoutError', 'fetchRateLimitError', 'timeoutError', 'rateLimitError']);
@@ -445,6 +449,7 @@ export function Skills() {
   const [sortBy, setSortBy] = useState<'download_count' | 'update_time'>('download_count');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [scrollPosition, setScrollPosition] = useState(0);
+  const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   const isGatewayRunning = gatewayStatus.state === 'running';
@@ -627,6 +632,18 @@ export function Skills() {
     }
   }, [t]);
 
+  const navigate = useNavigate();
+
+  const handleCreateSkill = useCallback(async () => {
+    // 设置预填充输入文本
+    const createSkillMessage = `@skill-creator 请帮我创建一个可以实现「……」的skill`;
+    useChatStore.getState().setPrefilledInput(createSkillMessage);
+    // 创建新对话
+    useChatStore.getState().newSession();
+    // 跳转到聊天页面
+    navigate('/');
+  }, [navigate]);
+
   const [skillsDirPath, setSkillsDirPath] = useState('~/.openclaw/skills');
 
   useEffect(() => {
@@ -786,7 +803,21 @@ export function Skills() {
           </div>
 
           <div className="flex items-center gap-3 md:mt-2">
-            {hasInstalledSkills && (
+            <button
+              onClick={handleCreateSkill}
+              className="bg-white hover:bg-gray-50 border border-gray-200 transition-colors shrink-0 text-[13px] font-medium px-4 h-8 rounded-full flex items-center justify-center text-foreground shadow-md"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              创建技能
+            </button>
+            <button
+              onClick={() => setUploadSkillOpen(true)}
+              className="bg-[#FF7B00] hover:bg-[#FF6A00] transition-colors shrink-0 text-[13px] font-medium px-4 h-8 rounded-full flex items-center justify-center text-white shadow-md shadow-[#FF7B00]/30"
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              上传技能
+            </button>
+            {/* {hasInstalledSkills && (
               <button
                 onClick={handleOpenSkillsFolder}
                 className="bg-[#FF7B00] hover:bg-[#FF6A00] transition-colors shrink-0 text-[13px] font-medium px-4 h-8 rounded-full flex items-center justify-center text-white shadow-md shadow-[#FF7B00]/30"
@@ -794,7 +825,7 @@ export function Skills() {
                 <FolderOpen className="h-4 w-4 mr-2" />
                 {t('openFolder')}
               </button>
-            )}
+            )} */}
           </div>
         </div>
 
@@ -906,7 +937,7 @@ export function Skills() {
             </div>
           )}
 
-          <div className="flex flex-col gap-1">
+          <div className="grid grid-cols-3 gap-2">
             {filteredSkills.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Puzzle className="h-10 w-10 mb-4 opacity-50" />
@@ -916,10 +947,10 @@ export function Skills() {
               filteredSkills.map((skill) => (
                 <div
                   key={skill.id}
-                  className="group flex flex-row items-center justify-between py-3.5 px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer border-b border-black/5 dark:border-white/5 last:border-0"
+                  className="group flex flex-row items-center justify-between py-3 px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer border border-black/5 dark:border-white/5"
                   onClick={() => setSelectedSkill(skill)}
                 >
-                  <div className="flex items-start gap-4 flex-1 overflow-hidden pr-4">
+                  <div className="flex items-center gap-4 flex-1 overflow-hidden pr-4">
                     <div className={`w-10 h-10 shrink-0 flex items-center justify-center text-lg font-bold text-white rounded-xl overflow-hidden flex-shrink-0 ${getSkillColor(skill.name)}`}>
                       {getSkillInitial(skill.name)}
                     </div>
@@ -957,17 +988,17 @@ export function Skills() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-6 shrink-0" onClick={e => e.stopPropagation()}>
-                    {skill.version && (
-                      <span className="text-[13px] font-mono text-muted-foreground">
-                        v{skill.version}
-                      </span>
-                    )}
+                  <div className="flex flex-col items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                     <Switch
                       checked={skill.enabled}
                       onCheckedChange={(checked) => handleToggle(skill.id, checked)}
                       disabled={skill.isCore}
                     />
+                    {skill.version && (
+                      <span className="text-[11px] font-mono text-muted-foreground">
+                        v{skill.version}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))
@@ -984,7 +1015,7 @@ export function Skills() {
             }
           }}>
         <SheetContent
-          className="w-full sm:max-w-[1070px] p-0 flex flex-col border-l border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-[0_0_40px_rgba(0,0,0,0.2)]"
+          className="w-full sm:max-w-[780px] p-0 flex flex-col border-l border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-[0_0_40px_rgba(0,0,0,0.2)]"
           side="right"
         >
           {/* 安装过程中的遮罩层 */}
@@ -1016,7 +1047,7 @@ export function Skills() {
                 <X className="h-5 w-5" />
               </Button>
             </div>
-            <div className={`mt-4 grid gap-2 ${navigator.platform.toLowerCase().includes('mac') ? 'grid-cols-[1fr_4fr_4fr_3fr]' : 'grid-cols-[1fr_4fr_3fr_2fr]'}`}>
+            <div className={`mt-4 grid gap-2 ${navigator.platform.toLowerCase().includes('mac') ? 'grid-cols-[1fr_4fr_4fr_3fr]' : 'grid-cols-[1fr_3fr_2fr_2fr]'}`}>
               <div className="relative">
                 <select
                   value={selectedType}
@@ -1024,15 +1055,16 @@ export function Skills() {
                   className="w-full h-10 rounded-xl border-2 border-[#FF7B00]/30 dark:border-white/20 bg-white dark:bg-muted/50 text-foreground px-4 py-2 text-sm appearance-none cursor-pointer hover:border-[#FF7B00]/50 hover:shadow-md hover:shadow-[#FF7B00]/15 dark:hover:border-white/30 focus:outline-none focus:ring-2 focus:ring-[#FF7B00]/50 focus:border-[#FF7B00]/50 transition-all"
                 >
                   <option value="">全部</option>
-                  <option value="fa">财经</option>
-                  <option value="rd">研发</option>
+                  <option value="finance">财经</option>
+                  <option value="rnd">研发</option>
                   <option value="hr">人力</option>
-                  <option value="manufacturing">制造</option>
-                  <option value="purchasing">采购</option>
+                  <option value="manufacture">制造</option>
+                  <option value="procurement">采购</option>
                   <option value="business">商务</option>
                   <option value="legal">法务</option>
-                  <option value="admin">办公</option>
-                  <option value="others">其他</option>
+                  <option value="office">办公</option>
+                  <option value="it">IT</option>
+                  <option value="other">其他</option>
                 </select>
                 <svg className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#FF7B00] pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1060,19 +1092,17 @@ export function Skills() {
                   </button>
                 )}
               </div>
-              <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 p-1">
-                {(['all', 'installed', 'uninstalled'] as const).map((filter) => {
+              <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 px-2 py-1 gap-1">
+                {(['installed', 'uninstalled'] as const).map((filter) => {
                   const installedCount = searchResults.filter(skill => 
                     safeSkills.some(s => s.id === skill.slug || s.slug === skill.slug || s.name === skill.name || s.baseDir?.includes(skill.slug))
                   ).length;
                   const uninstalledCount = searchResults.length - installedCount;
                   const counts = {
-                    all: searchResults.length,
                     installed: installedCount,
                     uninstalled: uninstalledCount,
                   };
                   const labels = {
-                    all: '全部',
                     installed: '已安装',
                     uninstalled: '未安装',
                   };
@@ -1081,7 +1111,7 @@ export function Skills() {
                       key={filter}
                       onClick={() => setInstallFilter(filter)}
                       className={cn(
-                        "flex-1 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all text-center",
+                        "px-3 py-1 rounded-md text-[13px] font-medium transition-all text-center whitespace-nowrap",
                         installFilter === filter
                           ? "bg-[#FF7B00] text-white shadow-md shadow-[#FF7B00]/30"
                           : "text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
@@ -1092,7 +1122,7 @@ export function Skills() {
                   );
                 })}
               </div>
-              <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 p-1">
+              <div className="flex items-center bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 p-0.5">
                 {(['download_count', 'update_time'] as const).map((sort) => {
                   const labels = {
                     download_count: '下载量',
@@ -1113,7 +1143,7 @@ export function Skills() {
                         }
                       }}
                       className={cn(
-                        "flex-1 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all flex items-center justify-center gap-1.5",
+                        "flex-1 px-2 py-1.5 rounded-lg text-[13px] font-medium transition-all flex items-center justify-center gap-1.5",
                         isSelected
                           ? "text-[#FF7B00]"
                           : "text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
@@ -1153,7 +1183,7 @@ export function Skills() {
             )}
 
             {!searching && searchResults.length > 0 && (
-              <div className="flex flex-col gap-1">
+              <div className="grid grid-cols-2 gap-2">
                 {searchResults
                   .filter((skill) => {
                     const isInstalled = safeSkills.some(s => 
@@ -1178,17 +1208,17 @@ export function Skills() {
                   return (
                     <div
                       key={skill.slug}
-                      className="group flex flex-row items-center justify-between py-3.5 px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors border-b border-black/5 dark:border-white/5 last:border-0"
+                      className="group flex flex-row items-center justify-between py-3 px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors border border-black/5 dark:border-white/5"
                     >
-                      <div className="flex items-start gap-4 flex-1 overflow-hidden pr-4">
+                      <div className="flex items-center gap-4 flex-1 overflow-hidden pr-4">
                         <div className={`w-10 h-10 shrink-0 flex items-center justify-center text-lg font-bold text-white rounded-xl overflow-hidden flex-shrink-0 ${getSkillColor(skill.name)}`}>
                           {getSkillInitial(skill.name)}
                         </div>
                         <div className="flex flex-col overflow-hidden">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="text-[15px] font-semibold text-foreground truncate">{skill.name}</h3>
+                          <div className="flex items-center gap-2 mb-1 min-w-0">
+                            <h3 className="text-[15px] font-semibold text-foreground truncate max-w-[160px]">{skill.name}</h3>
                             {skill.author && (
-                              <span className="text-xs text-muted-foreground">• {skill.author}</span>
+                              <span className="text-xs text-muted-foreground flex-shrink-0">• {skill.author}</span>
                             )}
                           </div>
                           <Tooltip>
@@ -1266,6 +1296,16 @@ export function Skills() {
         }}
         onUninstall={handleUninstall}
         onOpenFolder={handleOpenSkillFolder}
+      />
+
+      {/* Upload Skill Dialog */}
+      <UploadSkillDialog
+        open={uploadSkillOpen}
+        onOpenChange={setUploadSkillOpen}
+        onUploadComplete={() => {
+          // Refresh skills after upload
+          void fetchSkills();
+        }}
       />
     </div>
   );
