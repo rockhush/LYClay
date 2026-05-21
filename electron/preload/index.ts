@@ -66,8 +66,6 @@ const electronAPI = {
         'update:setChannel',
         'update:setAutoDownload',
         'update:cancelAutoInstall',
-        'update:getDownloadedFilePath',
-        'update:openDownloadDirectory',
         // Env
         'env:getConfig',
         'env:setApiKey',
@@ -119,7 +117,6 @@ const electronAPI = {
         'skill:updateConfig',
         'skill:getConfig',
         'skill:getAllConfigs',
-        'skill:uploadZip',
         // Logs
         'log:getRecent',
         'log:readFile',
@@ -127,8 +124,6 @@ const electronAPI = {
         'log:getDir',
         'log:listFiles',
         // File staging & media
-        'fs:readdir',
-        'fs:readFile',
         'file:stage',
         'file:stageBuffer',
         'media:getThumbnails',

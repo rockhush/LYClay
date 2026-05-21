@@ -6,19 +6,11 @@
         "skills": "Skills",
         "agents": "Agents",
         "channels": "Channels",
-        "connectors": "Connectors",
         "dashboard": "Dashboard",
         "settings": "Settings",
         "devConsole": "Developer Console",
         "models": "Models",
-        "workspaces": "Workspaces",
         "deleteSessionConfirm": "Are you sure you want to delete session \"{{label}}\"?",
-        "renameSession": "Rename session",
-        "renameSessionTitle": "Edit conversation title",
-        "renameSessionDescription": "Pick a name that's easy to recognize. The new title is kept across app restarts.",
-        "renameSessionPlaceholder": "Enter a new conversation name",
-        "renameSessionEmpty": "Conversation name cannot be empty",
-        "renameSessionFailed": "Failed to rename session",
         "openClawPage": "OpenClaw Page"
     },
     "actions": {
@@ -60,17 +52,8 @@
         "saving": "Saving..."
     },
     "gateway": {
-        "notRunning": "Gateway not running",
-        "notRunningDesc": "The OpenClaw gateway needs to be running to use this feature. It will start automatically, or you can start it from settings.",
+        "notRunning": "Gateway Not Running",
+        "notRunningDesc": "The OpenClaw Gateway needs to be running to use this feature. It will start automatically, or you can start it from Settings.",
         "warning": "Gateway is not running."
-    },
-    "workspace": {
-        "selectWorkspace": "Select Workspace",
-        "pickerTitle": "Workspaces",
-        "openLocalFolder": "Open Local Folder",
-        "selectFolder": "Select Folder",
-        "noWorkspaceSelected": "No workspace selected",
-        "folderSelected": "Folder selected: {{name}}",
-        "folderSelectFailed": "Failed to select folder"
     }
 }

@@ -22,6 +22,7 @@ import { registerAllBuiltinExtensions } from '../extensions/builtin';
 import { loadExternalMainExtensions } from '../extensions/_ext-bridge.generated';
 import { ensureClawXContext, repairClawXOnlyBootstrapFiles } from '../utils/openclaw-workspace';
 import { autoInstallCliIfNeeded, generateCompletionCache, installCompletionToProfile } from '../utils/openclaw-cli';
+import type { MarketplaceProvider } from '../gateway/clawhub';
 import { isQuitting, setQuitting } from './app-state';
 import { applyProxySettings } from './proxy';
 import { syncLaunchAtStartupSettingFromStore } from './launch-at-startup';
@@ -40,7 +41,7 @@ import { createSignalQuitHandler } from './signal-quit';
 import { acquireProcessInstanceFileLock } from './process-instance-lock';
 import { getSetting } from '../utils/store';
 import { ensureBuiltinSkillsInstalled, ensurePreinstalledSkillsInstalled } from '../utils/skill-config';
-
+import { ensureAllBundledPluginsInstalled } from '../utils/plugin-install';
 import { startHostApiServer } from '../api/server';
 import { HostEventBus } from '../api/event-bus';
 import { deviceOAuthManager } from '../utils/device-oauth';
@@ -48,8 +49,7 @@ import { browserOAuthManager } from '../utils/browser-oauth';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { syncAllProviderAuthToRuntime } from '../services/providers/provider-runtime-sync';
 
-const WINDOWS_APP_USER_MODEL_ID = 'app.LYClaw.desktop';
-const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'dingtalk:']);
+const WINDOWS_APP_USER_MODEL_ID = 'app.clawx.desktop';
 const isE2EMode = process.env.CLAWX_E2E === '1';
 const requestedUserDataDir = process.env.CLAWX_USER_DATA_DIR?.trim();
 
@@ -74,11 +74,11 @@ if (isE2EMode && requestedUserDataDir) {
 app.disableHardwareAcceleration();
 
 // On Linux, set CHROME_DESKTOP so Chromium can find the correct .desktop file.
-// On Wayland this maps the running window to LYClaw.desktop (→ icon + app grouping);
+// On Wayland this maps the running window to clawx.desktop (→ icon + app grouping);
 // on X11 it supplements the StartupWMClass matching.
 // Must be called before app.whenReady() / before any window is created.
 if (process.platform === 'linux') {
-  app.setDesktopName('LYClaw.desktop');
+  app.setDesktopName('clawx.desktop');
 }
 
 // Prevent multiple instances of the app from running simultaneously.
@@ -88,7 +88,7 @@ if (process.platform === 'linux') {
 // The losing process must exit immediately so it never reaches Gateway startup.
 const gotElectronLock = isE2EMode ? true : app.requestSingleInstanceLock();
 if (!gotElectronLock) {
-  console.info('[LYClaw] Another instance already holds the single-instance lock; exiting duplicate process');
+  console.info('[ClawX] Another instance already holds the single-instance lock; exiting duplicate process');
   app.exit(0);
 }
 let releaseProcessInstanceFileLock: () => void = () => {};
@@ -97,7 +97,7 @@ if (gotElectronLock && !isE2EMode) {
   try {
     const fileLock = acquireProcessInstanceFileLock({
       userDataDir: app.getPath('userData'),
-      lockName: 'LYClaw',
+      lockName: 'clawx',
       force: true, // Electron lock already guarantees exclusivity; force-clean orphan/recycled-PID locks
     });
     gotFileLock = fileLock.acquired;
@@ -109,12 +109,12 @@ if (gotElectronLock && !isE2EMode) {
           ? 'unknown lock format/content'
           : 'unknown owner';
       console.info(
-        `[LYClaw] Another instance already holds process lock (${fileLock.lockPath}, ${ownerDescriptor}); exiting duplicate process`,
+        `[ClawX] Another instance already holds process lock (${fileLock.lockPath}, ${ownerDescriptor}); exiting duplicate process`,
       );
       app.exit(0);
     }
   } catch (error) {
-    console.warn('[LYClaw] Failed to acquire process instance file lock; continuing with Electron single-instance lock only', error);
+    console.warn('[ClawX] Failed to acquire process instance file lock; continuing with Electron single-instance lock only', error);
   }
 }
 const gotTheLock = gotElectronLock && gotFileLock;
@@ -129,12 +129,32 @@ const mainWindowFocusState = createMainWindowFocusState();
 const quitLifecycleState = createQuitLifecycleState();
 
 /**
+ * 尝试初始化自定义技能市场提供者
+ */
+function tryInitCustomSkillMarketplace(): MarketplaceProvider | null {
+  const repoUrl = process.env.CLAWX_SKILL_REPO_URL;
+  if (!repoUrl) {
+    return null;
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { CustomSkillMarketplace } = require('../extensions/builtin/custom-skill-marketplace');
+    const marketplace = new CustomSkillMarketplace();
+    return marketplace;
+  } catch (error) {
+    logger.warn('[main] Failed to load custom skill marketplace:', error);
+    return null;
+  }
+}
+
+/**
  * Resolve the icons directory path (works in both dev and packaged mode)
  */
 function getIconsDir(): string {
   if (app.isPackaged) {
     // Packaged: icons are in extraResources → process.resourcesPath/resources/icons
-    return join(process.resourcesPath, 'icons');
+    return join(process.resourcesPath, 'resources', 'icons');
   }
   // Development: relative to dist-electron/main/
   return join(__dirname, '../../resources/icons');
@@ -153,38 +173,6 @@ function getAppIcon(): Electron.NativeImage | undefined {
       : join(iconsDir, 'icon.png');
   const icon = nativeImage.createFromPath(iconPath);
   return icon.isEmpty() ? undefined : icon;
-}
-
-/**
- * Force refresh Windows taskbar icon cache
- * Uses multiple strategies to ensure Windows picks up the new icon
- */
-function refreshTaskbarIcon(win: BrowserWindow): void {
-  if (process.platform !== 'win32') return;
-
-  const iconsDir = getIconsDir();
-  const iconPath = join(iconsDir, 'icon.ico');
-  
-  // Strategy 1: Re-set AppUserModelId with timestamp to force Windows to treat as new app
-  const timestamp = Date.now();
-  app.setAppUserModelId(`${WINDOWS_APP_USER_MODEL_ID}.${timestamp}`);
-
-  // Strategy 2: Clear and re-set window icon
-  const icon = nativeImage.createFromPath(iconPath);
-  if (!icon.isEmpty()) {
-    // First clear the icon
-    win.setIcon(nativeImage.createEmpty());
-    
-    // Then re-set it after a brief delay
-    setTimeout(() => {
-      if (!win.isDestroyed()) {
-        win.setIcon(icon);
-        
-        // Force another AppUserModelId update
-        app.setAppUserModelId(`${WINDOWS_APP_USER_MODEL_ID}.${timestamp + 1}`);
-      }
-    }, 200);
-  }
 }
 
 /**
@@ -220,7 +208,7 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url);
-      if (ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
         shell.openExternal(url);
       } else {
         logger.warn(`Blocked openExternal for disallowed protocol: ${parsed.protocol}`);
@@ -277,9 +265,6 @@ function focusMainWindow(): void {
 function createMainWindow(): BrowserWindow {
   const win = createWindow();
 
-  // Force refresh Windows taskbar icon cache
-  refreshTaskbarIcon(win);
-
   win.once('ready-to-show', () => {
     if (mainWindow !== win) {
       return;
@@ -317,7 +302,7 @@ function createMainWindow(): BrowserWindow {
 async function initialize(): Promise<void> {
   // Initialize logger first
   logger.init();
-  logger.info('=== LYClaw Application Starting ===');
+  logger.info('=== ClawX Application Starting ===');
   logger.debug(
     `Runtime: platform=${process.platform}/${process.arch}, electron=${process.versions.electron}, node=${process.versions.node}, packaged=${app.isPackaged}, pid=${process.pid}, ppid=${process.ppid}`
   );
@@ -391,6 +376,16 @@ async function initialize(): Promise<void> {
   const marketplaceProvider = extensionRegistry.getMarketplaceProvider();
   if (marketplaceProvider) {
     clawHubService.setMarketplaceProvider(marketplaceProvider);
+    logger.info('[main] Marketplace provider wired from extension registry');
+  } else {
+    // 如果没有扩展提供 marketplace provider，尝试使用自定义仓库
+    const customMarketplace = tryInitCustomSkillMarketplace();
+    if (customMarketplace) {
+      clawHubService.setMarketplaceProvider(customMarketplace);
+      logger.info('[main] Custom skill marketplace wired successfully');
+    } else {
+      logger.info('[main] Using default ClawHub CLI for skills');
+    }
   }
 
   // Register update handlers
@@ -399,7 +394,7 @@ async function initialize(): Promise<void> {
   // Note: Auto-check for updates is driven by the renderer (update store init)
   // so it respects the user's "Auto-check for updates" setting.
 
-  // Repair any bootstrap files that only contain LYClaw markers (no OpenClaw
+  // Repair any bootstrap files that only contain ClawX markers (no OpenClaw
   // template content). This fixes a race condition where ensureClawXContext()
   // previously created the file before the gateway could seed the full template.
   if (!isE2EMode) {
@@ -425,10 +420,14 @@ async function initialize(): Promise<void> {
     });
   }
 
-  // Plugin installation is now configuration-driven:
-  // - When a channel is added via UI: ensureXxxPluginInstalled() in IPC handlers
-  // - When Gateway starts: ensureConfiguredPluginsUpgraded() in config-sync.ts
-  // No need to pre-install all bundled plugins at app startup.
+  // Pre-deploy/upgrade bundled OpenClaw plugins (dingtalk, wecom, feishu, wechat)
+  // to ~/.openclaw/extensions/ so they are always up-to-date after an app update.
+  // Note: qqbot was moved to a built-in channel in OpenClaw 3.31.
+  if (!isE2EMode) {
+    void ensureAllBundledPluginsInstalled().catch((error) => {
+      logger.warn('Failed to install/upgrade bundled plugins:', error);
+    });
+  }
 
   // Bridge gateway and host-side events before any auto-start logic runs, so
   // renderer subscribers observe the full startup lifecycle.
@@ -436,7 +435,7 @@ async function initialize(): Promise<void> {
     hostEventBus.emit('gateway:status', status);
     if (status.state === 'running' && !isE2EMode) {
       void ensureClawXContext().catch((error) => {
-        logger.warn('Failed to re-merge LYClaw context after gateway reconnect:', error);
+        logger.warn('Failed to re-merge ClawX context after gateway reconnect:', error);
       });
     }
   });
@@ -523,12 +522,12 @@ async function initialize(): Promise<void> {
     logger.info('Gateway auto-start disabled in settings');
   }
 
-  // Merge LYClaw context snippets into the workspace bootstrap files.
+  // Merge ClawX context snippets into the workspace bootstrap files.
   // The gateway seeds workspace files asynchronously after its HTTP server
   // is ready, so ensureClawXContext will retry until the target files appear.
   if (!isE2EMode) {
     void ensureClawXContext().catch((error) => {
-      logger.warn('Failed to merge LYClaw context into workspace:', error);
+      logger.warn('Failed to merge ClawX context into workspace:', error);
     });
   }
 
@@ -579,7 +578,7 @@ if (gotTheLock) {
 
   // When a second instance is launched, focus the existing window instead.
   app.on('second-instance', () => {
-    logger.info('Second LYClaw instance detected; redirecting to the existing window');
+    logger.info('Second ClawX instance detected; redirecting to the existing window');
 
     const focusRequest = requestSecondInstanceFocus(
       mainWindowFocusState,

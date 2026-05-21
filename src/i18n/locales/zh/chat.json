@@ -2,7 +2,7 @@
     "gatewayNotRunning": "网关未运行",
     "gatewayRequired": "OpenClaw 网关需要运行才能使用聊天。它将自动启动，或者您可以从设置中启动。",
     "welcome": {
-        "title": "LYClaw 聊天",
+        "title": "ClawX 聊天",
         "subtitle": "我能为你做些什么？",
         "askQuestions": "处理任务",
         "askQuestionsDesc": "处理面向任务的请求",
@@ -19,7 +19,7 @@
         "eyebrow": "运行视图",
         "title": "任务脉络",
         "emptyTitle": "还没有结构化步骤",
-        "emptyBody": "当一次运行开始后，LYClaw 会在这里展示思考、工具调用和收尾状态。",
+        "emptyBody": "当一次运行开始后，ClawX 会在这里展示思考、工具调用和收尾状态。",
         "status": {
             "idle": "空闲",
             "running_one": "1 个活动步骤",
@@ -41,42 +41,16 @@
     },
     "composer": {
         "attachFiles": "添加文件",
-        "pickSkill": "选择技能",
-        "skillPickerTitle": "选择要使用的技能",
         "pickAgent": "选择 Agent",
         "clearTarget": "清除目标 Agent",
         "targetChip": "@{{agent}}",
         "agentPickerTitle": "将下一条消息直接发送给其他 Agent",
         "gatewayDisconnectedPlaceholder": "网关未连接...",
-        "gatewayInitializingPlaceholder": "网关初始化中...",
-        "gatewayWarmingPlaceholder": "AI 模型预热中...",
-        "gatewayPreparingPlaceholder": "网关准备中...",
         "send": "发送",
         "stop": "停止",
         "gatewayConnected": "已连接",
         "gatewayStatus": "gateway {{state}} | port: {{port}} {{pid}}",
-        "retryFailedAttachments": "重试失败的附件",
-        "switchModel": "切换模型",
-        "modelPickerTitle": "选择 AI 模型提供商",
-        "modelSwitched": "已切换到 {{name}}",
-        "modelSwitchFailed": "切换模型失败: {{error}}",
-        "defaultModel": "默认模型",
-        "modelSwitchNote": "切换模型将重启网关",
-        "reasoning": {
-            "title": "思考模式",
-            "fast": "快速",
-            "fastDesc": "适用于大部分情况",
-            "thinking": "思考",
-            "thinkingDesc": "擅长解决更难的问题",
-            "expert": "专家",
-            "expertDesc": "研究级智能模型"
-        }
-    },
-    "sidebar": {
-        "sessionSwitchBlockedWhilePreparing": "Agent 正在准备首次回复，请稍候再切换会话或新建对话。",
-        "workspaceChats": "此工作空间对话",
-        "expandWorkspaceChats": "展开此工作空间的会话",
-        "collapseWorkspaceChats": "收起此工作空间的会话"
+        "retryFailedAttachments": "重试失败的附件"
     },
     "historyBuckets": {
         "today": "今天",
@@ -85,10 +59,5 @@
         "withinTwoWeeks": "两周内",
         "withinMonth": "一个月内",
         "older": "一个月之前"
-    },
-
-    "errors": {
-        "modelResponseTimeout": "请求超时，请检查本机网络或者大模型配置！",
-        "modelResponseTimeoutLong": "较长时间仍未收到助手回复。可能是服务不可用、限流或仍在预热。请到「设置 → AI 提供商」检查后重试。"
     }
 }

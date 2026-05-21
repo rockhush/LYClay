@@ -3,20 +3,6 @@ import { createRuntimeActions } from './runtime-actions';
 import { createSessionHistoryActions } from './session-history-actions';
 import type { ChatGet, ChatSet } from './store-api';
 
-const REASONING_MODE_STORAGE_KEY = 'LYClaw:chat:reasoning-mode';
-
-function loadStoredReasoningMode(): ChatState['reasoningMode'] {
-  try {
-    const stored = window.localStorage.getItem(REASONING_MODE_STORAGE_KEY);
-    if (stored === 'fast' || stored === 'thinking' || stored === 'expert') {
-      return stored;
-    }
-  } catch {
-    // Keep default when storage is unavailable.
-  }
-  return 'thinking';
-}
-
 export const initialChatState: Pick<
   ChatState,
   | 'messages'
@@ -36,14 +22,12 @@ export const initialChatState: Pick<
   | 'sessionLabels'
   | 'sessionLastActivity'
   | 'thinkingLevel'
-  | 'reasoningMode'
 > = {
   messages: [],
   loading: false,
   error: null,
 
   sending: false,
-  aborting: false,
   activeRunId: null,
   streamingText: '',
   streamingMessage: null,
@@ -59,7 +43,6 @@ export const initialChatState: Pick<
   sessionLastActivity: {},
 
   thinkingLevel: null,
-  reasoningMode: loadStoredReasoningMode(),
 };
 
 export function createChatActions(
@@ -75,7 +58,6 @@ export function createChatActions(
   | 'loadHistory'
   | 'sendMessage'
   | 'abortRun'
-  | 'setReasoningMode'
   | 'handleChatEvent'
   | 'refresh'
   | 'clearError'

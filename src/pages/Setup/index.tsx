@@ -80,7 +80,7 @@ const getDefaultSkills = (t: TFunction): DefaultSkill[] => [
   { id: 'terminal', name: t('defaultSkills.terminal.name'), description: t('defaultSkills.terminal.description') },
 ];
 
-import clawxIcon from '@/assets/1.png';
+import clawxIcon from '@/assets/logo.svg';
 
 // NOTE: Channel types moved to Settings > Channels page
 // NOTE: Skill bundles moved to Settings > Skills page - auto-install essential skills during setup
@@ -268,7 +268,7 @@ function WelcomeContent() {
   return (
     <div data-testid="setup-welcome-step" className="text-center space-y-4">
       <div className="mb-4 flex justify-center">
-        <img src={clawxIcon} alt="LYClaw" className="h-16 w-16" />
+        <img src={clawxIcon} alt="ClawX" className="h-16 w-16" />
       </div>
       <h2 className="text-xl font-semibold">{t('welcome.title')}</h2>
       <p className="text-muted-foreground">
@@ -378,7 +378,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
           ...prev,
           openclaw: {
             status: 'success',
-            message: `LYClaw package ready${versionLabel}`
+            message: `OpenClaw package ready${versionLabel}`
           },
         }));
       }

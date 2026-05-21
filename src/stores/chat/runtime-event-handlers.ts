@@ -12,13 +12,11 @@ import {
   isToolOnlyMessage,
   isToolResultRole,
   makeAttachedFile,
-  attachmentFileNameFromPath,
   normalizeStreamingMessage,
   setErrorRecoveryTimer,
   snapshotStreamingAssistantMessage,
   upsertToolStatuses,
 } from './helpers';
-import { finishFirstSessionPerf, markFirstSessionRuntimeEvent } from './first-session-perf';
 import type { AttachedFileMeta, RawMessage } from './types';
 import type { ChatGet, ChatSet } from './store-api';
 
@@ -29,18 +27,6 @@ export function handleRuntimeEventState(
   resolvedState: string,
   runId: string,
 ): void {
-      markFirstSessionRuntimeEvent({
-        state: resolvedState,
-        runId,
-        hasMessage: Boolean(event.message),
-      });
-      // 如果没有 activeRunId，说明没有正在运行的任务，忽略除 started 之外的所有事件
-      const { activeRunId } = get();
-      if (!activeRunId && resolvedState !== 'started') {
-        // 只有 started 事件可以在没有 activeRunId 的情况下启动新任务
-        return;
-      }
-
       switch (resolvedState) {
         case 'started': {
           // Run just started (e.g. from console); show loading immediately.
@@ -80,12 +66,6 @@ export function handleRuntimeEventState(
                 if (s.streamingMessage && msgObj.content === undefined) {
                   return s.streamingMessage;
                 }
-                // 过滤 NO_REPLY 和 HEARTBEAT_OK 消息
-                const msgContent = String(msgObj.content || '');
-                if (/^(NO_REPLY|HEARTBEAT_OK)\s*$/.test(msgContent)) {
-                  // Clear streaming message to prevent stale content from flashing
-                  return null;
-                }
               }
               return normalizeStreamingMessage(event.message ?? s.streamingMessage);
             })(),
@@ -100,18 +80,6 @@ export function handleRuntimeEventState(
           const finalMsg = event.message as RawMessage | undefined;
           if (finalMsg) {
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
-            // 过滤 NO_REPLY 和 HEARTBEAT_OK 消息，不添加到消息列表
-            const finalMsgContent = String(normalizedFinalMessage.content || '');
-            if (/^(NO_REPLY|HEARTBEAT_OK)\s*$/.test(finalMsgContent)) {
-              // 如果已经有流式消息，保留它而不是清空
-              // 这可以防止 NO_REPLY 消息覆盖已经显示的结果
-              set((s) => ({
-                streamingText: '',
-                streamingMessage: s.streamingMessage,  // 保留现有的流式消息
-                pendingFinal: true,
-              }));
-              break;
-            }
             const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
             if (isToolResultRole(normalizedFinalMessage.role)) {
               // Resolve file path from the streaming assistant message's matching tool call
@@ -127,7 +95,7 @@ export function handleRuntimeEventState(
                 for (const f of toolFiles) {
                   if (!f.filePath) {
                     f.filePath = matchedPath;
-                    f.fileName = attachmentFileNameFromPath(matchedPath);
+                    f.fileName = matchedPath.split(/[\\/]/).pop() || 'image';
                   }
                 }
               }
@@ -220,7 +188,6 @@ export function handleRuntimeEventState(
             // After the final response, quietly reload history to surface all intermediate
             // tool-use turns (thinking + tool blocks) from the Gateway's authoritative record.
             if (hasOutput && !toolOnly) {
-              finishFirstSessionPerf('final', runId);
               clearHistoryPoll();
               void get().loadHistory(true);
             }
@@ -271,7 +238,6 @@ export function handleRuntimeEventState(
               const state = get();
               if (state.sending && !state.streamingMessage) {
                 clearHistoryPoll();
-                finishFirstSessionPerf('error', runId);
                 // Grace period expired with no recovery — finalize the error
                 set({
                   sending: false,
@@ -285,7 +251,6 @@ export function handleRuntimeEventState(
             }, ERROR_RECOVERY_GRACE_MS));
           } else {
             clearHistoryPoll();
-            finishFirstSessionPerf('error', runId);
             set({ sending: false, activeRunId: null, lastUserMessageAt: null });
           }
           break;
@@ -295,7 +260,6 @@ export function handleRuntimeEventState(
           clearErrorRecoveryTimer();
           set({
             sending: false,
-            aborting: false,
             activeRunId: null,
             streamingText: '',
             streamingMessage: null,

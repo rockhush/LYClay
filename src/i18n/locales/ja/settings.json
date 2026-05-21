@@ -1,6 +1,6 @@
 {
   "title": "設定",
-  "subtitle": "LYClaw の体験をカスタマイズ",
+  "subtitle": "ClawX の体験をカスタマイズ",
   "appearance": {
     "title": "通用",
     "description": "外観とスタイルをカスタマイズ",
@@ -10,7 +10,7 @@
     "system": "システム",
     "language": "言語",
     "launchAtStartup": "システム起動時に自動起動",
-    "launchAtStartupDesc": "ログイン時に LYClaw を自動的に起動します"
+    "launchAtStartupDesc": "ログイン時に ClawX を自動的に起動します"
   },
   "aiProviders": {
     "title": "AI プロバイダー",
@@ -37,7 +37,7 @@
     "notRequired": "不要",
     "empty": {
       "title": "プロバイダーが構成されていません",
-      "desc": "LYClaw の使用を開始するには AI プロバイダーを追加してください",
+      "desc": "ClawX の使用を開始するには AI プロバイダーを追加してください",
       "cta": "最初のプロバイダーを追加"
     },
     "dialog": {
@@ -60,7 +60,7 @@
       "protocol": "プロトコル",
       "advancedConfig": "詳細設定",
       "userAgent": "User-Agent",
-      "userAgentPlaceholder": "LYClaw/1.0",
+      "userAgentPlaceholder": "ClawX/1.0",
       "fallbackModels": "フォールバックモデル",
       "fallbackProviders": "別プロバイダーへのフォールバック",
       "fallbackModelIds": "同一プロバイダーのフォールバックモデル ID",
@@ -133,7 +133,7 @@
     "appLogs": "アプリケーションログ",
     "openFolder": "フォルダーを開く",
     "autoStart": "ゲートウェイ自動起動",
-    "autoStartDesc": "LYClaw 起動時にゲートウェイを自動起動",
+    "autoStartDesc": "ClawX 起動時にゲートウェイを自動起動",
     "proxyTitle": "プロキシ",
     "proxyDesc": "Electron と Gateway の通信をローカルプロキシ経由にします。",
     "proxyServer": "プロキシサーバー",
@@ -154,7 +154,7 @@
   },
   "updates": {
     "title": "アップデート",
-    "description": "LYClaw を最新に保つ",
+    "description": "ClawX を最新に保つ",
     "autoCheck": "自動更新チェック",
     "autoCheckDesc": "起動時に更新を確認",
     "autoDownload": "自動アップデート",
@@ -206,9 +206,7 @@
       }
     },
     "devMode": "開発者モード",
-    "devModeDesc": "開発者ツールとショートカットを表示",
-    "telemetry": "匿名の利用データ",
-    "telemetryDesc": "LYClaw の改善のため、匿名の基本的な利用データの提供を許可します"
+    "devModeDesc": "開発者ツールとショートカットを表示"
   },
   "developer": {
     "title": "開発者",
@@ -268,45 +266,9 @@
     "installMessage": "\"openclaw\" コマンドをインストールしますか？",
     "installDetail": "~/.local/bin/openclaw が作成されます。グローバルに実行するには ~/.local/bin が PATH に含まれていることを確認してください。"
   },
-  "dingtalk": {
-    "title": "DingTalk ログイン",
-    "account": "DingTalk アカウント",
-    "notLoggedIn": "ログインしていません",
-    "loggedInAs": "ログイン中：{{name}}",
-    "login": "DingTalk でログイン",
-    "logout": "ログアウト",
-    "loggingIn": "ログイン中...",
-    "loginSuccess": "ログイン成功、ようこそ {{name}} さん",
-    "loginSuccessDesc": "ユーザー情報が AI アシスタントのメモリに同期されました",
-    "loginFailed": "ログインに失敗しました",
-    "logoutSuccess": "ログアウトしました",
-    "logoutFailed": "ログアウトに失敗しました",
-    "userId": "ユーザー ID",
-    "unionId": "Union ID",
-    "email": "メール",
-    "orgEmail": "企業メール",
-    "mobile": "携帯電話",
-    "jobTitle": "役職",
-    "jobNumber": "社員番号",
-    "workPlace": "勤務地",
-    "authPage": {
-      "title": "LYClaw へようこそ",
-      "heroTitle": "あなたが頼み、LYClaw が動く",
-      "heroBadge": "LYClaw でタスクをプロらしく完了",
-      "previewTitle": "Lingyi AI Assistant",
-      "previewDesc": "ログイン後、ワークスペースに移動します",
-      "scanTip": "DingTalk で下の QR コードをスキャンしてログイン",
-      "starting": "DingTalk ログイン QR コードを生成中...",
-      "waiting": "DingTalk での確認を待っています...",
-      "retry": "QR コードを更新",
-      "agreement": "ログインするとサービス規約とプライバシー規約に同意したものとみなされます",
-      "warmupTitle": "LYClaw へようこそ",
-      "warmupDesc": "Agent がワークスペースを準備しています。しばらくお待ちください..."
-    }
-  },
   "about": {
     "title": "バージョン情報",
-    "appName": "LYClaw",
+    "appName": "ClawX",
     "tagline": "グラフィカル AI アシスタント",
     "basedOn": "OpenClaw ベース",
     "version": "バージョン {{version}}",

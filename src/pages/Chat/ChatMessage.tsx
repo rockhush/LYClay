@@ -1,12 +1,11 @@
 /**
  * Chat Message Component
  * Renders user / assistant / system / toolresult messages
- * with markdown, images, and tool cards. Thinking output is
- * surfaced via ExecutionGraphCard, not inside message bubbles.
+ * with markdown, thinking sections, images, and tool cards.
  */
-import { useState, useCallback, useEffect, memo, type MouseEvent, type ReactNode } from 'react';
-import { Sparkles, Copy, Check, ChevronDown, ChevronRight, Wrench, FileText, Film, Music, FileArchive, File, X, FolderOpen, ZoomIn, Loader2, CheckCircle2, AlertCircle, Edit3 } from 'lucide-react';
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import { useState, useCallback, useEffect, memo } from 'react';
+import { Sparkles, Copy, Check, ChevronDown, ChevronRight, Wrench, FileText, Film, Music, FileArchive, File, X, FolderOpen, ZoomIn, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -15,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
 import type { RawMessage, AttachedFileMeta } from '@/stores/chat';
-import { extractText, extractImages, extractToolUse, formatTimestamp } from './message-utils';
+import { extractText, extractThinking, extractImages, extractToolUse, formatTimestamp } from './message-utils';
 
 interface ChatMessageProps {
   message: RawMessage;
@@ -39,31 +38,9 @@ interface ChatMessageProps {
     durationMs?: number;
     summary?: string;
   }>;
-  onEditMessage?: (text: string) => void;
-  showEditButton?: boolean;
 }
 
 interface ExtractedImage { url?: string; data?: string; mimeType: string; }
-
-const EXTERNAL_LINK_PROTOCOLS = new Set(['http:', 'https:', 'dingtalk:']);
-
-function getExternalLinkProtocol(url: string): string | null {
-  try {
-    const protocol = new URL(url).protocol;
-    return EXTERNAL_LINK_PROTOCOLS.has(protocol) ? protocol : null;
-  } catch {
-    return null;
-  }
-}
-
-function transformMessageUrl(url: string): string {
-  return getExternalLinkProtocol(url) === 'dingtalk:' ? url : defaultUrlTransform(url);
-}
-
-function linkifyDingTalkDeepLinks(input: string): string {
-  if (!input.includes('dingtalk://')) return input;
-  return input.replace(/(?<!\]\()dingtalk:\/\/[^\s<>()]+/g, (url) => `[${url}](${url})`);
-}
 
 /**
  * Normalize LaTeX delimiters so `remark-math` can detect them.
@@ -110,8 +87,6 @@ export const ChatMessage = memo(function ChatMessage({
   suppressAssistantText = false,
   isStreaming = false,
   streamingTools = [],
-  onEditMessage,
-  showEditButton = true,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const role = typeof message.role === 'string' ? message.role.toLowerCase() : '';
@@ -123,11 +98,13 @@ export const ChatMessage = memo(function ChatMessage({
   // original content without surfacing the bubble.
   const hideAssistantText = suppressAssistantText && !isUser;
   const hasText = !hideAssistantText && text.trim().length > 0;
+  const visibleThinkingRaw = extractThinking(message);
+  const visibleThinking = hideAssistantText ? null : visibleThinkingRaw;
   const images = extractImages(message);
   const tools = extractToolUse(message);
   const visibleTools = suppressToolCards ? [] : tools;
   const shouldHideProcessAttachments = suppressProcessAttachments
-    && (hasText || images.length > 0 || visibleTools.length > 0);
+    && (hasText || !!visibleThinking || images.length > 0 || visibleTools.length > 0);
 
   const attachedFiles = shouldHideProcessAttachments
     ? (message._attachedFiles || []).filter((file) => file.source !== 'tool-result')
@@ -138,7 +115,7 @@ export const ChatMessage = memo(function ChatMessage({
   if (isToolResult) return null;
 
   const hasStreamingToolStatus = isStreaming && streamingTools.length > 0;
-  if (!hasText && images.length === 0 && visibleTools.length === 0 && attachedFiles.length === 0 && !hasStreamingToolStatus) return null;
+  if (!hasText && !visibleThinking && images.length === 0 && visibleTools.length === 0 && attachedFiles.length === 0 && !hasStreamingToolStatus) return null;
 
   return (
     <div
@@ -157,12 +134,17 @@ export const ChatMessage = memo(function ChatMessage({
       {/* Content */}
       <div
         className={cn(
-          'flex flex-col w-full min-w-0 space-y-2',
+          'flex flex-col w-full min-w-0 max-w-[80%] space-y-2',
           isUser ? 'items-end' : 'items-start',
         )}
       >
         {isStreaming && !isUser && streamingTools.length > 0 && (
           <ToolStatusBar tools={streamingTools} />
+        )}
+
+        {/* Thinking section */}
+        {visibleThinking && (
+          <ThinkingBlock content={visibleThinking} />
         )}
 
         {/* Tool use cards */}
@@ -286,23 +268,11 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
-        {/* Hover row for user messages — timestamp + edit button */}
+        {/* Hover row for user messages — timestamp only */}
         {isUser && message.timestamp && (
-          <div className="flex items-center justify-between w-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
-            <span className="text-xs text-muted-foreground">
-              {formatTimestamp(message.timestamp)}
-            </span>
-            {onEditMessage && showEditButton && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 -ml-5"
-                onClick={() => onEditMessage(text)}
-              >
-                <Edit3 className="h-3 w-3" />
-              </Button>
-            )}
-          </div>
+          <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
+            {formatTimestamp(message.timestamp)}
+          </span>
         )}
 
         {/* Hover row for assistant messages — only when there is real text content */}
@@ -421,8 +391,8 @@ function MessageBubble({
         'relative rounded-2xl px-4 py-3',
         !isUser && 'w-full',
         isUser
-          ? 'bg-[#FF7B00] text-white shadow-sm'
-          : 'bg-[#f8f8f6]/50 dark:bg-white/5 text-foreground',
+          ? 'bg-[#0a84ff] text-white shadow-sm'
+          : 'bg-black/5 dark:bg-white/5 text-foreground',
       )}
     >
       {isUser ? (
@@ -444,7 +414,7 @@ function MessageBubble({
                   );
                 }
                 return (
-                  <pre className="bg-background/50 rounded-lg p-4 whitespace-pre-wrap break-all overflow-x-auto">
+                  <pre className="bg-background/50 rounded-lg p-4 overflow-x-auto">
                     <code className={cn('text-sm font-mono', className)} {...props}>
                       {children}
                     </code>
@@ -453,13 +423,14 @@ function MessageBubble({
               },
               a({ href, children }) {
                 return (
-                  <MessageLink href={href}>{children}</MessageLink>
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-words break-all">
+                    {children}
+                  </a>
                 );
               },
             }}
-            urlTransform={transformMessageUrl}
           >
-            {linkifyDingTalkDeepLinks(normalizeLatexDelimiters(text))}
+            {normalizeLatexDelimiters(text)}
           </ReactMarkdown>
           {isStreaming && (
             <span className="inline-block w-2 h-4 bg-foreground/50 animate-pulse ml-0.5" />
@@ -471,17 +442,33 @@ function MessageBubble({
   );
 }
 
-function MessageLink({ href, children }: { href?: string; children: ReactNode }) {
-  const handleClick = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
-    if (!href || !getExternalLinkProtocol(href)) return;
-    event.preventDefault();
-    invokeIpc('shell:openExternal', href);
-  }, [href]);
+// ── Thinking Block ──────────────────────────────────────────────
+
+function ThinkingBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
 
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-words break-all" onClick={handleClick}>
-      {children}
-    </a>
+    <div className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 text-[14px]">
+      <button
+        className="flex items-center gap-2 w-full px-3 py-2 text-muted-foreground hover:text-foreground transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <span className="font-medium">Thinking</span>
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3 text-muted-foreground">
+          <div className="prose prose-sm dark:prose-invert max-w-none opacity-75">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, output: 'html' }]]}
+            >
+              {normalizeLatexDelimiters(content)}
+            </ReactMarkdown>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

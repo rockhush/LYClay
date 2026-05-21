@@ -42,14 +42,11 @@ export interface ContentBlock {
 export interface ChatSession {
   key: string;
   label?: string;
-  firstUserMessagePreview?: string;
   displayName?: string;
   thinkingLevel?: string;
   model?: string;
   updatedAt?: number;
 }
-
-export type ReasoningMode = 'fast' | 'thinking' | 'expert';
 
 export interface ToolStatus {
   id?: string;
@@ -61,33 +58,14 @@ export interface ToolStatus {
   updatedAt: number;
 }
 
-/** Streaming state per session - preserved when switching between sessions */
-export interface SessionStreamingState {
-  activeRunId: string | null;
-  streamingText: string;
-  streamingMessage: unknown | null;
-  streamingTools: ToolStatus[];
-  pendingFinal: boolean;
-  lastUserMessageAt: number | null;
-  pendingToolImages: AttachedFileMeta[];
-  runAborted: boolean;
-  sending: boolean;
-  /** Messages snapshot for recovery when switching back during active streaming */
-  messagesSnapshot: RawMessage[];
-}
-
 export interface ChatState {
   // Messages
   messages: RawMessage[];
   loading: boolean;
   error: string | null;
 
-  // Pre-filled input text (for skill creation, etc.)
-  prefilledInput: string | null;
-
   // Streaming
   sending: boolean;
-  aborting: boolean;
   activeRunId: string | null;
   streamingText: string;
   streamingMessage: unknown | null;
@@ -96,10 +74,6 @@ export interface ChatState {
   lastUserMessageAt: number | null;
   /** Images collected from tool results, attached to the next assistant message */
   pendingToolImages: AttachedFileMeta[];
-  /** True if this is the first message sent since app/gateway startup */
-  isFirstMessageEver?: boolean;
-  /** True if the current run was manually aborted by the user */
-  runAborted: boolean;
 
   // Sessions
   sessions: ChatSession[];
@@ -107,43 +81,19 @@ export interface ChatState {
   currentAgentId: string;
   /** First user message text per session key, used as display label */
   sessionLabels: Record<string, string>;
-  /**
-   * User-edited custom titles per session key. Persisted to localStorage so the
-   * rename survives session switches and app restarts. When present, this value
-   * takes precedence over `sessionLabels` / discovered previews in the UI.
-   */
-  customSessionLabels: Record<string, string>;
   /** Last message timestamp (ms) per session key, used for sorting */
   sessionLastActivity: Record<string, number>;
-  /** Workspace entry id per session key (sidebar: nest history under that folder) */
-  sessionWorkspaceIds: Record<string, string>;
-  /** Streaming state per session, preserved when switching sessions */
-  sessionStreamingStates: Record<string, SessionStreamingState>;
 
   // Thinking
   thinkingLevel: string | null;
-  reasoningMode: ReasoningMode;
 
   // Actions
-  loadSessions: (force?: boolean) => Promise<void>;
+  loadSessions: () => Promise<void>;
   switchSession: (key: string) => void;
   newSession: () => void;
-  /** Set pre-filled input text for the chat input box */
-  setPrefilledInput: (text: string | null) => void;
-  /** Associate the active chat session with a workspace id (or clear). */
-  bindCurrentSessionWorkspace: (workspaceId: string | null) => void;
   deleteSession: (key: string) => Promise<void>;
-  /**
-   * Rename a chat session. Stores the new title under `customSessionLabels`
-   * and persists it to localStorage so it survives reloads/restarts.
-   * An empty/whitespace-only label clears the custom title (reverts to default).
-   */
-  renameSession: (key: string, newLabel: string) => Promise<void>;
   cleanupEmptySession: () => void;
-  loadHistory: (
-    quiet?: boolean,
-    opts?: { afterAwaitRetry?: boolean },
-  ) => Promise<void>;
+  loadHistory: (quiet?: boolean) => Promise<void>;
   sendMessage: (
     text: string,
     attachments?: Array<{
@@ -156,7 +106,6 @@ export interface ChatState {
     targetAgentId?: string | null,
   ) => Promise<void>;
   abortRun: () => Promise<void>;
-  setReasoningMode: (mode: ReasoningMode) => Promise<void>;
   handleChatEvent: (event: Record<string, unknown>) => void;
   refresh: () => Promise<void>;
   clearError: () => void;

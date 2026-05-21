@@ -5,7 +5,7 @@ const hostApiFetchMock = vi.fn();
 
 const { gatewayState, agentsState } = vi.hoisted(() => ({
   gatewayState: {
-    status: { state: 'running', port: 18789 } as Record<string, unknown>,
+    status: { state: 'running', port: 18789 },
   },
   agentsState: {
     agents: [{ id: 'main', name: 'main' }] as Array<Record<string, unknown>>,
@@ -70,30 +70,12 @@ vi.mock('@/pages/Chat/ChatInput', () => ({
   ChatInput: () => null,
 }));
 
-vi.mock('@/pages/Chat/ChatMessage', () => ({
-  ChatMessage: ({ message, textOverride }: { message: { content?: unknown }; textOverride?: string }) => {
-    const text = typeof textOverride === 'string'
-      ? textOverride
-      : typeof message?.content === 'string'
-        ? message.content
-        : Array.isArray(message?.content)
-          ? message.content
-            .filter((block): block is { type?: string; text?: string } => typeof block === 'object' && block !== null)
-            .filter((block) => block.type === 'text' && typeof block.text === 'string')
-            .map((block) => block.text)
-            .join(' ')
-          : '';
-    return <div>{text}</div>;
-  },
-}));
-
 describe('Chat execution graph lifecycle', () => {
   beforeEach(async () => {
     vi.resetModules();
     hostApiFetchMock.mockReset();
     hostApiFetchMock.mockResolvedValue({ success: true, messages: [] });
     agentsState.fetchAgents.mockReset();
-    gatewayState.status = { state: 'running', port: 18789 };
 
     const { useChatStore } = await import('@/stores/chat');
     useChatStore.setState({
@@ -113,7 +95,6 @@ describe('Chat execution graph lifecycle', () => {
       ],
       loading: false,
       error: null,
-      runError: null,
       sending: true,
       activeRunId: 'run-live',
       streamingText: '',
@@ -169,7 +150,6 @@ describe('Chat execution graph lifecycle', () => {
       ],
       loading: false,
       error: null,
-      runError: null,
       sending: true,
       activeRunId: 'run-starting',
       streamingText: '',
@@ -196,158 +176,5 @@ describe('Chat execution graph lifecycle', () => {
 
     expect(screen.getByTestId('chat-execution-step-thinking-trailing')).toBeInTheDocument();
     expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
-  });
-
-  it('shows the centered first-response progress card while the gateway is warming', async () => {
-    gatewayState.status = {
-      state: 'running',
-      port: 18789,
-      warmupStatus: 'warming',
-    };
-
-    const { useChatStore } = await import('@/stores/chat');
-    useChatStore.setState({
-      messages: [
-        {
-          role: 'user',
-          content: 'Start the first run',
-        },
-      ],
-      loading: false,
-      error: null,
-      runError: null,
-      sending: true,
-      activeRunId: null,
-      streamingText: '',
-      streamingMessage: null,
-      streamingTools: [],
-      pendingFinal: false,
-      lastUserMessageAt: Date.now(),
-      pendingToolImages: [],
-      sessions: [{ key: 'agent:main:main' }],
-      currentSessionKey: 'agent:main:main',
-      currentAgentId: 'main',
-      sessionLabels: {},
-      sessionLastActivity: {},
-      thinkingLevel: null,
-    });
-
-    const { Chat } = await import('@/pages/Chat/index');
-
-    render(<Chat />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('first-response-progress-card')).toBeInTheDocument();
-    });
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '55');
-  });
-
-  it('renders generated file cards with line stats for edit tools', async () => {
-    const { useChatStore } = await import('@/stores/chat');
-    useChatStore.setState({
-      messages: [
-        {
-          role: 'user',
-          content: 'Patch the workspace file',
-        },
-        {
-          role: 'assistant',
-          id: 'edit-turn',
-          content: [
-            {
-              type: 'tool_use',
-              id: 'edit-1',
-              name: 'Edit',
-              input: {
-                file_path: '/workspace/demo.ts',
-                old_string: 'const value = 1\n',
-                new_string: 'const value = 2\n',
-              },
-            },
-          ],
-        },
-        {
-          role: 'assistant',
-          id: 'reply-turn',
-          content: [{ type: 'text', text: 'Updated the file.' }],
-        },
-      ],
-      loading: false,
-      error: null,
-      runError: null,
-      sending: false,
-      activeRunId: null,
-      streamingText: '',
-      streamingMessage: null,
-      streamingTools: [],
-      pendingFinal: false,
-      lastUserMessageAt: Date.now(),
-      pendingToolImages: [],
-      sessions: [{ key: 'agent:main:main' }],
-      currentSessionKey: 'agent:main:main',
-      currentAgentId: 'main',
-      sessionLabels: {},
-      sessionLastActivity: {},
-      thinkingLevel: null,
-    });
-
-    const { Chat } = await import('@/pages/Chat/index');
-
-    render(<Chat />);
-
-    await waitFor(() => {
-      expect(screen.getByText('demo.ts')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('+1')).toBeInTheDocument();
-    expect(screen.getByText('-1')).toBeInTheDocument();
-  });
-
-  it('stops showing trailing thinking and renders run error callout after terminal model error', async () => {
-    const { useChatStore } = await import('@/stores/chat');
-    useChatStore.setState({
-      messages: [
-        {
-          role: 'user',
-          content: 'Check semiconductor chatter',
-        },
-        {
-          role: 'assistant',
-          id: 'tool-turn',
-          content: [
-            { type: 'text', text: 'Checked X.' },
-            { type: 'tool_use', id: 'browser-search', name: 'browser', input: { action: 'search', query: 'semiconductor' } },
-          ],
-        },
-      ],
-      loading: false,
-      error: '404 Resource not found',
-      runError: '404 Resource not found',
-      sending: false,
-      activeRunId: null,
-      streamingText: '',
-      streamingMessage: null,
-      streamingTools: [],
-      pendingFinal: false,
-      lastUserMessageAt: null,
-      pendingToolImages: [],
-      sessions: [{ key: 'agent:main:main' }],
-      currentSessionKey: 'agent:main:main',
-      currentAgentId: 'main',
-      sessionLabels: {},
-      sessionLastActivity: {},
-      thinkingLevel: null,
-    });
-
-    const { Chat } = await import('@/pages/Chat/index');
-
-    render(<Chat />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('chat-execution-graph')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
-    expect(screen.getAllByText('404 Resource not found').length).toBeGreaterThan(0);
   });
 });

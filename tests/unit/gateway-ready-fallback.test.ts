@@ -41,8 +41,12 @@ describe('GatewayManager gatewayReady fallback', () => {
       statusUpdates.push({ gatewayReady: status.gatewayReady });
     });
 
-    const stateController = (manager as unknown as { stateController: { setStatus: (u: Record<string, unknown>) => void } }).stateController;
-    stateController.setStatus({ state: 'starting', gatewayReady: false });
+    // Simulate start attempt (will fail but we can check the initial status)
+    try {
+      await manager.start();
+    } catch {
+      // expected to fail — no actual gateway process
+    }
 
     const startingUpdate = statusUpdates.find((u) => u.gatewayReady === false);
     expect(startingUpdate).toBeDefined();
@@ -68,12 +72,10 @@ describe('GatewayManager gatewayReady fallback', () => {
     expect(readyUpdate).toBeDefined();
   });
 
-  it('auto-sets gatewayReady=true after fallback RPC router probe succeeds', async () => {
+  it('auto-sets gatewayReady=true after fallback timeout if no event received', async () => {
     vi.resetModules();
     const { GatewayManager } = await import('@electron/gateway/manager');
     const manager = new GatewayManager();
-    const rpcSpy = vi.spyOn(manager as unknown as { rpc: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown> }, 'rpc')
-      .mockResolvedValue({ ok: true });
 
     // Force internal state to 'running' without gatewayReady
     const stateController = (manager as unknown as { stateController: { setStatus: (u: Record<string, unknown>) => void } }).stateController;
@@ -88,35 +90,13 @@ describe('GatewayManager gatewayReady fallback', () => {
     (manager as unknown as { scheduleGatewayReadyFallback: () => void }).scheduleGatewayReadyFallback();
 
     // Before timeout, no gatewayReady update
-    await vi.advanceTimersByTimeAsync(29_000);
+    vi.advanceTimersByTime(29_000);
     expect(statusUpdates.find((u) => u.gatewayReady === true)).toBeUndefined();
 
-    // After 30s fallback timeout, a successful lightweight RPC marks the gateway ready.
-    await vi.advanceTimersByTimeAsync(2_000);
+    // After 30s fallback timeout
+    vi.advanceTimersByTime(2_000);
     const readyUpdate = statusUpdates.find((u) => u.gatewayReady === true);
     expect(readyUpdate).toBeDefined();
-    expect(rpcSpy).toHaveBeenCalledWith('system-presence', {}, 5_000);
-  });
-
-  it('keeps gatewayReady=false when fallback RPC router probe fails', async () => {
-    vi.resetModules();
-    const { GatewayManager } = await import('@electron/gateway/manager');
-    const manager = new GatewayManager();
-    vi.spyOn(manager as unknown as { rpc: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown> }, 'rpc')
-      .mockRejectedValue(new Error('RPC timeout: system-presence'));
-
-    const stateController = (manager as unknown as { stateController: { setStatus: (u: Record<string, unknown>) => void } }).stateController;
-    stateController.setStatus({ state: 'running', connectedAt: Date.now() });
-
-    const statusUpdates: Array<{ gatewayReady?: boolean }> = [];
-    manager.on('status', (status: { gatewayReady?: boolean }) => {
-      statusUpdates.push({ gatewayReady: status.gatewayReady });
-    });
-
-    (manager as unknown as { scheduleGatewayReadyFallback: () => void }).scheduleGatewayReadyFallback();
-
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(statusUpdates.find((u) => u.gatewayReady === true)).toBeUndefined();
   });
 
   it('cancels fallback timer when gateway:ready event arrives first', async () => {
@@ -136,12 +116,12 @@ describe('GatewayManager gatewayReady fallback', () => {
     (manager as unknown as { scheduleGatewayReadyFallback: () => void }).scheduleGatewayReadyFallback();
 
     // gateway:ready event arrives at 5s
-    await vi.advanceTimersByTimeAsync(5_000);
+    vi.advanceTimersByTime(5_000);
     manager.emit('gateway:ready', {});
     expect(statusUpdates.filter((u) => u.gatewayReady === true)).toHaveLength(1);
 
     // After 30s, no duplicate gatewayReady=true
-    await vi.advanceTimersByTimeAsync(30_000);
+    vi.advanceTimersByTime(30_000);
     expect(statusUpdates.filter((u) => u.gatewayReady === true)).toHaveLength(1);
   });
 });

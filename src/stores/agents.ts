@@ -3,7 +3,7 @@ import { hostApiFetch } from '@/lib/host-api';
 import type { ChannelType } from '@/types/channel';
 import type { AgentSummary, AgentsSnapshot } from '@/types/agent';
 
-interface AgentsState {  
+interface AgentsState {
   agents: AgentSummary[];
   defaultAgentId: string;
   defaultModelRef: string | null;
@@ -22,10 +22,6 @@ interface AgentsState {
   clearError: () => void;
 }
 
-let fetchAgentsPromise: Promise<void> | null = null;
-let lastFetchAgentsAt = 0;
-const FETCH_AGENTS_DEDUPE_MS = 5_000;
-
 function applySnapshot(snapshot: AgentsSnapshot | undefined) {
   return snapshot ? {
     agents: snapshot.agents ?? [],
@@ -37,7 +33,7 @@ function applySnapshot(snapshot: AgentsSnapshot | undefined) {
   } : {};
 }
 
-export const useAgentsStore = create<AgentsState>((set, get) => ({
+export const useAgentsStore = create<AgentsState>((set) => ({
   agents: [],
   defaultAgentId: 'main',
   defaultModelRef: null,
@@ -48,30 +44,16 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   error: null,
 
   fetchAgents: async () => {
-    if (fetchAgentsPromise) {
-      return fetchAgentsPromise;
-    }
-    const now = Date.now();
-    if (get().agents.length > 0 && now - lastFetchAgentsAt < FETCH_AGENTS_DEDUPE_MS) {
-      return;
-    }
-
-    fetchAgentsPromise = (async () => {
     set({ loading: true, error: null });
     try {
       const snapshot = await hostApiFetch<AgentsSnapshot & { success?: boolean }>('/api/agents');
-      lastFetchAgentsAt = Date.now();
       set({
         ...applySnapshot(snapshot),
         loading: false,
       });
     } catch (error) {
       set({ loading: false, error: String(error) });
-    } finally {
-      fetchAgentsPromise = null;
     }
-    })();
-    return fetchAgentsPromise;
   },
 
   createAgent: async (name: string, options?: { inheritWorkspace?: boolean }) => {

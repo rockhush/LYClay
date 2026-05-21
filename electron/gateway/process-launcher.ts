@@ -33,7 +33,7 @@ const GATEWAY_FETCH_PRELOAD_SOURCE = `'use strict';
       delete flat['x-title'];
       delete flat['X-Title'];
       flat['HTTP-Referer'] = 'https://claw-x.com';
-      flat['X-Title'] = 'LYClaw';
+      flat['X-Title'] = 'ClawX';
       init.headers = flat;
     }
     return _f.call(globalThis, input, init);
@@ -95,8 +95,6 @@ export async function launchGatewayProcess(options: {
   getCurrentState: () => GatewayLifecycleState;
   getShouldReconnect: () => boolean;
   onStderrLine: (line: string) => void;
-  /** OpenClaw often logs routine channel traffic on stdout; mirror at debug level for troubleshooting. */
-  onStdoutLine?: (line: string) => void;
   onSpawn: (pid: number | undefined) => void;
   onExit: (child: Electron.UtilityProcess, code: number | null) => void;
   onError: (error: Error) => void;
@@ -181,16 +179,6 @@ export async function launchGatewayProcess(options: {
         options.onStderrLine(line);
       }
     });
-
-    if (options.onStdoutLine) {
-      const onOut = options.onStdoutLine;
-      child.stdout?.on('data', (data) => {
-        const raw = data.toString();
-        for (const line of raw.split(/\r?\n/)) {
-          onOut(line);
-        }
-      });
-    }
 
     child.on('spawn', () => {
       logger.info(`Gateway process started (pid=${child.pid})`);

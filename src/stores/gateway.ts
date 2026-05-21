@@ -15,55 +15,9 @@ const gatewayEventDedupe = new Map<string, number>();
 const GATEWAY_EVENT_DEDUPE_TTL_MS = 30_000;
 const LOAD_SESSIONS_MIN_INTERVAL_MS = 1_200;
 const LOAD_HISTORY_MIN_INTERVAL_MS = 800;
-const CRON_REPAIR_STARTUP_DELAY_MS = 60_000;
-const CRON_REPAIR_BUSY_RETRY_DELAY_MS = 30_000;
 let lastLoadSessionsAt = 0;
 let lastLoadHistoryAt = 0;
 let cronRepairTriggeredThisSession = false;
-let cronRepairStartupTimer: ReturnType<typeof setTimeout> | null = null;
-let chatStoreImportPromise: Promise<typeof import('./chat')> | null = null;
-
-function loadChatStoreModule(): Promise<typeof import('./chat')> {
-  chatStoreImportPromise ??= import('./chat');
-  return chatStoreImportPromise;
-}
-
-function scheduleCronRepair(delayMs: number): void {
-  if (cronRepairStartupTimer) {
-    clearTimeout(cronRepairStartupTimer);
-  }
-
-  cronRepairStartupTimer = setTimeout(() => {
-    cronRepairStartupTimer = null;
-    if (useGatewayStore.getState().status.state !== 'running') {
-      return;
-    }
-
-    loadChatStoreModule()
-      .then(({ useChatStore }) => {
-        const chatState = useChatStore.getState();
-        if (chatState.sending || chatState.activeRunId) {
-          console.info('[gateway-store] delayed cron repair because chat is active');
-          scheduleCronRepair(CRON_REPAIR_BUSY_RETRY_DELAY_MS);
-          return;
-        }
-
-        // Fire-and-forget: fetch cron jobs to trigger repair logic in background.
-        import('./cron')
-          .then(({ useCronStore }) => {
-            useCronStore.getState().fetchJobs();
-          })
-          .catch(() => {});
-      })
-      .catch(() => {
-        import('./cron')
-          .then(({ useCronStore }) => {
-            useCronStore.getState().fetchJobs();
-          })
-          .catch(() => {});
-      });
-  }, delayMs);
-}
 
 interface GatewayHealth {
   ok: boolean;
@@ -75,7 +29,6 @@ interface GatewayState {
   status: GatewayStatus;
   health: GatewayHealth | null;
   isInitialized: boolean;
-  isWarmedUp: boolean;
   lastError: string | null;
   init: () => Promise<void>;
   start: () => Promise<void>;
@@ -85,7 +38,6 @@ interface GatewayState {
   rpc: <T>(method: string, params?: unknown, timeoutMs?: number) => Promise<T>;
   setStatus: (status: GatewayStatus) => void;
   clearError: () => void;
-  checkWarmup: () => Promise<boolean>;
 }
 
 function pruneGatewayEventDedupe(now: number): void {
@@ -145,6 +97,9 @@ function maybeLoadSessions(
   state: { loadSessions: () => Promise<void> },
   force = false,
 ): void {
+  const { status } = useGatewayStore.getState();
+  if (status.gatewayReady === false) return;
+
   const now = Date.now();
   if (!force && now - lastLoadSessionsAt < LOAD_SESSIONS_MIN_INTERVAL_MS) return;
   lastLoadSessionsAt = now;
@@ -183,7 +138,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
       message: p.message ?? data.message,
     };
     if (shouldProcessGatewayEvent(normalizedEvent)) {
-      loadChatStoreModule()
+      import('./chat')
         .then(({ useChatStore }) => {
           useChatStore.getState().handleChatEvent(normalizedEvent);
         })
@@ -194,7 +149,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
   const runId = p.runId ?? data.runId;
   const sessionKey = p.sessionKey ?? data.sessionKey;
   if (phase === 'started' && runId != null && sessionKey != null) {
-    loadChatStoreModule()
+    import('./chat')
       .then(({ useChatStore }) => {
         const state = useChatStore.getState();
         const resolvedSessionKey = String(sessionKey);
@@ -215,7 +170,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
   }
 
   if (phase === 'completed' || phase === 'done' || phase === 'finished' || phase === 'end') {
-    loadChatStoreModule()
+    import('./chat')
       .then(({ useChatStore }) => {
         const state = useChatStore.getState();
         const resolvedSessionKey = sessionKey != null ? String(sessionKey) : null;
@@ -248,7 +203,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
 }
 
 function handleGatewayChatMessage(data: unknown): void {
-  loadChatStoreModule().then(({ useChatStore }) => {
+  import('./chat').then(({ useChatStore }) => {
     const chatData = data as Record<string, unknown>;
     const payload = ('message' in chatData && typeof chatData.message === 'object')
       ? chatData.message as Record<string, unknown>
@@ -293,7 +248,6 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   },
   health: null,
   isInitialized: false,
-  isWarmedUp: false,
   lastError: null,
 
   init: async () => {
@@ -313,20 +267,15 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
           unsubscribers.push(subscribeHostEvent<GatewayStatus>('gateway:status', (payload) => {
             set({ status: payload });
 
-            // Reset first message flag when gateway starts/restarts
-            if (payload.state === 'running') {
-              loadChatStoreModule()
-                .then(({ resetFirstMessageFlag }) => {
-                  resetFirstMessageFlag();
-                })
-                .catch(() => {});
-            }
-
-            // Delay cron repair after startup so first chat has priority for
-            // session file locks and Gateway RPC capacity.
+            // Trigger cron repair when gateway becomes ready
             if (!cronRepairTriggeredThisSession && payload.state === 'running') {
               cronRepairTriggeredThisSession = true;
-              scheduleCronRepair(CRON_REPAIR_STARTUP_DELAY_MS);
+              // Fire-and-forget: fetch cron jobs to trigger repair logic in background
+              import('./cron')
+                .then(({ useCronStore }) => {
+                  useCronStore.getState().fetchJobs();
+                })
+                .catch(() => {});
             }
           }));
           unsubscribers.push(subscribeHostEvent<{ message?: string }>('gateway:error', (payload) => {
@@ -487,22 +436,6 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
       throw new Error(response.error || `Gateway RPC failed: ${method}`);
     }
     return response.result as T;
-  },
-
-  checkWarmup: async (): Promise<boolean> => {
-    try {
-      const response = await invokeIpc<{
-        success: boolean;
-        result?: boolean;
-        error?: string;
-      }>('gateway:warmup-status');
-      if (response.success && response.result) {
-        set({ isWarmedUp: true });
-      }
-      return response.result ?? false;
-    } catch {
-      return false;
-    }
   },
 
   setStatus: (status) => set({ status }),

@@ -3,7 +3,6 @@ import openai from './openai.svg';
 import google from './google.svg';
 import openrouter from './openrouter.svg';
 import ark from './ark.svg';
-import deepseek from './deepseek.svg';
 import moonshot from './moonshot.svg';
 import siliconflow from './siliconflow.svg';
 import minimaxPortal from './minimax.svg';
@@ -17,7 +16,6 @@ export const providerIcons: Record<string, string> = {
     google,
     openrouter,
     ark,
-    deepseek,
     moonshot,
     'moonshot-global': moonshot,
     siliconflow,

@@ -19,7 +19,7 @@
  *      @mariozechner/clipboard).
  */
 
-const { cpSync, existsSync, readdirSync, rmSync, statSync, mkdirSync, realpathSync, readFileSync, writeFileSync } = require('fs');
+const { cpSync, existsSync, readdirSync, rmSync, statSync, mkdirSync, realpathSync } = require('fs');
 const { join, dirname, basename, relative } = require('path');
 
 // On Windows, paths in pnpm's virtual store can exceed the default MAX_PATH
@@ -32,159 +32,12 @@ function normWin(p) {
   return '\\\\?\\' + p.replace(/\//g, '\\');
 }
 
-/** Block the current thread for `ms` without spawning a subprocess (Windows AV may lock the exe we just wrote). */
-function sleepSync(ms) {
-  if (ms <= 0) return;
-  try {
-    const sab = new SharedArrayBuffer(4);
-    const ia = new Int32Array(sab);
-    Atomics.wait(ia, 0, 0, Math.min(ms, 2147483647));
-  } catch {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {
-      /* SharedArrayBuffer / Atomics unavailable — coarse fallback for build hook only */
-    }
-  }
-}
-
-function isWindowsTransientFsLockError(err) {
-  const code = err && err.code;
-  return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES';
-}
-
-/**
- * Retry fs ops that fail when Defender/EDR briefly opens the freshly packed exe.
- * Only used on win32 from applyWindowsExeResources.
- */
-function readFileSyncWithRetry(filePath, labelForLog) {
-  const maxAttempts = 12;
-  let delayMs = 80;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return readFileSync(filePath);
-    } catch (err) {
-      if (!isWindowsTransientFsLockError(err) || attempt === maxAttempts) {
-        throw err;
-      }
-      console.warn(
-        `[after-pack] ${labelForLog} read blocked (${err.code}), retry ${attempt}/${maxAttempts} in ${delayMs}ms ...`,
-      );
-      sleepSync(delayMs + Math.floor(Math.random() * 40));
-      delayMs = Math.min(delayMs * 2, 2000);
-    }
-  }
-}
-
-function writeFileSyncWithRetry(filePath, data, labelForLog) {
-  const maxAttempts = 12;
-  let delayMs = 100;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      writeFileSync(filePath, data);
-      if (attempt > 1) {
-        console.log(`[after-pack] ${labelForLog} wrote after ${attempt} attempts (Windows file lock retry)`);
-      }
-      return;
-    } catch (err) {
-      if (!isWindowsTransientFsLockError(err) || attempt === maxAttempts) {
-        throw err;
-      }
-      console.warn(
-        `[after-pack] ${labelForLog} write blocked (${err.code}), retry ${attempt}/${maxAttempts} in ${delayMs}ms ...`,
-      );
-      sleepSync(delayMs + Math.floor(Math.random() * 50));
-      delayMs = Math.min(delayMs * 2, 2000);
-    }
-  }
-}
-
 // ── Arch helpers ─────────────────────────────────────────────────────────────
 // electron-builder Arch enum: 0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal
 const ARCH_MAP = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
 
 function resolveArch(archEnum) {
   return ARCH_MAP[archEnum] || 'x64';
-}
-
-function readJsonSafe(filePath) {
-  try {
-    return JSON.parse(readFileSync(normWin(filePath), 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function listPackageDeps(pkgJson) {
-  return Object.keys({
-    ...(pkgJson?.dependencies && typeof pkgJson.dependencies === 'object' ? pkgJson.dependencies : {}),
-    ...(pkgJson?.optionalDependencies && typeof pkgJson.optionalDependencies === 'object' ? pkgJson.optionalDependencies : {}),
-  }).sort((a, b) => a.localeCompare(b));
-}
-
-function readInstalledPackageVersion(packageDir) {
-  const pkg = readJsonSafe(join(packageDir, 'package.json'));
-  return typeof pkg?.version === 'string' ? pkg.version.trim() : null;
-}
-
-function normalizeWindowsVersion(version) {
-  const parts = String(version || '0.0.0')
-    .split(/[.-]/)
-    .map((part) => Number.parseInt(part, 10))
-    .filter((part) => Number.isFinite(part))
-    .slice(0, 4);
-  while (parts.length < 4) parts.push(0);
-  return parts.map((part) => Math.max(0, Math.min(65535, part))).join('.');
-}
-
-function applyWindowsExeResources(context) {
-  const appInfo = context.packager.appInfo;
-  const exePath = join(context.appOutDir, `${appInfo.productFilename}.exe`);
-  const iconPath = join(__dirname, '..', 'resources', 'icons', 'icon.ico');
-  if (!existsSync(exePath)) {
-    throw new Error(`Windows executable not found for resource editing: ${exePath}`);
-  }
-  if (!existsSync(iconPath)) {
-    throw new Error(`Windows icon not found for resource editing: ${iconPath}`);
-  }
-
-  const resedit = require('resedit');
-  const exe = resedit.NtExecutable.from(readFileSyncWithRetry(normWin(exePath), 'Windows exe'), { ignoreCert: true });
-  const resources = resedit.NtExecutableResource.from(exe);
-  const iconFile = resedit.Data.IconFile.from(readFileSync(normWin(iconPath)));
-  resedit.Resource.IconGroupEntry.replaceIconsForResource(
-    resources.entries,
-    1,
-    1033,
-    iconFile.icons.map((icon) => icon.data),
-  );
-
-  const language = { lang: 1033, codepage: 1200 };
-  const fileVersion = normalizeWindowsVersion(appInfo.shortVersion || appInfo.buildVersion || appInfo.version);
-  const productVersion = normalizeWindowsVersion(
-    appInfo.shortVersionWindows
-      || (typeof appInfo.getVersionInWeirdWindowsForm === 'function'
-        ? appInfo.getVersionInWeirdWindowsForm()
-        : appInfo.version),
-  );
-  const versionInfo = resedit.Resource.VersionInfo.fromEntries(resources.entries)[0]
-    || resedit.Resource.VersionInfo.createEmpty();
-  versionInfo.setFileVersion(fileVersion, language.lang);
-  versionInfo.setProductVersion(productVersion, language.lang);
-  versionInfo.setStringValues(language, {
-    FileDescription: appInfo.productName,
-    ProductName: appInfo.productName,
-    LegalCopyright: appInfo.copyright || '',
-    FileVersion: fileVersion,
-    ProductVersion: productVersion,
-    InternalName: appInfo.productFilename,
-    OriginalFilename: `${appInfo.productFilename}.exe`,
-    CompanyName: appInfo.companyName || '',
-  });
-  versionInfo.outputToResourceEntries(resources.entries);
-
-  resources.outputResource(exe);
-  writeFileSyncWithRetry(normWin(exePath), Buffer.from(exe.generate()), 'Windows exe resources');
-  console.log(`[after-pack] 🪟 Applied Windows exe icon/version resources with resedit: ${exePath}`);
 }
 
 // ── General cleanup ──────────────────────────────────────────────────────────
@@ -195,17 +48,7 @@ function cleanupUnnecessaryFiles(dir) {
   const REMOVE_DIRS = new Set([
     'test', 'tests', '__tests__', '.github', 'examples', 'example',
   ]);
-  // .d.mts / .d.cts are TypeScript declaration files for ESM/CJS dual-package
-  // builds. They are useless at runtime but show up in huge volumes from
-  // typed packages (e.g. typebox), and inflate the per-process file count
-  // that codesign opens during macOS signing → EMFILE.
-  const REMOVE_FILE_EXTS = [
-    '.d.ts', '.d.ts.map',
-    '.d.mts', '.d.mts.map',
-    '.d.cts', '.d.cts.map',
-    '.js.map', '.mjs.map', '.cjs.map', '.ts.map',
-    '.markdown',
-  ];
+  const REMOVE_FILE_EXTS = ['.d.ts', '.d.ts.map', '.js.map', '.mjs.map', '.ts.map', '.markdown'];
   const REMOVE_FILE_NAMES = new Set([
     '.DS_Store', 'README.md', 'CHANGELOG.md', 'LICENSE.md', 'CONTRIBUTING.md',
     'tsconfig.json', '.npmignore', '.eslintrc', '.prettierrc', '.editorconfig',
@@ -706,10 +549,6 @@ exports.default = async function afterPack(context) {
   const nodeModulesRoot = join(__dirname, '..', 'node_modules');
   const pluginsDestRoot = join(resourcesDir, 'openclaw-plugins');
 
-  if (platform === 'win32') {
-    applyWindowsExeResources(context);
-  }
-
   if (!existsSync(src)) {
     console.warn('[after-pack] ⚠️  build/openclaw/node_modules not found. Run bundle-openclaw first.');
     return;
@@ -768,121 +607,49 @@ exports.default = async function afterPack(context) {
   //     the top-level node_modules/ as well.
   const buildExtDir = join(__dirname, '..', 'build', 'openclaw', 'dist', 'extensions');
   const packExtDir = join(openclawRoot, 'dist', 'extensions');
-  // ClawX always uses the official @larksuite/openclaw-lark plugin for Feishu.
-  // The built-in openclaw dist/extensions/feishu tree is redundant, and on macOS
-  // its mirrored runtime deps significantly increase codesign file pressure.
-  rmSync(join(packExtDir, 'feishu'), { recursive: true, force: true });
   if (existsSync(buildExtDir)) {
     let extNMCount = 0;
     let mergedPkgCount = 0;
-    let prunedSharedDepCount = 0;
     for (const extEntry of readdirSync(buildExtDir, { withFileTypes: true })) {
       if (!extEntry.isDirectory()) continue;
-      if (extEntry.name === 'feishu') continue;
-
       const srcNM = join(buildExtDir, extEntry.name, 'node_modules');
       if (!existsSync(srcNM)) continue;
 
-      const destExtRoot = join(packExtDir, extEntry.name);
-      const destExtNM = join(destExtRoot, 'node_modules');
-      rmSync(destExtNM, { recursive: true, force: true });
-      mkdirSync(destExtNM, { recursive: true });
+      // Copy to extension's own node_modules (for direct requires from extension code)
+      const destExtNM = join(packExtDir, extEntry.name, 'node_modules');
+      if (!existsSync(destExtNM)) {
+        cpSync(srcNM, destExtNM, { recursive: true });
+      }
       extNMCount++;
 
-      if (platform === 'darwin') {
-        const buildPkgPath = join(buildExtDir, extEntry.name, 'package.json');
-        const packPkgPath = join(destExtRoot, 'package.json');
-        const buildPkgJson = readJsonSafe(buildPkgPath) || {};
-        // Deep copy the fallback so mutations to packPkgJson don't bleed back
-        // into buildPkgJson (which we still iterate via listPackageDeps below).
-        const packPkgJson = readJsonSafe(packPkgPath) || JSON.parse(JSON.stringify(buildPkgJson));
+      // Merge into top-level openclaw/node_modules/ (for shared chunks in dist/)
+      for (const pkgEntry of readdirSync(srcNM, { withFileTypes: true })) {
+        if (!pkgEntry.isDirectory() || pkgEntry.name === '.bin') continue;
+        const srcPkg = join(srcNM, pkgEntry.name);
+        const destPkg = join(dest, pkgEntry.name);
 
-        for (const depName of listPackageDeps(buildPkgJson)) {
-          const srcDepPkg = join(srcNM, ...depName.split('/'));
-          const destDepPkg = join(dest, ...depName.split('/'));
-          if (!existsSync(destDepPkg) && existsSync(srcDepPkg)) {
-            mkdirSync(dirname(destDepPkg), { recursive: true });
-            cpSync(srcDepPkg, destDepPkg, { recursive: true });
-            mergedPkgCount++;
-          }
-
-          // Reuse the top-level openclaw/node_modules copy whenever possible:
-          //   - if src is missing, we have no reference version → trust top-level
-          //     (Node's module resolution will walk up from
-          //     dist/extensions/<ext>/<file>.js to openclaw/node_modules/ anyway).
-          //   - if src exists and matches top-level version, we can safely share.
-          // Only force a per-extension local copy when we actually have a
-          // version conflict between the extension's pinned dep and the
-          // top-level shared dep.
-          const srcVersion = existsSync(srcDepPkg) ? readInstalledPackageVersion(srcDepPkg) : null;
-          const destVersion = existsSync(destDepPkg) ? readInstalledPackageVersion(destDepPkg) : null;
-          const canReuseTopLevel = existsSync(destDepPkg) && (
-            !srcVersion || (destVersion && srcVersion === destVersion)
-          );
-          if (canReuseTopLevel) {
-            if (packPkgJson.dependencies && depName in packPkgJson.dependencies) {
-              delete packPkgJson.dependencies[depName];
-              prunedSharedDepCount++;
-            }
-            if (packPkgJson.optionalDependencies && depName in packPkgJson.optionalDependencies) {
-              delete packPkgJson.optionalDependencies[depName];
-              prunedSharedDepCount++;
-            }
-            continue;
-          }
-
-          const extDepPkg = join(destExtNM, ...depName.split('/'));
-          mkdirSync(dirname(extDepPkg), { recursive: true });
-          if (existsSync(srcDepPkg)) {
-            cpSync(srcDepPkg, extDepPkg, { recursive: true });
-          } else if (existsSync(destDepPkg)) {
-            cpSync(destDepPkg, extDepPkg, { recursive: true });
-          }
-        }
-
-        if (packPkgJson.dependencies && Object.keys(packPkgJson.dependencies).length === 0) {
-          delete packPkgJson.dependencies;
-        }
-        if (packPkgJson.optionalDependencies && Object.keys(packPkgJson.optionalDependencies).length === 0) {
-          delete packPkgJson.optionalDependencies;
-        }
-        writeFileSync(packPkgPath, JSON.stringify(packPkgJson, null, 2) + '\n', 'utf8');
-      } else {
-        for (const pkgEntry of readdirSync(srcNM, { withFileTypes: true })) {
-          if (!pkgEntry.isDirectory() || pkgEntry.name === '.bin') continue;
-          const srcPkg = join(srcNM, pkgEntry.name);
-          const destPkg = join(dest, pkgEntry.name);
-
-          if (pkgEntry.name.startsWith('@')) {
-            // Scoped package — iterate sub-entries
-            for (const scopeEntry of readdirSync(srcPkg, { withFileTypes: true })) {
-              if (!scopeEntry.isDirectory()) continue;
-              const srcScoped = join(srcPkg, scopeEntry.name);
-              const destScoped = join(destPkg, scopeEntry.name);
-              if (!existsSync(destScoped)) {
-                mkdirSync(dirname(destScoped), { recursive: true });
-                cpSync(srcScoped, destScoped, { recursive: true });
-                mergedPkgCount++;
-              }
-
-              const extScoped = join(destExtNM, pkgEntry.name, scopeEntry.name);
-              mkdirSync(dirname(extScoped), { recursive: true });
-              cpSync(srcScoped, extScoped, { recursive: true });
-            }
-          } else {
-            if (!existsSync(destPkg)) {
-              cpSync(srcPkg, destPkg, { recursive: true });
+        if (pkgEntry.name.startsWith('@')) {
+          // Scoped package — iterate sub-entries
+          for (const scopeEntry of readdirSync(srcPkg, { withFileTypes: true })) {
+            if (!scopeEntry.isDirectory()) continue;
+            const srcScoped = join(srcPkg, scopeEntry.name);
+            const destScoped = join(destPkg, scopeEntry.name);
+            if (!existsSync(destScoped)) {
+              mkdirSync(dirname(destScoped), { recursive: true });
+              cpSync(srcScoped, destScoped, { recursive: true });
               mergedPkgCount++;
             }
-
-            const extPkg = join(destExtNM, pkgEntry.name);
-            cpSync(srcPkg, extPkg, { recursive: true });
+          }
+        } else {
+          if (!existsSync(destPkg)) {
+            cpSync(srcPkg, destPkg, { recursive: true });
+            mergedPkgCount++;
           }
         }
       }
     }
     if (extNMCount > 0) {
-      console.log(`[after-pack] ✅ Prepared node_modules for ${extNMCount} built-in extension(s), merged ${mergedPkgCount} packages into top-level${prunedSharedDepCount > 0 ? `, pruned ${prunedSharedDepCount} redundant direct deps on macOS` : ''}.`);
+      console.log(`[after-pack] ✅ Copied node_modules for ${extNMCount} built-in extension(s), merged ${mergedPkgCount} packages into top-level.`);
     }
   }
 

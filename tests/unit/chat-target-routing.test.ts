@@ -66,9 +66,6 @@ describe('chat target routing', () => {
       if (method === 'chat.send') {
         return { runId: 'run-text' };
       }
-      if (method === 'sessions.patch') {
-        return { ok: true };
-      }
       if (method === 'chat.abort') {
         return { ok: true };
       }
@@ -123,48 +120,10 @@ describe('chat target routing', () => {
     const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
     expect(sendCall?.[1]).toMatchObject({
       sessionKey: 'agent:research:desk',
-      message: '/think medium Hello direct agent',
+      message: 'Hello direct agent',
       deliver: false,
     });
-    const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
-    expect(patchCall?.[1]).toEqual({ key: 'agent:research:desk', thinkingLevel: 'medium' });
     expect(typeof (sendCall?.[1] as { idempotencyKey?: unknown })?.idempotencyKey).toBe('string');
-  });
-
-  it('applies reasoning mode through sessions.patch without adding unsupported chat.send params', async () => {
-    const { useChatStore } = await import('@/stores/chat');
-
-    useChatStore.setState({
-      currentSessionKey: 'agent:main:main',
-      currentAgentId: 'main',
-      sessions: [{ key: 'agent:main:main' }],
-      messages: [],
-      sessionLabels: {},
-      sessionLastActivity: {},
-      sending: false,
-      activeRunId: null,
-      streamingText: '',
-      streamingMessage: null,
-      streamingTools: [],
-      pendingFinal: false,
-      lastUserMessageAt: null,
-      pendingToolImages: [],
-      error: null,
-      loading: false,
-      thinkingLevel: null,
-      reasoningMode: 'expert',
-    });
-
-    await useChatStore.getState().sendMessage('Investigate this', undefined, null);
-
-    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
-    const payload = sendCall?.[1] as Record<string, unknown>;
-    expect(payload).not.toHaveProperty('thinkingLevel');
-    expect(payload.message).toBe('/think high Investigate this');
-
-    const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
-    expect(patchCall?.[1]).toEqual({ key: 'agent:main:main', thinkingLevel: 'high' });
-    expect(useChatStore.getState().thinkingLevel).toBe('high');
   });
 
   it('uses the selected agent main session for attachment sends', async () => {
@@ -223,7 +182,7 @@ describe('chat target routing', () => {
     };
 
     expect(payload.sessionKey).toBe('agent:research:desk');
-    expect(payload.message).toBe('/think medium Process the attached file(s).');
+    expect(payload.message).toBe('Process the attached file(s).');
     expect(payload.media[0]?.filePath).toBe('/tmp/design.png');
   });
 });

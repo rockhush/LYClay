@@ -16,7 +16,7 @@ const AUTH_ERROR_PATTERN = /\b(unauthorized|forbidden|access denied|invalid api 
 const AUTH_ERROR_CODE_PATTERN = /\b(unauthorized|forbidden|access[_-]?denied|invalid[_-]?api[_-]?key|api[_-]?key[_-]?invalid|incorrect[_-]?api[_-]?key|api[_-]?key[_-]?incorrect|authentication[_-]?failed|auth[_-]?failed|invalid[_-]?credential|credential[_-]?invalid|invalid[_-]?signature|signature[_-]?invalid|invalid[_-]?access[_-]?token|access[_-]?token[_-]?invalid|invalid[_-]?bearer[_-]?token|bearer[_-]?token[_-]?invalid|access[_-]?token[_-]?expired|invalid[_-]?token|token[_-]?invalid|token[_-]?expired)\b/i;
 
 function logValidationStatus(provider: string, status: number): void {
-  console.log(`[LYClaw-validate] ${provider} HTTP ${status}`);
+  console.log(`[clawx-validate] ${provider} HTTP ${status}`);
 }
 
 function maskSecret(secret: string): string {
@@ -85,7 +85,7 @@ function logValidationRequest(
   headers: Record<string, string>,
 ): void {
   console.log(
-    `[LYClaw-validate] ${provider} request ${method} ${sanitizeValidationUrl(url)} headers=${JSON.stringify(sanitizeHeaders(headers))}`,
+    `[clawx-validate] ${provider} request ${method} ${sanitizeValidationUrl(url)} headers=${JSON.stringify(sanitizeHeaders(headers))}`,
   );
 }
 
@@ -208,7 +208,7 @@ async function validateOpenAiCompatibleKey(
 
   if (shouldFallbackFromModelsProbe(modelsResult)) {
     console.log(
-      `[LYClaw-validate] ${providerType} /models returned ${modelsResult.status}, falling back to ${apiProtocol} probe`,
+      `[clawx-validate] ${providerType} /models returned ${modelsResult.status}, falling back to ${apiProtocol} probe`,
     );
     if (apiProtocol === 'openai-responses') {
       return await performResponsesProbe(providerType, probeUrl, headers);
@@ -332,7 +332,7 @@ async function validateAnthropicHeaderKey(
     modelsResult.error?.includes('API error: 400')
   ) {
     console.log(
-      `[LYClaw-validate] ${providerType} /models returned error, falling back to /messages probe`,
+      `[clawx-validate] ${providerType} /models returned error, falling back to /messages probe`,
     );
     const messagesUrl = `${base}/messages`;
     return await performAnthropicMessagesProbe(providerType, messagesUrl, headers);

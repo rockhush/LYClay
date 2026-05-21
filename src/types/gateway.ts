@@ -17,8 +17,6 @@ export interface GatewayStatus {
   reconnectAttempts?: number;
   /** True once the gateway's internal subsystems (skills, plugins) are ready for RPC calls. */
   gatewayReady?: boolean;
-  /** Warmup status: 'idle' | 'warming' | 'ready' | 'failed' */
-  warmupStatus?: 'idle' | 'warming' | 'ready' | 'failed';
 }
 
 /**

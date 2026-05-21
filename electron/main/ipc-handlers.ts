@@ -3,12 +3,10 @@
  * Registers all IPC handlers for main-renderer communication
  */
 import { ipcMain, BrowserWindow, shell, dialog, app, nativeImage } from 'electron';
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, extname, basename } from 'node:path';
 import crypto from 'node:crypto';
-import { readFile as fsReadFile, writeFile as fsWriteFile, access as fsAccess, mkdir as fsMkdir, rm as fsRm } from 'fs/promises';
-import * as fsP from 'fs/promises';
 import { GatewayManager } from '../gateway/manager';
 import { ClawHubService, ClawHubSearchParams, ClawHubInstallParams, ClawHubUninstallParams } from '../gateway/clawhub';
 import {
@@ -140,9 +138,6 @@ export function registerIpcHandlers(
 
   // File staging handlers (upload/send separation)
   registerFileHandlers();
-
-  // Skill upload handlers
-  registerSkillUploadHandlers();
 }
 
 function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
@@ -940,7 +935,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
   });
 
   // Create a new cron job
-  // UI-created tasks have no delivery target — results go to the LYClaw chat page.
+  // UI-created tasks have no delivery target — results go to the ClawX chat page.
   // Tasks created via external channels (Feishu, Discord, etc.) are handled
   // directly by the OpenClaw Gateway and do not pass through this IPC handler.
   ipcMain.handle('cron:create', async (_, input: {
@@ -958,7 +953,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
         enabled: input.enabled ?? true,
         wakeMode: 'next-heartbeat',
         sessionTarget: 'isolated',
-        // UI-created jobs deliver results via LYClaw WebSocket chat events,
+        // UI-created jobs deliver results via ClawX WebSocket chat events,
         // not external messaging channels.  Setting mode='none' prevents
         // the Gateway from attempting channel delivery (which would fail
         // with "Channel is required" when no channels are configured).
@@ -1212,23 +1207,13 @@ function registerGatewayHandlers(
 
   // Gateway RPC call
   ipcMain.handle('gateway:rpc', async (_, method: string, params?: unknown, timeoutMs?: number) => {
-    const t0 = Date.now();
-    logger.info(`[ipc] gateway:rpc ${method} requested (timeoutMs=${timeoutMs ?? 30000})`);
     try {
       const result = await gatewayManager.rpc(method, params, timeoutMs);
-      const duration = Date.now() - t0;
-      logger.info(`[ipc] gateway:rpc ${method} completed in ${duration}ms`);
       return { success: true, result };
     } catch (error) {
-      const duration = Date.now() - t0;
-      logger.warn(`[ipc] gateway:rpc ${method} failed after ${duration}ms (timeoutMs=${timeoutMs ?? 30000}): ${String(error)}`);
+      logger.warn(`[gateway:rpc] ${method} failed (timeoutMs=${timeoutMs ?? 30000}): ${String(error)}`);
       return { success: false, error: String(error) };
     }
-  });
-
-  // Gateway warmup status check
-  ipcMain.handle('gateway:warmup-status', async () => {
-    return { success: true, result: gatewayManager.getIsWarmedUp() };
   });
 
   // Gateway HTTP proxy
@@ -1437,10 +1422,6 @@ function registerGatewayHandlers(
 
   gatewayManager.on('chat:message', (data) => {
     if (!mainWindow.isDestroyed()) {
-      const chatState = (data?.message as Record<string, unknown>)?.state;
-      if (chatState === 'delta' || chatState === 'final') {
-        logger.info(`[ipc] forwarding chat event to renderer: state=${chatState}, runId=${(data?.message as Record<string, unknown>)?.runId}`);
-      }
       mainWindow.webContents.send('gateway:chat-message', data);
     }
   });
@@ -1469,11 +1450,19 @@ function registerOpenClawHandlers(gatewayManager: GatewayManager): void {
   const forceRestartChannels = new Set(['dingtalk', 'wecom', 'whatsapp', 'feishu', 'qqbot']);
 
   const scheduleGatewayChannelRestart = (reason: string): void => {
-    logger.info(`Scheduling Gateway restart after ${reason}`);
-    gatewayManager.debouncedRestart(150);
+    if (gatewayManager.getStatus().state !== 'stopped') {
+      logger.info(`Scheduling Gateway restart after ${reason}`);
+      gatewayManager.debouncedRestart(150);
+    } else {
+      logger.info(`Gateway is stopped; skip immediate restart after ${reason}`);
+    }
   };
 
   const scheduleGatewayChannelSaveRefresh = (channelType: string, reason: string): void => {
+    if (gatewayManager.getStatus().state === 'stopped') {
+      logger.info(`Gateway is stopped; skip immediate refresh after ${reason}`);
+      return;
+    }
     if (forceRestartChannels.has(channelType)) {
       logger.info(`Scheduling Gateway restart after ${reason}`);
       gatewayManager.debouncedRestart(150);
@@ -2050,7 +2039,7 @@ function registerProviderHandlers(gatewayManager: GatewayManager): void {
         const resolvedBaseUrl = options?.baseUrl || provider?.baseUrl || registryBaseUrl;
         const resolvedProtocol = options?.apiProtocol || provider?.apiProtocol;
 
-        console.log(`[LYClaw-validate] validating provider type: ${providerType}`);
+        console.log(`[clawx-validate] validating provider type: ${providerType}`);
         return await validateApiKeyWithProvider(providerType, apiKey, {
           baseUrl: resolvedBaseUrl,
           apiProtocol: resolvedProtocol,
@@ -2066,15 +2055,9 @@ function registerProviderHandlers(gatewayManager: GatewayManager): void {
 /**
  * Shell-related IPC handlers
  */
-const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'dingtalk:']);
-
 function registerShellHandlers(): void {
   // Open external URL
   ipcMain.handle('shell:openExternal', async (_, url: string) => {
-    const parsed = new URL(url);
-    if (!ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
-      throw new Error(`Disallowed external protocol: ${parsed.protocol}`);
-    }
     await shell.openExternal(url);
   });
 
@@ -2085,11 +2068,7 @@ function registerShellHandlers(): void {
 
   // Open path
   ipcMain.handle('shell:openPath', async (_, path: string) => {
-    // Resolve ~ to user home directory (works on both Windows and Unix)
-    const resolvedPath = path.replace(/^~(?=\/|\\)/, () => {
-      return process.env.HOME || process.env.USERPROFILE || '';
-    });
-    return await shell.openPath(resolvedPath);
+    return await shell.openPath(path);
   });
 }
 
@@ -2399,56 +2378,6 @@ async function generateImagePreview(filePath: string, mimeType: string): Promise
  * Stage files to ~/.openclaw/media/outbound/ for gateway access
  */
 function registerFileHandlers(): void {
-  // Read directory contents
-  ipcMain.handle('fs:readdir', async (_, dirPath: string) => {
-    try {
-      const fsP = await import('fs/promises');
-      const { stat } = fsP;
-      const entries = await fsP.readdir(dirPath, { withFileTypes: true });
-      
-      const items = await Promise.all(
-        entries.map(async (entry) => {
-          const fullPath = join(dirPath, entry.name);
-          try {
-            const stats = await stat(fullPath);
-            return {
-              name: entry.name,
-              path: fullPath,
-              isDirectory: entry.isDirectory(),
-              isFile: entry.isFile(),
-              size: stats.size,
-              modified: stats.mtime.getTime(),
-            };
-          } catch {
-            return {
-              name: entry.name,
-              path: fullPath,
-              isDirectory: entry.isDirectory(),
-              isFile: entry.isFile(),
-              size: 0,
-              modified: 0,
-            };
-          }
-        })
-      );
-      
-      return { success: true, items };
-    } catch (error) {
-      return { success: false, error: String(error), items: [] };
-    }
-  });
-
-  // Read file content
-  ipcMain.handle('fs:readFile', async (_, filePath: string) => {
-    try {
-      const fsP = await import('fs/promises');
-      const content = await fsP.readFile(filePath, 'utf-8');
-      return { success: true, content };
-    } catch (error) {
-      return { success: false, error: String(error) };
-    }
-  });
-
   // Stage files from real disk paths (used with dialog:open)
   ipcMain.handle('file:stage', async (_, filePaths: string[]) => {
     const fsP = await import('fs/promises');
@@ -2699,96 +2628,4 @@ function registerSessionHandlers(): void {
       return { success: false, error: String(err) };
     }
   });
-}
-
-/**
- * Skill upload IPC handlers
- * Handles ZIP file upload and extraction to skills directory
- */
-function registerSkillUploadHandlers(): void {
-  ipcMain.handle('skill:uploadZip', async (_, params: {
-    fileName: string;
-    base64Data: string;
-    autoInstall: boolean;
-  }) => {
-    try {
-      const skillsDir = getOpenClawSkillsDir();
-      const tempZipPath = join(skillsDir, `.upload_${Date.now()}.zip`);
-
-      // Ensure skills directory exists
-      await ensureDir(skillsDir);
-
-      // Decode base64 and write temp zip file
-      const buffer = Buffer.from(params.base64Data, 'base64');
-      await fsWriteFile(tempZipPath, buffer);
-
-      // Extract zip file
-      const isWin = process.platform === 'win32';
-      const { execSync } = await import('child_process');
-      const unzipCmd = isWin
-        ? `powershell -Command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${skillsDir}' -Force"`
-        : `unzip -o "${tempZipPath}" -d "${skillsDir}"`;
-
-      try {
-        execSync(unzipCmd, { stdio: 'pipe' });
-      } catch (unzipError) {
-        // Fallback to manual extraction
-        logger.warn('Zip extraction failed, trying manual extraction:', unzipError);
-        await manualExtractZip(tempZipPath, skillsDir);
-      }
-
-      // Clean up temp file
-      await fsRm(tempZipPath, { force: true });
-
-      // Try to extract skill name from SKILL.md
-      let skillName = params.fileName.replace(/\.zip$/i, '');
-      try {
-        const entries = await fsP.readdir(skillsDir);
-        const skillDirs = entries.filter(entry => {
-          const fullPath = join(skillsDir, entry);
-          return existsSync(fullPath) && existsSync(join(fullPath, 'SKILL.md'));
-        });
-        
-        // Find the most recently modified skill directory
-        if (skillDirs.length > 0) {
-          const stats = await Promise.all(
-            skillDirs.map(async (dir) => {
-              const stat = await fsP.stat(join(skillsDir, dir));
-              return { dir, mtime: stat.mtime };
-            })
-          );
-          stats.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-          skillName = stats[0].dir;
-        }
-      } catch (e) {
-        logger.warn('Could not extract skill name from SKILL.md:', e);
-      }
-
-      return {
-        success: true,
-        skillName,
-      };
-    } catch (error) {
-      logger.error('Skill upload error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Upload failed',
-      };
-    }
-  });
-}
-
-/**
- * Manual zip extraction fallback (when system tools are unavailable)
- */
-async function manualExtractZip(zipPath: string, destDir: string): Promise<void> {
-  try {
-    // Try to use node-unzipper if available, otherwise throw
-    const AdmZip = (await import('adm-zip')).default;
-    const zip = new AdmZip(zipPath);
-    zip.extractAllTo(destDir, true);
-  } catch (error) {
-    logger.error('Manual zip extraction failed:', error);
-    throw new Error('Failed to extract zip file');
-  }
 }

@@ -16,7 +16,7 @@ const openclawResolvedPath = getOpenClawResolvedDir();
 const openclawRequire = createRequire(join(openclawResolvedPath, 'package.json'));
 // Fallback: resolves from the symlink path (`node_modules/openclaw`).
 // In dev mode, Node walks UP from here to `<project>/node_modules/`, which
-// contains LYClaw's own devDependencies — packages that are NOT deps of openclaw
+// contains ClawX's own devDependencies — packages that are NOT deps of openclaw
 // (e.g. @whiskeysockets/baileys) become resolvable through pnpm hoisting.
 const projectRequire = createRequire(join(openclawPath, 'package.json'));
 
@@ -26,7 +26,7 @@ function resolveOpenClawPackageJson(packageName: string): string {
     try {
         return openclawRequire.resolve(specifier);
     } catch { /* fall through */ }
-    // 2. Fallback to project-level deps (works in dev mode for LYClaw devDependencies)
+    // 2. Fallback to project-level deps (works in dev mode for ClawX devDependencies)
     try {
         return projectRequire.resolve(specifier);
     } catch (err) {
@@ -297,7 +297,7 @@ export class WhatsAppLoginManager extends EventEmitter {
                 logger: pino({ level: 'silent' }), // Silent logger
                 connectTimeoutMs: 60000,
                 // mobile: false,
-                // browser: ['LYClaw', 'Chrome', '1.0.0'],
+                // browser: ['ClawX', 'Chrome', '1.0.0'],
             });
 
             let connectionOpened = false;

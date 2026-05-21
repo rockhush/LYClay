@@ -28,10 +28,10 @@ export async function fetchProviderSnapshot(): Promise<ProviderSnapshot> {
   ]);
 
   return {
-    accounts: Array.isArray(accounts) ? accounts : [],
-    statuses: Array.isArray(statuses) ? statuses : [],
-    vendors: Array.isArray(vendors) ? vendors : [],
-    defaultAccountId: defaultInfo?.accountId ?? null,
+    accounts,
+    statuses,
+    vendors,
+    defaultAccountId: defaultInfo.accountId,
   };
 }
 

@@ -38,8 +38,6 @@ interface UpdateState {
   isInitialized: boolean;
   /** Seconds remaining before auto-install, or null if inactive. */
   autoInstallCountdown: number | null;
-  /** Path to the downloaded update file */
-  downloadedFilePath: string | null;
 
   // Actions
   init: () => Promise<void>;
@@ -50,8 +48,6 @@ interface UpdateState {
   setChannel: (channel: 'stable' | 'beta' | 'dev') => Promise<void>;
   setAutoDownload: (enable: boolean) => Promise<void>;
   clearError: () => void;
-  getDownloadedFilePath: () => Promise<string | null>;
-  openDownloadDirectory: () => Promise<void>;
 }
 
 export const useUpdateStore = create<UpdateState>((set, get) => ({
@@ -62,7 +58,6 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   error: null,
   isInitialized: false,
   autoInstallCountdown: null,
-  downloadedFilePath: null,
 
   init: async () => {
     if (get().isInitialized) return;
@@ -160,20 +155,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
           error: result.status.error || null,
         });
       } else if (!result.success) {
-        // 检查是否为 JSON 解析错误，如果是则显示友好提示
-        const errorMsg = result.error || 'Failed to check for updates';
-        const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
-          ? '请使用内网检测'
-          : errorMsg;
-        set({ status: 'error', error: friendlyError });
+        set({ status: 'error', error: result.error || 'Failed to check for updates' });
       }
     } catch (error) {
-      // 检查是否为 JSON 解析错误，如果是则显示友好提示
-      const errorMsg = String(error);
-      const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
-        ? '请使用内网检测'
-        : errorMsg;
-      set({ status: 'error', error: friendlyError });
+      set({ status: 'error', error: String(error) });
     } finally {
       // In dev mode autoUpdater skips without emitting events, so the
       // status may still be 'checking' or even 'idle'. Catch both.
@@ -210,28 +195,6 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       await invokeIpc('update:cancelAutoInstall');
     } catch (error) {
       console.error('Failed to cancel auto-install:', error);
-    }
-  },
-
-  getDownloadedFilePath: async () => {
-    try {
-      const result = await invokeIpc<{ success: boolean; filePath: string | null }>('update:getDownloadedFilePath');
-      if (result.success) {
-        set({ downloadedFilePath: result.filePath });
-        return result.filePath;
-      }
-      return null;
-    } catch (error) {
-      console.error('Failed to get downloaded file path:', error);
-      return null;
-    }
-  },
-
-  openDownloadDirectory: async () => {
-    try {
-      await invokeIpc('update:openDownloadDirectory');
-    } catch (error) {
-      console.error('Failed to open download directory:', error);
     }
   },
 

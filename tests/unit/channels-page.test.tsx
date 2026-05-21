@@ -59,7 +59,7 @@ describe('Channels page status refresh', () => {
     });
     gatewayState.status = { state: 'running', port: 18789 };
     hostApiFetchMock.mockImplementation(async (path: string) => {
-      if (path.startsWith('/api/channels/accounts')) {
+      if (path === '/api/channels/accounts') {
         return {
           success: true,
           gatewayHealth: {
@@ -100,7 +100,7 @@ describe('Channels page status refresh', () => {
   it('blocks saving when custom account ID is non-canonical', async () => {
     subscribeHostEventMock.mockImplementation(() => vi.fn());
     hostApiFetchMock.mockImplementation(async (path: string) => {
-      if (path.startsWith('/api/channels/accounts')) {
+      if (path === '/api/channels/accounts') {
         return {
           success: true,
           channels: [
@@ -210,7 +210,7 @@ describe('Channels page status refresh', () => {
       const channelFetchCalls = hostApiFetchMock.mock.calls.filter(([path]) => path === '/api/channels/accounts');
       const agentFetchCalls = hostApiFetchMock.mock.calls.filter(([path]) => path === '/api/agents');
       expect(channelFetchCalls).toHaveLength(2);
-      expect(agentFetchCalls).toHaveLength(1);
+      expect(agentFetchCalls).toHaveLength(2);
     });
   });
 
@@ -233,59 +233,14 @@ describe('Channels page status refresh', () => {
       const channelFetchCalls = hostApiFetchMock.mock.calls.filter(([path]) => path === '/api/channels/accounts');
       const agentFetchCalls = hostApiFetchMock.mock.calls.filter(([path]) => path === '/api/agents');
       expect(channelFetchCalls).toHaveLength(2);
-      expect(agentFetchCalls).toHaveLength(1);
-    });
-  });
-
-  it('renders channel data without waiting for slow agents request', async () => {
-    subscribeHostEventMock.mockImplementation(() => vi.fn());
-
-    const agentsDeferred = createDeferred<{
-      success: boolean;
-      agents: Array<Record<string, unknown>>;
-    }>();
-
-    hostApiFetchMock.mockImplementation((path: string) => {
-      if (path.startsWith('/api/channels/accounts')) {
-        return Promise.resolve({
-          success: true,
-          channels: [
-            {
-              channelType: 'feishu',
-              defaultAccountId: 'default',
-              status: 'connected',
-              accounts: [
-                {
-                  accountId: 'default',
-                  name: 'Primary Account',
-                  configured: true,
-                  status: 'connected',
-                  isDefault: true,
-                },
-              ],
-            },
-          ],
-        });
-      }
-      if (path === '/api/agents') {
-        return agentsDeferred.promise;
-      }
-      throw new Error(`Unexpected host API path: ${path}`);
-    });
-
-    render(<Channels />);
-
-    expect(await screen.findByText('Feishu / Lark')).toBeInTheDocument();
-
-    await act(async () => {
-      agentsDeferred.resolve({ success: true, agents: [] });
+      expect(agentFetchCalls).toHaveLength(2);
     });
   });
 
   it('treats WeChat accounts as plugin-managed QR accounts', async () => {
     subscribeHostEventMock.mockImplementation(() => vi.fn());
     hostApiFetchMock.mockImplementation(async (path: string) => {
-      if (path.startsWith('/api/channels/accounts')) {
+      if (path === '/api/channels/accounts') {
         return {
           success: true,
           channels: [
@@ -350,7 +305,7 @@ describe('Channels page status refresh', () => {
 
     let refreshCallCount = 0;
     hostApiFetchMock.mockImplementation((path: string) => {
-      if (path.startsWith('/api/channels/accounts')) {
+      if (path === '/api/channels/accounts') {
         if (refreshCallCount === 0) {
           refreshCallCount += 1;
           return Promise.resolve({
@@ -446,7 +401,7 @@ describe('Channels page status refresh', () => {
     const writeTextMock = vi.mocked(navigator.clipboard.writeText);
 
     hostApiFetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
-      if (path.startsWith('/api/channels/accounts')) {
+      if (path === '/api/channels/accounts') {
         return {
           success: true,
           gatewayHealth: {
@@ -522,7 +477,7 @@ describe('Channels page status refresh', () => {
     subscribeHostEventMock.mockImplementation(() => vi.fn());
 
     hostApiFetchMock.mockImplementation(async (path: string) => {
-      if (path.startsWith('/api/channels/accounts')) {
+      if (path === '/api/channels/accounts') {
         return {
           success: true,
           gatewayHealth: {
@@ -575,7 +530,7 @@ describe('Channels page status refresh', () => {
     subscribeHostEventMock.mockImplementation(() => vi.fn());
 
     hostApiFetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
-      if (path.startsWith('/api/channels/accounts')) {
+      if (path === '/api/channels/accounts') {
         return {
           success: true,
           gatewayHealth: {
@@ -629,7 +584,7 @@ describe('Channels page status refresh', () => {
 
     let diagnosticsFetchCount = 0;
     hostApiFetchMock.mockImplementation(async (path: string) => {
-      if (path.startsWith('/api/channels/accounts')) {
+      if (path === '/api/channels/accounts') {
         return {
           success: true,
           gatewayHealth: {

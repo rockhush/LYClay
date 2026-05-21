@@ -43,7 +43,7 @@ function clearHistoryPoll(): void {
 // [media attached: <path> ...] reference in the Gateway's user message text).
 // Keying by path avoids the race condition of keying by runId (which is only
 // available after the RPC returns, but history may load before that).
-const IMAGE_CACHE_KEY = 'LYClaw:image-cache';
+const IMAGE_CACHE_KEY = 'clawx:image-cache';
 const IMAGE_CACHE_MAX = 100; // max entries to prevent unbounded growth
 
 function loadImageCache(): Map<string, AttachedFileMeta> {
@@ -128,34 +128,8 @@ function normalizeStreamingMessage(message: unknown): unknown {
     : rawMessage;
 }
 
-/**
- * Strip Gateway-injected metadata that does NOT exist on the renderer's
- * optimistic user message but is echoed back when the Gateway persists it:
- *   - leading timestamp `[Wed 2026-04-22 10:30 GMT+8] `
- *   - `[message_id: uuid]` tags sprinkled throughout the text
- *   - `[media attached: path (mime) | path]` references appended when the
- *     renderer sends attachments via `chat:sendWithMedia`
- *   - Gateway-injected "Conversation info (untrusted metadata): ..." blocks
- *
- * Keeping this aligned with `cleanUserText` in `pages/Chat/message-utils.ts`
- * is important: the user bubble renders the cleaned text, so the comparison
- * used to dedupe optimistic vs server echoes must operate on the same
- * cleaned form — otherwise the same visible message renders twice.
- */
-function stripGatewayUserMetadata(text: string): string {
-  return text
-    .replace(/\s*\[media attached:[^\]]*\]/g, '')
-    .replace(/\s*\[message_id:\s*[^\]]+\]/g, '')
-    .replace(/Sender\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
-    .replace(/Sender\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
-    .replace(/Conversation info\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
-    .replace(/Conversation info\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
-    .replace(/\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[^\]]+\]\s*/gi, '')
-    .trim();
-}
-
 function normalizeComparableUserText(content: unknown): string {
-  return stripGatewayUserMetadata(getMessageText(content))
+  return getMessageText(content)
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -384,74 +358,6 @@ function extractImagesAsAttachedFiles(content: unknown): AttachedFileMeta[] {
   return files;
 }
 
-function isReasonableAttachmentBaseName(s: string): boolean {
-  if (!s || s.length > 255) return false;
-  if (/[\x00-\x1f<>:"|?*]/.test(s)) return false;
-  if (s.includes('\uFFFD')) return false;
-  return true;
-}
-
-/**
- * When UTF-8 filename bytes were mis-decoded as Latin-1 / ANSI (each byte → one BMP char),
- * re-pack code units 0–255 as bytes and strict-decode as UTF-8. Fixes common Chinese/European
- * mojibake in tool paths before they reach the UI.
- */
-function tryRecoverUtf8FromByteWiseLatin1(fileName: string): string | null {
-  if (!fileName || fileName.includes('\uFFFD')) return null;
-  const bytes: number[] = [];
-  for (let i = 0; i < fileName.length; i++) {
-    const c = fileName.charCodeAt(i);
-    if (c > 255) return null;
-    bytes.push(c);
-  }
-  if (!bytes.some((b) => b >= 0x80)) return null;
-  try {
-    const recovered = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
-    if (recovered === fileName || !isReasonableAttachmentBaseName(recovered)) return null;
-    return recovered;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Normalize a path basename for display on attachment cards (URL parts, UTF-8/Latin1 mixups, GBK).
- */
-export function normalizeAttachmentBaseName(fileName: string): string {
-  let s = fileName;
-  try {
-    s = decodeURIComponent(fileName);
-  } catch {
-    s = fileName;
-  }
-
-  const utf8Recovered = tryRecoverUtf8FromByteWiseLatin1(s);
-  if (utf8Recovered) s = utf8Recovered;
-
-  // GBK bytes shown in a Latin/UTF-8 context (heuristic; optional iconv-lite)
-  const hasGarbledChars = /\uFFFD|[\u0080-\u00ff]/.test(s);
-  if (hasGarbledChars) {
-    try {
-      const iconv = require('iconv-lite') as { decode: (buf: Buffer, enc: string) => string };
-      const buffer = Buffer.from(s, 'binary');
-      const converted = iconv.decode(buffer, 'GBK');
-      if (/[\u4e00-\u9fff]/.test(converted) && isReasonableAttachmentBaseName(converted)) {
-        return converted;
-      }
-    } catch {
-      /* iconv-lite unavailable or decode failed */
-    }
-  }
-
-  return s;
-}
-
-/** Last segment of `filePath`, normalized for display (encoding fixes). */
-export function attachmentFileNameFromPath(filePath: string): string {
-  const base = filePath.split(/[\\/]/).pop() || 'file';
-  return normalizeAttachmentBaseName(base);
-}
-
 /**
  * Build an AttachedFileMeta entry for a file ref, using cache if available.
  */
@@ -461,7 +367,7 @@ function makeAttachedFile(
 ): AttachedFileMeta {
   const cached = _imageCache.get(ref.filePath);
   if (cached) return { ...cached, filePath: ref.filePath, source };
-  const fileName = attachmentFileNameFromPath(ref.filePath);
+  const fileName = ref.filePath.split(/[\\/]/).pop() || 'file';
   return { fileName, mimeType: ref.mimeType, fileSize: 0, preview: null, filePath: ref.filePath, source };
 }
 
@@ -571,7 +477,7 @@ function enrichWithToolResultFiles(messages: RawMessage[]): RawMessage[] {
         for (const f of imageFiles) {
           if (!f.filePath) {
             f.filePath = matchedPath;
-            f.fileName = attachmentFileNameFromPath(matchedPath);
+            f.fileName = matchedPath.split(/[\\/]/).pop() || 'image';
           }
         }
       }
@@ -666,7 +572,7 @@ function enrichWithCachedImages(messages: RawMessage[]): RawMessage[] {
     const files: AttachedFileMeta[] = allRefs.map(ref => {
       const cached = _imageCache.get(ref.filePath);
       if (cached) return { ...cached, filePath: ref.filePath, source: 'message-ref' };
-      const fileName = attachmentFileNameFromPath(ref.filePath);
+      const fileName = ref.filePath.split(/[\\/]/).pop() || 'file';
       return { fileName, mimeType: ref.mimeType, fileSize: 0, preview: null, filePath: ref.filePath, source: 'message-ref' };
     });
     return { ...msg, _attachedFiles: files };
@@ -1097,7 +1003,6 @@ export {
   clearHistoryPoll,
   extractImagesAsAttachedFiles,
   getMessageText,
-  stripGatewayUserMetadata,
   extractMediaRefs,
   extractRawFilePaths,
   makeAttachedFile,

@@ -15,7 +15,7 @@ let settingsStoreInstance: any = null;
  * Generate a random token for gateway authentication
  */
 function generateToken(): string {
-  return `LYClaw-${randomBytes(16).toString('hex')}`;
+  return `clawx-${randomBytes(16).toString('hex')}`;
 }
 
 /**
@@ -56,54 +56,6 @@ export interface AppSettings {
   selectedBundles: string[];
   enabledSkills: string[];
   disabledSkills: string[];
-  // DingTalk Login
-  dingtalkUser: {
-    openId: string;
-    unionId: string;
-    name: string;
-    avatar: string;
-    mobile: string;
-    email: string;
-    orgEmail: string;
-    jobNumber: string;
-    title: string;
-    workPlace: string;
-    userId: string;
-    nickname: string;
-    admin: boolean;
-    boss: boolean;
-    senior: boolean;
-    active: boolean;
-    disableStatus: boolean;
-    hideMobile: boolean;
-    realAuthed: boolean;
-    createTime: string;
-    hiredDate: number;
-    loginId: string;
-    managerUserId: string;
-    exclusiveAccount: boolean;
-    exclusiveAccountType: string;
-    exclusiveAccountCorpId: string;
-    exclusiveAccountCorpName: string;
-    deptIdList: number[];
-    roleList: Array<{ group_name: string; id: number; name: string }>;
-    leaderInDept: Array<{ dept_id: number; leader: boolean }>;
-    departmentIds: string[];
-    leaderUserId: string;
-    loginAt: string;
-  } | null;
-  dingtalkUserBindings: Record<string, {
-    dingUserId: string;
-    unionId: string;
-    officialAccountId: string;
-    personalAccountIds: string[];
-    defaultAccountId: string;
-    agentId: string;
-    sessionKey: string;
-    createdAt: string;
-    updatedAt: string;
-  }>;
-
 }
 
 /**
@@ -155,10 +107,6 @@ function createDefaultSettings(): AppSettings {
     selectedBundles: ['productivity', 'developer'],
     enabledSkills: [],
     disabledSkills: [],
-    // DingTalk Login
-    dingtalkUser: null,
-    dingtalkUserBindings: {},
-
   };
 }
 

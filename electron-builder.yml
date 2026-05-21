@@ -1,6 +1,6 @@
 appId: app.clawx.desktop
-productName: LYClaw
-copyright: Copyright © 2026 LYClaw
+productName: ClawX
+copyright: Copyright © 2026 ClawX
 compression: maximum
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
@@ -14,17 +14,12 @@ files:
   - package.json
 
 extraResources:
-  - from: resources/icons/
-    to: icons/
-    filter:
-      - "**/*"
-      - "!*.md"
-      - "!*.svg"
   - from: resources/
     to: resources/
     filter:
       - "**/*"
-      - "!icons/**"
+      - "!icons/*.md"
+      - "!icons/*.svg"
       - "!bin/**"
       - "!screenshot/**"
   # OpenClaw package (node_modules copied separately by afterPack hook
@@ -64,7 +59,7 @@ publish:
     useMultipleRangeRequest: false
   - provider: github
     owner: ValueCell-ai
-    repo: LYClaw
+    repo: ClawX
 
 # macOS Configuration
 mac:
@@ -91,8 +86,8 @@ mac:
   entitlementsInherit: entitlements.mac.plist
   notarize: true
   extendInfo:
-    NSMicrophoneUsageDescription: LYClaw requires microphone access for voice features
-    NSCameraUsageDescription: LYClaw requires camera access for video features
+    NSMicrophoneUsageDescription: ClawX requires microphone access for voice features
+    NSCameraUsageDescription: ClawX requires camera access for video features
 
 dmg:
   # Explicit volume size prevents dmg-builder@1.2.0 auto-calculation from
@@ -119,11 +114,6 @@ win:
   # Skip update signature verification: we ship via OSS + GitHub without a
   # code-signing certificate, so verifying would always fail on the updater.
   verifyUpdateCodeSignature: false
-  # We edit Windows exe resources in afterPack with resedit instead of
-  # electron-builder's app-builder/rcedit path. app-builder downloads
-  # winCodeSign.7z, whose macOS symlinks require elevated privileges to extract
-  # on locked-down Windows machines.
-  signAndEditExecutable: false
   extraResources:
     - from: resources/bin/win32-${arch}
       to: bin
@@ -143,8 +133,8 @@ nsis:
   differentialPackage: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: LYClaw
-  uninstallDisplayName: LYClaw
+  shortcutName: ClawX
+  uninstallDisplayName: ClawX
   license: LICENSE
   include: scripts/installer.nsh
   installerIcon: resources/icons/icon.ico
@@ -171,17 +161,17 @@ linux:
       arch:
         - x64
   category: Utility
-  maintainer: LYClaw Team <public@valuecell.ai>
-  vendor: LYClaw
+  maintainer: ClawX Team <public@valuecell.ai>
+  vendor: ClawX
   synopsis: AI Assistant powered by OpenClaw
-  description: LYClaw is a graphical AI assistant application that integrates with OpenClaw Gateway to provide intelligent automation and assistance across multiple messaging platforms.
+  description: ClawX is a graphical AI assistant application that integrates with OpenClaw Gateway to provide intelligent automation and assistance across multiple messaging platforms.
   desktop:
     entry:
-      Name: LYClaw
+      Name: ClawX
       Comment: AI Assistant powered by OpenClaw
       Categories: Utility;Network;
       Keywords: ai;assistant;automation;chat;
-      StartupWMClass: LYClaw
+      StartupWMClass: clawx
 
 appImage:
   license: LICENSE

@@ -68,7 +68,7 @@ export async function restartGatewayForAgentDeletion(ctx: HostApiContext): Promi
       // a previous pnpm dev run), forcefully kill whatever is on the port.
       try {
         if (process.platform === 'darwin' || process.platform === 'linux') {
-          // MUST use -sTCP:LISTEN. Otherwise lsof returns the client process (LYClaw itself) 
+          // MUST use -sTCP:LISTEN. Otherwise lsof returns the client process (ClawX itself) 
           // that has an ESTABLISHED WebSocket connection to the port, causing us to kill ourselves.
           const { stdout } = await execAsync(`lsof -t -i :${port} -sTCP:LISTEN`);
           const pids = stdout.trim().split('\n').filter(Boolean);
@@ -129,10 +129,10 @@ export async function handleAgentRoutes(
         console.warn('[agents] Failed to sync provider auth after agent creation:', err);
       });
       scheduleGatewayReload(ctx, 'create-agent');
-      // Ensure newly provisioned workspaces get LYClaw context merge/cleanup
+      // Ensure newly provisioned workspaces get ClawX context merge/cleanup
       // even when gateway status events do not fire (e.g. in-process reload).
       void ensureClawXContext().catch((err) => {
-        console.warn('[agents] Failed to ensure LYClaw context after agent creation:', err);
+        console.warn('[agents] Failed to ensure ClawX context after agent creation:', err);
       });
       sendJson(res, 200, { success: true, ...snapshot });
     } catch (error) {

@@ -10,85 +10,6 @@ const ROOT = join(__dirname, '..');
 const MANIFEST_PATH = join(ROOT, 'resources', 'skills', 'preinstalled-manifest.json');
 const OUTPUT_ROOT = join(ROOT, 'build', 'preinstalled-skills');
 const TMP_ROOT = join(ROOT, 'build', '.tmp-preinstalled-skills');
-const DEFAULT_GITHUB_BASE_URL = 'https://github.com';
-const DEFAULT_GIT_REMOTE_TEMPLATES = [
-  'https://github.com/{repo}.git',
-  'https://gitclone.com/github.com/{repo}.git',
-  'https://hub.gitmirror.com/https://github.com/{repo}.git',
-  'https://gh-proxy.com/https://github.com/{repo}.git',
-  'https://gh.llkk.cc/https://github.com/{repo}.git',
-  'https://ghfast.top/https://github.com/{repo}.git',
-];
-
-function readArgValue(name) {
-  const prefix = `${name}=`;
-  const inline = process.argv.find((arg) => arg.startsWith(prefix));
-  if (inline) return inline.slice(prefix.length);
-
-  const index = process.argv.indexOf(name);
-  if (index >= 0 && process.argv[index + 1]) return process.argv[index + 1];
-  return '';
-}
-
-function normalizeGitBaseUrl(input) {
-  return (input || DEFAULT_GITHUB_BASE_URL).replace(/\/+$/, '');
-}
-
-function normalizeGitRemoteTemplate(input) {
-  const value = (input || '').trim().replace(/\/+$/, '');
-  if (!value) return '';
-  return value.includes('{repo}') ? value : `${value}/{repo}.git`;
-}
-
-function parseGitBaseUrlList(input) {
-  return (input || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map((value) => normalizeGitBaseUrl(value));
-}
-
-function parseGitRemoteTemplateList(input) {
-  return (input || '')
-    .split(',')
-    .map((value) => normalizeGitRemoteTemplate(value))
-    .filter(Boolean);
-}
-
-function uniqueValues(values) {
-  return [...new Set(values)];
-}
-
-function getGitRemoteTemplates() {
-  const remoteTemplates = readArgValue('--git-remotes')
-    || process.env.PREINSTALLED_SKILLS_GIT_REMOTES;
-  if (remoteTemplates) {
-    return uniqueValues(parseGitRemoteTemplateList(remoteTemplates));
-  }
-
-  const overrideBaseUrl = readArgValue('--github-base-url')
-    || process.env.PREINSTALLED_SKILLS_GITHUB_BASE_URL
-    || process.env.GITHUB_BASE_URL;
-  if (overrideBaseUrl) {
-    return [normalizeGitRemoteTemplate(normalizeGitBaseUrl(overrideBaseUrl))];
-  }
-
-  const configuredMirrors = parseGitBaseUrlList(process.env.PREINSTALLED_SKILLS_GITHUB_MIRRORS);
-  if (configuredMirrors.length > 0) {
-    return uniqueValues([
-      normalizeGitRemoteTemplate(DEFAULT_GITHUB_BASE_URL),
-      ...configuredMirrors.map((baseUrl) => normalizeGitRemoteTemplate(baseUrl)),
-    ]);
-  }
-
-  return DEFAULT_GIT_REMOTE_TEMPLATES;
-}
-
-function createRemoteUrl(template, repo) {
-  return template.replaceAll('{repo}', repo);
-}
-
-const GIT_REMOTE_TEMPLATES = getGitRemoteTemplates();
 
 function loadManifest() {
   if (!existsSync(MANIFEST_PATH)) {
@@ -160,6 +81,7 @@ async function extractArchive(archiveFileName, cwd) {
 }
 
 async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
+  const remote = `https://github.com/${repo}.git`;
   mkdirSync(checkoutDir, { recursive: true });
   const gitCheckoutDir = toGitPath(checkoutDir);
   const archiveFileName = '.subset.tar';
@@ -167,30 +89,8 @@ async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
   const archivePaths = [...new Set(paths.map(normalizeRepoPath))];
 
   await $`git init ${gitCheckoutDir}`;
-  let lastFetchError;
-  for (let index = 0; index < GIT_REMOTE_TEMPLATES.length; index += 1) {
-    const remote = createRemoteUrl(GIT_REMOTE_TEMPLATES[index], repo);
-    if (index === 0) {
-      await $`git -C ${gitCheckoutDir} remote add origin ${remote}`;
-    } else {
-      await $`git -C ${gitCheckoutDir} remote set-url origin ${remote}`;
-    }
-
-    try {
-      echo`   fetching from ${remote}`;
-      await $`git -C ${gitCheckoutDir} fetch --depth 1 origin ${ref}`;
-      lastFetchError = null;
-      break;
-    } catch (error) {
-      lastFetchError = error;
-      echo`   fetch failed from ${remote}`;
-    }
-  }
-
-  if (lastFetchError) {
-    throw lastFetchError;
-  }
-
+  await $`git -C ${gitCheckoutDir} remote add origin ${remote}`;
+  await $`git -C ${gitCheckoutDir} fetch --depth 1 origin ${ref}`;
   // Do not checkout working tree on Windows: upstream repos may contain
   // Windows-invalid paths. Export only requested directories via git archive.
   await $`git -C ${gitCheckoutDir} archive --format=tar --output ${archiveFileName} FETCH_HEAD ${archivePaths}`;

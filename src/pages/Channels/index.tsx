@@ -98,12 +98,6 @@ interface DeleteTarget {
   accountId?: string;
 }
 
-type FetchPageDataOptions = {
-  probe?: boolean;
-  configOnly?: boolean;
-  forceAgentsRefresh?: boolean;
-};
-
 function removeDeletedTarget(groups: ChannelGroupItem[], target: DeleteTarget): ChannelGroupItem[] {
   if (target.accountId) {
     return groups
@@ -149,9 +143,7 @@ export function Channels() {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const convergenceRefreshTimersRef = useRef<number[]>([]);
   const fetchInFlightRef = useRef(false);
-  const queuedFetchOptionsRef = useRef<FetchPageDataOptions | null>(null);
-  const agentsFetchInFlightRef = useRef<Promise<void> | null>(null);
-  const hasLoadedAgentsRef = useRef(false);
+  const queuedFetchOptionsRef = useRef<{ probe?: boolean } | null>(null);
 
   const displayedChannelTypes = getPrimaryChannels();
   const visibleChannelGroups = channelGroups;
@@ -167,46 +159,16 @@ export function Channels() {
   const agentsRef = useRef(agents);
   agentsRef.current = agents;
 
-  const ensureAgentsLoaded = useCallback(async () => {
-    if (hasLoadedAgentsRef.current) return;
-    if (agentsFetchInFlightRef.current) {
-      await agentsFetchInFlightRef.current;
-      return;
-    }
-
-    agentsFetchInFlightRef.current = (async () => {
-      try {
-        const agentsRes = await hostApiFetch<{ success: boolean; agents?: AgentItem[]; error?: string }>('/api/agents');
-        if (!agentsRes.success) {
-          throw new Error(agentsRes.error || 'Failed to load agents');
-        }
-        setAgents(agentsRes.agents || []);
-        hasLoadedAgentsRef.current = true;
-      } catch (agentsError) {
-        console.warn(`[channels-ui] load agents failed error=${String(agentsError)}`);
-      } finally {
-        agentsFetchInFlightRef.current = null;
-      }
-    })();
-
-    await agentsFetchInFlightRef.current;
-  }, []);
-
   const mergeFetchOptions = (
-    base: FetchPageDataOptions | null,
-    incoming: FetchPageDataOptions | undefined,
-  ): FetchPageDataOptions => {
-    if (!base) return incoming ?? {};
-    if (!incoming) return base;
+    base: { probe?: boolean } | null,
+    incoming: { probe?: boolean } | undefined,
+  ): { probe?: boolean } => {
     return {
       probe: Boolean(base?.probe) || Boolean(incoming?.probe),
-      // If either request needs runtime data, do not keep config-only mode.
-      configOnly: Boolean(base?.configOnly) && Boolean(incoming?.configOnly),
-      forceAgentsRefresh: Boolean(base?.forceAgentsRefresh) || Boolean(incoming?.forceAgentsRefresh),
     };
   };
 
-  const fetchPageData = useCallback(async (options?: FetchPageDataOptions) => {
+  const fetchPageData = useCallback(async (options?: { probe?: boolean }) => {
     if (fetchInFlightRef.current) {
       queuedFetchOptionsRef.current = mergeFetchOptions(queuedFetchOptionsRef.current, options);
       return;
@@ -214,27 +176,20 @@ export function Channels() {
     fetchInFlightRef.current = true;
     const startedAt = Date.now();
     const probe = options?.probe === true;
-    const configOnly = options?.configOnly === true;
-    console.info(`[channels-ui] fetch start mode=${configOnly ? 'config' : 'runtime'} probe=${probe ? '1' : '0'}`);
+    console.info(`[channels-ui] fetch start probe=${probe ? '1' : '0'}`);
     // Only show loading spinner on first load (stale-while-revalidate).
     const hasData = channelGroupsRef.current.length > 0 || agentsRef.current.length > 0;
     if (!hasData) {
       setLoading(true);
     }
     setError(null);
-    if (options?.forceAgentsRefresh) {
-      hasLoadedAgentsRef.current = false;
-    }
-    void ensureAgentsLoaded();
     try {
-      const channelsPath = configOnly
-        ? '/api/channels/accounts?mode=config'
-        : options?.probe
-          ? '/api/channels/accounts?probe=1'
-          : '/api/channels/accounts';
-      const channelsRes = await hostApiFetch<{ success: boolean; channels?: ChannelGroupItem[]; error?: string }>(
-        channelsPath
-      );
+      const [channelsRes, agentsRes] = await Promise.all([
+        hostApiFetch<{ success: boolean; channels?: ChannelGroupItem[]; error?: string }>(
+          options?.probe ? '/api/channels/accounts?probe=1' : '/api/channels/accounts'
+        ),
+        hostApiFetch<{ success: boolean; agents?: AgentItem[]; error?: string }>('/api/agents'),
+      ]);
 
       type ChannelsResponse = {
         success: boolean;
@@ -248,18 +203,23 @@ export function Channels() {
         throw new Error(channelsPayload.error || 'Failed to load channels');
       }
 
+      if (!agentsRes.success) {
+        throw new Error(agentsRes.error || 'Failed to load agents');
+      }
+
       setChannelGroups(channelsPayload.channels || []);
+      setAgents(agentsRes.agents || []);
       setGatewayHealth(channelsPayload.gatewayHealth || DEFAULT_GATEWAY_HEALTH);
       setDiagnosticsSnapshot(null);
       setShowDiagnostics(false);
       console.info(
-        `[channels-ui] fetch ok mode=${configOnly ? 'config' : 'runtime'} probe=${probe ? '1' : '0'} elapsedMs=${Date.now() - startedAt} view=${(channelsPayload.channels || []).map((item) => `${item.channelType}:${item.status}`).join(',')}`
+        `[channels-ui] fetch ok probe=${probe ? '1' : '0'} elapsedMs=${Date.now() - startedAt} view=${(channelsPayload.channels || []).map((item) => `${item.channelType}:${item.status}`).join(',')}`
       );
     } catch (fetchError) {
       // Preserve previous data on error — don't clear channelGroups/agents.
       setError(String(fetchError));
       console.warn(
-        `[channels-ui] fetch fail mode=${configOnly ? 'config' : 'runtime'} probe=${probe ? '1' : '0'} elapsedMs=${Date.now() - startedAt} error=${String(fetchError)}`
+        `[channels-ui] fetch fail probe=${probe ? '1' : '0'} elapsedMs=${Date.now() - startedAt} error=${String(fetchError)}`
       );
     } finally {
       fetchInFlightRef.current = false;
@@ -272,7 +232,7 @@ export function Channels() {
     }
   // Stable reference — reads state via refs, no deps needed.
    
-  }, [ensureAgentsLoaded]);
+  }, []);
 
   const clearConvergenceRefreshTimers = useCallback(() => {
     convergenceRefreshTimersRef.current.forEach((timerId) => {
@@ -301,7 +261,6 @@ export function Channels() {
   }, [clearConvergenceRefreshTimers, fetchPageData]);
 
   useEffect(() => {
-    void fetchPageData({ configOnly: true });
     void fetchPageData();
   }, [fetchPageData]);
 
@@ -370,7 +329,7 @@ export function Channels() {
   const unsupportedGroups = displayedChannelTypes.filter((type) => !configuredTypes.includes(type));
 
   const handleRefresh = () => {
-    void fetchPageData({ probe: true, forceAgentsRefresh: true });
+    void fetchPageData({ probe: true });
   };
 
   const fetchDiagnosticsSnapshot = useCallback(async (): Promise<GatewayDiagnosticSnapshot> => {
@@ -533,7 +492,7 @@ export function Channels() {
               variant="outline"
               onClick={handleRefresh}
               disabled={gatewayStatus.state !== 'running'}
-              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-md shadow-black/10 text-foreground/80 hover:text-foreground transition-colors"
+              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground transition-colors"
             >
               <RefreshCw className={cn('h-3.5 w-3.5 mr-2', isUsingStableValue && 'animate-spin')} />
               {t('refresh')}
@@ -681,7 +640,7 @@ export function Channels() {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-8 text-xs rounded-full shadow-md shadow-black/10"
+                          className="h-8 text-xs rounded-full"
                           onClick={() => {
                             const shouldUseGeneratedAccountId = !usesPluginManagedQrAccounts(group.channelType);
                             const nextAccountId = shouldUseGeneratedAccountId
@@ -754,7 +713,7 @@ export function Channels() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-8 text-xs rounded-full shadow-md shadow-black/10"
+                                className="h-8 text-xs rounded-full"
                                   onClick={() => {
                                     void (async () => {
                                       try {

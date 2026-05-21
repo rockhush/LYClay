@@ -11,7 +11,6 @@ import { getOpenClawConfigDir, ensureDir, getClawHubCliBinPath, getClawHubCliEnt
 export interface ClawHubSearchParams {
     query: string;
     limit?: number;
-    sort?: string;
 }
 
 export interface ClawHubInstallParams {
@@ -188,11 +187,11 @@ export class ClawHubService {
             let stderr = '';
 
             child.stdout.on('data', (data) => {
-                stdout += data.toString('utf8');
+                stdout += data.toString();
             });
 
             child.stderr.on('data', (data) => {
-                stderr += data.toString('utf8');
+                stderr += data.toString();
             });
 
             child.on('error', (error) => {
@@ -217,24 +216,9 @@ export class ClawHubService {
      * otherwise falls back to the local ClawHub CLI.
      */
     async search(params: ClawHubSearchParams): Promise<ClawHubSkillResult[]> {
-        console.log('[ClawHub] search called with params:', params);
-        console.log('[ClawHub] marketplaceProvider exists:', !!this.marketplaceProvider);
-        console.log('[ClawHub] marketplaceProvider type:', this.marketplaceProvider?.constructor.name);
-        
         if (this.marketplaceProvider) {
-            console.log('[ClawHub] Using marketplace provider for search');
-            // 添加 os 参数
-            const os = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? '' : 'linux';
-            const paramsWithOs = {
-                ...params,
-                os,
-            };
-            console.log('[ClawHub] search params with os:', paramsWithOs);
-            const result = await this.marketplaceProvider.search(paramsWithOs);
-            console.log('[ClawHub] Marketplace search result count:', result?.length || 0);
-            return result;
+            return this.marketplaceProvider.search(params);
         }
-        console.log('[ClawHub] Falling back to local CLI search');
         try {
             // If query is empty, use 'explore' to show trending skills
             if (!params.query || params.query.trim() === '') {
@@ -362,18 +346,11 @@ export class ClawHubService {
     async uninstall(params: ClawHubUninstallParams): Promise<void> {
         const fsPromises = fs.promises;
 
-        // 1. Find the actual skill directory (handles nested directories)
-        const skillDir = this.resolveSkillDir(params.slug);
-        if (skillDir && fs.existsSync(skillDir)) {
+        // 1. Delete the skill directory
+        const skillDir = path.join(this.workDir, 'skills', params.slug);
+        if (fs.existsSync(skillDir)) {
             console.log(`Deleting skill directory: ${skillDir}`);
             await fsPromises.rm(skillDir, { recursive: true, force: true });
-        } else {
-            // Fallback: try the default path
-            const defaultDir = path.join(this.workDir, 'skills', params.slug);
-            if (fs.existsSync(defaultDir)) {
-                console.log(`Deleting skill directory (fallback): ${defaultDir}`);
-                await fsPromises.rm(defaultDir, { recursive: true, force: true });
-            }
         }
 
         // 2. Remove from lock.json
@@ -398,92 +375,29 @@ export class ClawHubService {
     async listInstalled(): Promise<ClawHubInstalledSkillResult[]> {
         try {
             const output = await this.runCommand(['list']);
-            
-            // 从 CLI 获取已安装技能列表
-            const cliResults: ClawHubInstalledSkillResult[] = [];
-            if (output && !output.includes('No installed skills')) {
-                const lines = output.split('\n').filter(l => l.trim());
-                for (const line of lines) {
-                    const cleanLine = this.stripAnsi(line);
-                    const match = cleanLine.match(/^(\S+)\s+v?(\d+\.\S+)/);
-                    if (match) {
-                        const slug = match[1];
-                        // 尝试查找实际的技能目录（处理可能的嵌套结构）
-                        const baseDir = this.resolveSkillDir(slug);
-                        cliResults.push({
-                            slug,
-                            version: match[2],
-                            source: 'openclaw-managed',
-                            baseDir: baseDir || path.join(this.workDir, 'skills', slug),
-                        });
-                    }
-                }
+            if (!output || output.includes('No installed skills')) {
+                return [];
             }
-            
-            // 额外扫描 skills 目录，确保所有技能都被发现
-            const skillsRoot = path.join(this.workDir, 'skills');
-            if (fs.existsSync(skillsRoot)) {
-                const skillDirs = this.scanSkillDirectories(skillsRoot);
-                
-                // 合并扫描结果，避免重复
-                for (const skillDir of skillDirs) {
-                    const existing = cliResults.find(r => r.slug === skillDir.slug);
-                    if (!existing) {
-                        cliResults.push(skillDir);
-                    } else if (!existing.baseDir && skillDir.baseDir) {
-                        existing.baseDir = skillDir.baseDir;
-                    }
+
+            const lines = output.split('\n').filter(l => l.trim());
+            return lines.map(line => {
+                const cleanLine = this.stripAnsi(line);
+                const match = cleanLine.match(/^(\S+)\s+v?(\d+\.\S+)/);
+                if (match) {
+                    const slug = match[1];
+                    return {
+                        slug,
+                        version: match[2],
+                        source: 'openclaw-managed',
+                        baseDir: path.join(this.workDir, 'skills', slug),
+                    };
                 }
-            }
-            
-            return cliResults;
+                return null;
+            }).filter((s): s is ClawHubInstalledSkillResult => s !== null);
         } catch (error) {
             console.error('ClawHub list error:', error);
             return [];
         }
-    }
-    
-    /**
-     * 扫描 skills 目录，查找所有技能（包括嵌套目录）
-     */
-    private scanSkillDirectories(skillsRoot: string): ClawHubInstalledSkillResult[] {
-        const results: ClawHubInstalledSkillResult[] = [];
-        
-        try {
-            const entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
-            
-            for (const entry of entries) {
-                if (!entry.isDirectory()) continue;
-                
-                const dirPath = path.join(skillsRoot, entry.name);
-                const skillManifestPath = path.join(dirPath, 'SKILL.md');
-                
-                if (fs.existsSync(skillManifestPath)) {
-                    // 这是一个技能目录
-                    const frontmatterName = this.extractFrontmatterName(skillManifestPath);
-                    const slug = frontmatterName || entry.name;
-                    
-                    // 尝试从 SKILL.md 中提取版本
-                    const versionMatch = fs.readFileSync(skillManifestPath, 'utf8').match(/version\s*:\s*["']?([\d.]+)["']?/);
-                    const version = versionMatch ? versionMatch[1] : 'unknown';
-                    
-                    results.push({
-                        slug,
-                        version,
-                        source: 'openclaw-managed',
-                        baseDir: dirPath,
-                    });
-                } else {
-                    // 可能是嵌套目录，递归扫描
-                    const nestedResults = this.scanSkillDirectories(dirPath);
-                    results.push(...nestedResults);
-                }
-            }
-        } catch (error) {
-            console.error('Failed to scan skill directories:', error);
-        }
-        
-        return results;
     }
 
     private resolveSkillDir(skillKeyOrSlug: string, fallbackSlug?: string, preferredBaseDir?: string): string | null {

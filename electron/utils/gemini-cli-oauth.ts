@@ -389,7 +389,7 @@ async function waitForLocalCallback(params: {
           res.statusCode = 200;
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
           res.end(
-            "<!doctype html><html><head><meta charset='utf-8'/></head><body><h2>Session expired</h2><p>This authorization link is from a previous attempt. Please go back to LYClaw and try again.</p></body></html>",
+            "<!doctype html><html><head><meta charset='utf-8'/></head><body><h2>Session expired</h2><p>This authorization link is from a previous attempt. Please go back to ClawX and try again.</p></body></html>",
           );
           return;
         }
@@ -397,7 +397,7 @@ async function waitForLocalCallback(params: {
         res.statusCode = 200;
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.end(
-          "<!doctype html><html><head><meta charset='utf-8'/></head><body><h2>Gemini CLI OAuth complete</h2><p>You can close this window and return to LYClaw.</p></body></html>",
+          "<!doctype html><html><head><meta charset='utf-8'/></head><body><h2>Gemini CLI OAuth complete</h2><p>You can close this window and return to ClawX.</p></body></html>",
         );
 
         finish(undefined, { code, state });
@@ -512,7 +512,7 @@ async function discoverProject(accessToken: string): Promise<string> {
     Authorization: `Bearer ${accessToken}`,
     'Content-Type': 'application/json',
     'User-Agent': 'google-api-nodejs-client/9.15.1',
-    'X-Goog-Api-Client': 'gl-node/LYClaw',
+    'X-Goog-Api-Client': 'gl-node/clawx',
   };
 
   const loadBody = {
@@ -677,7 +677,7 @@ export async function loginGeminiCliOAuth(
   ctx: GeminiCliOAuthContext,
 ): Promise<GeminiCliOAuthCredentials> {
   if (ctx.isRemote) {
-    throw new Error('Remote/manual Gemini OAuth is not implemented in LYClaw yet.');
+    throw new Error('Remote/manual Gemini OAuth is not implemented in ClawX yet.');
   }
 
   await ctx.note(

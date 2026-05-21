@@ -29,7 +29,7 @@ const DEFAULT_ACCOUNT_ID = 'default';
 // Channels whose top-level schema (additionalProperties:false) does NOT
 // include `defaultAccount`.  We still use the multi-account `accounts`
 // map, but strip `defaultAccount` before persisting to avoid plugin
-// schema validation errors.  LYClaw falls back to DEFAULT_ACCOUNT_ID
+// schema validation errors.  ClawX falls back to DEFAULT_ACCOUNT_ID
 // when `defaultAccount` is absent.
 const CHANNELS_OMIT_DEFAULT_ACCOUNT_KEY = new Set(['dingtalk']);
 const CHANNEL_TOP_LEVEL_KEYS_TO_KEEP = new Set(['accounts', 'defaultAccount', 'enabled']);
@@ -993,22 +993,6 @@ export async function deleteChannelConfig(channelType: string): Promise<void> {
             delete currentConfig.channels[resolvedChannelType];
             if (isWechatChannelType(resolvedChannelType)) {
                 removePluginRegistration(currentConfig, WECHAT_PLUGIN_ID);
-            }
-            // Clean up third-party plugin registrations when their channel is removed.
-            if (resolvedChannelType === 'feishu') {
-                for (const candidateId of FEISHU_PLUGIN_ID_CANDIDATES) {
-                    removePluginRegistration(currentConfig, candidateId);
-                }
-                // Also remove the built-in feishu disable entry since it's no longer needed
-                if (currentConfig.plugins?.entries?.feishu) {
-                    delete currentConfig.plugins.entries.feishu;
-                }
-            }
-            if (resolvedChannelType === 'dingtalk') {
-                removePluginRegistration(currentConfig, 'dingtalk');
-            }
-            if (resolvedChannelType === 'wecom') {
-                removePluginRegistration(currentConfig, WECOM_PLUGIN_ID);
             }
             syncBuiltinChannelsWithPluginAllowlist(currentConfig);
             await writeOpenClawConfig(currentConfig);

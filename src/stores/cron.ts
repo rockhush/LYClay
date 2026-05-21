@@ -7,8 +7,6 @@ import { hostApiFetch } from '@/lib/host-api';
 import { useChatStore } from './chat';
 import type { CronJob, CronJobCreateInput, CronJobUpdateInput } from '../types/cron';
 
-let _fetchJobsInFlight: Promise<void> | null = null;
-
 interface CronState {
   jobs: CronJob[];
   loading: boolean;
@@ -30,41 +28,28 @@ export const useCronStore = create<CronState>((set) => ({
   error: null,
 
   fetchJobs: async () => {
-    if (_fetchJobsInFlight) {
-      await _fetchJobsInFlight;
-      return;
+    const currentJobs = useCronStore.getState().jobs;
+    // Only show loading spinner when there's no data yet (stale-while-revalidate).
+    if (currentJobs.length === 0) {
+      set({ loading: true, error: null });
+    } else {
+      set({ error: null });
     }
 
-    _fetchJobsInFlight = (async () => {
-      const currentJobs = useCronStore.getState().jobs;
-      // Only show loading spinner when there's no data yet (stale-while-revalidate).
-      if (currentJobs.length === 0) {
-        set({ loading: true, error: null });
-      } else {
-        set({ error: null });
-      }
-
-      try {
-        const result = await hostApiFetch<CronJob[]>('/api/cron/jobs');
-
-        // Gateway now correctly returns agentId for all jobs.
-        // If Gateway returned fewer jobs than we have (e.g. race condition), preserve
-        // the extra ones from current state to avoid losing data.
-        const resultIds = new Set(result.map((j) => j.id));
-        const extraJobs = currentJobs.filter((j) => !resultIds.has(j.id));
-        const allJobs = [...result, ...extraJobs];
-
-        set({ jobs: allJobs, loading: false });
-      } catch (error) {
-        // Preserve previous jobs on error so the user sees stale data instead of nothing.
-        set({ error: String(error), loading: false });
-      }
-    })();
-
     try {
-      await _fetchJobsInFlight;
-    } finally {
-      _fetchJobsInFlight = null;
+      const result = await hostApiFetch<CronJob[]>('/api/cron/jobs');
+
+      // Gateway now correctly returns agentId for all jobs.
+      // If Gateway returned fewer jobs than we have (e.g. race condition), preserve
+      // the extra ones from current state to avoid losing data.
+      const resultIds = new Set(result.map((j) => j.id));
+      const extraJobs = currentJobs.filter((j) => !resultIds.has(j.id));
+      const allJobs = [...result, ...extraJobs];
+
+      set({ jobs: allJobs, loading: false });
+    } catch (error) {
+      // Preserve previous jobs on error so the user sees stale data instead of nothing.
+      set({ error: String(error), loading: false });
     }
   },
 

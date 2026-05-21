@@ -70,7 +70,7 @@ const defaultSettings = {
   language: resolveSupportedLanguage(typeof navigator !== 'undefined' ? navigator.language : undefined),
   startMinimized: false,
   launchAtStartup: false,
-  telemetryEnabled: false,
+  telemetryEnabled: true,
   gatewayAutoStart: true,
   gatewayPort: 18789,
   proxyEnabled: false,
@@ -80,7 +80,7 @@ const defaultSettings = {
   proxyAllServer: '',
   proxyBypassRules: '<local>;localhost;127.0.0.1;::1',
   updateChannel: 'stable' as UpdateChannel,
-  autoCheckUpdate: false,  // 默认关闭自动检查更新
+  autoCheckUpdate: true,
   autoDownloadUpdate: false,
   sidebarCollapsed: false,
   devModeUnlocked: false,
@@ -178,7 +178,7 @@ export const useSettingsStore = create<SettingsState>()(
       resetSettings: () => set(defaultSettings),
     }),
     {
-      name: 'LYClaw-settings',
+      name: 'clawx-settings',
     }
   )
 );

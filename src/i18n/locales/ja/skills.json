@@ -83,10 +83,10 @@
         "copiedPath": "パスをコピーしました",
         "failedCopyPath": "パスのコピーに失敗しました",
         "failedOpenActualFolder": "スキルの実際のフォルダを開けませんでした",
-        "searchTimeoutError": "検索がタイムアウトしました。ネットワークを確認するか管理者にお問い合わせください。",
-        "installTimeoutError": "インストールがタイムアウトしました。ネットワークを確認するか管理者にお問い合わせください。",
-        "searchRateLimitError": "検索リクエストの制限を超過しました。後でお試しください。",
-        "installRateLimitError": "インストールリクエストの制限を超過しました。後でお試しください。", 
+        "searchTimeoutError": "検索がタイムアウトしました。ClawHub.aiで検索してZIPをダウンロードし、\"{{path}}\" に展開することも可能です",
+        "installTimeoutError": "インストールがタイムアウトしました。ClawHub.aiでZIPをダウンロードし、\"{{path}}\" に展開することも可能です",
+        "searchRateLimitError": "検索リクエストの制限を超過しました。ClawHub.aiで検索してZIPをダウンロードし、\"{{path}}\" に展開することも可能です",
+        "installRateLimitError": "インストールリクエストの制限を超過しました。ClawHub.aiからZIPをダウンロードし、\"{{path}}\" に展開することも可能です",
         "fetchTimeoutError": "スキルリストの取得がタイムアウトしました。ネットワークを確認してください。",
         "fetchRateLimitError": "スキルリスト取得のリクエスト制限を超過しました。後でお試しください。",
         "noBatchEnableTargets": "表示中のスキルはすべて有効です。",
@@ -98,14 +98,14 @@
     "marketplace": {
         "title": "マーケットプレイス",
         "installDialogTitle": "スキルをインストール",
-        "installDialogSubtitle": "会社サーバーからスキルを取得、キーワード入力で検索します。",
+        "installDialogSubtitle": "初期表示は Explore、キーワード入力時は検索します。",
         "sourceLabel": "ソース",
-        "sourceClawHub": "会社マーケットプレイス",
-        "securityNote": "インストール前にスキルの詳細を確認してください。",
-        "manualInstallHint": "ネットワークに問題がありますか？管理者にお問い合わせください。",
-        "searching": "会社マーケットプレイスを検索中...",
+        "sourceClawHub": "ClawHub",
+        "securityNote": "インストール前にスキルカードをクリックして、ClawHubでドキュメントとセキュリティ情報を確認してください。",
+        "manualInstallHint": "ネットワークに問題がありますか？いつでもClawHub.aiからスキルのZIPをダウンロードし、手動で \"{{path}}\" に展開してインストールできます。",
+        "searching": "ClawHubを検索中...",
         "noResults": "検索に一致するスキルが見つかりません。",
         "emptyPrompt": "新しいスキルを検索して機能を拡張しましょう。",
-        "searchError": "会社マーケットプレイスの検索に失敗しました。接続を確認するか管理者にお問い合わせください。"
+        "searchError": "ClawHub検索に失敗しました。接続またはインストールを確認してください。"
     }
 }

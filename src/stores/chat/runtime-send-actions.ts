@@ -1,11 +1,5 @@
-import i18n from '@/i18n';
 import { invokeIpc } from '@/lib/api-client';
 import { useAgentsStore } from '@/stores/agents';
-import {
-  beginFirstSessionPerf,
-  markFirstSessionRpcCompleted,
-  markFirstSessionRpcStarted,
-} from './first-session-perf';
 import {
   clearErrorRecoveryTimer,
   clearHistoryPoll,
@@ -14,7 +8,7 @@ import {
   setLastChatEventAt,
   upsertImageCacheEntry,
 } from './helpers';
-import type { ChatSession, RawMessage, ReasoningMode } from './types';
+import type { ChatSession, RawMessage } from './types';
 import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
 
 function normalizeAgentId(value: string | undefined | null): string {
@@ -29,46 +23,6 @@ function getAgentIdFromSessionKey(sessionKey: string): string {
 
 function buildFallbackMainSessionKey(agentId: string): string {
   return `agent:${normalizeAgentId(agentId)}:main`;
-}
-
-function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' | 'high' {
-  if (mode === 'fast') return 'off';
-  if (mode === 'expert') return 'high';
-  return 'medium';
-}
-
-function withThinkingDirective(message: string, mode: ReasoningMode): string {
-  if (message.trimStart().startsWith('/')) {
-    return message;
-  }
-  return `/think ${toThinkingLevel(mode)} ${message}`;
-}
-
-async function patchSessionThinkingLevel(sessionKey: string, mode: ReasoningMode): Promise<void> {
-  const result = await invokeIpc(
-    'gateway:rpc',
-    'sessions.patch',
-    {
-      key: sessionKey,
-      thinkingLevel: toThinkingLevel(mode),
-    },
-    5_000,
-  ) as { success?: boolean; error?: string };
-
-  if (result && result.success === false) {
-    throw new Error(result.error || 'Failed to update thinking level');
-  }
-}
-
-function applySessionThinkingLevelInBackground(
-  sessionKey: string,
-  mode: ReasoningMode,
-  set: ChatSet,
-): void {
-  set({ thinkingLevel: toThinkingLevel(mode) });
-  void patchSessionThinkingLevel(sessionKey, mode).catch((error) => {
-    console.warn('[chat] Failed to persist thinking level; continuing with one-shot /think directive:', error);
-  });
 }
 
 function resolveMainSessionKeyForAgent(agentId: string | undefined | null): string | null {
@@ -126,8 +80,6 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       }
 
       const currentSessionKey = targetSessionKey;
-      const reasoningMode = get().reasoningMode;
-      applySessionThinkingLevelInBackground(currentSessionKey, reasoningMode, set);
 
       // Add user message optimistically (with local file metadata for UI display)
       const nowMs = Date.now();
@@ -167,14 +119,28 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       // Mark this session as most recently active
       set((s) => ({ sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: nowMs } }));
 
-      // Reset tracking for error recovery and safety timeout
+      // Start the history poll and safety timeout IMMEDIATELY (before the
+      // RPC await) because the gateway's chat.send RPC may block until the
+      // entire agentic conversation finishes — the poll must run in parallel.
       setLastChatEventAt(Date.now());
       clearHistoryPoll();
       clearErrorRecoveryTimer();
 
-      const SOFT_NO_RESPONSE_NOTICE_MS = 90_000;
-      const HARD_NO_RESPONSE_TIMEOUT_MS = 240_000;
-      let slowResponseNoticeLogged = false;
+      const POLL_START_DELAY = 3_000;
+      const POLL_INTERVAL = 4_000;
+      const pollHistory = () => {
+        const state = get();
+        if (!state.sending) { clearHistoryPoll(); return; }
+        if (state.streamingMessage) {
+          setHistoryPollTimer(setTimeout(pollHistory, POLL_INTERVAL));
+          return;
+        }
+        state.loadHistory(true);
+        setHistoryPollTimer(setTimeout(pollHistory, POLL_INTERVAL));
+      };
+      setHistoryPollTimer(setTimeout(pollHistory, POLL_START_DELAY));
+
+      const SAFETY_TIMEOUT_MS = 90_000;
       const checkStuck = () => {
         const state = get();
         if (!state.sending) return;
@@ -183,26 +149,13 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           setTimeout(checkStuck, 10_000);
           return;
         }
-        const idleMs = Date.now() - getLastChatEventAt();
-        if (idleMs < SOFT_NO_RESPONSE_NOTICE_MS) {
+        if (Date.now() - getLastChatEventAt() < SAFETY_TIMEOUT_MS) {
           setTimeout(checkStuck, 10_000);
-          return;
-        }
-        if (idleMs < HARD_NO_RESPONSE_TIMEOUT_MS) {
-          if (!slowResponseNoticeLogged) {
-            slowResponseNoticeLogged = true;
-            console.info('[chat.safety-timeout] still waiting for first model response', {
-              idleMs,
-              activeRunId: state.activeRunId,
-              currentSessionKey,
-            });
-          }
-          setTimeout(checkStuck, 15_000);
           return;
         }
         clearHistoryPoll();
         set({
-          error: i18n.t('chat:errors.modelResponseTimeoutLong'),
+          error: 'No response received from the model. The provider may be unavailable or the API key may have insufficient quota. Please check your provider settings.',
           sending: false,
           activeRunId: null,
           lastUserMessageAt: null,
@@ -210,22 +163,12 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       };
       setTimeout(checkStuck, 30_000);
 
-      let firstSessionPerfActive = false;
-      let firstSessionPerfMethod = 'chat.send';
       try {
         const idempotencyKey = crypto.randomUUID();
         const hasMedia = attachments && attachments.length > 0;
-        firstSessionPerfMethod = hasMedia ? 'chat.sendWithMedia' : 'chat.send';
         if (hasMedia) {
           console.log('[sendMessage] Media paths:', attachments!.map(a => a.stagedPath));
         }
-        firstSessionPerfActive = beginFirstSessionPerf({
-          sessionKey: currentSessionKey,
-          idempotencyKey,
-          messageLength: trimmed.length,
-          hasMedia: Boolean(hasMedia),
-          attachmentCount: attachments?.length ?? 0,
-        });
 
         // Cache image attachments BEFORE the IPC call to avoid race condition:
         // history may reload (via Gateway event) before the RPC returns.
@@ -242,18 +185,16 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         }
 
         let result: { success: boolean; result?: { runId?: string }; error?: string };
+
         // Longer timeout for chat sends to tolerate high-latency networks (avoids connect error)
         const CHAT_SEND_TIMEOUT_MS = 120_000;
-        if (firstSessionPerfActive) {
-          markFirstSessionRpcStarted(firstSessionPerfMethod);
-        }
 
         if (hasMedia) {
           result = await invokeIpc(
             'chat:sendWithMedia',
             {
               sessionKey: currentSessionKey,
-              message: withThinkingDirective(trimmed || 'Process the attached file(s).', reasoningMode),
+              message: trimmed || 'Process the attached file(s).',
               deliver: false,
               idempotencyKey,
               media: attachments.map((a) => ({
@@ -269,21 +210,12 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             'chat.send',
             {
               sessionKey: currentSessionKey,
-              message: withThinkingDirective(trimmed, reasoningMode),
+              message: trimmed,
               deliver: false,
               idempotencyKey,
             },
             CHAT_SEND_TIMEOUT_MS,
           ) as { success: boolean; result?: { runId?: string }; error?: string };
-        }
-
-        if (firstSessionPerfActive) {
-          markFirstSessionRpcCompleted({
-            method: firstSessionPerfMethod,
-            success: result.success,
-            runId: result.result?.runId ?? null,
-            error: result.error,
-          });
         }
 
         console.log(`[sendMessage] RPC result: success=${result.success}, runId=${result.result?.runId || 'none'}`);
@@ -295,13 +227,6 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           set({ activeRunId: result.result.runId });
         }
       } catch (err) {
-        if (firstSessionPerfActive) {
-          markFirstSessionRpcCompleted({
-            method: firstSessionPerfMethod,
-            success: false,
-            error: String(err),
-          });
-        }
         clearHistoryPoll();
         set({ error: String(err), sending: false });
       }
@@ -312,32 +237,18 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
     abortRun: async () => {
       clearHistoryPoll();
       clearErrorRecoveryTimer();
-      const { currentSessionKey, activeRunId } = get();
-      
-      // 立即重置所有状态，确保UI立即响应
-      set({ 
-        sending: false, 
-        aborting: false,
-        activeRunId: null,
-        streamingText: '', 
-        streamingMessage: null, 
-        pendingFinal: false, 
-        lastUserMessageAt: null, 
-        pendingToolImages: [],
-        streamingTools: [],
-        error: null,
-      });
+      const { currentSessionKey } = get();
+      set({ sending: false, streamingText: '', streamingMessage: null, pendingFinal: false, lastUserMessageAt: null, pendingToolImages: [] });
+      set({ streamingTools: [] });
 
-      // 异步发送 abort 请求给 Gateway（不等待响应，避免阻塞）
-      if (currentSessionKey && activeRunId) {
-        invokeIpc(
+      try {
+        await invokeIpc(
           'gateway:rpc',
           'chat.abort',
           { sessionKey: currentSessionKey },
-        ).catch((err) => {
-          // 忽略错误，因为我们已经重置了状态
-          console.warn('[abortRun] Failed to abort run:', err);
-        });
+        );
+      } catch (err) {
+        set({ error: String(err) });
       }
     },
 

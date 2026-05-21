@@ -1,9 +1,9 @@
 import { invokeIpc } from '@/lib/api-client';
-import { hostApiFetch } from '@/lib/host-api';
-import { useGatewayStore } from '@/stores/gateway';
-import { getCanonicalPrefixFromSessions, toMs } from './helpers';
-import { DEFAULT_CANONICAL_PREFIX, DEFAULT_SESSION_KEY, type ChatSession } from './types';
+import { getCanonicalPrefixFromSessions, getMessageText, toMs } from './helpers';
+import { DEFAULT_CANONICAL_PREFIX, DEFAULT_SESSION_KEY, type ChatSession, type RawMessage } from './types';
 import type { ChatGet, ChatSet, SessionHistoryActions } from './store-api';
+
+const LABEL_FETCH_CONCURRENCY = 5;
 
 function getAgentIdFromSessionKey(sessionKey: string): string {
   if (!sessionKey.startsWith('agent:')) return 'main';
@@ -24,128 +24,12 @@ function parseSessionUpdatedAtMs(value: unknown): number | undefined {
   return undefined;
 }
 
-function parseSessionRecord(record: Record<string, unknown>): ChatSession | null {
-  const key = String(record.key || '');
-  if (!key || key.includes('__warmup__')) return null;
-  const firstUserMessagePreview = record.firstUserMessagePreview
-    ? String(record.firstUserMessagePreview)
-    : undefined;
-
-  return {
-    key,
-    label: firstUserMessagePreview || (record.label ? String(record.label) : undefined),
-    firstUserMessagePreview,
-    displayName: record.displayName ? String(record.displayName) : undefined,
-    thinkingLevel: record.thinkingLevel ? String(record.thinkingLevel) : undefined,
-    model: record.model ? String(record.model) : undefined,
-    updatedAt: parseSessionUpdatedAtMs(record.updatedAt),
-  };
-}
-
-async function loadLocalSessionSummaries(agentId = 'main'): Promise<ChatSession[]> {
-  const response = await hostApiFetch<{
-    success: boolean;
-    sessions?: Array<Record<string, unknown>>;
-    error?: string;
-  }>(`/api/sessions/list-local?agentId=${encodeURIComponent(agentId)}&includePreviews=1`);
-
-  if (!response.success || !Array.isArray(response.sessions)) {
-    return [];
-  }
-
-  return response.sessions
-    .map(parseSessionRecord)
-    .filter((session): session is ChatSession => session != null);
-}
-
-function mergeSessionSummariesWithLocalPreviews(
-  sessions: ChatSession[],
-  localSessions: ChatSession[],
-): ChatSession[] {
-  if (localSessions.length === 0) return sessions;
-  const localByKey = new Map(localSessions.map((session) => [session.key, session]));
-
-  return sessions.map((session) => {
-    const local = localByKey.get(session.key);
-    if (!local) return session;
-
-    const localLabel = local.firstUserMessagePreview || local.label;
-    return {
-      ...session,
-      label: localLabel || session.label,
-      firstUserMessagePreview: local.firstUserMessagePreview || session.firstUserMessagePreview,
-      updatedAt: session.updatedAt ?? local.updatedAt,
-    };
-  });
-}
-
-function getSessionLabelsFromSessions(sessions: ChatSession[]): Record<string, string> {
-  return Object.fromEntries(
-    sessions
-      .filter((session) => session.label)
-      .map((session) => [session.key, session.label!]),
-  );
-}
-
 export function createSessionActions(
   set: ChatSet,
   get: ChatGet,
 ): Pick<SessionHistoryActions, 'loadSessions' | 'switchSession' | 'newSession' | 'deleteSession' | 'cleanupEmptySession'> {
   return {
     loadSessions: async () => {
-      const loadStart = performance.now();
-      console.log('[Sessions] loadSessions() started');
-      
-      const { gatewayReady } = useGatewayStore.getState().status;
-       
-      console.log(`[Sessions] gatewayReady = ${gatewayReady}, type = ${typeof gatewayReady}`);
-       
-      if (gatewayReady !== true) {
-        console.log('[Sessions] Gateway not ready, loading from local filesystem');
-        try {
-          const localStart = performance.now();
-          const sessions = await loadLocalSessionSummaries('main');
-          console.log(`[Sessions] Local read took ${(performance.now() - localStart).toFixed(2)}ms, sessions count: ${sessions.length}`);
-          
-          if (sessions.length > 0) {
-            console.log('[Sessions] Local sessions:', sessions.map(s => s.key).join(', '));
-            console.log(`[Sessions] Parsed ${sessions.length} sessions from local`);
-            
-            const { currentSessionKey } = get();
-            const nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
-            
-            const discoveredActivity = Object.fromEntries(
-              sessions
-                .filter((session) => typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt))
-                .map((session) => [session.key, session.updatedAt!]),
-            );
-            const discoveredLabels = getSessionLabelsFromSessions(sessions);
-
-            set((state) => ({
-              sessions,
-              currentSessionKey: nextSessionKey,
-              currentAgentId: getAgentIdFromSessionKey(nextSessionKey),
-              sessionLabels: {
-                ...state.sessionLabels,
-                ...discoveredLabels,
-              },
-              sessionLastActivity: {
-                ...state.sessionLastActivity,
-                ...discoveredActivity,
-              },
-            }));
-            
-            console.log(`[Sessions] ✅ Loaded ${sessions.length} sessions from LOCAL in ${(performance.now() - loadStart).toFixed(2)}ms`);
-            return;
-          } else {
-            console.warn('[Sessions] Local read returned no sessions');
-          }
-        } catch (err) {
-          console.warn('[Sessions] Local read failed with exception:', err);
-        }
-      }
-      
-      console.log('[Sessions] Using Gateway RPC');
       try {
         const result = await invokeIpc(
           'gateway:rpc',
@@ -156,16 +40,14 @@ export function createSessionActions(
         if (result.success && result.result) {
           const data = result.result;
           const rawSessions = Array.isArray(data.sessions) ? data.sessions : [];
-          const gatewaySessions = rawSessions
-            .map((s: Record<string, unknown>) => parseSessionRecord(s))
-            .filter((session): session is ChatSession => session != null);
-          let localSessions: ChatSession[] = [];
-          try {
-            localSessions = await loadLocalSessionSummaries('main');
-          } catch (error) {
-            console.warn('[Sessions] Failed to load local session previews for Gateway list:', error);
-          }
-          const sessions = mergeSessionSummariesWithLocalPreviews(gatewaySessions, localSessions);
+          const sessions: ChatSession[] = rawSessions.map((s: Record<string, unknown>) => ({
+            key: String(s.key || ''),
+            label: s.label ? String(s.label) : undefined,
+            displayName: s.displayName ? String(s.displayName) : undefined,
+            thinkingLevel: s.thinkingLevel ? String(s.thinkingLevel) : undefined,
+            model: s.model ? String(s.model) : undefined,
+            updatedAt: parseSessionUpdatedAtMs(s.updatedAt),
+          })).filter((s: ChatSession) => s.key);
 
           const canonicalBySuffix = new Map<string, string>();
           for (const session of sessions) {
@@ -215,16 +97,11 @@ export function createSessionActions(
               .filter((session) => typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt))
               .map((session) => [session.key, session.updatedAt!]),
           );
-          const discoveredLabels = getSessionLabelsFromSessions(sessionsWithCurrent);
 
           set((state) => ({
             sessions: sessionsWithCurrent,
             currentSessionKey: nextSessionKey,
             currentAgentId: getAgentIdFromSessionKey(nextSessionKey),
-            sessionLabels: {
-              ...state.sessionLabels,
-              ...discoveredLabels,
-            },
             sessionLastActivity: {
               ...state.sessionLastActivity,
               ...discoveredActivity,
@@ -235,9 +112,47 @@ export function createSessionActions(
             get().loadHistory();
           }
 
-          console.info('[loadSessions] Skipped bulk history label hydration', {
-            sessionCount: sessionsWithCurrent.length,
-          });
+          // Background: fetch first user message for every non-main session to populate labels.
+          // Concurrency-limited to avoid flooding the gateway with parallel RPCs.
+          // By the time this runs, the gateway should already be fully ready (Sidebar
+          // gates on gatewayReady), so no startup-retry loop is needed.
+          const sessionsToLabel = sessionsWithCurrent.filter((s) => !s.key.endsWith(':main'));
+          if (sessionsToLabel.length > 0) {
+            void (async () => {
+              for (let i = 0; i < sessionsToLabel.length; i += LABEL_FETCH_CONCURRENCY) {
+                const batch = sessionsToLabel.slice(i, i + LABEL_FETCH_CONCURRENCY);
+                await Promise.all(
+                  batch.map(async (session) => {
+                    try {
+                      const r = await invokeIpc(
+                        'gateway:rpc',
+                        'chat.history',
+                        { sessionKey: session.key, limit: 1000 },
+                      ) as { success: boolean; result?: Record<string, unknown>; error?: string };
+                      if (!r.success || !r.result) return;
+                      const msgs = Array.isArray(r.result.messages) ? r.result.messages as RawMessage[] : [];
+                      const firstUser = msgs.find((m) => m.role === 'user');
+                      const lastMsg = msgs[msgs.length - 1];
+                      set((s) => {
+                        const next: Partial<typeof s> = {};
+                        if (firstUser) {
+                          const labelText = getMessageText(firstUser.content).trim();
+                          if (labelText) {
+                            const truncated = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
+                            next.sessionLabels = { ...s.sessionLabels, [session.key]: truncated };
+                          }
+                        }
+                        if (lastMsg?.timestamp) {
+                          next.sessionLastActivity = { ...s.sessionLastActivity, [session.key]: toMs(lastMsg.timestamp) };
+                        }
+                        return next;
+                      });
+                    } catch { /* ignore per-session errors */ }
+                  }),
+                );
+              }
+            })();
+          }
         }
       } catch (err) {
         console.warn('Failed to load sessions:', err);
@@ -268,8 +183,6 @@ export function createSessionActions(
         pendingFinal: false,
         lastUserMessageAt: null,
         pendingToolImages: [],
-        sending: false,
-        loading: false,
         ...(leavingEmpty ? {
           sessions: s.sessions.filter((s) => s.key !== currentSessionKey),
           sessionLabels: Object.fromEntries(

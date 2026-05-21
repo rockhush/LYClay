@@ -4,9 +4,7 @@ import type {
   NavItemDef,
   RouteDef,
   SettingsSectionDef,
-  SkillDetailMetaProps,
 } from './types';
-import type { ComponentType } from 'react';
 
 class RendererExtensionRegistry {
   private extensions: RendererExtension[] = [];
@@ -56,10 +54,6 @@ class RendererExtensionRegistry {
     return this.extensions
       .flatMap((ext) => ext.settings?.sections ?? [])
       .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
-  }
-
-  getSkillDetailMetaComponents(): ComponentType<SkillDetailMetaProps>[] {
-    return this.extensions.flatMap((ext) => ext.skills?.detailMetaComponents ?? []);
   }
 
   async initializeAll(): Promise<void> {

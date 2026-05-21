@@ -21,8 +21,6 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
 import { useMinLoading } from '@/hooks/use-min-loading';
-import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
-import { isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
 
 type GraphStepCacheEntry = {
   steps: ReturnType<typeof deriveTaskSteps>;
@@ -43,18 +41,6 @@ type UserRunCard = {
   steps: TaskStep[];
   messageStepTexts: string[];
   streamingReplyText: string | null;
-  /**
-   * Whether the trailing "Thinking..." indicator should be hidden for this
-   * card. True only when the run's live stream is currently rendered AS a
-   * streaming step inside the graph (the step itself already signals
-   * liveness, so the extra indicator would be redundant). False in all
-   * other cases — including when the stream is promoted to a bubble
-   * below the graph, or when there is no streaming content at all (the
-   * gap between tool rounds), because the graph has no visible activity
-   * of its own in those windows and the indicator is what tells the user
-   * "work is still in progress".
-   */
-  suppressThinking: boolean;
 };
 
 function getPrimaryMessageStepTexts(steps: TaskStep[]): string[] {
@@ -68,17 +54,12 @@ function getPrimaryMessageStepTexts(steps: TaskStep[]): string[] {
 // steps without tripping React's set-state-in-effect lint rule.
 const graphStepCacheStore = new Map<string, Record<string, GraphStepCacheEntry>>();
 const streamingTimestampStore = new Map<string, number>();
-const EMPTY_GRAPH_STEP_CACHE: Record<string, GraphStepCacheEntry> = {};
 
 export function Chat() {
   const { t } = useTranslation('chat');
   const gatewayStatus = useGatewayStore((s) => s.status);
   const isGatewayRunning = gatewayStatus.state === 'running';
-  const warmupStatus = gatewayStatus.warmupStatus;
 
-  const [editingText, setEditingText] = useState<string | null>(null);
-  const prefilledInput = useChatStore((s) => s.prefilledInput);
-  const setPrefilledInput = useChatStore((s) => s.setPrefilledInput);
   const messages = useChatStore((s) => s.messages);
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
@@ -87,20 +68,13 @@ export function Chat() {
   const sending = useChatStore((s) => s.sending);
   const error = useChatStore((s) => s.error);
   const streamingMessage = useChatStore((s) => s.streamingMessage);
-  const streamingText = useChatStore((s) => s.streamingText);
   const streamingTools = useChatStore((s) => s.streamingTools);
   const pendingFinal = useChatStore((s) => s.pendingFinal);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const abortRun = useChatStore((s) => s.abortRun);
   const clearError = useChatStore((s) => s.clearError);
-  const loadHistory = useChatStore((s) => s.loadHistory);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const agents = useAgentsStore((s) => s.agents);
-  const runAborted = useChatStore((s) => s.runAborted);
-  const subagentCompletionInfos = useMemo(
-    () => messages.map((message) => parseSubagentCompletionInfo(message)),
-    [messages],
-  );
 
   const cleanupEmptySession = useChatStore((s) => s.cleanupEmptySession);
   const [childTranscripts, setChildTranscripts] = useState<Record<string, RawMessage[]>>({});
@@ -111,32 +85,9 @@ export function Chat() {
   // remount and reset. `undefined` values mean "user hasn't toggled, let the
   // card pick a default from its own `active` prop."
   const [graphExpandedOverrides, setGraphExpandedOverrides] = useState<Record<string, boolean>>({});
-  const graphStepCache: Record<string, GraphStepCacheEntry> = graphStepCacheStore.get(currentSessionKey) ?? EMPTY_GRAPH_STEP_CACHE;
-  // Include empty-thread loads (session switch clears messages before chat.history returns).
-  // Otherwise the Welcome screen flashes and looks “stuck” until messages arrive.
-  const minLoading = useMinLoading(loading);
+  const graphStepCache: Record<string, GraphStepCacheEntry> = graphStepCacheStore.get(currentSessionKey) ?? {};
+  const minLoading = useMinLoading(loading && messages.length > 0);
   const { contentRef, scrollRef } = useStickToBottomInstant(currentSessionKey);
-
-  // Auto scroll to bottom during sending/streaming, and when new messages arrive
-  useEffect(() => {
-    const scrollElement = scrollRef.current;
-    if (!scrollElement) return;
-
-    // During sending or streaming, always scroll to bottom immediately
-    // Use requestAnimationFrame to ensure DOM is updated before scrolling
-    requestAnimationFrame(() => {
-      if (sending || streamingText || streamingTools.length > 0) {
-        scrollElement.scrollTop = scrollElement.scrollHeight;
-        return;
-      }
-
-      // When not sending/streaming, only scroll if we're already near the bottom (within 100px)
-      const isNearBottom = scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight < 100;
-      if (isNearBottom) {
-        scrollElement.scrollTop = scrollElement.scrollHeight;
-      }
-    });
-  }, [sending, streamingText, streamingTools.length, messages.length, scrollRef]);
 
   // Load data when gateway is running.
   // When the store already holds messages for this session (i.e. the user
@@ -155,25 +106,9 @@ export function Chat() {
     void fetchAgents();
   }, [fetchAgents]);
 
-  // Load history for an empty thread when the session key (or message count) changes.
-  // Do not require `gatewayReady`: `loadHistory` prefers local JSONL when the Gateway
-  // is not ready yet, so gating only on `isGatewayReady` left new sessions / sidebar
-  // switches waiting on the overlay until RPC came online.
-  // Include currentSessionKey so switching between two empty threads still retriggers
-  // (messages.length stays 0 — without this, the effect never runs and the main pane
-  // can stay on the welcome screen while the sidebar selection changes).
-  // Do not list `loading` in deps: when history is empty, loadHistory(false) finishes with
-  // messages still [] and loading false — that would retrigger this effect forever and
-  // spam `chat.history` / local history IPC (each completion toggles `loading`).
   useEffect(() => {
-    if (messages.length === 0 && !loading) {
-      void loadHistory();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally omit `loading` to avoid empty-thread refetch loops
-  }, [currentSessionKey, messages.length, loadHistory]);
-
-  useEffect(() => {
-    const completions = subagentCompletionInfos
+    const completions = messages
+      .map((message) => parseSubagentCompletionInfo(message))
       .filter((value): value is NonNullable<typeof value> => value != null);
     const missing = completions.filter((completion) => !childTranscripts[completion.sessionId]);
     if (missing.length === 0) return;
@@ -218,7 +153,7 @@ export function Chat() {
     return () => {
       cancelled = true;
     };
-  }, [subagentCompletionInfos, childTranscripts]);
+  }, [messages, childTranscripts]);
 
   const streamMsg = streamingMessage && typeof streamingMessage === 'object'
     ? streamingMessage as unknown as { role?: string; content?: unknown; timestamp?: number }
@@ -239,84 +174,49 @@ export function Chat() {
     : 0;
   const streamText = streamMsg ? extractText(streamMsg) : (typeof streamingMessage === 'string' ? streamingMessage : '');
   const hasStreamText = streamText.trim().length > 0;
-  // Whether the streaming chunk currently carries a `thinking` block. Used as
-  // a liveness signal so the run stays "active" (and the ExecutionGraphCard
-  // keeps showing its trailing "Thinking..." indicator) during the brief window
-  // between a tool finishing and the next text/tool chunk arriving — that gap
-  // is normally only filled by streamed thinking. NOT included in
-  // `shouldRenderStreaming`: a thinking-only stream chunk should not produce
-  // a chat bubble (thinking is rendered exclusively inside the ExecutionGraph).
   const streamThinking = streamMsg ? extractThinking(streamMsg) : null;
   const hasStreamThinking = !!streamThinking && streamThinking.trim().length > 0;
-  const streamTools = useMemo(() => streamMsg ? extractToolUse(streamMsg) : [], [streamMsg]);
+  const streamTools = streamMsg ? extractToolUse(streamMsg) : [];
   const hasStreamTools = streamTools.length > 0;
-  const streamImages = useMemo(() => streamMsg ? extractImages(streamMsg) : [], [streamMsg]);
+  const streamImages = streamMsg ? extractImages(streamMsg) : [];
   const hasStreamImages = streamImages.length > 0;
   const hasStreamToolStatus = streamingTools.length > 0;
   const hasRunningStreamToolStatus = streamingTools.some((tool) => tool.status === 'running');
-  const shouldRenderStreaming = sending && (hasStreamText || hasStreamTools || hasStreamImages || hasStreamToolStatus);
+  const shouldRenderStreaming = sending && (hasStreamText || hasStreamThinking || hasStreamTools || hasStreamImages || hasStreamToolStatus);
   const hasAnyStreamContent = hasStreamText || hasStreamThinking || hasStreamTools || hasStreamImages || hasStreamToolStatus;
-  const showFirstResponseProgress = isFirstResponsePreparing({
-    gatewayStatus,
-    sending,
-    streamingMessage: streamingMessage as RawMessage | string | null,
-    streamingText,
-    streamingTools,
-  });
 
-  // Bar fill only (same curve as post-login warmup) — no seconds in copy.
-  const [firstResponseBarSeconds, setFirstResponseBarSeconds] = useState(0);
-  useEffect(() => {
-    if (!showFirstResponseProgress) return;
-    setFirstResponseBarSeconds(0);
-    const id = window.setInterval(() => {
-      setFirstResponseBarSeconds((s) => s + 1);
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [showFirstResponseProgress]);
-
-  const firstResponseProgress = estimateGatewayWarmupProgress(
-    gatewayStatus,
-    firstResponseBarSeconds,
-  );
-
-  const isEmpty = messages.length === 0 && !sending && !loading;
-
-  const {
-    foldedNarrationIndices,
-    userRunCards,
-  } = useMemo(() => {
-    // Build an index of the *next* real user message after each position.
-    // Gateway history may contain `role: 'user'` messages that are actually
-    // tool-result wrappers (Anthropic API format).  These must NOT split
-    // the run into multiple segments — only genuine user-authored messages
-    // should act as run boundaries.
-    const isRealUserMessage = (msg: RawMessage): boolean => {
-      if (msg.role !== 'user') return false;
-      const content = msg.content;
-      if (!Array.isArray(content)) return true;
-      // If every block in the content is a tool_result, this is a Gateway
-      // tool-result wrapper, not a real user message.
-      const blocks = content as Array<{ type?: string }>;
-      return blocks.length === 0 || !blocks.every((b) => b.type === 'tool_result');
-    };
-
-    const nextUserMessageIndexes = new Array<number>(messages.length).fill(-1);
-    let nextUserMessageIndex = -1;
-    for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
-      nextUserMessageIndexes[idx] = nextUserMessageIndex;
-      if (isRealUserMessage(messages[idx]) && !subagentCompletionInfos[idx]) {
-        nextUserMessageIndex = idx;
-      }
+  const isEmpty = messages.length === 0 && !sending;
+  const subagentCompletionInfos = messages.map((message) => parseSubagentCompletionInfo(message));
+  // Build an index of the *next* real user message after each position.
+  // Gateway history may contain `role: 'user'` messages that are actually
+  // tool-result wrappers (Anthropic API format).  These must NOT split
+  // the run into multiple segments — only genuine user-authored messages
+  // should act as run boundaries.
+  const isRealUserMessage = (msg: RawMessage): boolean => {
+    if (msg.role !== 'user') return false;
+    const content = msg.content;
+    if (!Array.isArray(content)) return true;
+    // If every block in the content is a tool_result, this is a Gateway
+    // tool-result wrapper, not a real user message.
+    const blocks = content as Array<{ type?: string }>;
+    return blocks.length === 0 || !blocks.every((b) => b.type === 'tool_result');
+  };
+  const nextUserMessageIndexes = new Array<number>(messages.length).fill(-1);
+  let nextUserMessageIndex = -1;
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    nextUserMessageIndexes[idx] = nextUserMessageIndex;
+    if (isRealUserMessage(messages[idx]) && !subagentCompletionInfos[idx]) {
+      nextUserMessageIndex = idx;
     }
+  }
 
-    // Indices of intermediate assistant process messages that are represented
-    // in the ExecutionGraphCard (narration text and/or thinking). We suppress
-    // them from the chat stream so they don't appear duplicated below the graph.
-    const folded = new Set<number>();
+  // Indices of intermediate assistant process messages that are represented
+  // in the ExecutionGraphCard (narration text and/or thinking). We suppress
+  // them from the chat stream so they don't appear duplicated below the graph.
+  const foldedNarrationIndices = new Set<number>();
 
-    const cards: UserRunCard[] = messages.flatMap((message, idx) => {
-      if (!isRealUserMessage(message) || subagentCompletionInfos[idx]) return [];
+  const userRunCards: UserRunCard[] = messages.flatMap((message, idx) => {
+    if (!isRealUserMessage(message) || subagentCompletionInfos[idx]) return [];
 
     const runKey = message.id
       ? `msg-${message.id}`
@@ -336,22 +236,7 @@ export function Chat() {
     const hasToolActivity = segmentMessages.some((m) =>
       m.role === 'assistant' && extractToolUse(m).length > 0,
     );
-    // Locate the last tool-use message so we only count text messages that
-    // come AFTER all tool calls as "final reply".  Intermediate narration
-    // messages (pure text, no tool_use) sit BEFORE tool calls and must not
-    // be misread as the concluding reply — otherwise `runStillExecutingTools`
-    // flips to false between tool rounds, collapsing the trailing
-    // "Thinking..." indicator during the brief gap before the next stream chunk.
-    let lastToolUseOffset = -1;
-    for (let i = segmentMessages.length - 1; i >= 0; i -= 1) {
-      const m = segmentMessages[i];
-      if (m.role === 'assistant' && extractToolUse(m).length > 0) {
-        lastToolUseOffset = i;
-        break;
-      }
-    }
-    const hasFinalReply = segmentMessages.some((m, i) => {
-      if (i <= lastToolUseOffset) return false;
+    const hasFinalReply = segmentMessages.some((m) => {
       if (m.role !== 'assistant') return false;
       if (extractText(m).trim().length === 0) return false;
       const content = m.content;
@@ -361,8 +246,7 @@ export function Chat() {
       );
     });
     const runStillExecutingTools = hasToolActivity && !hasFinalReply;
-    // const runStillExecutingTools = hasToolActivity && !hasFinalReply;
-      const isLatestOpenRun = nextUserIndex === -1
+    const isLatestOpenRun = nextUserIndex === -1
       && (sending || pendingFinal || hasAnyStreamContent || runStillExecutingTools);
     const replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
     const replyIndex = replyIndexOffset === -1 ? null : idx + 1 + replyIndexOffset;
@@ -409,36 +293,22 @@ export function Chat() {
     };
 
     // Show the streaming response as a separate bubble (not inside the
-    // execution graph) once tool activity has happened and the CURRENT stream
-    // chunk carries no tool_use block.
+    // execution graph) once all tool calls have finished.
     //
-    // We use an optimistic promotion strategy because the distinguishing
-    // signal between "narration-before-next-tool" and "final reply" is not
-    // available during early deltas — both are text-only, both arrive after
-    // `hasToolActivity` has flipped true.  Any of these signals opens the
-    // promotion gate:
-    //   1. `pendingFinal`       — tool-result final just fired; next text is
-    //      (almost always) the final reply.
-    //   2. `allToolsCompleted`  — every client-tracked tool entry reached
-    //      `completed` state.
-    //   3. `hasToolActivity`    — at least one prior tool_use exists in the
-    //      segment, i.e. we're past the first tool round.
-    //
-    // Demotion happens the moment a tool_use block appears in the streaming
-    // message (`streamTools.length > 0`) OR a tool transitions back to
-    // `running`.  When demoted, the stream re-renders inside the graph as a
-    // narration step.  A brief flicker when narration turns into the next
-    // tool round is inherent to optimistic promotion and is accepted.
-    //
-    // Earlier iterations tried restricting this gate to only
-    // `pendingFinal || allToolsCompleted` to protect the trailing
-    // "Thinking..." indicator.  That check is real, but belongs in the
-    // `suppressThinking` coupling below — not here.  With the coupling
-    // fixed, the three-signal gate gives the correct bubble placement for
-    // both narration and final reply.
+    // Three signals indicate "tools finished, now streaming the reply":
+    //   1. `pendingFinal`        — set by tool-result final events
+    //   2. `allToolsCompleted`   — all entries in streamingTools are completed
+    //   3. `hasCompletedToolPhase` — historical messages (loaded by the poll)
+    //      contain tool_use blocks, meaning the Gateway executed tools
+    //      server-side without sending streaming tool events to the client.
+    //      During intermediate narration (before reply), stripProcessMessagePrefix
+    //      will produce an empty trimmedReplyText, so the graph stays active.
     const allToolsCompleted = streamingTools.length > 0 && !hasRunningStreamToolStatus;
+    const hasCompletedToolPhase = segmentMessages.some((msg) =>
+      msg.role === 'assistant' && extractToolUse(msg).length > 0,
+    );
     const rawStreamingReplyCandidate = isLatestOpenRun
-      && (pendingFinal || allToolsCompleted || hasToolActivity)
+      && (pendingFinal || allToolsCompleted || hasCompletedToolPhase)
       && (hasStreamText || hasStreamImages)
       && streamTools.length === 0
       && !hasRunningStreamToolStatus;
@@ -464,14 +334,13 @@ export function Chat() {
         return [{
           triggerIndex: idx,
           replyIndex,
-          active: isLatestOpenRun && !runAborted,
+          active: true,
           agentLabel: segmentAgentLabel,
           sessionLabel: segmentSessionLabel,
           segmentEnd: nextUserIndex === -1 ? messages.length - 1 : nextUserIndex - 1,
           steps: [],
           messageStepTexts: [],
           streamingReplyText: null,
-          suppressThinking: false,
         }];
       }
       const cached = graphStepCache[runKey];
@@ -493,7 +362,6 @@ export function Chat() {
         steps: cleanedSteps,
         messageStepTexts: getPrimaryMessageStepTexts(cleanedSteps),
         streamingReplyText: null,
-        suppressThinking: false,
       }];
     }
 
@@ -517,7 +385,7 @@ export function Chat() {
       const hasNarrationText = extractText(candidate).trim().length > 0;
       const hasThinking = !!extractThinking(candidate);
       if (!hasNarrationText && !hasThinking) continue;
-      folded.add(idx + 1 + offset);
+      foldedNarrationIndices.add(idx + 1 + offset);
     }
 
     // The graph should stay "active" (expanded, can show trailing thinking)
@@ -525,65 +393,20 @@ export function Chat() {
     // appears.  Tying active to streamingReplyText caused a flicker: a brief
     // active→false→true transition collapsed the graph via ExecutionGraphCard's
     // uncontrolled path before the controlled `expanded` override could kick in.
-    // When runAborted is true, card should not be active (user manually stopped)
-    const cardActive = isLatestOpenRun && !runAborted;
+    const cardActive = isLatestOpenRun;
 
-    // Suppress the trailing "Thinking..." indicator only when the live stream is
-    // currently rendered AS a streaming step inside this card's graph. In
-    // that case the streaming step itself is the activity signal, and the
-    // separate trailing indicator would be redundant.
-    //   - streamingReplyText != null: stream is promoted to a bubble → graph
-    //     has no live step of its own → DO show the trailing indicator so the
-    //     user still sees progress in the graph (indicator rendered above the
-    //     bubble).
-    //   - no stream content at all (the gap between tool rounds): graph also
-    //     has no live step → DO show the indicator — this is the very case
-    //     the indicator exists for.
-    //   - stream IS in graph (e.g. tool_use is streaming): indicator is
-    //     redundant → suppress.
-    const streamIsInGraph =
-      isLatestOpenRun && streamingReplyText == null && hasAnyStreamContent;
-    const suppressThinking = streamIsInGraph;
-
-      return [{
-        triggerIndex: idx,
-        replyIndex,
-        active: cardActive,
-        agentLabel: segmentAgentLabel,
-        sessionLabel: segmentSessionLabel,
-        segmentEnd: nextUserIndex === -1 ? messages.length - 1 : nextUserIndex - 1,
-        steps,
-        messageStepTexts: getPrimaryMessageStepTexts(steps),
-        streamingReplyText,
-        suppressThinking,
-      }];
-    });
-
-    return {
-      foldedNarrationIndices: folded,
-      userRunCards: cards,
-    };
-  }, [
-    agents,
-    childTranscripts,
-    currentAgentId,
-    currentSessionKey,
-    graphStepCache,
-    hasAnyStreamContent,
-    hasRunningStreamToolStatus,
-    hasStreamImages,
-    hasStreamText,
-    messages,
-    pendingFinal,
-    runAborted,
-    sending,
-    sessionLabels,
-    streamText,
-    streamTools,
-    streamingMessage,
-    streamingTools,
-    subagentCompletionInfos,
-  ]);
+    return [{
+      triggerIndex: idx,
+      replyIndex,
+      active: cardActive,
+      agentLabel: segmentAgentLabel,
+      sessionLabel: segmentSessionLabel,
+      segmentEnd: nextUserIndex === -1 ? messages.length - 1 : nextUserIndex - 1,
+      steps,
+      messageStepTexts: getPrimaryMessageStepTexts(steps),
+      streamingReplyText,
+    }];
+  });
   const hasActiveExecutionGraph = userRunCards.some((card) => card.active);
   const replyTextOverrides = useMemo(() => {
     const map = new Map<number, string>();
@@ -600,27 +423,6 @@ export function Chat() {
     return map;
   }, [userRunCards, messages]);
   const streamingReplyText = userRunCards.find((card) => card.streamingReplyText != null)?.streamingReplyText ?? null;
-  const userRunCardsByTriggerIndex = useMemo(() => {
-    const map = new Map<number, UserRunCard[]>();
-    for (const card of userRunCards) {
-      const existing = map.get(card.triggerIndex);
-      if (existing) {
-        existing.push(card);
-      } else {
-        map.set(card.triggerIndex, [card]);
-      }
-    }
-    return map;
-  }, [userRunCards]);
-  const suppressedToolCardIndices = useMemo(() => {
-    const indices = new Set<number>();
-    for (const card of userRunCards) {
-      for (let idx = card.triggerIndex + 1; idx <= card.segmentEnd; idx += 1) {
-        indices.add(idx);
-      }
-    }
-    return indices;
-  }, [userRunCards]);
 
   // Derive the set of run keys that should be auto-collapsed (run finished
   // streaming or has a reply override) during render instead of in an effect,
@@ -707,8 +509,8 @@ export function Chat() {
             <div
               ref={contentRef}
               className={cn(
-                "space-y-4 transition-all duration-300 mx-auto",
-                isEmpty ? "w-full max-w-3xl" : "w-full max-w-4xl",
+                "space-y-4 transition-all duration-300",
+                isEmpty ? "mx-auto w-full max-w-3xl" : "max-w-4xl",
               )}
             >
               {isEmpty ? (
@@ -717,7 +519,9 @@ export function Chat() {
                 <>
                   {messages.map((msg, idx) => {
                     if (foldedNarrationIndices.has(idx)) return null;
-                    const suppressToolCards = suppressedToolCardIndices.has(idx);
+                    const suppressToolCards = userRunCards.some((card) =>
+                      idx > card.triggerIndex && idx <= card.segmentEnd,
+                    );
                     return (
                     <div
                       key={msg.id || `msg-${idx}`}
@@ -730,10 +534,9 @@ export function Chat() {
                         textOverride={replyTextOverrides.get(idx)}
                         suppressToolCards={suppressToolCards}
                         suppressProcessAttachments={suppressToolCards}
-                        onEditMessage={setEditingText}
-                        showEditButton={!sending && !hasActiveExecutionGraph}
                       />
-                      {(userRunCardsByTriggerIndex.get(idx) ?? [])
+                      {userRunCards
+                        .filter((card) => card.triggerIndex === idx)
                         .map((card) => {
                           const triggerMsg = messages[card.triggerIndex];
                           const runKey = triggerMsg?.id
@@ -755,7 +558,7 @@ export function Chat() {
                               agentLabel={card.agentLabel}
                               steps={card.steps}
                               active={card.active}
-                              suppressThinking={card.suppressThinking}
+                              suppressThinking={card.streamingReplyText != null}
                               expanded={expanded}
                               onExpandedChange={(next) =>
                                 setGraphExpandedOverrides((prev) => ({ ...prev, [runKey]: next }))
@@ -804,20 +607,13 @@ export function Chat() {
                     />
                   )}
 
-                  {showFirstResponseProgress && (
-                    <FirstResponsePreparing
-                      progress={firstResponseProgress}
-                      warmupStatus={warmupStatus}
-                    />
-                  )}
-
                   {/* Activity indicator: waiting for next AI turn after tool execution */}
                   {sending && pendingFinal && !shouldRenderStreaming && !hasActiveExecutionGraph && (
                     <ActivityIndicator phase="tool_processing" />
                   )}
 
                   {/* Typing indicator when sending but no stream content yet */}
-                  {sending && !showFirstResponseProgress && !pendingFinal && !hasAnyStreamContent && !hasActiveExecutionGraph && (
+                  {sending && !pendingFinal && !hasAnyStreamContent && !hasActiveExecutionGraph && (
                     <TypingIndicator />
                   )}
                 </>
@@ -853,20 +649,11 @@ export function Chat() {
         disabled={!isGatewayRunning}
         sending={sending || hasActiveExecutionGraph}
         isEmpty={isEmpty}
-        initialText={editingText || prefilledInput || undefined}
-        onTextChange={(text) => {
-          if (prefilledInput && text !== prefilledInput) {
-            setPrefilledInput(null);
-          }
-        }}
       />
 
       {/* Transparent loading overlay */}
       {minLoading && !sending && (
-        <div
-          data-testid="chat-history-loading-overlay"
-          className="absolute inset-0 z-50 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-xl pointer-events-auto"
-        >
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-xl pointer-events-auto">
           <div className="bg-background shadow-lg rounded-full p-2.5 border border-border">
             <LoadingSpinner size="md" />
           </div>
@@ -887,10 +674,7 @@ function WelcomeScreen() {
   ];
 
   return (
-    <div
-      className="flex flex-col items-center justify-center text-center h-[60vh]"
-      data-testid="chat-welcome"
-    >
+    <div className="flex flex-col items-center justify-center text-center h-[60vh]">
       <h1 className="text-4xl md:text-5xl font-serif text-foreground/80 mb-8 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
         {t('welcome.subtitle')}
       </h1>
@@ -904,94 +688,6 @@ function WelcomeScreen() {
             {label}
           </button>
         ))}
-      </div>
-    </div>
-  );
-}
-
-// ── First Response Preparing Indicator ──────────────────────────
-
-function FirstResponsePreparing({
-  progress,
-  warmupStatus,
-}: {
-  progress: number;
-  warmupStatus?: 'idle' | 'warming' | 'ready' | 'failed';
-}) {
-  const { t } = useTranslation('chat');
-  const [mascotSrc, setMascotSrc] = useState<string | null>(null);
-  const [mascotFailed, setMascotFailed] = useState(false);
-  const title = t('firstMessage.preparingTitle', {
-    defaultValue: '正在准备执行...',
-  });
-  const description = warmupStatus === 'warming'
-    ? t('firstMessage.preparingDescriptionWarmup', {
-      defaultValue:
-        '网关正在后台预热模型，请稍等',
-    })
-    : t('firstMessage.preparingDescription', {
-      defaultValue: 'Agent 正在接手并进入工作状态。',
-    });
-
-  useEffect(() => {
-    let cancelled = false;
-    void hostApiFetch<{ success: boolean; dataUrl?: string }>('/api/app/first-response-mascot')
-      .then((result) => {
-        if (!cancelled && result.success && result.dataUrl) {
-          setMascotSrc(result.dataUrl);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setMascotFailed(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <div className="flex min-h-[360px] items-center justify-center px-4 py-10">
-      <div
-        className="flex w-full max-w-[520px] flex-col items-center rounded-[2rem] bg-card/90 px-8 py-10 text-center shadow-sm ring-1 ring-border/40 dark:bg-card/80"
-        data-testid="first-response-progress-card"
-        role="status"
-        aria-live="polite"
-      >
-        {!mascotSrc || mascotFailed ? (
-          <div className="mb-7 flex h-32 w-32 items-center justify-center rounded-[2rem] bg-primary/10 text-primary md:h-36 md:w-36">
-            <Sparkles className="h-14 w-14" aria-hidden="true" />
-          </div>
-        ) : (
-          <img
-            src={mascotSrc}
-            alt=""
-            aria-hidden="true"
-            className="mb-7 h-32 w-32 object-contain md:h-36 md:w-36"
-            onError={() => setMascotFailed(true)}
-          />
-        )}
-        <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-          {title}
-        </h2>
-        <p className="mt-4 text-base text-muted-foreground">
-          {description}
-        </p>
-        <div className="mx-auto mt-9 h-2 w-48 overflow-hidden rounded-full bg-[#e8dfd0] dark:bg-white/10">
-          <div
-            className="h-full rounded-full bg-blue-500 transition-all duration-700 ease-out"
-            style={{ width: `${Math.max(12, Math.min(100, progress))}%` }}
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(progress)}
-            aria-label={t('firstMessage.progressLabel', {
-              progress: Math.round(progress),
-              defaultValue: `Preparing first response ${Math.round(progress)}%`,
-            })}
-          />
-        </div>
       </div>
     </div>
   );

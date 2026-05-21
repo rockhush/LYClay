@@ -8,7 +8,7 @@ import type { RawMessage, ContentBlock } from '@/stores/chat';
 /**
  * Clean Gateway metadata from user message text for display.
  * Strips: [media attached: ... | ...], [message_id: ...],
- * [Working Directory: ...], and the timestamp prefix [Day Date Time Timezone].
+ * and the timestamp prefix [Day Date Time Timezone].
  */
 function cleanUserText(text: string): string {
   return text
@@ -16,20 +16,12 @@ function cleanUserText(text: string): string {
     .replace(/\s*\[media attached:[^\]]*\]/g, '')
     // Remove [message_id: uuid]
     .replace(/\s*\[message_id:\s*[^\]]+\]/g, '')
-    // Remove [Working Directory: path] workspace context
-    .replace(/\s*\[Working Directory:[^\]]*\]/g, '')
-    // Remove Gateway-injected "Sender (untrusted metadata): ```json...```" block
-    .replace(/Sender\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
-    // Fallback: remove "Sender (...): {...}" without code block wrapper
-    .replace(/Sender\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
     // Remove Gateway-injected "Conversation info (untrusted metadata): ```json...```" block
-    .replace(/Conversation info\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
+    .replace(/^Conversation info\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/i, '')
     // Fallback: remove "Conversation info (...): {...}" without code block wrapper
-    .replace(/Conversation info\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
+    .replace(/^Conversation info\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/i, '')
     // Remove Gateway timestamp prefix like [Fri 2026-02-13 22:39 GMT+8]
-    .replace(/\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[^\]]+\]\s*/gi, '')
-    // Clean up multiple consecutive newlines
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[^\]]+\]\s*/i, '')
     .trim();
 }
 

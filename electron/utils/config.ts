@@ -7,10 +7,10 @@
  * Port configuration
  */
 export const PORTS = {
-  /** LYClaw GUI development server port */
+  /** ClawX GUI development server port */
   CLAWX_DEV: 5173,
   
-  /** LYClaw GUI production port (for reference) */
+  /** ClawX GUI production port (for reference) */
   CLAWX_GUI: 23333,
 
   /** Local host API server port */
@@ -36,11 +36,11 @@ export const APP_PATHS = {
   /** OpenClaw configuration directory */
   OPENCLAW_CONFIG: '~/.openclaw',
   
-  /** LYClaw configuration directory */
-  CLAWX_CONFIG: '~/.LYClaw',
+  /** ClawX configuration directory */
+  CLAWX_CONFIG: '~/.clawx',
   
   /** Log files directory */
-  LOGS: '~/.LYClaw/logs',
+  LOGS: '~/.clawx/logs',
 } as const;
 
 /**

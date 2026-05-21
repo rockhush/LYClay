@@ -17,9 +17,6 @@ import { handleFileRoutes } from './routes/files';
 import { handleSessionRoutes } from './routes/sessions';
 import { handleCronRoutes } from './routes/cron';
 import { handleDiagnosticsRoutes } from './routes/diagnostics';
-import { handleDingTalkRoutes } from './routes/dingtalk';
-import { handleMcpRoutes } from './routes/mcp';
-import { handleConnectorRoutes } from './routes/connectors';
 import { sendJson, setCorsHeaders, requireJsonContentType } from './route-utils';
 
 type RouteHandler = (
@@ -42,10 +39,7 @@ const coreRouteHandlers: RouteHandler[] = [
   handleCronRoutes,
   handleDiagnosticsRoutes,
   handleLogRoutes,
-  handleDingTalkRoutes,
   handleUsageRoutes,
-  handleConnectorRoutes,
-  handleMcpRoutes,
 ];
 
 function buildRouteHandlers(): RouteHandler[] {
