@@ -88,9 +88,9 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       const snapshot = await fetchProviderSnapshot();
       
       set({ 
-        statuses: snapshot.statuses ?? [],
-        accounts: snapshot.accounts ?? [],
-        vendors: snapshot.vendors ?? [],
+        statuses: Array.isArray(snapshot.statuses) ? snapshot.statuses : [],
+        accounts: Array.isArray(snapshot.accounts) ? snapshot.accounts : [],
+        vendors: Array.isArray(snapshot.vendors) ? snapshot.vendors : [],
         defaultAccountId: snapshot.defaultAccountId ?? null,
         loading: false 
       });

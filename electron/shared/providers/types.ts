@@ -1,28 +1,39 @@
+export const LY_MINIMAX_PROVIDER_ID = 'ly-minimax' as const;
+export const LEGACY_LY_MINIMAX_PROVIDER_ID = 'lyclaw-model' as const;
+
 export const PROVIDER_TYPES = [
+  LY_MINIMAX_PROVIDER_ID,
   'anthropic',
   'openai',
   'google',
   'openrouter',
   'ark',
+  'deepseek',
   'moonshot',
+  'moonshot-global',
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
+  'ly-mimo',
   'modelstudio',
   'ollama',
   'custom',
 ] as const;
 
 export const BUILTIN_PROVIDER_TYPES = [
+  LY_MINIMAX_PROVIDER_ID,
   'anthropic',
   'openai',
   'google',
   'openrouter',
-  'ark',
+  'ark', 
+  'deepseek',
   'moonshot',
+  'moonshot-global',
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
+  'ly-mimo',
   'modelstudio',
   'ollama',
 ] as const;
@@ -130,6 +141,8 @@ export interface ProviderAccount {
     email?: string;
     resourceUrl?: string;
     customModels?: string[];
+    managedBy?: 'lyclaw';
+    readonly?: boolean;
   };
   createdAt: string;
   updatedAt: string;

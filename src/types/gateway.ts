@@ -17,6 +17,18 @@ export interface GatewayStatus {
   reconnectAttempts?: number;
   /** True once the gateway's internal subsystems (skills, plugins) are ready for RPC calls. */
   gatewayReady?: boolean;
+  /** Warmup status: 'idle' | 'warming' | 'ready' | 'failed' */
+  warmupStatus?: 'idle' | 'warming' | 'ready' | 'failed';
+  /** Most recent OpenClaw stuck-session diagnostic emitted by Gateway stderr. */
+  lastStuckSessionAt?: number;
+  lastStuckSession?: {
+    sessionId?: string;
+    sessionKey?: string;
+    state?: string;
+    ageSeconds?: number;
+    queueDepth?: number;
+    raw: string;
+  };
 }
 
 /**

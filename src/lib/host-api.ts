@@ -144,7 +144,7 @@ function shouldFallbackToBrowser(message: string): boolean {
 
 function allowLocalhostFallback(): boolean {
   try {
-    return window.localStorage.getItem('clawx:allow-localhost-fallback') === '1';
+    return window.localStorage.getItem('LYClaw:allow-localhost-fallback') === '1';
   } catch {
     return false;
   }
@@ -228,4 +228,64 @@ export function createHostEventSource(path = '/api/events'): EventSource {
 
 export function getHostApiBase(): string {
   return HOST_API_BASE;
+}
+export interface DingTalkUserInfo {
+  openId?: string;
+  unionId: string;
+  name: string;
+  avatar: string;
+  mobile: string;
+  email: string;
+  orgEmail: string;
+  jobNumber: string;
+  title: string;
+  workPlace: string;
+  userId: string;
+  nickname: string;
+  admin: boolean;
+  boss: boolean;
+  senior: boolean;
+  active: boolean;
+  disableStatus: boolean;
+  hideMobile: boolean;
+  realAuthed: boolean;
+  createTime: string;
+  hiredDate: number;
+  loginId: string;
+  managerUserId: string;
+  exclusiveAccount: boolean;
+  exclusiveAccountType: string;
+  exclusiveAccountCorpId: string;
+  exclusiveAccountCorpName: string;
+  deptIdList: number[];
+  roleList: Array<{ group_name: string; id: number; name: string }>;
+  leaderInDept: Array<{ dept_id: number; leader: boolean }>;
+  departmentIds?: string[];
+  leaderUserId?: string;
+  loginAt?: string;
+}
+
+export async function loginWithDingTalk(force = false): Promise<{ success: boolean; user: DingTalkUserInfo | null; alreadyLoggedIn?: boolean }> {
+  return hostApiFetch<{ success: boolean; user: DingTalkUserInfo | null; alreadyLoggedIn?: boolean }>(
+    '/api/dingtalk/login',
+    { method: 'POST', body: JSON.stringify({ force }) },
+  );
+}
+
+export async function getDingTalkUser(): Promise<{ success: boolean; user: DingTalkUserInfo | null }> {
+  return hostApiFetch<{ success: boolean; user: DingTalkUserInfo | null }>('/api/dingtalk/user');
+}
+
+export async function logoutDingTalk(): Promise<{ success: boolean }> {
+  return hostApiFetch<{ success: boolean }>('/api/dingtalk/logout', { method: 'POST' });
+}
+
+/** True when `.env` provides OpenClaw dingtalk channel credentials (auto-provision after login). */
+export async function getDingTalkChannelAutoFromEnv(): Promise<{ success: boolean; active: boolean }> {
+  return hostApiFetch<{ success: boolean; active: boolean }>('/api/dingtalk/channel-auto-from-env');
+}
+
+/** BFF single-chat welcome — only after DingTalk sign-in; no-op server-side if not logged in. */
+export async function sendDingTalkWorkspaceWelcome(): Promise<{ success: boolean; skipped?: boolean }> {
+  return hostApiFetch<{ success: boolean; skipped?: boolean }>('/api/dingtalk/welcome/send', { method: 'POST' });
 }

@@ -6,7 +6,7 @@ export async function getClawXProviderStore() {
   if (!providerStore) {
     const Store = (await import('electron-store')).default;
     providerStore = new Store({
-      name: 'clawx-providers',
+      name: 'LYClaw-providers',
       defaults: {
         schemaVersion: 0,
         providers: {} as Record<string, unknown>,

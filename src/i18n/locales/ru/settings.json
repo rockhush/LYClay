@@ -1,6 +1,6 @@
 {
   "title": "Настройки",
-  "subtitle": "Настройте ваш опыт работы с ClawX",
+  "subtitle": "Настройте ваш опыт работы с LYClaw",
   "appearance": {
     "title": "Общие",
     "description": "Настройте внешний вид",
@@ -10,7 +10,7 @@
     "system": "Системная",
     "language": "Язык",
     "launchAtStartup": "Запуск при старте системы",
-    "launchAtStartupDesc": "Автоматически запускать ClawX при входе в систему"
+    "launchAtStartupDesc": "Автоматически запускать LYClaw при входе в систему"
   },
   "aiProviders": {
     "title": "AI-провайдеры",
@@ -33,11 +33,12 @@
       "fallback": "Настройки резервного переключения"
     },
     "add": "Добавить провайдера",
+    "sendUsageReport": "Отправить отчёт",
     "custom": "Свой",
     "notRequired": "Не требуется",
     "empty": {
       "title": "Провайдеры не настроены",
-      "desc": "Добавьте AI-провайдера, чтобы начать использовать ClawX",
+      "desc": "Добавьте AI-провайдера, чтобы начать использовать LYClaw",
       "cta": "Добавить первого провайдера"
     },
     "dialog": {
@@ -60,7 +61,7 @@
       "protocol": "Протокол",
       "advancedConfig": "Расширенная конфигурация",
       "userAgent": "User-Agent",
-      "userAgentPlaceholder": "ClawX/1.0",
+      "userAgentPlaceholder": "LYClaw/1.0",
       "fallbackModels": "Резервные модели",
       "fallbackProviders": "Резервные провайдеры",
       "fallbackModelIds": "ID резервных моделей",
@@ -102,7 +103,9 @@
       "failedUpdate": "Не удалось обновить провайдера",
       "invalidKey": "Неверный API-ключ",
       "modelRequired": "Требуется ID модели",
-      "minimaxConflict": "Нельзя добавить оба провайдера MiniMax (Global) и MiniMax (CN)."
+      "minimaxConflict": "Нельзя добавить оба провайдера MiniMax (Global) и MiniMax (CN).",
+      "usageReportSent": "Отчёт об использовании отправлен ({{count}} записей)",
+      "usageReportFailed": "Не удалось отправить отчёт; записи сохранены для повторной попытки"
     },
     "oauth": {
       "loginMode": "Вход через OAuth",
@@ -134,7 +137,7 @@
     "appLogs": "Журналы приложения",
     "openFolder": "Открыть папку",
     "autoStart": "Автозапуск шлюза",
-    "autoStartDesc": "Запускать шлюз при старте ClawX",
+    "autoStartDesc": "Запускать шлюз при старте LYClaw",
     "proxyTitle": "Прокси",
     "proxyDesc": "Направлять трафик Electron и шлюза через локальный прокси-клиент.",
     "proxyServer": "Прокси-сервер",
@@ -155,7 +158,7 @@
   },
   "updates": {
     "title": "Обновления",
-    "description": "Поддерживайте ClawX в актуальном состоянии",
+    "description": "Поддерживайте LYClaw в актуальном состоянии",
     "autoCheck": "Автопроверка обновлений",
     "autoCheckDesc": "Проверять обновления при запуске",
     "autoDownload": "Автообновление",
@@ -209,7 +212,7 @@
     "devMode": "Режим разработчика",
     "devModeDesc": "Показывать инструменты и ярлыки разработчика",
     "telemetry": "Анонимные данные об использовании",
-    "telemetryDesc": "Разрешить предоставление анонимных базовых данных об использовании для улучшения ClawX"
+    "telemetryDesc": "Разрешить предоставление анонимных базовых данных об использовании для улучшения LYClaw"
   },
   "developer": {
     "title": "Разработчик",
@@ -224,7 +227,7 @@
     "tokenCopied": "Токен шлюза скопирован",
     "cli": "CLI OpenClaw",
     "cliDesc": "Скопируйте команду для запуска OpenClaw без изменения PATH.",
-    "cliPowershell": "Команда PowerShell.",
+    "cliPowershell": "Команда Windows. Администраторский PowerShell не требуется.",
     "cmdUnavailable": "Команда недоступна",
     "cmdCopied": "CLI-команда скопирована",
     "doctor": "OpenClaw Doctor",
@@ -269,9 +272,45 @@
     "installMessage": "Установить команду \"openclaw\"?",
     "installDetail": "Это создаст ~/.local/bin/openclaw. Убедитесь, что ~/.local/bin в PATH, если хотите запускать глобально."
   },
+  "dingtalk": {
+    "title": "Вход через DingTalk",
+    "account": "Аккаунт DingTalk",
+    "notLoggedIn": "Не выполнен вход",
+    "loggedInAs": "Выполнен вход как: {{name}}",
+    "login": "Войти через DingTalk",
+    "logout": "Выйти",
+    "loggingIn": "Выполняется вход...",
+    "loginSuccess": "Вход выполнен, добро пожаловать {{name}}",
+    "loginSuccessDesc": "Информация о пользователе синхронизирована с памятью AI-ассистента",
+    "loginFailed": "Ошибка входа",
+    "logoutSuccess": "Выход выполнен успешно",
+    "logoutFailed": "Ошибка выхода",
+    "userId": "ID пользователя",
+    "unionId": "Union ID",
+    "email": "Электронная почта",
+    "orgEmail": "Корпоративная почта",
+    "mobile": "Мобильный",
+    "jobTitle": "Должность",
+    "jobNumber": "Табельный номер",
+    "workPlace": "Место работы",
+    "authPage": {
+      "title": "Добро пожаловать в LYClaw",
+      "heroTitle": "Вы просите, LYClaw делает",
+      "heroBadge": "Выполняйте задачи профессионально с LYClaw",
+      "previewTitle": "Lingyi AI Assistant",
+      "previewDesc": "Войдите, чтобы перейти в рабочую область",
+      "scanTip": "Отсканируйте QR-код ниже в DingTalk",
+      "starting": "Создание QR-кода DingTalk...",
+      "waiting": "Ожидание подтверждения в DingTalk...",
+      "retry": "Обновить QR-код",
+      "agreement": "Вход означает согласие с условиями сервиса и политикой конфиденциальности",
+      "warmupTitle": "Добро пожаловать в LYClaw",
+      "warmupDesc": "Agent готовит рабочую область. Подождите..."
+    }
+  },
   "about": {
     "title": "О приложении",
-    "appName": "ClawX",
+    "appName": "LYClaw",
     "tagline": "Графический AI-ассистент",
     "basedOn": "На базе OpenClaw",
     "version": "Версия {{version}}",

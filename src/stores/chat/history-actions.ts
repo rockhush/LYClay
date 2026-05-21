@@ -6,10 +6,12 @@ import {
   enrichWithToolResultFiles,
   getLatestOptimisticUserMessage,
   getMessageText,
+  stripGatewayUserMetadata,
   isInternalMessage,
   isToolResultRole,
   loadMissingPreviews,
   matchesOptimisticUserMessage,
+  normalizeComplexTaskControlUserMessages,
   toMs,
 } from './helpers';
 import { buildCronSessionHistoryPath, isCronSessionKey } from './cron-session-utils';
@@ -92,7 +94,7 @@ export function createHistoryActions(
         const messagesWithToolImages = enrichWithToolResultFiles(rawMessages);
         const filteredMessages = messagesWithToolImages.filter((msg) => !isToolResultRole(msg.role) && !isInternalMessage(msg));
         // Restore file attachments for user/assistant messages (from cache + text patterns)
-        const enrichedMessages = enrichWithCachedImages(filteredMessages);
+        const enrichedMessages = normalizeComplexTaskControlUserMessages(enrichWithCachedImages(filteredMessages));
 
         // Preserve the optimistic user message during an active send.
         // The Gateway may not include the user's message in chat.history
@@ -102,30 +104,45 @@ export function createHistoryActions(
         if (get().sending && userMsgAt) {
           const userMsMs = toMs(userMsgAt);
           const optimistic = getLatestOptimisticUserMessage(get().messages, userMsMs);
-          const hasMatchingUser = optimistic
-            ? enrichedMessages.some((message) => matchesOptimisticUserMessage(message, optimistic, userMsMs))
-            : false;
-          if (optimistic && !hasMatchingUser) {
-            finalMessages = [...enrichedMessages, optimistic];
+          if (optimistic) {
+            // 检查历史中是否已经有匹配的用户消息
+            const hasMatchingUser = enrichedMessages.some(
+              (message) => message.role === 'user'
+                && message.content === optimistic.content
+                && Math.abs(toMs(message.timestamp || 0) - userMsMs) < 10000
+            );
+            // 如果没有匹配的，才添加乐观消息
+            if (!hasMatchingUser) {
+              finalMessages = [...enrichedMessages, optimistic];
+            }
           }
         }
 
-        set({ messages: finalMessages, thinkingLevel, loading: false });
+        // 在设置消息前进行去重，防止相同内容的用户消息重复出现
+        const seenContent = new Set<string>();
+        const deduplicatedMessages = finalMessages.filter((msg) => {
+          if (msg.role === 'user') {
+            const content = msg.content;
+            if (seenContent.has(content)) {
+              return false;
+            }
+            seenContent.add(content);
+          }
+          return true;
+        });
+
+        set({ messages: deduplicatedMessages, thinkingLevel, loading: false });
 
         // Extract first user message text as a session label for display in the toolbar.
-        // Skip main sessions (key ends with ":main") — they rely on the Gateway-provided
-        // displayName (e.g. the configured agent name "ClawX") instead.
-        const isMainSession = currentSessionKey.endsWith(':main');
-        if (!isMainSession) {
-          const firstUserMsg = finalMessages.find((m) => m.role === 'user');
-          if (firstUserMsg) {
-            const labelText = getMessageText(firstUserMsg.content).trim();
-            if (labelText) {
-              const truncated = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
-              set((s) => ({
-                sessionLabels: { ...s.sessionLabels, [currentSessionKey]: truncated },
-              }));
-            }
+        const firstUserMsg = finalMessages.find((m) => m.role === 'user');
+        if (firstUserMsg) {
+          const rawText = getMessageText(firstUserMsg.content);
+          const labelText = stripGatewayUserMetadata(rawText).trim();
+          if (labelText) {
+            const truncated = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
+            set((s) => ({
+              sessionLabels: { ...s.sessionLabels, [currentSessionKey]: truncated },
+            }));
           }
         }
 
@@ -183,8 +200,42 @@ export function createHistoryActions(
       };
 
       try {
+        const loadHistoryStartTime = Date.now();
         let result: { success: boolean; result?: Record<string, unknown>; error?: string } | null = null;
         let lastError: unknown = null;
+
+        const { gatewayReady } = useGatewayStore.getState().status;
+        console.log(`[History] gatewayReady = ${gatewayReady}, type = ${typeof gatewayReady}`);
+        
+        if (gatewayReady !== true) {
+          console.log(`[History] Gateway not ready, trying local filesystem for ${currentSessionKey}`);
+          try {
+            const localStart = Date.now();
+            const response = await hostApiFetch<{ success: boolean; messages?: RawMessage[]; error?: string }>(
+              `/api/sessions/history-local?sessionKey=${encodeURIComponent(currentSessionKey)}`
+            );
+            console.log(`[PERF] Local history read took ${Date.now() - localStart}ms, success: ${response.success}, messages: ${response.messages?.length || 0}`);
+            
+            if (response.success && Array.isArray(response.messages)) {
+              const rawMessages = response.messages;
+              const thinkingLevel = null;
+              console.log(`[History] ✅ Loaded ${rawMessages.length} messages from LOCAL filesystem`);
+              
+              const applied = applyLoadedMessages(rawMessages, thinkingLevel);
+              if (applied && isInitialForegroundLoad) {
+                foregroundHistoryLoadSeen.add(currentSessionKey);
+              }
+              console.log(`[PERF] chat.history load COMPLETE (LOCAL), total=${Date.now() - loadHistoryStartTime}ms, messages=${rawMessages.length}`);
+              return;
+            } else {
+              console.warn(`[History] Local read failed or returned no messages, response:`, response);
+            }
+          } catch (localError) {
+            console.warn(`[History] Local filesystem read failed with exception:`, localError);
+          }
+        }
+        
+        console.log(`[History] Attempting Gateway RPC for ${currentSessionKey}`);
 
         for (let attempt = 0; attempt <= CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS.length; attempt += 1) {
           if (!isCurrentSession()) {

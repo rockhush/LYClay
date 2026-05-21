@@ -3,7 +3,7 @@
 import 'zx/globals';
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const NODE_VERSION = '22.16.0';
+const NODE_VERSION = '22.19.0';
 const BASE_URL = `https://nodejs.org/dist/v${NODE_VERSION}`;
 const OUTPUT_BASE = path.join(ROOT_DIR, 'resources', 'bin');
 
@@ -36,11 +36,16 @@ async function setupTarget(id) {
 
   echo(chalk.blue`\n📦 Setting up Node.js for ${id}...`);
 
-  // Only remove the target binary, not the entire directory,
+  // Only remove Node/npm assets, not the entire directory,
   // to avoid deleting uv.exe or other binaries placed by other download scripts.
   const outputNode = path.join(targetDir, 'node.exe');
-  if (await fs.pathExists(outputNode)) {
-    await fs.remove(outputNode);
+  const outputNpm = path.join(targetDir, 'npm.cmd');
+  const outputNpx = path.join(targetDir, 'npx.cmd');
+  const outputNpmPackage = path.join(targetDir, 'node_modules', 'npm');
+  for (const outputPath of [outputNode, outputNpm, outputNpx, outputNpmPackage]) {
+    if (await fs.pathExists(outputPath)) {
+      await fs.remove(outputPath);
+    }
   }
   await fs.remove(tempDir);
   await fs.ensureDir(targetDir);
@@ -62,7 +67,8 @@ async function setupTarget(id) {
       await $`unzip -q -o ${archivePath} -d ${tempDir}`;
     }
 
-    const expectedNode = path.join(tempDir, target.sourceDir, 'node.exe');
+    const sourceRoot = path.join(tempDir, target.sourceDir);
+    const expectedNode = path.join(sourceRoot, 'node.exe');
     if (await fs.pathExists(expectedNode)) {
       await fs.move(expectedNode, outputNode, { overwrite: true });
     } else {
@@ -75,7 +81,20 @@ async function setupTarget(id) {
       }
     }
 
-    echo(chalk.green`✅ Success: ${outputNode}`);
+    const npmAssets = [
+      ['npm.cmd', outputNpm],
+      ['npx.cmd', outputNpx],
+      [path.join('node_modules', 'npm'), outputNpmPackage],
+    ];
+    for (const [relativeSource, outputPath] of npmAssets) {
+      const sourcePath = path.join(sourceRoot, relativeSource);
+      if (!(await fs.pathExists(sourcePath))) {
+        throw new Error(`Could not find ${relativeSource} in extracted Node.js package.`);
+      }
+      await fs.move(sourcePath, outputPath, { overwrite: true });
+    }
+
+    echo(chalk.green`✅ Success: ${outputNode} + npm/npx`);
   } finally {
     await fs.remove(archivePath);
     await fs.remove(tempDir);

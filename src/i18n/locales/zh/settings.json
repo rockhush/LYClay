@@ -1,6 +1,6 @@
 {
   "title": "设置",
-  "subtitle": "配置您的 ClawX 体验",
+  "subtitle": "配置您的 LYClaw 体验",
   "appearance": {
     "title": "通用",
     "description": "自定义外观和风格",
@@ -10,7 +10,7 @@
     "system": "跟随系统",
     "language": "语言",
     "launchAtStartup": "开机自动启动",
-    "launchAtStartupDesc": "登录系统后自动启动 ClawX"
+    "launchAtStartupDesc": "登录系统后自动启动 LYClaw"
   },
   "aiProviders": {
     "title": "AI 模型提供商",
@@ -33,11 +33,12 @@
       "fallback": "回退配置"
     },
     "add": "添加提供商",
+    "sendUsageReport": "发送统计",
     "custom": "自定义",
     "notRequired": "非必填",
     "empty": {
       "title": "未配置提供商",
-      "desc": "添加 AI 提供商以开始使用 ClawX",
+      "desc": "添加 AI 提供商以开始使用 LYClaw",
       "cta": "添加您的第一个提供商"
     },
     "dialog": {
@@ -60,7 +61,7 @@
       "protocol": "协议",
       "advancedConfig": "高级配置",
       "userAgent": "User-Agent",
-      "userAgentPlaceholder": "ClawX/1.0",
+      "userAgentPlaceholder": "LYClaw/1.0",
       "fallbackModels": "回退模型",
       "fallbackProviders": "跨 Provider 回退",
       "fallbackModelIds": "同 Provider 回退模型 ID",
@@ -102,7 +103,9 @@
       "failedUpdate": "更新提供商失败",
       "invalidKey": "无效的 API 密钥",
       "modelRequired": "需要模型 ID",
-      "minimaxConflict": "不能同时添加 MiniMax 国际站和国内站的服务商。"
+      "minimaxConflict": "不能同时添加 MiniMax 国际站和国内站的服务商。",
+      "usageReportSent": "统计已发送（共上报 {{count}} 条记录）",
+      "usageReportFailed": "统计上报失败，已保留在本地待重试"
     },
     "oauth": {
       "loginMode": "OAuth 登录",
@@ -134,7 +137,7 @@
     "appLogs": "应用日志",
     "openFolder": "打开文件夹",
     "autoStart": "自动启动网关",
-    "autoStartDesc": "ClawX 启动时自动启动网关",
+    "autoStartDesc": "LYClaw 启动时自动启动网关",
     "proxyTitle": "代理",
     "proxyDesc": "让 Electron 和 Gateway 的网络请求都走本地代理客户端。",
     "proxyServer": "代理服务器",
@@ -155,7 +158,7 @@
   },
   "updates": {
     "title": "更新",
-    "description": "保持 ClawX 最新",
+    "description": "保持 LYClaw 最新",
     "autoCheck": "自动检查更新",
     "autoCheckDesc": "启动时检查更新",
     "autoDownload": "自动更新",
@@ -164,7 +167,7 @@
       "checking": "正在检查更新...",
       "downloading": "正在下载更新...",
       "available": "可用更新：v{{version}}",
-      "downloaded": "准备安装：v{{version}}",
+      "downloaded": "已下载",
       "autoInstalling": "将在 {{seconds}} 秒后重启并安装更新...",
       "failed": "检查更新失败",
       "latest": "您已拥有最新版本",
@@ -177,8 +180,11 @@
       "install": "安装并重启",
       "cancelAutoInstall": "取消",
       "retry": "重试",
-      "check": "检查更新"
+      "check": "检查更新",
+      "openFolder": "打开文件夹"
     },
+    "downloadComplete": "最新版安装包已下载完毕",
+    "installHint": "请双击 {{filePath}} 自行安装",
     "currentVersion": "当前版本",
     "whatsNew": "更新内容：",
     "errorDetails": "错误详情：",
@@ -209,7 +215,7 @@
     "devMode": "开发者模式",
     "devModeDesc": "显示开发者工具和快捷方式",
     "telemetry": "匿名使用数据",
-    "telemetryDesc": "允许提供匿名的基础使用数据，用于改进 ClawX"
+    "telemetryDesc": "允许提供匿名的基础使用数据，用于改进 LYClaw"
   },
   "developer": {
     "title": "开发者",
@@ -224,7 +230,7 @@
     "tokenCopied": "网关令牌已复制",
     "cli": "OpenClaw CLI",
     "cliDesc": "复制命令以运行 OpenClaw，无需修改 PATH。",
-    "cliPowershell": "PowerShell 命令。",
+    "cliPowershell": "Windows 命令。无需管理员 PowerShell。",
     "cmdUnavailable": "命令不可用",
     "cmdCopied": "CLI 命令已复制",
     "doctor": "OpenClaw Doctor 诊断",
@@ -269,11 +275,47 @@
     "installMessage": "安装 \"openclaw\" 命令？",
     "installDetail": "这将创建 ~/.local/bin/openclaw。确保 ~/.local/bin 在您的 PATH 中。"
   },
+  "dingtalk": {
+    "title": "钉钉登录",
+    "account": "钉钉账户",
+    "notLoggedIn": "未登录",
+    "loggedInAs": "已登录：{{name}}",
+    "login": "钉钉登录",
+    "logout": "退出登录",
+    "loggingIn": "正在登录中...",
+    "loginSuccess": "登录成功，欢迎 {{name}}",
+    "loginSuccessDesc": "你的用户信息已同步到 AI 助手的记忆中",
+    "loginFailed": "登录失败",
+    "logoutSuccess": "已退出登录",
+    "logoutFailed": "退出登录失败",
+    "userId": "用户 ID",
+    "unionId": "Union ID",
+    "email": "邮箱",
+    "orgEmail": "企业邮箱",
+    "mobile": "手机号",
+    "jobTitle": "职位",
+    "jobNumber": "工号",
+    "workPlace": "办公地点",
+    "authPage": {
+      "title": "欢迎使用 LYClaw",
+      "heroTitle": "你说 LYClaw 干",
+      "heroBadge": "用 LYClaw 专业地完成任务",
+      "previewTitle": "领益AI助手",
+      "previewDesc": "登录后进入工作台开始处理任务",
+      "scanTip": "使用手机钉钉扫描下方二维码登录",
+      "starting": "正在生成钉钉登录二维码...",
+      "waiting": "等待手机钉钉确认登录...",
+      "retry": "刷新二维码",
+      "agreement": "登录即代表同意服务协议与隐私保护协议",
+      "warmupTitle": "欢迎使用 LYClaw",
+      "warmupDesc": "Agent 正在准备工作环境，请稍候..."
+    }
+  },
   "about": {
     "title": "关于",
-    "appName": "ClawX",
+    "appName": "LYClaw",
     "tagline": "图形化 AI 助手",
-    "basedOn": "基于 OpenClaw",
+    "basedOn": "领益制造股份有限公司",
     "version": "版本 {{version}}",
     "docs": "官网",
     "github": "GitHub",

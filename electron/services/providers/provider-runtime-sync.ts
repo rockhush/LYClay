@@ -1,5 +1,7 @@
 import type { GatewayManager } from '../../gateway/manager';
 import { getProviderAccount, listProviderAccounts } from './provider-store';
+import { readOpenClawConfig, writeOpenClawConfig } from '../../utils/channel-config';
+import { withConfigLock } from '../../utils/config-mutex';
 import { getProviderSecret } from '../secrets/secret-store';
 import type { ProviderConfig } from '../../utils/secure-storage';
 import { getAllProviders, getApiKey, getDefaultProvider, getProvider } from '../../utils/secure-storage';
@@ -22,6 +24,7 @@ const GOOGLE_OAUTH_RUNTIME_PROVIDER = 'google-gemini-cli';
 const GOOGLE_OAUTH_DEFAULT_MODEL_REF = `${GOOGLE_OAUTH_RUNTIME_PROVIDER}/gemini-3-pro-preview`;
 const OPENAI_OAUTH_RUNTIME_PROVIDER = 'openai-codex';
 const OPENAI_OAUTH_DEFAULT_MODEL_REF = `${OPENAI_OAUTH_RUNTIME_PROVIDER}/gpt-5.4`;
+const LY_MANAGED_PROVIDER_TYPES = new Set(['ly-minimax', 'ly-mimo']);
 
 /**
  * Provider types that are not in the built-in provider registry (no `providerConfig.api`).
@@ -48,7 +51,7 @@ function normalizeProviderBaseUrl(
 
   const normalized = baseUrl.trim().replace(/\/+$/, '');
 
-  if (config.type === 'minimax-portal' || config.type === 'minimax-portal-cn') {
+  if (config.type === 'minimax-portal' || config.type === 'minimax-portal-cn' || config.type === 'ly-minimax' || config.type === 'ly-mimo') {
     return normalized.replace(/\/v1$/, '').replace(/\/anthropic$/, '').replace(/\/$/, '') + '/anthropic';
   }
 
@@ -70,6 +73,15 @@ function normalizeProviderBaseUrl(
 
 function shouldUseExplicitDefaultOverride(config: ProviderConfig, runtimeProviderKey: string): boolean {
   return Boolean(config.baseUrl || config.apiProtocol || runtimeProviderKey !== config.type);
+}
+
+function canHotUpdateGateway(gatewayManager?: GatewayManager): boolean {
+  return Boolean(
+    gatewayManager
+    && typeof gatewayManager.isConnected === 'function'
+    && typeof gatewayManager.rpc === 'function'
+    && gatewayManager.isConnected()
+  );
 }
 
 export function getOpenClawProviderKey(type: string, providerId: string): string {
@@ -387,6 +399,22 @@ function parseModelRef(modelRef: string): { providerKey: string; modelId: string
   };
 }
 
+async function setOpenClawDefaultModelRefOnly(modelRef: string, fallbackModels: string[]): Promise<void> {
+  await withConfigLock(async () => {
+    const config = await readOpenClawConfig();
+    const agents = (config.agents && typeof config.agents === 'object' ? config.agents : {}) as Record<string, unknown>;
+    const defaults = (agents.defaults && typeof agents.defaults === 'object' ? agents.defaults : {}) as Record<string, unknown>;
+    defaults.model = {
+      ...(defaults.model && typeof defaults.model === 'object' ? defaults.model as Record<string, unknown> : {}),
+      primary: modelRef,
+      fallbacks: fallbackModels,
+    };
+    agents.defaults = defaults;
+    config.agents = agents;
+    await writeOpenClawConfig(config);
+  });
+}
+
 async function buildRuntimeProviderConfigMap(): Promise<Map<string, ProviderConfig>> {
   const configs = await getAllProviders();
   const runtimeMap = new Map<string, ProviderConfig>();
@@ -429,6 +457,8 @@ async function buildAgentModelProviderEntry(
       authHeader = true;
       apiKey = 'minimax-oauth';
     }
+  } else if (config.type === 'ly-minimax' || config.type === 'ly-mimo') {
+    apiKey = (await getApiKey(config.id)) || undefined;
   }
 
   return {
@@ -493,10 +523,30 @@ export async function syncSavedProviderToRuntime(
     logger.warn('[provider-runtime] Failed to sync per-agent model registries after provider save:', err);
   }
 
-  scheduleGatewayRefresh(
-    gatewayManager,
-    `Scheduling Gateway reload after saving provider "${context.runtimeProviderKey}" config`,
-  );
+  // 热更新：如果该 provider 是默认 provider，直接通过 RPC 更新模型
+  if (canHotUpdateGateway(gatewayManager) && config.id === await getDefaultProvider()) {
+    const modelRef = getProviderModelRef(config);
+    if (modelRef) {
+      try {
+        await gatewayManager!.rpc('agents.update', {
+          agentId: 'main',
+          model: modelRef,
+        }, 10000);
+        logger.info(`[provider-runtime] Hot-reloaded default model to ${modelRef} via agents.update RPC after provider save`);
+      } catch (rpcError) {
+        logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
+        scheduleGatewayRefresh(
+          gatewayManager,
+          `Scheduling Gateway reload after saving provider "${context.runtimeProviderKey}" config (fallback)`,
+        );
+      }
+    }
+  } else {
+    scheduleGatewayRefresh(
+      gatewayManager,
+      `Scheduling Gateway reload after saving provider "${context.runtimeProviderKey}" config`,
+    );
+  }
 }
 
 export async function syncUpdatedProviderToRuntime(
@@ -541,10 +591,30 @@ export async function syncUpdatedProviderToRuntime(
     logger.warn('[provider-runtime] Failed to sync per-agent model registries after provider update:', err);
   }
 
-  scheduleGatewayRefresh(
-    gatewayManager,
-    `Scheduling Gateway reload after updating provider "${ock}" config`,
-  );
+  // 热更新：如果该 provider 是默认 provider，直接通过 RPC 更新模型
+  if (canHotUpdateGateway(gatewayManager) && defaultProviderId === config.id) {
+    const modelRef = getProviderModelRef(config);
+    if (modelRef) {
+      try {
+        await gatewayManager!.rpc('agents.update', {
+          agentId: 'main',
+          model: modelRef,
+        }, 10000);
+        logger.info(`[provider-runtime] Hot-reloaded default model to ${modelRef} via agents.update RPC after provider update`);
+      } catch (rpcError) {
+        logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
+        scheduleGatewayRefresh(
+          gatewayManager,
+          `Scheduling Gateway reload after updating provider "${ock}" config (fallback)`,
+        );
+      }
+    }
+  } else {
+    scheduleGatewayRefresh(
+      gatewayManager,
+      `Scheduling Gateway reload after updating provider "${ock}" config`,
+    );
+  }
 }
 
 export async function syncDeletedProviderToRuntime(
@@ -607,6 +677,11 @@ export async function syncDefaultProviderToRuntime(
         api: provider.apiProtocol || 'openai-completions',
         headers: provider.headers,
       }, fallbackModels);
+    } else if (LY_MANAGED_PROVIDER_TYPES.has(provider.type)) {
+      const managedModelRef = getProviderModelRef(provider);
+      if (managedModelRef) {
+        await setOpenClawDefaultModelRefOnly(managedModelRef, fallbackModels);
+      }
     } else if (shouldUseExplicitDefaultOverride(provider, ock)) {
       await setOpenClawDefaultModelWithOverride(ock, modelOverride, {
         baseUrl: normalizeProviderBaseUrl(
@@ -654,10 +729,23 @@ export async function syncDefaultProviderToRuntime(
       } catch (err) {
         logger.warn('[provider-runtime] Failed to sync per-agent model registries after browser OAuth switch:', err);
       }
-      scheduleGatewayRefresh(
-        gatewayManager,
-        `Scheduling Gateway reload after provider switch to "${browserOAuthRuntimeProvider}"`,
-      );
+
+      // 热更新：直接通过 RPC 让 Gateway 更新模型配置
+      if (canHotUpdateGateway(gatewayManager)) {
+        try {
+          await gatewayManager!.rpc('agents.update', {
+            agentId: 'main',
+            model: modelOverride,
+          }, 10000);
+          logger.info(`[provider-runtime] Hot-reloaded default model to ${modelOverride} via agents.update RPC after browser OAuth switch`);
+        } catch (rpcError) {
+          logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
+          scheduleGatewayRefresh(
+            gatewayManager,
+            `Scheduling Gateway reload after provider switch to "${browserOAuthRuntimeProvider}" (fallback)`,
+          );
+        }
+      }
       return;
     }
 
@@ -716,9 +804,24 @@ export async function syncDefaultProviderToRuntime(
     logger.warn('[provider-runtime] Failed to sync per-agent model registries after default provider switch:', err);
   }
 
-  scheduleGatewayRefresh(
-    gatewayManager,
-    `Scheduling Gateway reload after provider switch to "${ock}"`,
-    { onlyIfRunning: true },
-  );
+  // 热更新：直接通过 RPC 让 Gateway 更新模型配置
+  if (canHotUpdateGateway(gatewayManager)) {
+    const modelRef = getProviderModelRef(provider);
+    if (modelRef) {
+      try {
+        await gatewayManager!.rpc('agents.update', {
+          agentId: 'main',
+          model: modelRef,
+        }, 10000);
+        logger.info(`[provider-runtime] Hot-reloaded default model to ${modelRef} via agents.update RPC`);
+      } catch (rpcError) {
+        logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
+        scheduleGatewayRefresh(
+          gatewayManager,
+          `Scheduling Gateway reload after provider switch to "${ock}" (fallback)`,
+          { onlyIfRunning: true },
+        );
+      }
+    }
+  }
 }

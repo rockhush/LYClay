@@ -6,15 +6,15 @@
     "gatewayWarning": "网关未运行。没有活跃的网关，无法加载技能。",
     "tabs": {
         "installed": "已安装",
-        "marketplace": "市场"
+        "marketplace": "领益市场"
     },
     "filter": {
         "all": "全部 ({{count}})",
         "builtIn": "内置 ({{count}})",
-        "marketplace": "市场 ({{count}})"
+        "marketplace": "领益市场 ({{count}})"
     },
     "search": "搜索技能...",
-    "searchMarketplace": "搜索市场...",
+    "searchMarketplace": "请输入技能的名称、描述、上传者",
     "searchButton": "搜索",
     "actions": {
         "enableVisible": "批量启用可见项",
@@ -52,6 +52,8 @@
         "openActualFolder": "打开实际目录",
         "copyPath": "复制路径",
         "pathUnavailable": "路径不可用",
+        "pathMissing": "路径缺失",
+        "pathMissingHint": "此技能在本机未找到对应目录，可能是配置目录搬家或同步导致。请尝试卸载后重新安装来修复路径。",
         "configurable": "可配置",
         "uninstall": "卸载",
         "enable": "启用",
@@ -83,10 +85,10 @@
         "copiedPath": "路径已复制",
         "failedCopyPath": "复制路径失败",
         "failedOpenActualFolder": "打开技能实际目录失败",
-        "searchTimeoutError": "搜索超时，请检查网络。您也可访问 ClawHub.ai 搜索并下载压缩包，解压到 \"{{path}}\"",
-        "installTimeoutError": "安装超时，请检查网络。您也可在 ClawHub.ai 下载该技能压缩包，解压到 \"{{path}}\"",
-        "searchRateLimitError": "搜索请求过于频繁。您也可访问 ClawHub.ai 搜索并下载压缩包，解压到 \"{{path}}\"",
-        "installRateLimitError": "安装请求过于频繁。您也可在 ClawHub.ai 下载该技能压缩包，解压到 \"{{path}}\"",
+        "searchTimeoutError": "搜索超时，请检查网络或联系管理员。",
+        "installTimeoutError": "安装超时，请检查网络或联系管理员。",
+        "searchRateLimitError": "搜索请求过于频繁，请稍后再试。",
+        "installRateLimitError": "安装请求过于频繁，请稍后再试。", 
         "fetchTimeoutError": "获取技能列表超时，请检查网络。",
         "fetchRateLimitError": "获取技能列表请求过于频繁，请稍后再试。",
         "noBatchEnableTargets": "当前可见技能都已启用。",
@@ -96,16 +98,36 @@
         "batchPartial": "已更新 {{success}} / {{total}} 个技能，部分操作失败。"
     },
     "marketplace": {
-        "title": "市场",
+        "title": "领益市场",
         "installDialogTitle": "安装技能",
-        "installDialogSubtitle": "默认展示 Explore，输入关键词后执行搜索。",
+        "installDialogSubtitle": "从公司服务器获取技能列表，输入关键词可进行搜索。",
         "sourceLabel": "来源",
-        "sourceClawHub": "ClawHub",
-        "securityNote": "安装前请点击技能卡片，在 ClawHub 上查看其文档和安全信息。",
-        "manualInstallHint": "遇到网络问题？您可以随时从 ClawHub.ai 下载技能压缩包，并将其解压至 \"{{path}}\" 目录来完成手动安装。",
-        "searching": "正在搜索 ClawHub...",
+        "sourceClawHub": "领益广场",
+        "securityNote": "安装前请查看技能详情信息。",
+        "manualInstallHint": "遇到网络问题？请联系管理员获取技能包。",
+        "searching": "正在搜索领益广场...",
         "noResults": "未找到匹配的技能。",
-        "emptyPrompt": "搜索新技能以扩展您的能力。",
-        "searchError": "ClawHub 搜索失败。请检查您的连接或安装。"
+        "emptyPrompt": "暂无数据",
+        "searchError": "领益广场搜索失败。请使用公司内网连接",
+        "installing": "安装中..."
+    },
+    "upload": {
+        "title": "上传技能",
+        "subtitle": "从本地 ZIP 文件安装技能",
+        "dragDrop": "拖拽文件或点击上传",
+        "browse": "浏览文件",
+        "autoInstall": "非高风险自动安装",
+        "requirements": "文件要求",
+        "requirement1": "文件夹或者.zip需要包含SKILL.md文件",
+        "requirement2": "SKILL.md 文件需包含 YAML 格式的技能名称和描述",
+        "cancel": "取消",
+        "upload": "上传",
+        "uploading": "上传中...",
+        "success": "上传成功",
+        "successDesc": "技能 {{name}} 已成功安装",
+        "failed": "上传失败",
+        "failedDesc": "无法完成上传，请重试",
+        "invalidFileType": "无效的文件类型",
+        "zipOnly": "仅支持 ZIP 格式的文件"
     }
 }

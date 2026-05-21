@@ -16,6 +16,7 @@ import enAgents from './locales/en/agents.json';
 import enSkills from './locales/en/skills.json';
 import enCron from './locales/en/cron.json';
 import enSetup from './locales/en/setup.json';
+import enConnectors from './locales/en/connectors.json';
 
 // ZH
 import zhCommon from './locales/zh/common.json';
@@ -27,6 +28,7 @@ import zhAgents from './locales/zh/agents.json';
 import zhSkills from './locales/zh/skills.json';
 import zhCron from './locales/zh/cron.json';
 import zhSetup from './locales/zh/setup.json';
+import zhConnectors from './locales/zh/connectors.json';
 
 // JA
 import jaCommon from './locales/ja/common.json';
@@ -38,6 +40,7 @@ import jaAgents from './locales/ja/agents.json';
 import jaSkills from './locales/ja/skills.json';
 import jaCron from './locales/ja/cron.json';
 import jaSetup from './locales/ja/setup.json';
+import jaConnectors from './locales/ja/connectors.json';
 
 // RU
 import ruCommon from './locales/ru/common.json';
@@ -49,6 +52,7 @@ import ruAgents from './locales/ru/agents.json';
 import ruSkills from './locales/ru/skills.json';
 import ruCron from './locales/ru/cron.json';
 import ruSetup from './locales/ru/setup.json';
+import ruConnectors from './locales/ru/connectors.json';
 
 export const SUPPORTED_LANGUAGES = [
     { code: 'en', label: 'English' },
@@ -68,6 +72,7 @@ const resources = {
         skills: enSkills,
         cron: enCron,
         setup: enSetup,
+        connectors: enConnectors,
     },
     zh: {
         common: zhCommon,
@@ -79,6 +84,7 @@ const resources = {
         skills: zhSkills,
         cron: zhCron,
         setup: zhSetup,
+        connectors: zhConnectors,
     },
     ja: {
         common: jaCommon,
@@ -90,6 +96,7 @@ const resources = {
         skills: jaSkills,
         cron: jaCron,
         setup: jaSetup,
+        connectors: jaConnectors,
     },
     ru: {
         common: ruCommon,
@@ -101,6 +108,7 @@ const resources = {
         skills: ruSkills,
         cron: ruCron,
         setup: ruSetup,
+        connectors: ruConnectors,
     },
 };
 
@@ -112,7 +120,7 @@ i18n
         fallbackLng: 'en',
         supportedLngs: [...SUPPORTED_LANGUAGE_CODES],
         defaultNS: 'common',
-        ns: ['common', 'settings', 'dashboard', 'chat', 'channels', 'agents', 'skills', 'cron', 'setup'],
+        ns: ['common', 'settings', 'dashboard', 'chat', 'channels', 'agents', 'skills', 'cron', 'setup', 'connectors'],
         interpolation: {
             escapeValue: false, // React already escapes
         },

@@ -12,6 +12,7 @@ vi.mock('@/stores/gateway', () => ({
   useGatewayStore: {
     getState: () => ({
       rpc: gatewayRpcMock,
+      status: { gatewayReady: true },
     }),
   },
 }));
@@ -65,6 +66,9 @@ describe('chat target routing', () => {
       }
       if (method === 'chat.send') {
         return { runId: 'run-text' };
+      }
+      if (method === 'sessions.patch') {
+        return { ok: true };
       }
       if (method === 'chat.abort') {
         return { ok: true };
@@ -120,10 +124,134 @@ describe('chat target routing', () => {
     const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
     expect(sendCall?.[1]).toMatchObject({
       sessionKey: 'agent:research:desk',
-      message: 'Hello direct agent',
+      message: '/think off Hello direct agent',
       deliver: false,
     });
+    expect(gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch')).toBeUndefined();
     expect(typeof (sendCall?.[1] as { idempotencyKey?: unknown })?.idempotencyKey).toBe('string');
+
+    useChatStore.setState({ sending: false, activeRunId: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
+    expect(patchCall?.[1]).toEqual({ key: 'agent:research:desk', thinkingLevel: 'off' });
+  });
+
+  it('uses one-shot fast reasoning for lightweight input without changing the persisted mode', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'thinking',
+    });
+
+    await useChatStore.getState().sendMessage('hello', undefined, null);
+
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect(sendCall?.[1]).toMatchObject({
+      sessionKey: 'agent:main:main',
+      message: '/think off hello',
+      deliver: false,
+    });
+    expect(gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch')).toBeUndefined();
+    const sendIndex = gatewayRpcMock.mock.calls.findIndex(([method]) => method === 'chat.send');
+    expect(sendIndex).toBeGreaterThanOrEqual(0);
+
+    useChatStore.setState({ sending: false, activeRunId: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
+    expect(patchCall?.[1]).toEqual({ key: 'agent:main:main', thinkingLevel: 'medium' });
+    const patchIndex = gatewayRpcMock.mock.calls.findIndex(([method]) => method === 'sessions.patch');
+    expect(patchIndex).toBeGreaterThan(sendIndex);
+  });
+
+  it('aggressively downgrades short expert queries but preserves complex expert prompts', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'expert',
+    });
+
+    await useChatStore.getState().sendMessage('东莞天气咋样', undefined, null);
+    let sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect((sendCall?.[1] as Record<string, unknown>).message).toBe('/think off 东莞天气咋样');
+
+    gatewayRpcMock.mockClear();
+    await useChatStore.getState().sendMessage('帮我分析这个项目 chat 首包慢的根因并给修复方案', undefined, null);
+    sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect((sendCall?.[1] as Record<string, unknown>).message).toBe('/think high 帮我分析这个项目 chat 首包慢的根因并给修复方案');
+  });
+
+  it('applies reasoning mode through sessions.patch without adding unsupported chat.send params', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'expert',
+    });
+
+    await useChatStore.getState().sendMessage('Investigate this', undefined, null);
+
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    const payload = sendCall?.[1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('thinkingLevel');
+    expect(payload.message).toBe('/think high Investigate this');
+
+    expect(gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch')).toBeUndefined();
+    expect(useChatStore.getState().thinkingLevel).toBe('high');
+
+    useChatStore.setState({ sending: false, activeRunId: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
+    expect(patchCall?.[1]).toEqual({ key: 'agent:main:main', thinkingLevel: 'high' });
   });
 
   it('uses the selected agent main session for attachment sends', async () => {
@@ -173,8 +301,9 @@ describe('chat target routing', () => {
       }),
     );
 
+    const sendWithMediaCall = hostApiFetchMock.mock.calls.find(([path]) => path === '/api/chat/send-with-media');
     const payload = JSON.parse(
-      (hostApiFetchMock.mock.calls[0]?.[1] as { body: string }).body,
+      (sendWithMediaCall?.[1] as { body: string }).body,
     ) as {
       sessionKey: string;
       message: string;
@@ -182,7 +311,7 @@ describe('chat target routing', () => {
     };
 
     expect(payload.sessionKey).toBe('agent:research:desk');
-    expect(payload.message).toBe('Process the attached file(s).');
+    expect(payload.message).toBe('/think off Process the attached file(s).');
     expect(payload.media[0]?.filePath).toBe('/tmp/design.png');
   });
 });

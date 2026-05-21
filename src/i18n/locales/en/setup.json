@@ -1,7 +1,7 @@
 {
     "steps": {
         "welcome": {
-            "title": "Welcome to ClawX",
+            "title": "Welcome to LYClaw",
             "description": "Your AI assistant is ready to be configured"
         },
         "runtime": {
@@ -22,12 +22,12 @@
         },
         "complete": {
             "title": "All Set!",
-            "description": "ClawX is ready to use"
+            "description": "LYClaw is ready to use"
         }
     },
     "welcome": {
-        "title": "Welcome to ClawX",
-        "description": "ClawX is a graphical interface for OpenClaw, making it easy to use AI assistants across your favorite messaging platforms.",
+        "title": "Welcome to LYClaw",
+        "description": "LYClaw is a graphical interface for LYClaw, making it easy to use AI assistants across your favorite messaging platforms.",
         "features": {
             "noCommand": "Zero command-line required",
             "modernUI": "Modern, beautiful interface",
@@ -40,7 +40,7 @@
         "viewLogs": "View Logs",
         "recheck": "Re-check",
         "nodejs": "Node.js Runtime",
-        "openclaw": "OpenClaw Package",
+        "openclaw": "LYClaw Package",
         "gateway": "Gateway Service",
         "startGateway": "Start Gateway",
         "status": {
@@ -48,11 +48,11 @@
             "success": "Node.js is available",
             "error": "Failed",
             "gatewayRunning": "Running on port {{port}}",
-            "packageReady": "OpenClaw package ready"
+            "packageReady": "LYClaw package ready"
         },
         "issue": {
             "title": "Environment issue detected",
-            "desc": "Please ensure OpenClaw is properly installed. Check the logs for details."
+            "desc": "Please ensure LYClaw is properly installed. Check the logs for details."
         },
         "logs": {
             "title": "Application Logs",
@@ -113,7 +113,7 @@
     },
     "complete": {
         "title": "Setup Complete!",
-        "subtitle": "ClawX is configured and ready to use. You can now start chatting with your AI assistant.",
+        "subtitle": "LYClaw is configured and ready to use. You can now start chatting with your AI assistant.",
         "provider": "AI Provider",
         "components": "Components",
         "gateway": "Gateway",

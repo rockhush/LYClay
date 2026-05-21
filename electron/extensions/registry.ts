@@ -57,6 +57,17 @@ class ExtensionRegistry {
   }
 
   getMarketplaceProvider(): MarketplaceProviderExtension | undefined {
+    // 优先返回公司市场提供商
+    const companyMarketplace = this.get('builtin/company-marketplace');
+    if (companyMarketplace && isMarketplaceProviderExtension(companyMarketplace)) {
+      return companyMarketplace;
+    }
+    // 如果公司市场提供商不存在，返回本地市场提供商
+    const localMarketplace = this.get('builtin/local-marketplace');
+    if (localMarketplace && isMarketplaceProviderExtension(localMarketplace)) {
+      return localMarketplace;
+    }
+    // 如果都不存在，返回第一个找到的市场提供商
     return this.getAll().find(isMarketplaceProviderExtension) as MarketplaceProviderExtension | undefined;
   }
 

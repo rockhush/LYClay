@@ -7,9 +7,17 @@ const extractImagesAsAttachedFiles = vi.fn(() => []);
 const extractMediaRefs = vi.fn(() => []);
 const extractRawFilePaths = vi.fn(() => []);
 const getMessageText = vi.fn(() => '');
+const getMessageErrorMessage = vi.fn((message: { errorMessage?: string; error_message?: string } | undefined) =>
+  message?.errorMessage ?? message?.error_message ?? null);
 const getToolCallFilePath = vi.fn(() => undefined);
 const hasErrorRecoveryTimer = vi.fn(() => false);
 const hasNonToolAssistantContent = vi.fn(() => true);
+const isInternalMessage = vi.fn(() => false);
+const isInternalMessageText = vi.fn(() => false);
+const isTerminalAssistantErrorMessage = vi.fn((message: { role?: string; stopReason?: string; stop_reason?: string } | undefined) => {
+  const stopReason = message?.stopReason ?? message?.stop_reason;
+  return message?.role === 'assistant' && stopReason === 'error';
+});
 const isToolOnlyMessage = vi.fn(() => false);
 const isToolResultRole = vi.fn((role: unknown) => role === 'toolresult' || role === 'toolResult' || role === 'tool_result');
 const makeAttachedFile = vi.fn((ref: { filePath: string; mimeType: string }, source?: 'user-upload' | 'tool-result' | 'message-ref') => ({
@@ -31,11 +39,15 @@ vi.mock('@/stores/chat/helpers', () => ({
   collectToolUpdates: (...args: unknown[]) => collectToolUpdates(...args),
   extractImagesAsAttachedFiles: (...args: unknown[]) => extractImagesAsAttachedFiles(...args),
   extractMediaRefs: (...args: unknown[]) => extractMediaRefs(...args),
+  getMessageErrorMessage: (...args: unknown[]) => getMessageErrorMessage(...args),
   extractRawFilePaths: (...args: unknown[]) => extractRawFilePaths(...args),
   getMessageText: (...args: unknown[]) => getMessageText(...args),
   getToolCallFilePath: (...args: unknown[]) => getToolCallFilePath(...args),
   hasErrorRecoveryTimer: (...args: unknown[]) => hasErrorRecoveryTimer(...args),
   hasNonToolAssistantContent: (...args: unknown[]) => hasNonToolAssistantContent(...args),
+  isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
+  isInternalMessageText: (...args: unknown[]) => isInternalMessageText(...args),
+  isTerminalAssistantErrorMessage: (...args: unknown[]) => isTerminalAssistantErrorMessage(...args),
   isToolOnlyMessage: (...args: unknown[]) => isToolOnlyMessage(...args),
   isToolResultRole: (...args: unknown[]) => isToolResultRole(...args),
   makeAttachedFile: (...args: unknown[]) => makeAttachedFile(...args),
@@ -47,8 +59,10 @@ vi.mock('@/stores/chat/helpers', () => ({
 
 type ChatLikeState = {
   sending: boolean;
+  aborting: boolean;
   activeRunId: string | null;
   error: string | null;
+  runError: string | null;
   streamingMessage: unknown | null;
   streamingTools: unknown[];
   messages: Array<Record<string, unknown>>;
@@ -62,8 +76,10 @@ type ChatLikeState = {
 function makeHarness(initial?: Partial<ChatLikeState>) {
   let state: ChatLikeState = {
     sending: false,
-    activeRunId: null,
+    aborting: false,
+    activeRunId: 'run-default',
     error: 'stale error',
+    runError: null,
     streamingMessage: null,
     streamingTools: [],
     messages: [],
@@ -88,6 +104,19 @@ describe('chat runtime event handlers', () => {
     vi.resetAllMocks();
     hasErrorRecoveryTimer.mockReturnValue(false);
     collectToolUpdates.mockReturnValue([]);
+    getMessageText.mockImplementation((content: unknown) => {
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        return content
+          .filter((block): block is { type?: string; text: string } => {
+            return typeof block === 'object' && block != null && (block as { type?: string }).type === 'text' && typeof (block as { text?: unknown }).text === 'string';
+          })
+          .map((block) => block.text)
+          .join('\n');
+      }
+      return '';
+    });
+    isInternalMessageText.mockImplementation((text: unknown) => /^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(String(text).trim()));
     normalizeStreamingMessage.mockImplementation((message: unknown) => message);
     snapshotStreamingAssistantMessage.mockImplementation((currentStream: unknown) => currentStream ? [currentStream as Record<string, unknown>] : []);
     upsertToolStatuses.mockImplementation((_current, updates) => updates);
@@ -120,6 +149,7 @@ describe('chat runtime event handlers', () => {
     const next = h.read();
     expect(clearErrorRecoveryTimer).toHaveBeenCalledTimes(1);
     expect(next.error).toBeNull();
+    expect(next.runError).toBeNull();
     expect(next.streamingMessage).toEqual(event.message);
     expect(next.streamingTools).toEqual([{ name: 'tool-a', status: 'running', updatedAt: 1 }]);
   });
@@ -188,10 +218,34 @@ describe('chat runtime event handlers', () => {
     const next = h.read();
     expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
     expect(next.error).toBe('boom');
+    expect(next.runError).toBeNull();
     expect(next.sending).toBe(false);
     expect(next.activeRunId).toBeNull();
     expect(next.lastUserMessageAt).toBeNull();
     expect(next.streamingTools).toEqual([]);
+  });
+
+  it('treats stopReason=error assistant finals as runtime errors', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({ sending: true, activeRunId: 'run-err', lastUserMessageAt: 123 });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      message: {
+        role: 'assistant',
+        id: 'assistant-error',
+        content: [],
+        stopReason: 'error',
+        errorMessage: '404 Resource not found',
+      },
+    }, 'final', 'run-err');
+
+    const next = h.read();
+    expect(next.error).toBeNull();
+    expect(next.runError).toBe('404 Resource not found');
+    expect(next.pendingFinal).toBe(false);
+    expect(next.streamingMessage).toBeNull();
+    expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
+    expect(setErrorRecoveryTimer).not.toHaveBeenCalled();
   });
 
   it('delta with empty object does not overwrite existing streamingMessage', async () => {
@@ -347,5 +401,69 @@ describe('chat runtime event handlers', () => {
     expect(next.pendingFinal).toBe(false);
     expect(next.lastUserMessageAt).toBeNull();
     expect(next.pendingToolImages).toEqual([]);
+  });
+
+  it('filters text-block HEARTBEAT_OK deltas before they reach streamingMessage', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({ streamingMessage: null });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'HEARTBEAT_OK' }],
+      },
+    }, 'delta', 'run-heartbeat');
+
+    expect(h.read().streamingMessage).toBeNull();
+  });
+
+  it('filters text-block HEARTBEAT_OK final events without adding to messages', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({
+      sending: true,
+      activeRunId: 'run-heartbeat',
+      messages: [{ role: 'user', content: 'hello', id: 'u1' }],
+    });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'HEARTBEAT_OK' }],
+        id: 'a-heartbeat',
+      },
+    }, 'final', 'run-heartbeat');
+
+    expect(h.read().messages).toEqual([{ role: 'user', content: 'hello', id: 'u1' }]);
+    expect(h.read().streamingMessage).toBeNull();
+    expect(h.read().sending).toBe(false);
+  });
+
+  it('filters out NO_REPLY internal message in final event without adding to messages', async () => {
+    isInternalMessage.mockReturnValueOnce(true);
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({
+      sending: true,
+      activeRunId: 'r3',
+      messages: [{ role: 'user', content: 'hello', id: 'u1' }],
+    });
+
+    handleRuntimeEventState(
+      h.set as never,
+      h.get as never,
+      { message: { role: 'assistant', content: 'NO_REPLY', id: 'a1' } },
+      'final',
+      'r3',
+    );
+    const next = h.read();
+    // NO_REPLY must not appear in messages
+    expect(next.messages).toEqual([{ role: 'user', content: 'hello', id: 'u1' }]);
+    expect(next.sending).toBe(false);
+    expect(next.activeRunId).toBeNull();
+    expect(next.pendingFinal).toBe(false);
+    expect(next.streamingText).toBe('');
+    expect(next.streamingMessage).toBeNull();
+    // Should trigger history reload
+    expect(clearHistoryPoll).toHaveBeenCalled();
+    expect(next.loadHistory).toHaveBeenCalledWith(true);
   });
 });

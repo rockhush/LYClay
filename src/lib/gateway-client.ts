@@ -146,10 +146,10 @@ class GatewayBrowserClient {
               method: 'connect',
               params: {
                 minProtocol: 3,
-                maxProtocol: 3,
+                maxProtocol: 4,
                 client: {
                   id: 'gateway-client',
-                  displayName: 'ClawX',
+                  displayName: 'LYClaw',
                   version: '0.1.0',
                   platform: navigator.platform,
                   mode: 'ui',

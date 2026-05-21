@@ -65,24 +65,29 @@ describe('getOpenClawCliCommand (Windows packaged)', () => {
   it('prefers bundled node.exe when present', async () => {
     mockExistsSync.mockImplementation((p: string) => /[\\/]cli[\\/]openclaw\.cmd$/i.test(p) || /[\\/]bin[\\/]node\.exe$/i.test(p));
     const { getOpenClawCliCommand } = await import('@electron/utils/openclaw-cli');
-    expect(getOpenClawCliCommand()).toBe(
-      "& 'C:\\Program Files\\ClawX\\resources/cli/openclaw.cmd'",
+    const command = getOpenClawCliCommand();
+    expect(command).toBe(
+      '"C:\\Program Files\\ClawX\\resources\\cli\\openclaw.cmd"',
     );
+    expect(command).not.toMatch(/\$env:|powershell|Start-Process|Verb RunAs/i);
   });
 
   it('falls back to bundled node.exe when openclaw.cmd is missing', async () => {
     mockExistsSync.mockImplementation((p: string) => /[\\/]bin[\\/]node\.exe$/i.test(p));
     const { getOpenClawCliCommand } = await import('@electron/utils/openclaw-cli');
-    expect(getOpenClawCliCommand()).toBe(
-      "& 'C:\\Program Files\\ClawX\\resources/bin/node.exe' 'C:\\Program Files\\ClawX\\resources\\openclaw\\openclaw.mjs'",
+    const command = getOpenClawCliCommand();
+    expect(command).toBe(
+      '"C:\\Program Files\\ClawX\\resources\\bin\\node.exe" "C:\\Program Files\\ClawX\\resources\\openclaw\\openclaw.mjs"',
     );
+    expect(command).not.toMatch(/\$env:|powershell|Start-Process|Verb RunAs/i);
   });
 
   it('falls back to ELECTRON_RUN_AS_NODE command when wrappers are missing', async () => {
     mockExistsSync.mockReturnValue(false);
     const { getOpenClawCliCommand } = await import('@electron/utils/openclaw-cli');
     const command = getOpenClawCliCommand();
-    expect(command.startsWith('$env:ELECTRON_RUN_AS_NODE=1; & ')).toBe(true);
-    expect(command.endsWith("'C:\\Program Files\\ClawX\\resources\\openclaw\\openclaw.mjs'")).toBe(true);
+    expect(command.startsWith('set "ELECTRON_RUN_AS_NODE=1" && ')).toBe(true);
+    expect(command.endsWith('"C:\\Program Files\\ClawX\\resources\\openclaw\\openclaw.mjs"')).toBe(true);
+    expect(command).not.toMatch(/\$env:|powershell|Start-Process|Verb RunAs/i);
   });
 });

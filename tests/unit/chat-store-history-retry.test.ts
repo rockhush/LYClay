@@ -53,6 +53,7 @@ describe('useChatStore startup history retry', () => {
       sessionLabels: {},
       sessionLastActivity: {},
       sending: false,
+      aborting: false,
       activeRunId: null,
       streamingText: '',
       streamingMessage: null,
@@ -81,7 +82,7 @@ describe('useChatStore startup history retry', () => {
       1,
       'chat.history',
       { sessionKey: 'agent:main:main', limit: 200 },
-      35_000,
+      30_000,
     );
     expect(gatewayRpcMock).toHaveBeenNthCalledWith(
       2,
@@ -89,8 +90,68 @@ describe('useChatStore startup history retry', () => {
       { sessionKey: 'agent:main:main', limit: 200 },
       undefined,
     );
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 191_800);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 129_000);
     setTimeoutSpy.mockRestore();
+  });
+
+  it('forces the internal final-message reload through the quiet history cooldown', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    gatewayRpcMock
+      .mockResolvedValueOnce({
+        messages: [{ role: 'user', content: 'hello', id: 'u1', timestamp: 1000 }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { role: 'user', content: 'hello', id: 'u1', timestamp: 1000 },
+          { role: 'assistant', content: 'Real answer', id: 'a2', timestamp: 1001 },
+        ],
+      });
+
+    await useChatStore.getState().loadHistory(true);
+    useChatStore.setState({
+      sending: true,
+      activeRunId: 'run-internal',
+      streamingText: 'NO_REPLY',
+      streamingMessage: { role: 'assistant', content: 'NO_REPLY' },
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-internal',
+      sessionKey: 'agent:main:main',
+      message: { role: 'assistant', content: 'NO_REPLY', id: 'a1' },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(gatewayRpcMock).toHaveBeenCalledTimes(2);
+    expect(useChatStore.getState().messages.map((message) => message.content)).toEqual([
+      'hello',
+      'Real answer',
+    ]);
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
   });
 
   it('keeps non-startup foreground loading safety timeout at 15 seconds', async () => {
@@ -126,6 +187,7 @@ describe('useChatStore startup history retry', () => {
 
     await useChatStore.getState().loadHistory(false);
     setTimeoutSpy.mockClear();
+    useChatStore.setState({ messages: [] });
     await useChatStore.getState().loadHistory(false);
 
     expect(gatewayRpcMock).toHaveBeenNthCalledWith(
@@ -167,7 +229,6 @@ describe('useChatStore startup history retry', () => {
       .mockImplementationOnce(() => new Promise((resolve) => {
         resolveFirstAttempt = resolve;
       }))
-      .mockRejectedValueOnce(new Error('RPC timeout: chat.history'))
       .mockResolvedValueOnce({
         messages: [{ role: 'assistant', content: 'restored after retry', timestamp: 1002 }],
       });
@@ -182,37 +243,12 @@ describe('useChatStore startup history retry', () => {
     });
     await firstLoad;
 
-    useChatStore.setState({
-      currentSessionKey: 'agent:main:main',
-      messages: [],
-    });
-    const secondLoad = useChatStore.getState().loadHistory(false);
-    await vi.runAllTimersAsync();
-    await secondLoad;
-
-    expect(gatewayRpcMock).toHaveBeenCalledTimes(3);
-    expect(gatewayRpcMock.mock.calls[0]).toEqual([
-      'chat.history',
-      { sessionKey: 'agent:main:main', limit: 200 },
-      35_000,
-    ]);
-    expect(gatewayRpcMock.mock.calls[1]).toEqual([
-      'chat.history',
-      { sessionKey: 'agent:main:main', limit: 200 },
-      35_000,
-    ]);
-    expect(gatewayRpcMock.mock.calls[2]).toEqual([
-      'chat.history',
-      { sessionKey: 'agent:main:main', limit: 200 },
-      35_000,
-    ]);
-    expect(useChatStore.getState().messages.map((message) => message.content)).toEqual(['restored after retry']);
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[chat.history] startup retry scheduled',
-      expect.objectContaining({
-        sessionKey: 'agent:main:main',
-        attempt: 1,
-      }),
+    expect(gatewayRpcMock).not.toHaveBeenCalled();
+    expect(useChatStore.getState().currentSessionKey).toBe('agent:main:other');
+    expect(useChatStore.getState().messages.map((message) => message.content)).toEqual(['other session']);
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      '[chat.history] startup retry exhausted',
+      expect.anything(),
     );
     warnSpy.mockRestore();
   });
@@ -258,5 +294,88 @@ describe('useChatStore startup history retry', () => {
     expect(useChatStore.getState().error).toBeNull();
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+
+  it('refreshes local transcript during an active send before the first stream delta', async () => {
+    vi.setSystemTime(new Date('2026-05-18T05:10:57.000Z'));
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+      runAborted: false,
+    });
+
+    gatewayRpcMock.mockImplementation(async (method: string) => {
+      if (method === 'chat.send') return { runId: 'run-local-progress' };
+      if (method === 'sessions.patch') return {};
+      return {};
+    });
+    hostApiFetchMock.mockResolvedValue({
+      success: true,
+      messages: [
+        {
+          role: 'user',
+          id: 'user-from-transcript',
+          timestamp: Date.now() / 1000,
+          content: 'How do I request annual leave?',
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-tool-plan',
+          timestamp: Date.now() / 1000 + 1,
+          content: [
+            { type: 'thinking', thinking: 'Checking the leave flow.' },
+            { type: 'toolCall', id: 'call-1', name: 'memory_search', arguments: { query: 'annual leave' } },
+          ],
+        },
+      ],
+    });
+
+    await useChatStore.getState().sendMessage('How do I request annual leave?');
+    expect(useChatStore.getState().activeRunId).toBe('run-local-progress');
+    expect(useChatStore.getState().messages).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(hostApiFetchMock).not.toHaveBeenCalledWith(
+      '/api/sessions/history-local?sessionKey=agent%3Amain%3Amain',
+    );
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(hostApiFetchMock).toHaveBeenCalledWith(
+      '/api/sessions/history-local?sessionKey=agent%3Amain%3Amain',
+    );
+    expect(useChatStore.getState().messages.map((message) => message.id)).toEqual([
+      'user-from-transcript',
+      'assistant-tool-plan',
+    ]);
+    expect(infoSpy).toHaveBeenCalledWith(
+      '[perf:chat-run-ui]',
+      'transcript.first_progress',
+      expect.objectContaining({
+        runId: 'run-local-progress',
+        source: 'local-history',
+        assistantCount: 1,
+      }),
+    );
+    infoSpy.mockRestore();
   });
 });

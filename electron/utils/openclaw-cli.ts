@@ -27,8 +27,8 @@ function quoteForPosix(value: string): string {
   return `"${escapeForDoubleQuotes(value)}"`;
 }
 
-function quoteForPowerShell(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
+function quoteForCmdCopy(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 function getPackagedWindowsNodePath(): string | null {
@@ -64,7 +64,7 @@ export function getOpenClawCliCommand(): string {
 
     if (existsSync(binPath)) {
       if (platform === 'win32') {
-        return `& ${quoteForPowerShell(binPath)}`;
+        return quoteForCmdCopy(binPath);
       }
       return quoteForPosix(binPath);
     }
@@ -75,24 +75,24 @@ export function getOpenClawCliCommand(): string {
       const cliDir = join(process.resourcesPath, 'cli');
       const cmdPath = join(cliDir, 'openclaw.cmd');
       if (existsSync(cmdPath)) {
-        return `& ${quoteForPowerShell(cmdPath)}`;
+        return quoteForCmdCopy(cmdPath);
       }
 
       const bundledNode = getPackagedWindowsNodePath();
       if (bundledNode) {
-        return `& ${quoteForPowerShell(bundledNode)} ${quoteForPowerShell(entryPath)}`;
+        return `${quoteForCmdCopy(bundledNode)} ${quoteForCmdCopy(entryPath)}`;
       }
     }
 
     const execPath = process.execPath;
     if (platform === 'win32') {
-      return `$env:ELECTRON_RUN_AS_NODE=1; & ${quoteForPowerShell(execPath)} ${quoteForPowerShell(entryPath)}`;
+      return `set "ELECTRON_RUN_AS_NODE=1" && ${quoteForCmdCopy(execPath)} ${quoteForCmdCopy(entryPath)}`;
     }
     return `ELECTRON_RUN_AS_NODE=1 ${quoteForPosix(execPath)} ${quoteForPosix(entryPath)}`;
   }
 
   if (platform === 'win32') {
-    return `node ${quoteForPowerShell(entryPath)}`;
+    return `node ${quoteForCmdCopy(entryPath)}`;
   }
 
   return `node ${quoteForPosix(entryPath)}`;
@@ -191,6 +191,7 @@ function ensureWindowsCliOnPath(): Promise<'updated' | 'already-present'> {
 
     const cliDir = dirname(cliWrapper);
     const helperPath = join(cliDir, 'update-user-path.ps1');
+    // Non-admin HKCU PATH helper; do not add elevation or RunAs fallback here.
     if (!existsSync(helperPath)) {
       reject(new Error(`PATH helper not found at ${helperPath}`));
       return;
@@ -231,7 +232,7 @@ function ensureWindowsCliOnPath(): Promise<'updated' | 'already-present'> {
     child.on('error', reject);
     child.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `PowerShell exited with code ${code}`));
+        reject(new Error(stderr.trim() || `PATH helper exited with code ${code}`));
         return;
       }
 
@@ -241,7 +242,7 @@ function ensureWindowsCliOnPath(): Promise<'updated' | 'already-present'> {
         return;
       }
 
-      reject(new Error(`Unexpected PowerShell output: ${status || '(empty)'}`));
+      reject(new Error(`Unexpected PATH helper output: ${status || '(empty)'}`));
     });
   });
 }
@@ -272,8 +273,8 @@ function ensureLocalBinInPath(): void {
     if (content.includes(marker)) return;
 
     const line = shell.includes('fish')
-      ? '\n# Added by ClawX\nfish_add_path "$HOME/.local/bin"\n'
-      : '\n# Added by ClawX\nexport PATH="$HOME/.local/bin:$PATH"\n';
+      ? '\n# Added by LYClaw\nfish_add_path "$HOME/.local/bin"\n'
+      : '\n# Added by LYClaw\nexport PATH="$HOME/.local/bin:$PATH"\n';
 
     appendFileSync(profileFile, line);
     logger.info(`Added ~/.local/bin to PATH in ${profileFile}`);
@@ -356,7 +357,7 @@ export function generateCompletionCache(): void {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       OPENCLAW_NO_RESPAWN: '1',
-      OPENCLAW_EMBEDDED_IN: 'ClawX',
+      OPENCLAW_EMBEDDED_IN: 'LYClaw',
     },
     stdio: 'ignore',
     detached: false,
@@ -393,7 +394,7 @@ export function installCompletionToProfile(): void {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
         OPENCLAW_NO_RESPAWN: '1',
-        OPENCLAW_EMBEDDED_IN: 'ClawX',
+        OPENCLAW_EMBEDDED_IN: 'LYClaw',
       },
       stdio: 'ignore',
       detached: false,

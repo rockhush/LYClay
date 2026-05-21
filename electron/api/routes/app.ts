@@ -1,7 +1,24 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import { app } from 'electron';
+import { readFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 import { runOpenClawDoctor, runOpenClawDoctorFix } from '../../utils/openclaw-doctor';
+
+function getIconsDir(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'icons')
+    : join(process.cwd(), 'resources', 'icons');
+}
+
+function getImageMimeType(filePath: string): string {
+  const ext = extname(filePath).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.svg') return 'image/svg+xml';
+  return 'image/png';
+}
 
 export async function handleAppRoutes(
   req: IncomingMessage,
@@ -28,6 +45,45 @@ export async function handleAppRoutes(
     const body = await parseJsonBody<{ mode?: 'diagnose' | 'fix' }>(req);
     const mode = body.mode === 'fix' ? 'fix' : 'diagnose';
     sendJson(res, 200, mode === 'fix' ? await runOpenClawDoctorFix() : await runOpenClawDoctor());
+    return true;
+  }
+
+  if (url.pathname === '/api/app/first-response-mascot' && req.method === 'GET') {
+    const mascotPath = join(getIconsDir(), 'first-response-mascot.png');
+    try {
+      const file = await readFile(mascotPath);
+      sendJson(res, 200, {
+        success: true,
+        dataUrl: `data:${getImageMimeType(mascotPath)};base64,${file.toString('base64')}`,
+      });
+    } catch {
+      sendJson(res, 404, {
+        success: false,
+        error: 'First response mascot image not found',
+      });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/app/icon' && req.method === 'GET') {
+    const requested = url.searchParams.get('name') || '';
+    // Allow only a leaf filename inside the bundled icons dir; reject any
+    // path separators or traversal attempts.
+    const isSafe = /^[A-Za-z0-9._-]+$/.test(requested) && !requested.includes('..');
+    if (!isSafe) {
+      sendJson(res, 400, { success: false, error: 'Invalid icon name' });
+      return true;
+    }
+    const iconPath = join(getIconsDir(), requested);
+    try {
+      const file = await readFile(iconPath);
+      sendJson(res, 200, {
+        success: true,
+        dataUrl: `data:${getImageMimeType(iconPath)};base64,${file.toString('base64')}`,
+      });
+    } catch {
+      sendJson(res, 404, { success: false, error: `Icon ${requested} not found` });
+    }
     return true;
   }
 

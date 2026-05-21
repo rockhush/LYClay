@@ -62,7 +62,7 @@ interface ChannelConfigModalProps {
   onChannelSaved?: (channelType: ChannelType) => void | Promise<void>;
 }
 
-const inputClasses = 'h-[44px] rounded-xl font-mono text-[13px] bg-[#eeece3] dark:bg-muted border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40';
+const inputClasses = 'h-[44px] rounded-xl font-mono text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-[#FF7B00]/50 focus-visible:border-[#FF7B00] shadow-sm transition-all text-foreground placeholder:text-foreground/40';
 const labelClasses = 'text-[14px] text-foreground/80 font-bold';
 const outlineButtonClasses = 'h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground';
 const primaryButtonClasses = 'h-9 text-[13px] font-medium rounded-full px-4 shadow-none';
@@ -500,7 +500,7 @@ export function ChannelConfigModal({
       }}
     >
       <Card
-        className="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-3xl border-0 shadow-2xl bg-[#f3f1e9] dark:bg-card overflow-hidden"
+        className="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-3xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden"
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >

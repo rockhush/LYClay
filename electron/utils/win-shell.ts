@@ -15,28 +15,33 @@ import path from 'path';
  * Quote a path/value for safe use with Windows cmd.exe (shell: true in spawn).
  *
  * When Node.js spawn is called with `shell: true` on Windows, cmd.exe
- * interprets spaces as argument separators. Wrapping the value in double
- * quotes prevents this. On non-Windows platforms the value is returned
- * unchanged so this function can be called unconditionally.
+ * interprets spaces as argument separators, and characters like `&` or `|`
+ * as command separators. Wrapping the value in double quotes prevents cmd.exe
+ * from splitting them. On non-Windows platforms the value is returned unchanged
+ * so this function can be called unconditionally.
  */
 export function quoteForCmd(value: string): string {
   if (process.platform !== 'win32') return value;
-  if (!value.includes(' ')) return value;
+  if (value === '') return value;
   if (value.startsWith('"') && value.endsWith('"')) return value;
+  if (!/[\s&|<>()^!%]/.test(value)) return value;
   return `"${value}"`;
 }
 
 /**
- * Determine whether a spawn call needs `shell: true` on Windows.
+ * Determine whether a spawn call should use cmd.exe on Windows.
  *
- * Full (absolute) paths can be executed directly by the OS via
- * CreateProcessW, which handles spaces correctly without a shell.
- * Simple command names (e.g. 'uv', 'node') need shell for PATH/PATHEXT
- * resolution on Windows.
+ * Full .exe paths can be executed directly by the OS via CreateProcessW, which
+ * handles spaces correctly without a shell. Simple command names need cmd.exe
+ * for PATH/PATHEXT resolution, and .cmd/.bat wrappers need cmd.exe even when
+ * addressed by absolute path. PowerShell scripts are not routed implicitly.
  */
 export function needsWinShell(bin: string): boolean {
   if (process.platform !== 'win32') return false;
-  return !path.win32.isAbsolute(bin);
+  if (!path.win32.isAbsolute(bin)) return true;
+
+  const ext = path.win32.extname(bin).toLowerCase();
+  return ext === '.cmd' || ext === '.bat';
 }
 
 /**
@@ -51,7 +56,7 @@ export function prepareWinSpawn(
   forceShell?: boolean,
 ): { shell: boolean; command: string; args: string[] } {
   const isWin = process.platform === 'win32';
-  const useShell = forceShell ?? (isWin && !path.win32.isAbsolute(command));
+  const useShell = forceShell ?? needsWinShell(command);
 
   if (!useShell || !isWin) {
     return { shell: useShell, command, args };

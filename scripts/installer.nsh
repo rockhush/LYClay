@@ -221,25 +221,12 @@
     ; E.g. $INSTDIR = D:\Apps\MyClaw → glob = MyClaw._stale_*
     ExecShell "" "cmd.exe" `/c ping -n 61 127.0.0.1 >nul & cd /d "$INSTDIR\.." & for /d %D in ("$INSTDIR._stale_*") do rd /s /q "%D"` SW_HIDE
   _ci_stale_cleaned:
-  DetailPrint "Core files extracted. Finalizing system integration..."
+  DetailPrint "Core files extracted. Finalizing user integration..."
 
-  ; Enable Windows long path support (Windows 10 1607+ / Windows 11).
-  ; pnpm virtual store paths can exceed the default MAX_PATH limit of 260 chars.
-  ; Writing to HKLM requires admin privileges; on per-user installs without
-  ; elevation this call silently fails — no crash, just no key written.
-  DetailPrint "Enabling long-path support (if permissions allow)..."
-  WriteRegDWORD HKLM "SYSTEM\CurrentControlSet\Control\FileSystem" "LongPathsEnabled" 1
+  ; Admin-only system changes such as HKLM long-path configuration and Defender
+  ; exclusions are intentionally not attempted by default.
 
-  ; Add $INSTDIR to Windows Defender exclusion list so that real-time scanning
-  ; doesn't block the first app launch (Defender scans every newly-created file,
-  ; causing 10-30s startup delay on a fresh install).  Requires elevation;
-  ; silently fails on non-admin per-user installs (no harm done).
-  DetailPrint "Configuring Windows Defender exclusion..."
-  nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Add-MpPreference -ExclusionPath '$INSTDIR' -ErrorAction SilentlyContinue"`
-  Pop $0
-  Pop $1
-
-  ; Use PowerShell to update the current user's PATH.
+  ; Use PowerShell to update the current user's PATH via HKCU only.
   ; This avoids NSIS string-buffer limits and preserves long PATH values.
   DetailPrint "Updating user PATH for the OpenClaw CLI..."
   InitPluginsDir
@@ -249,23 +236,18 @@
   Pop $0
   Pop $1
   StrCmp $0 "error" 0 +2
-    DetailPrint "Warning: Failed to launch PowerShell while updating PATH."
+    DetailPrint "Warning: Failed to launch PATH helper while updating PATH."
   StrCmp $0 "timeout" 0 +2
-    DetailPrint "Warning: PowerShell PATH update timed out."
+    DetailPrint "Warning: PATH helper update timed out."
   StrCmp $0 "0" 0 +2
     Goto _ci_done
-  DetailPrint "Warning: PowerShell PATH update exited with code $0."
+  DetailPrint "Warning: PATH helper update exited with code $0."
 
   _ci_done:
   DetailPrint "Installation steps complete."
 !macroend
 
 !macro customUnInstall
-  ; Remove Windows Defender exclusion added during install
-  nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Remove-MpPreference -ExclusionPath '$INSTDIR' -ErrorAction SilentlyContinue"`
-  Pop $0
-  Pop $1
-
   ; Remove resources\cli from user PATH via PowerShell so long PATH values are handled safely
   InitPluginsDir
   ClearErrors
@@ -274,12 +256,12 @@
   Pop $0
   Pop $1
   StrCmp $0 "error" 0 +2
-    DetailPrint "Warning: Failed to launch PowerShell while removing PATH entry."
+    DetailPrint "Warning: Failed to launch PATH helper while removing PATH entry."
   StrCmp $0 "timeout" 0 +2
-    DetailPrint "Warning: PowerShell PATH removal timed out."
+    DetailPrint "Warning: PATH helper removal timed out."
   StrCmp $0 "0" 0 +2
     Goto _cu_pathDone
-  DetailPrint "Warning: PowerShell PATH removal exited with code $0."
+  DetailPrint "Warning: PATH helper removal exited with code $0."
 
   _cu_pathDone:
 

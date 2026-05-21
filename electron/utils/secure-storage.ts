@@ -5,7 +5,7 @@
  * account-based provider storage and a dedicated secret-store abstraction.
  */
 
-import { BUILTIN_PROVIDER_TYPES, type ProviderType } from './provider-registry';
+import { BUILTIN_PROVIDER_TYPES, LY_MINIMAX_PROVIDER_ID, type ProviderType } from './provider-registry';
 import { getActiveOpenClawProviders } from './openclaw-auth';
 import {
   deleteProviderAccount,
@@ -188,6 +188,9 @@ export async function getAllProviders(): Promise<ProviderConfig[]> {
 export async function deleteProvider(providerId: string): Promise<boolean> {
   try {
     await ensureProviderStoreMigrated();
+    if (providerId === LY_MINIMAX_PROVIDER_ID) {
+      throw new Error('LY-MiniMax cannot be deleted');
+    }
     // Delete the API key
     await deleteApiKey(providerId);
 
@@ -260,7 +263,7 @@ export async function getProviderWithKeyInfo(
 
 /**
  * Get all providers with key info (for UI display)
- * Also synchronizes ClawX local provider list with OpenClaw's actual config.
+ * Also synchronizes LYClaw local provider list with OpenClaw's actual config.
  */
 export async function getAllProvidersWithKeyInfo(): Promise<
   Array<ProviderConfig & { hasKey: boolean; keyMasked: string | null }>
@@ -275,7 +278,7 @@ export async function getAllProvidersWithKeyInfo(): Promise<
   for (const provider of providers) {
     // Sync check: If it's a custom/OAuth provider and it no longer exists in OpenClaw config
     // (e.g. wiped by Gateway due to missing plugin, or manually deleted by user)
-    // we should remove it from ClawX UI to stay consistent.
+    // we should remove it from LYClaw UI to stay consistent.
     const isBuiltin = (BUILTIN_PROVIDER_TYPES as readonly string[]).includes(provider.type);
     // For custom/ollama providers, the OpenClaw config key is derived as
     // "<type>-<suffix>" where suffix = first 8 chars of providerId with hyphens stripped.

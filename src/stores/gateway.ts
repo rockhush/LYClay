@@ -15,9 +15,55 @@ const gatewayEventDedupe = new Map<string, number>();
 const GATEWAY_EVENT_DEDUPE_TTL_MS = 30_000;
 const LOAD_SESSIONS_MIN_INTERVAL_MS = 1_200;
 const LOAD_HISTORY_MIN_INTERVAL_MS = 800;
+const CRON_REPAIR_STARTUP_DELAY_MS = 60_000;
+const CRON_REPAIR_BUSY_RETRY_DELAY_MS = 30_000;
 let lastLoadSessionsAt = 0;
 let lastLoadHistoryAt = 0;
 let cronRepairTriggeredThisSession = false;
+let cronRepairStartupTimer: ReturnType<typeof setTimeout> | null = null;
+let chatStoreImportPromise: Promise<typeof import('./chat')> | null = null;
+
+function loadChatStoreModule(): Promise<typeof import('./chat')> {
+  chatStoreImportPromise ??= import('./chat');
+  return chatStoreImportPromise;
+}
+
+function scheduleCronRepair(delayMs: number): void {
+  if (cronRepairStartupTimer) {
+    clearTimeout(cronRepairStartupTimer);
+  }
+
+  cronRepairStartupTimer = setTimeout(() => {
+    cronRepairStartupTimer = null;
+    if (useGatewayStore.getState().status.state !== 'running') {
+      return;
+    }
+
+    loadChatStoreModule()
+      .then(({ useChatStore }) => {
+        const chatState = useChatStore.getState();
+        if (chatState.sending || chatState.activeRunId) {
+          console.info('[gateway-store] delayed cron repair because chat is active');
+          scheduleCronRepair(CRON_REPAIR_BUSY_RETRY_DELAY_MS);
+          return;
+        }
+
+        // Fire-and-forget: fetch cron jobs to trigger repair logic in background.
+        import('./cron')
+          .then(({ useCronStore }) => {
+            useCronStore.getState().fetchJobs();
+          })
+          .catch(() => {});
+      })
+      .catch(() => {
+        import('./cron')
+          .then(({ useCronStore }) => {
+            useCronStore.getState().fetchJobs();
+          })
+          .catch(() => {});
+      });
+  }, delayMs);
+}
 
 interface GatewayHealth {
   ok: boolean;
@@ -29,6 +75,7 @@ interface GatewayState {
   status: GatewayStatus;
   health: GatewayHealth | null;
   isInitialized: boolean;
+  isWarmedUp: boolean;
   lastError: string | null;
   init: () => Promise<void>;
   start: () => Promise<void>;
@@ -38,6 +85,7 @@ interface GatewayState {
   rpc: <T>(method: string, params?: unknown, timeoutMs?: number) => Promise<T>;
   setStatus: (status: GatewayStatus) => void;
   clearError: () => void;
+  checkWarmup: () => Promise<boolean>;
 }
 
 function pruneGatewayEventDedupe(now: number): void {
@@ -53,6 +101,12 @@ function buildGatewayEventDedupeKey(event: Record<string, unknown>): string | nu
   const sessionKey = event.sessionKey != null ? String(event.sessionKey) : '';
   const seq = event.seq != null ? String(event.seq) : '';
   const state = event.state != null ? String(event.state) : '';
+  // Streaming deltas are often emitted without a monotonically increasing seq.
+  // Deduping them by run/session/state would collapse legitimate progress and
+  // make long tool-writing runs look frozen after the first token batch.
+  if (state === 'delta' && !seq) {
+    return null;
+  }
   if (runId || sessionKey || seq || state) {
     return [runId, sessionKey, seq, state].join('|');
   }
@@ -79,7 +133,11 @@ function getMessageIdDedupeKey(event: Record<string, unknown>): string | null {
   return null;
 }
 
-function shouldProcessGatewayEvent(event: Record<string, unknown>): boolean {
+export function __test_buildGatewayEventDedupeKey(event: Record<string, unknown>): string | null {
+  return buildGatewayEventDedupeKey(event);
+}
+
+export function shouldProcessGatewayEvent(event: Record<string, unknown>): boolean {
   const key = buildGatewayEventDedupeKey(event);
   const msgKey = getMessageIdDedupeKey(event);
   if (!key && !msgKey) return true;
@@ -97,9 +155,6 @@ function maybeLoadSessions(
   state: { loadSessions: () => Promise<void> },
   force = false,
 ): void {
-  const { status } = useGatewayStore.getState();
-  if (status.gatewayReady === false) return;
-
   const now = Date.now();
   if (!force && now - lastLoadSessionsAt < LOAD_SESSIONS_MIN_INTERVAL_MS) return;
   lastLoadSessionsAt = now;
@@ -137,8 +192,10 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
       state: p.state ?? data.state,
       message: p.message ?? data.message,
     };
+    const normalizedSessionKey = normalizedEvent.sessionKey;
+    if (typeof normalizedSessionKey === 'string' && normalizedSessionKey.includes('__warmup__')) return;
     if (shouldProcessGatewayEvent(normalizedEvent)) {
-      import('./chat')
+      loadChatStoreModule()
         .then(({ useChatStore }) => {
           useChatStore.getState().handleChatEvent(normalizedEvent);
         })
@@ -149,7 +206,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
   const runId = p.runId ?? data.runId;
   const sessionKey = p.sessionKey ?? data.sessionKey;
   if (phase === 'started' && runId != null && sessionKey != null) {
-    import('./chat')
+    loadChatStoreModule()
       .then(({ useChatStore }) => {
         const state = useChatStore.getState();
         const resolvedSessionKey = String(sessionKey);
@@ -170,7 +227,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
   }
 
   if (phase === 'completed' || phase === 'done' || phase === 'finished' || phase === 'end') {
-    import('./chat')
+    loadChatStoreModule()
       .then(({ useChatStore }) => {
         const state = useChatStore.getState();
         const resolvedSessionKey = sessionKey != null ? String(sessionKey) : null;
@@ -188,26 +245,19 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
         if (matchesCurrentSession || matchesActiveRun) {
           maybeLoadHistory(state);
         }
-        if ((matchesCurrentSession || matchesActiveRun) && state.sending) {
-          useChatStore.setState({
-            sending: false,
-            activeRunId: null,
-            pendingFinal: false,
-            lastUserMessageAt: null,
-            error: null,
-          });
-        }
       })
       .catch(() => {});
   }
 }
 
 function handleGatewayChatMessage(data: unknown): void {
-  import('./chat').then(({ useChatStore }) => {
+  loadChatStoreModule().then(({ useChatStore }) => {
     const chatData = data as Record<string, unknown>;
     const payload = ('message' in chatData && typeof chatData.message === 'object')
       ? chatData.message as Record<string, unknown>
       : chatData;
+    const sessionKey = payload.sessionKey ?? chatData.sessionKey;
+    if (typeof sessionKey === 'string' && sessionKey.includes('__warmup__')) return;
 
     if (payload.state) {
       if (!shouldProcessGatewayEvent(payload)) return;
@@ -248,6 +298,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   },
   health: null,
   isInitialized: false,
+  isWarmedUp: false,
   lastError: null,
 
   init: async () => {
@@ -267,15 +318,20 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
           unsubscribers.push(subscribeHostEvent<GatewayStatus>('gateway:status', (payload) => {
             set({ status: payload });
 
-            // Trigger cron repair when gateway becomes ready
-            if (!cronRepairTriggeredThisSession && payload.state === 'running') {
-              cronRepairTriggeredThisSession = true;
-              // Fire-and-forget: fetch cron jobs to trigger repair logic in background
-              import('./cron')
-                .then(({ useCronStore }) => {
-                  useCronStore.getState().fetchJobs();
+            // Reset first message flag when gateway starts/restarts
+            if (payload.state === 'running') {
+              loadChatStoreModule()
+                .then(({ resetFirstMessageFlag }) => {
+                  resetFirstMessageFlag();
                 })
                 .catch(() => {});
+            }
+
+            // Delay cron repair after startup so first chat has priority for
+            // session file locks and Gateway RPC capacity.
+            if (!cronRepairTriggeredThisSession && payload.state === 'running') {
+              cronRepairTriggeredThisSession = true;
+              scheduleCronRepair(CRON_REPAIR_STARTUP_DELAY_MS);
             }
           }));
           unsubscribers.push(subscribeHostEvent<{ message?: string }>('gateway:error', (payload) => {
@@ -329,9 +385,9 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
               .then((result: unknown) => {
                 const latest = result as GatewayStatus;
                 const current = get().status;
-                if (latest.state !== current.state) {
+                if (latest.state !== current.state || latest.warmupStatus !== current.warmupStatus) {
                   console.info(
-                    `[gateway-store] reconciled stale state: ${current.state} → ${latest.state}`,
+                    `[gateway-store] reconciled stale status: ${current.state}/${current.warmupStatus ?? 'none'} → ${latest.state}/${latest.warmupStatus ?? 'none'}`,
                   );
                   set({ status: latest });
                 }
@@ -347,7 +403,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
         try {
           const refreshed = await hostApiFetch<GatewayStatus>('/api/gateway/status');
           const current = get().status;
-          if (refreshed.state !== current.state) {
+          if (refreshed.state !== current.state || refreshed.warmupStatus !== current.warmupStatus) {
             set({ status: refreshed });
           }
         } catch {
@@ -436,6 +492,22 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
       throw new Error(response.error || `Gateway RPC failed: ${method}`);
     }
     return response.result as T;
+  },
+
+  checkWarmup: async (): Promise<boolean> => {
+    try {
+      const response = await invokeIpc<{
+        success: boolean;
+        result?: boolean;
+        error?: string;
+      }>('gateway:warmup-status');
+      if (response.success && response.result) {
+        set({ isWarmedUp: true });
+      }
+      return response.result ?? false;
+    } catch {
+      return false;
+    }
   },
 
   setStatus: (status) => set({ status }),

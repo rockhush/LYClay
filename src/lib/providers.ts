@@ -6,17 +6,23 @@
  * layer so TypeScript project boundaries remain stable during the migration.
  */
 
+export const LY_MINIMAX_PROVIDER_ID = 'ly-minimax' as const;
+export const LEGACY_LY_MINIMAX_PROVIDER_ID = 'lyclaw-model' as const;
+
 export const PROVIDER_TYPES = [
+  LY_MINIMAX_PROVIDER_ID,
   'anthropic',
   'openai',
   'google',
   'openrouter',
-  'ark',
+  'ark', 
+  'deepseek', 
   'moonshot',
   'moonshot-global',
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
+  'ly-mimo',
   'modelstudio',
   'ollama',
   'custom',
@@ -24,16 +30,19 @@ export const PROVIDER_TYPES = [
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
 export const BUILTIN_PROVIDER_TYPES = [
+  LY_MINIMAX_PROVIDER_ID,
   'anthropic',
   'openai',
   'google',
   'openrouter',
-  'ark',
+  'ark', 
+  'deepseek', 
   'moonshot',
   'moonshot-global',
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
+  'ly-mimo',
   'modelstudio',
   'ollama',
 ] as const;
@@ -123,6 +132,8 @@ export interface ProviderAccount {
     email?: string;
     resourceUrl?: string;
     customModels?: string[];
+    managedBy?: 'lyclaw';
+    readonly?: boolean;
   };
   createdAt: string;
   updatedAt: string;
@@ -132,6 +143,19 @@ import { providerIcons } from '@/assets/providers';
 
 /** All supported provider types with UI metadata */
 export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
+  {
+    id: LY_MINIMAX_PROVIDER_ID,
+    name: 'LY-MiniMax',
+    icon: 'LY',
+    placeholder: '',
+    model: 'MiniMax',
+    requiresApiKey: false,
+    defaultBaseUrl: 'http://10.64.22.11:8000/v1',
+    defaultModelId: 'MiniMax-M2.7',
+    showBaseUrl: true,
+    showModelId: true,
+    hidden: true,
+  },
   {
     id: 'anthropic',
     name: 'Anthropic',
@@ -173,9 +197,11 @@ export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
   },
   { id: 'openrouter', name: 'OpenRouter', icon: '🌐', placeholder: 'sk-or-v1-...', model: 'Multi-Model', requiresApiKey: true, showModelId: true, modelIdPlaceholder: 'openai/gpt-5.4', defaultModelId: 'openai/gpt-5.4', docsUrl: 'https://openrouter.ai/models' },
   { id: 'minimax-portal-cn', name: 'MiniMax (CN)', icon: '☁️', placeholder: 'sk-...', model: 'MiniMax', requiresApiKey: false, isOAuth: true, supportsApiKey: true, defaultModelId: 'MiniMax-M2.7', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'MiniMax-M2.7', apiKeyUrl: 'https://platform.minimaxi.com/' },
-  { id: 'moonshot', name: 'Moonshot (CN)', icon: '🌙', placeholder: 'sk-...', model: 'Kimi', requiresApiKey: true, defaultBaseUrl: 'https://api.moonshot.cn/v1', defaultModelId: 'kimi-k2.5', docsUrl: 'https://platform.moonshot.cn/' },
-  { id: 'moonshot-global', name: 'Moonshot (Global)', icon: '🌙', placeholder: 'sk-...', model: 'Kimi', requiresApiKey: true, defaultBaseUrl: 'https://api.moonshot.ai/v1', defaultModelId: 'kimi-k2.5', docsUrl: 'https://platform.moonshot.ai/' },
+  { id: 'ly-mimo', name: 'LY-Mimo', icon: '☁️', placeholder: 'sk-...', model: 'MiMo', requiresApiKey: true, defaultBaseUrl: 'http://10.64.22.12:8000/v1', showBaseUrl: true, defaultModelId: 'MiMo-V2.5', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'MiMo-V2.5', docsUrl: 'https://platform.minimaxi.com/' },
+  { id: 'moonshot', name: 'Moonshot (CN)', icon: '🌙', placeholder: 'sk-...', model: 'Kimi', requiresApiKey: true, defaultBaseUrl: 'https://api.moonshot.cn/v1', defaultModelId: 'kimi-k2.6', docsUrl: 'https://platform.moonshot.cn/' },
+  { id: 'moonshot-global', name: 'Moonshot (Global)', icon: '🌙', placeholder: 'sk-...', model: 'Kimi', requiresApiKey: true, defaultBaseUrl: 'https://api.moonshot.ai/v1', defaultModelId: 'kimi-k2.6', docsUrl: 'https://platform.moonshot.ai/' },
   { id: 'siliconflow', name: 'SiliconFlow (CN)', icon: '🌊', placeholder: 'sk-...', model: 'Multi-Model', requiresApiKey: true, defaultBaseUrl: 'https://api.siliconflow.cn/v1', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'deepseek-ai/DeepSeek-V3', defaultModelId: 'deepseek-ai/DeepSeek-V3', docsUrl: 'https://docs.siliconflow.cn/cn/userguide/introduction' },
+  { id: 'deepseek', name: 'DeepSeek', icon: '', placeholder: 'sk-...', model: 'DeepSeek', requiresApiKey: true, defaultBaseUrl: 'https://api.deepseek.com/v1', defaultModelId: 'deepseek-chat', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'deepseek-chat', docsUrl: 'https://platform.deepseek.com/' },
   { id: 'minimax-portal', name: 'MiniMax (Global)', icon: '☁️', placeholder: 'sk-...', model: 'MiniMax', requiresApiKey: false, isOAuth: true, supportsApiKey: true, defaultModelId: 'MiniMax-M2.7', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'MiniMax-M2.7', apiKeyUrl: 'https://platform.minimax.io' },
   { id: 'modelstudio', name: 'Model Studio', icon: '☁️', placeholder: 'sk-...', model: 'Qwen', requiresApiKey: true, defaultBaseUrl: 'https://coding.dashscope.aliyuncs.com/v1', showBaseUrl: true, defaultModelId: 'qwen3.5-plus', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'qwen3.5-plus', apiKeyUrl: 'https://bailian.console.aliyun.com/', hidden: true },
   { id: 'ark', name: 'ByteDance Ark', icon: 'A', placeholder: 'your-ark-api-key', model: 'Doubao', requiresApiKey: true, defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3', showBaseUrl: true, showModelId: true, modelIdPlaceholder: 'ep-20260228000000-xxxxx', docsUrl: 'https://www.volcengine.com/', codePlanPresetBaseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3', codePlanPresetModelId: 'ark-code-latest', codePlanDocsUrl: 'https://www.volcengine.com/docs/82379/1928261?lang=zh' },
@@ -200,8 +226,8 @@ export function getProviderIconUrl(type: ProviderType | string): string | undefi
 }
 
 /** Whether a provider's logo needs CSS invert in dark mode (all logos are monochrome) */
-export function shouldInvertInDark(_type: ProviderType | string): boolean {
-  return true;
+export function shouldInvertInDark(type: ProviderType | string): boolean {
+  return type !== LY_MINIMAX_PROVIDER_ID;
 }
 
 /** Provider list shown in the Setup wizard */

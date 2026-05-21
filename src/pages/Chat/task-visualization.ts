@@ -1,5 +1,5 @@
 import { extractText, extractTextSegments, extractThinkingSegments, extractToolUse } from './message-utils';
-import type { RawMessage, ToolStatus } from '@/stores/chat';
+import type { ContentBlock, RawMessage, ToolStatus } from '@/stores/chat';
 
 export type TaskStepStatus = 'running' | 'completed' | 'error';
 
@@ -65,6 +65,11 @@ function normalizeText(text: string | null | undefined): string | undefined {
 
 function makeToolId(prefix: string, name: string, index: number): string {
   return `${prefix}:${name}:${index}`;
+}
+
+function hasThinkingBlock(message: RawMessage): boolean {
+  if (!Array.isArray(message.content)) return false;
+  return (message.content as ContentBlock[]).some((block) => block.type === 'thinking');
 }
 
 export function parseAgentIdFromSessionKey(sessionKey: string): string | null {
@@ -292,13 +297,23 @@ export function deriveTaskSteps({
     // (omitLastStreamingMessageSegment), thinking that accompanies
     // the reply belongs to the bubble — omit it from the graph.
     if (!omitLastStreamingMessageSegment) {
-      appendDetailSegments(extractThinkingSegments(streamMessage), {
+      const thinkingSegments = extractThinkingSegments(streamMessage);
+      appendDetailSegments(thinkingSegments, {
         idPrefix: 'stream-thinking',
         label: 'Thinking',
         kind: 'thinking',
         running: true,
         upsertStep,
       });
+      if (thinkingSegments.length === 0 && hasThinkingBlock(streamMessage)) {
+        upsertStep({
+          id: 'stream-thinking-empty',
+          label: 'Thinking',
+          status: 'running',
+          kind: 'thinking',
+          depth: 1,
+        });
+      }
     }
 
     // Stream-time narration should also appear in the execution graph so that

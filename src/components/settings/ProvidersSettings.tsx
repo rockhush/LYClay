@@ -17,6 +17,7 @@ import {
   Copy,
   XCircle,
   ChevronDown,
+  Send,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,6 +39,7 @@ import {
   resolveProviderApiKeyForSave,
   resolveProviderModelForSave,
   shouldShowProviderModelId,
+  LY_MINIMAX_PROVIDER_ID,
   shouldInvertInDark,
 } from '@/lib/providers';
 import {
@@ -49,12 +51,13 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+import { flushUsageReports } from '@/lib/usage-reporter';
 import { invokeIpc } from '@/lib/api-client';
 import { useSettingsStore } from '@/stores/settings';
 import { hostApiFetch } from '@/lib/host-api';
 import { subscribeHostEvent } from '@/lib/host-events';
 
-const inputClasses = 'h-[44px] rounded-xl font-mono text-[13px] bg-[#eeece3] dark:bg-muted border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40';
+const inputClasses = 'h-[44px] rounded-xl font-mono text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-[#FF7B00]/50 focus-visible:border-[#FF7B00] shadow-sm transition-all text-foreground placeholder:text-foreground/40';
 const labelClasses = 'text-[14px] text-foreground/80 font-bold';
 type ArkMode = 'apikey' | 'codeplan';
 
@@ -130,6 +133,10 @@ function shouldShowUserAgentFieldForNewProvider(providerType: ProviderType | nul
   return providerType === 'custom';
 }
 
+function isReadonlyProvider(account: Pick<ProviderAccount, 'vendorId' | 'metadata'>): boolean {
+  return account.vendorId === LY_MINIMAX_PROVIDER_ID || account.metadata?.readonly === true;
+}
+
 function getAuthModeLabel(
   authMode: ProviderAccount['authMode'],
   t: (key: string) => string
@@ -167,6 +174,7 @@ export function ProvidersSettings() {
 
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [usageReportSending, setUsageReportSending] = useState(false);
   const vendorMap = new Map(vendors.map((vendor) => [vendor.id, vendor]));
   const existingVendorIds = new Set(accounts.map((account) => account.vendorId));
   const displayProviders = useMemo(
@@ -240,16 +248,68 @@ export function ProvidersSettings() {
     }
   };
 
+  // Manual trigger for the management/claw/report uploader. Always hits all
+  // three endpoints (token-consume / skill-download / skill-invoke), so QA
+  // can confirm reachability without waiting for the daily slot or chat usage.
+  const handleSendUsageReport = async () => {
+    if (usageReportSending) return;
+    setUsageReportSending(true);
+    try {
+      const result = await flushUsageReports('manual-models-page');
+      if (result.success) {
+        const totals = result.uploaded
+          ? result.uploaded.tokenConsume + result.uploaded.skillDownload + result.uploaded.skillInvoke
+          : 0;
+        toast.success(t('aiProviders.toast.usageReportSent', {
+          defaultValue: '统计已发送（共上报 {{count}} 条记录）',
+          count: totals,
+        }));
+      } else {
+        toast.error(t('aiProviders.toast.usageReportFailed', {
+          defaultValue: '统计上报失败，已保留在本地待重试',
+        }));
+      }
+    } catch (error) {
+      toast.error(`${t('aiProviders.toast.usageReportFailed', { defaultValue: '统计上报失败' })}: ${error}`);
+    } finally {
+      setUsageReportSending(false);
+    }
+  };
+
   return (
     <div data-testid="providers-settings" className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 data-testid="providers-settings-title" className="text-3xl font-serif text-foreground font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
           {t('aiProviders.title', 'AI Providers')}
         </h2>
-        <Button data-testid="providers-add-button" onClick={() => setShowAddDialog(true)} className="rounded-full px-5 h-9 shadow-none font-medium text-[13px]">
-          <Plus className="h-4 w-4 mr-2" />
-          {t('aiProviders.add')}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/*
+            Manual "发送统计" button kept in the source as a hidden QA/debug
+            entry point. handleSendUsageReport remains wired up so we can flip
+            the flag below back to true (or expose it via a hidden hotkey)
+            without re-implementing the toast + flush plumbing.
+          */}
+          {false && (
+            <Button
+              data-testid="providers-send-usage-report-button"
+              onClick={handleSendUsageReport}
+              disabled={usageReportSending}
+              variant="outline"
+              className="rounded-full px-5 h-9 font-medium text-[13px] border-black/10 dark:border-white/15 bg-transparent hover:bg-black/5 dark:hover:bg-white/10"
+            >
+              {usageReportSending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4 mr-2" />
+              )}
+              {t('aiProviders.sendUsageReport', { defaultValue: '发送统计' })}
+            </Button>
+          )}
+          <Button data-testid="providers-add-button" onClick={() => setShowAddDialog(true)} className="rounded-full px-5 h-9 font-medium text-[13px] bg-[#FF7B00] hover:bg-[#FF6A00] text-white shadow-md shadow-[#FF7B00]/30">
+            <Plus className="h-4 w-4 mr-2" />
+            {t('aiProviders.add')}
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -263,7 +323,7 @@ export function ProvidersSettings() {
           <p className="text-[13px] text-center mb-6 max-w-sm">
             {t('aiProviders.empty.desc')}
           </p>
-          <Button onClick={() => setShowAddDialog(true)} className="rounded-full px-6 h-10 bg-[#0a84ff] hover:bg-[#007aff] text-white">
+          <Button onClick={() => setShowAddDialog(true)} className="rounded-full px-6 h-10 bg-[#FF7B00] hover:bg-[#FF6A00] text-white">
             <Plus className="h-4 w-4 mr-2" />
             {t('aiProviders.empty.cta')}
           </Button>
@@ -374,6 +434,7 @@ function ProviderCard({
   const [arkMode, setArkMode] = useState<ArkMode>('apikey');
 
   const typeInfo = PROVIDER_TYPE_INFO.find((t) => t.id === account.vendorId);
+  const readonlyProvider = isReadonlyProvider(account);
   const providerDocsUrl = getProviderDocsUrl(typeInfo, i18n.language);
   const showModelIdField = shouldShowProviderModelId(typeInfo, devModeUnlocked);
   const codePlanPreset = typeInfo?.codePlanPresetBaseUrl && typeInfo?.codePlanPresetModelId
@@ -499,7 +560,7 @@ function ProviderCard({
   };
 
   const currentInputClasses = isDefault
-    ? "h-[40px] rounded-xl font-mono text-[13px] bg-white dark:bg-card border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-blue-500/50 shadow-sm"
+    ? "h-[40px] rounded-xl font-mono text-[13px] bg-white dark:bg-card border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-[#FF7B00]/50 shadow-sm"
     : inputClasses;
 
   const currentLabelClasses = isDefault ? "text-[13px] text-muted-foreground" : labelClasses;
@@ -583,31 +644,35 @@ function ProviderCard({
                 <Check className="h-4 w-4" />
               </Button>
             )}
-            <Button
-              data-testid={`provider-edit-${account.id}`}
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-white dark:hover:bg-card shadow-sm"
-              onClick={onEdit}
-              title={t('aiProviders.card.editKey')}
-            >
-              <Edit className="h-4 w-4" />
-            </Button>
-            <Button
-              data-testid={`provider-delete-${account.id}`}
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded-full text-muted-foreground hover:text-destructive hover:bg-white dark:hover:bg-card shadow-sm"
-              onClick={onDelete}
-              title={t('aiProviders.card.delete')}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {!readonlyProvider && (
+              <>
+                <Button
+                  data-testid={`provider-edit-${account.id}`}
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-white dark:hover:bg-card shadow-sm"
+                  onClick={onEdit}
+                  title={t('aiProviders.card.editKey')}
+                >
+                  <Edit className="h-4 w-4" />
+                </Button>
+                <Button
+                  data-testid={`provider-delete-${account.id}`}
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-full text-muted-foreground hover:text-destructive hover:bg-white dark:hover:bg-card shadow-sm"
+                  onClick={onDelete}
+                  title={t('aiProviders.card.delete')}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </>
+            )}
           </div>
         )}
       </div>
 
-      {isEditing && (
+      {isEditing && !readonlyProvider && (
         <div className="space-y-6 mt-4 pt-4 border-t border-black/5 dark:border-white/5">
           {effectiveDocsUrl && (
             <div className="flex justify-end -mt-2 mb-2">
@@ -754,8 +819,8 @@ function ProviderCard({
                     onChange={(e) => setFallbackModelsText(e.target.value)}
                     placeholder={t('aiProviders.dialog.fallbackModelIdsPlaceholder')}
                     className={isDefault
-                      ? "min-h-24 w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-card px-3 py-2 text-[13px] font-mono outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 shadow-sm"
-                      : "min-h-24 w-full rounded-xl border border-black/10 dark:border-white/10 bg-[#eeece3] dark:bg-muted px-3 py-2 text-[13px] font-mono outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:border-blue-500 shadow-sm transition-all text-foreground placeholder:text-foreground/40"}
+                      ? "min-h-24 w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-card px-3 py-2 text-[13px] font-mono outline-none focus-visible:ring-2 focus-visible:ring-[#FF7B00]/50 shadow-sm"
+                      : "min-h-24 w-full rounded-xl border border-black/10 dark:border-white/10 bg-[#eeece3] dark:bg-muted px-3 py-2 text-[13px] font-mono outline-none focus-visible:ring-2 focus-visible:ring-[#FF7B00]/50 focus-visible:border-[#FF7B00] shadow-sm transition-all text-foreground placeholder:text-foreground/40"}
                   />
                   <p className="text-[12px] text-muted-foreground">
                     {t('aiProviders.dialog.fallbackModelIdsHelp')}
@@ -1139,8 +1204,7 @@ function AddProviderDialog({
     // Skip providers that are temporarily hidden from the UI.
     if (type.hidden) return false;
 
-    // MiniMax portal variants are mutually exclusive — hide BOTH variants
-    // when either one already exists (account may have vendorId of either variant).
+    // MiniMax OAuth variants are mutually exclusive — hide them all when any one exists.
     const hasMinimax = existingVendorIds.has('minimax-portal') || existingVendorIds.has('minimax-portal-cn');
     if ((type.id === 'minimax-portal' || type.id === 'minimax-portal-cn') && hasMinimax) return false;
 
@@ -1216,7 +1280,7 @@ function AddProviderDialog({
 
   return (
     <div data-testid="add-provider-dialog" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-3xl border-0 shadow-2xl bg-[#f3f1e9] dark:bg-card overflow-hidden">
+      <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-3xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
         <CardHeader className="relative pb-2 shrink-0">
           <CardTitle className="text-2xl font-serif font-normal">{t('aiProviders.dialog.title')}</CardTitle>
           <CardDescription className="text-[15px] mt-1 text-foreground/70">
@@ -1532,7 +1596,7 @@ function AddProviderDialog({
                       <Button
                         onClick={handleStartOAuth}
                         disabled={oauthFlowing}
-                        className="w-full rounded-full h-[42px] font-semibold bg-[#0a84ff] hover:bg-[#007aff] text-white shadow-sm"
+                        className="w-full rounded-full h-[42px] font-semibold bg-[#FF7B00] hover:bg-[#FF6A00] text-white shadow-sm"
                       >
                         {oauthFlowing ? (
                           <><Loader2 className="h-4 w-4 mr-2 animate-spin" />{t('aiProviders.oauth.waiting')}</>
@@ -1589,7 +1653,7 @@ function AddProviderDialog({
                               />
 
                               <Button
-                                className="w-full rounded-full h-[42px] font-semibold bg-[#0a84ff] hover:bg-[#007aff] text-white"
+                                className="w-full rounded-full h-[42px] font-semibold bg-[#FF7B00] hover:bg-[#FF6A00] text-white shadow-md shadow-[#FF7B00]/30"
                                 onClick={handleSubmitManualOAuthCode}
                                 disabled={!manualCodeInput.trim()}
                               >
@@ -1660,7 +1724,7 @@ function AddProviderDialog({
                 <Button
                   data-testid="add-provider-submit-button"
                   onClick={handleAdd}
-                  className={cn("rounded-full px-8 h-[42px] text-[13px] font-semibold bg-[#0a84ff] hover:bg-[#007aff] text-white shadow-sm", useOAuthFlow && "hidden")}
+                  className={cn("rounded-full px-8 h-[42px] text-[13px] font-semibold bg-[#FF7B00] hover:bg-[#FF6A00] text-white shadow-sm", useOAuthFlow && "hidden")}
                   disabled={!selectedType || saving || (showModelIdField && modelId.trim().length === 0)}
                 >
                   {saving ? (

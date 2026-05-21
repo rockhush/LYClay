@@ -46,6 +46,42 @@ async function readOpenClawJson(): Promise<Record<string, unknown>> {
   return JSON.parse(content) as Record<string, unknown>;
 }
 
+describe('OpenClaw session defaults', () => {
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    await rm(testHome, { recursive: true, force: true });
+    await rm(testUserData, { recursive: true, force: true });
+  });
+
+  it('adds dmScope when writing a config without session', async () => {
+    const { writeOpenClawConfig } = await import('@electron/utils/channel-config');
+
+    await writeOpenClawConfig({});
+
+    const config = await readOpenClawJson();
+    expect(config.session).toEqual({ dmScope: 'per-account-channel-peer' });
+  });
+
+  it('preserves idleMinutes and adds dmScope when writing session config', async () => {
+    const { writeOpenClawConfig } = await import('@electron/utils/channel-config');
+
+    await writeOpenClawConfig({ session: { idleMinutes: 10080 } });
+
+    const config = await readOpenClawJson();
+    expect(config.session).toEqual({ idleMinutes: 10080, dmScope: 'per-account-channel-peer' });
+  });
+
+  it('preserves an explicit valid dmScope', async () => {
+    const { writeOpenClawConfig } = await import('@electron/utils/channel-config');
+
+    await writeOpenClawConfig({ session: { dmScope: 'main' } });
+
+    const config = await readOpenClawJson();
+    expect(config.session).toEqual({ dmScope: 'main' });
+  });
+});
+
 describe('channel credential normalization and duplicate checks', () => {
   beforeEach(async () => {
     vi.resetAllMocks();
@@ -213,6 +249,49 @@ describe('WeCom plugin configuration', () => {
       expect(plugins.entries['openclaw-qqbot']).toBeUndefined();
       expect(plugins.entries['qqbot']).toBeUndefined();
     }
+  });
+});
+
+describe('DingTalk channel defaults', () => {
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    await rm(testHome, { recursive: true, force: true });
+    await rm(testUserData, { recursive: true, force: true });
+  });
+
+  it('defaults convertMarkdownTables to false when saving dingtalk config', async () => {
+    const { saveChannelConfig } = await import('@electron/utils/channel-config');
+
+    await saveChannelConfig('dingtalk', { clientId: 'ding-app', clientSecret: 'secret' }, 'default');
+
+    const config = await readOpenClawJson();
+    const channels = config.channels as Record<string, {
+      convertMarkdownTables?: boolean;
+      accounts?: Record<string, { convertMarkdownTables?: boolean }>;
+    }>;
+
+    expect(channels.dingtalk.convertMarkdownTables).toBe(false);
+    expect(channels.dingtalk.accounts?.default?.convertMarkdownTables).toBe(false);
+  });
+
+  it('preserves an explicit convertMarkdownTables value for dingtalk config', async () => {
+    const { saveChannelConfig } = await import('@electron/utils/channel-config');
+
+    await saveChannelConfig('dingtalk', {
+      clientId: 'ding-app',
+      clientSecret: 'secret',
+      convertMarkdownTables: true,
+    }, 'default');
+
+    const config = await readOpenClawJson();
+    const channels = config.channels as Record<string, {
+      convertMarkdownTables?: boolean;
+      accounts?: Record<string, { convertMarkdownTables?: boolean }>;
+    }>;
+
+    expect(channels.dingtalk.convertMarkdownTables).toBe(true);
+    expect(channels.dingtalk.accounts?.default?.convertMarkdownTables).toBe(true);
   });
 });
 

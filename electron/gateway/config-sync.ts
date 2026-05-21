@@ -19,7 +19,9 @@ import { getAllSettings } from '../utils/store';
 import { getApiKey, getDefaultProvider, getProvider } from '../utils/secure-storage';
 import { getProviderEnvVar, getKeyableProviderTypes } from '../utils/provider-registry';
 import { getOpenClawDir, getOpenClawEntryPath, isOpenClawPresent } from '../utils/paths';
+import { getDwsDir } from '../utils/dws-env-setup';
 import { getUvMirrorEnv } from '../utils/uv-env';
+import { getManagedPythonEnv } from '../utils/uv-setup';
 import { cleanupDanglingWeChatPluginState, listConfiguredChannelsFromConfig, readOpenClawConfig } from '../utils/channel-config';
 import { sanitizeOpenClawConfig, batchSyncConfigFields } from '../utils/openclaw-auth';
 import { buildProxyEnv, resolveProxySettings } from '../utils/proxy';
@@ -47,7 +49,7 @@ export interface GatewayLaunchContext {
 
 const CHANNEL_PLUGIN_MAP: Record<string, { dirName: string; npmName: string }> = {
   dingtalk: { dirName: 'dingtalk', npmName: '@soimy/dingtalk' },
-  wecom: { dirName: 'wecom', npmName: '@wecom/wecom-openclaw-plugin' },
+  wecom: { dirName: 'wecom-openclaw-plugin', npmName: '@wecom/wecom-openclaw-plugin' },
   feishu: { dirName: 'feishu-openclaw-plugin', npmName: '@larksuite/openclaw-lark' },
 
   'openclaw-weixin': { dirName: 'openclaw-weixin', npmName: '@tencent-weixin/openclaw-weixin' },
@@ -55,7 +57,7 @@ const CHANNEL_PLUGIN_MAP: Record<string, { dirName: string; npmName: string }> =
 
 /**
  * OpenClaw 3.22+ ships Discord, Telegram, and other channels as built-in
- * extensions.  If a previous ClawX version copied one of these into
+ * extensions.  If a previous LYClaw version copied one of these into
  * ~/.openclaw/extensions/, the broken copy overrides the working built-in
  * plugin and must be removed.
  */
@@ -165,6 +167,40 @@ function ensureConfiguredPluginsUpgraded(configuredChannels: string[]): void {
 }
 
 /**
+ * Remove channel plugin extensions from ~/.openclaw/extensions/ when their
+ * corresponding channel is no longer configured.  This prevents the Gateway
+ * from scanning residual plugin manifests that were installed by a previous
+ * configuration but are no longer needed.
+ */
+function cleanupUnconfiguredChannelPlugins(configuredChannels: string[]): void {
+  const configuredSet = new Set(configuredChannels);
+  const staleWeComDir = join(homedir(), '.openclaw', 'extensions', 'wecom');
+  if (existsSync(fsPath(staleWeComDir))) {
+    logger.info('[plugin] Removing stale WeCom plugin directory: wecom');
+    try {
+      rmSync(fsPath(staleWeComDir), { recursive: true, force: true });
+    } catch (err) {
+      logger.warn('[plugin] Failed to remove stale WeCom plugin directory:', err);
+    }
+  }
+
+  for (const [channelType, pluginInfo] of Object.entries(CHANNEL_PLUGIN_MAP)) {
+    if (configuredSet.has(channelType)) continue;
+
+    const { dirName } = pluginInfo;
+    const targetDir = join(homedir(), '.openclaw', 'extensions', dirName);
+    if (!existsSync(fsPath(targetDir))) continue;
+
+    logger.info(`[plugin] Removing unconfigured channel plugin: ${channelType} (${dirName})`);
+    try {
+      rmSync(fsPath(targetDir), { recursive: true, force: true });
+    } catch (err) {
+      logger.warn(`[plugin] Failed to remove unconfigured channel plugin ${channelType}:`, err);
+    }
+  }
+}
+
+/**
  * Ensure extension-specific packages are resolvable from shared dist/ chunks.
  *
  * OpenClaw's Rollup bundler creates shared chunks in dist/ (e.g.
@@ -256,60 +292,38 @@ export async function syncGatewayConfigBeforeLaunch(
   // node_modules linked on the next Gateway spawn.
   resetExtensionDepsLinked();
 
-  await syncProxyConfigToOpenClaw(appSettings, { preserveExistingWhenDisabled: true });
+  // Run independent cleanup operations in parallel for faster startup
+  await Promise.allSettled([
+    syncProxyConfigToOpenClaw(appSettings, { preserveExistingWhenDisabled: true }).catch((err) => {
+      logger.warn('Failed to sync proxy config:', err);
+    }),
+    
+    sanitizeOpenClawConfig().catch((err) => {
+      logger.warn('Failed to sanitize openclaw.json:', err);
+    }),
+    
+    cleanupDanglingWeChatPluginState().catch((err) => {
+      logger.warn('Failed to clean dangling WeChat plugin state before launch:', err);
+    }),
+    
+    // Remove stale copies of built-in extensions (Discord, Telegram) that
+    // override OpenClaw's working built-in plugins and break channel loading.
+    Promise.resolve().then(() => {
+      try {
+        cleanupStaleBuiltInExtensions();
+      } catch (err) {
+        logger.warn('Failed to clean stale built-in extensions:', err);
+      }
+    }),
+  ]);
 
-  try {
-    await sanitizeOpenClawConfig();
-  } catch (err) {
-    logger.warn('Failed to sanitize openclaw.json:', err);
-  }
-
-  try {
-    await cleanupDanglingWeChatPluginState();
-  } catch (err) {
-    logger.warn('Failed to clean dangling WeChat plugin state before launch:', err);
-  }
-
-  // Remove stale copies of built-in extensions (Discord, Telegram) that
-  // override OpenClaw's working built-in plugins and break channel loading.
-  try {
-    cleanupStaleBuiltInExtensions();
-  } catch (err) {
-    logger.warn('Failed to clean stale built-in extensions:', err);
-  }
-
-  // Auto-upgrade installed plugins before Gateway starts so that
-  // the plugin manifest ID matches what sanitize wrote to the config.
-  // Read config once and reuse for both listConfiguredChannels and plugins.allow.
+  // Plugin upgrade must run after sanitize completes (depends on config)
   try {
     const rawCfg = await readOpenClawConfig();
     const configuredChannels = await listConfiguredChannelsFromConfig(rawCfg);
 
-    // Also ensure plugins referenced in plugins.allow are installed even if
-    // they have no channels.X section yet (e.g. qqbot added via plugins.allow
-    // but never fully saved through ClawX UI).
-    try {
-      const allowList = Array.isArray(rawCfg.plugins?.allow) ? (rawCfg.plugins!.allow as string[]) : [];
-      const pluginIdToChannel: Record<string, string> = {};
-      for (const [channelType, info] of Object.entries(CHANNEL_PLUGIN_MAP)) {
-        pluginIdToChannel[info.dirName] = channelType;
-      }
-
-      pluginIdToChannel['openclaw-lark'] = 'feishu';
-      pluginIdToChannel['feishu-openclaw-plugin'] = 'feishu';
-
-      for (const pluginId of allowList) {
-        const channelType = pluginIdToChannel[pluginId] ?? pluginId;
-        if (CHANNEL_PLUGIN_MAP[channelType] && !configuredChannels.includes(channelType)) {
-          configuredChannels.push(channelType);
-        }
-      }
-
-    } catch (err) {
-      logger.warn('[plugin] Failed to augment channel list from plugins.allow:', err);
-    }
-
     ensureConfiguredPluginsUpgraded(configuredChannels);
+    cleanupUnconfiguredChannelPlugins(configuredChannels);
   } catch (err) {
     logger.warn('Failed to auto-upgrade plugins:', err);
   }
@@ -367,25 +381,25 @@ async function resolveChannelStartupPolicy(): Promise<{
   skipChannels: boolean;
   channelStartupSummary: string;
 }> {
+  // Skip channel adapters only when nothing is configured: faster cold start.
+  // If openclaw.json already has channels (e.g. dingtalk Stream), we must not set
+  // OPENCLAW_SKIP_CHANNELS — lazy init may never attach and the UI stays disconnected.
   try {
     const rawCfg = await readOpenClawConfig();
     const configuredChannels = await listConfiguredChannelsFromConfig(rawCfg);
-    if (configuredChannels.length === 0) {
-      return {
-        skipChannels: true,
-        channelStartupSummary: 'skipped(no configured channels)',
-      };
-    }
+    const skipChannels = configuredChannels.length === 0;
 
     return {
-      skipChannels: false,
-      channelStartupSummary: `enabled(${configuredChannels.join(',')})`,
+      skipChannels,
+      channelStartupSummary: skipChannels
+        ? 'skipped(no configured channels)'
+        : `startup(${configuredChannels.join(',')})`,
     };
   } catch (error) {
     logger.warn('Failed to determine configured channels for gateway launch:', error);
     return {
-      skipChannels: false,
-      channelStartupSummary: 'enabled(unknown)',
+      skipChannels: true,
+      channelStartupSummary: 'skipped(unknown)',
     };
   }
 }
@@ -427,18 +441,32 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
 
   const { NODE_OPTIONS: _nodeOptions, ...baseEnv } = process.env;
   const baseEnvRecord = baseEnv as Record<string, string | undefined>;
-  const baseEnvPatched = binPathExists
+  const baseEnvWithBundledBin = binPathExists
     ? prependPathEntry(baseEnvRecord, binPath).env
     : baseEnvRecord;
+  // Agent exec/command tools run in non-interactive shells and do not source
+  // ~/.zshrc, ~/.bashrc, or Windows' refreshed user environment. Put the
+  // user-level DWS install directory directly into Gateway PATH so commands
+  // like `dws ...` can resolve the same external ~/.dws binary.
+  const baseEnvPatched = prependPathEntry(baseEnvWithBundledBin, getDwsDir()).env;
+  const managedPythonEnv = await getManagedPythonEnv(stripSystemdSupervisorEnv(baseEnvPatched));
+
   const forkEnv: Record<string, string | undefined> = {
-    ...stripSystemdSupervisorEnv(baseEnvPatched),
+    ...managedPythonEnv,
     ...providerEnv,
     ...uvEnv,
     ...proxyEnv,
     OPENCLAW_GATEWAY_TOKEN: appSettings.gatewayToken,
-    OPENCLAW_SKIP_CHANNELS: skipChannels ? '1' : '',
-    CLAWDBOT_SKIP_CHANNELS: skipChannels ? '1' : '',
+    ...(skipChannels
+      ? { OPENCLAW_SKIP_CHANNELS: '1', CLAWDBOT_SKIP_CHANNELS: '1' }
+      : {}),
     OPENCLAW_NO_RESPAWN: '1',
+    OPENCLAW_DISABLE_BONJOUR: '1',
+    OPENCLAW_DISABLE_MODEL_PRICING: '1',
+    // OPENCLAW_OFFLINE_MODE: '1',
+    // OPENCLAW_NETWORK_TIMEOUT: '1',
+    LITELLM_DISABLE_COST_TRACKING: 'true',
+    // Additional optimizations for faster startup
   };
 
   // Ensure extension-specific packages (e.g. grammy from the telegram

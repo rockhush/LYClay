@@ -1,7 +1,7 @@
 import type { GatewayStatus } from '@/types/gateway';
 
-export const CHAT_HISTORY_RPC_TIMEOUT_MS = 35_000;
-export const CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS = [800, 2_000, 4_000, 8_000] as const;
+export const CHAT_HISTORY_RPC_TIMEOUT_MS = 30_000;
+export const CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 export const CHAT_HISTORY_STARTUP_CONNECTION_GRACE_MS = 30_000;
 export const CHAT_HISTORY_STARTUP_RUNNING_WINDOW_MS =
   CHAT_HISTORY_RPC_TIMEOUT_MS + CHAT_HISTORY_STARTUP_CONNECTION_GRACE_MS;
@@ -19,6 +19,8 @@ export function classifyHistoryStartupRetryError(error: unknown): HistoryRetryEr
   if (
     message.includes('unavailable during gateway startup')
     || message.includes('unavailable during startup')
+    || message.includes('gateway starting')
+    || message.includes('retry shortly')
     || message.includes('not yet ready')
     || message.includes('service not initialized')
   ) {

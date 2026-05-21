@@ -13,9 +13,12 @@ export function dispatchProtocolEvent(
   switch (event) {
     case 'tick':
       break;
-    case 'chat':
+    case 'chat': {
+      const chatState = (payload as Record<string, unknown>)?.state;
+      logger.info(`[event] chat event received: state=${chatState}, runId=${(payload as Record<string, unknown>)?.runId}`);
       emitter.emit('chat:message', { message: payload });
       break;
+    }
     case 'agent': {
       // Keep "agent" on the canonical notification path to avoid double
       // handling in renderer when both notification and chat-message are wired.

@@ -227,6 +227,25 @@ describe('deriveTaskSteps', () => {
     ]);
   });
 
+  it('filters heartbeat text from execution graph narration', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-heartbeat',
+          content: [{ type: 'text', text: 'HEARTBEAT_OK' }],
+        },
+      ],
+      streamingMessage: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'HEARTBEAT_OK' }],
+      },
+      streamingTools: [],
+    });
+
+    expect(steps).toEqual([]);
+  });
+
   it('keeps earlier reply segments in the graph when the last streaming segment is rendered separately', () => {
     const steps = deriveTaskSteps({
       messages: [],

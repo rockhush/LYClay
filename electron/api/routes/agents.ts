@@ -68,7 +68,7 @@ export async function restartGatewayForAgentDeletion(ctx: HostApiContext): Promi
       // a previous pnpm dev run), forcefully kill whatever is on the port.
       try {
         if (process.platform === 'darwin' || process.platform === 'linux') {
-          // MUST use -sTCP:LISTEN. Otherwise lsof returns the client process (ClawX itself) 
+          // MUST use -sTCP:LISTEN. Otherwise lsof returns the client process (LYClaw itself) 
           // that has an ESTABLISHED WebSocket connection to the port, causing us to kill ourselves.
           const { stdout } = await execAsync(`lsof -t -i :${port} -sTCP:LISTEN`);
           const pids = stdout.trim().split('\n').filter(Boolean);
@@ -129,10 +129,10 @@ export async function handleAgentRoutes(
         console.warn('[agents] Failed to sync provider auth after agent creation:', err);
       });
       scheduleGatewayReload(ctx, 'create-agent');
-      // Ensure newly provisioned workspaces get ClawX context merge/cleanup
+      // Ensure newly provisioned workspaces get LYClaw context merge/cleanup
       // even when gateway status events do not fire (e.g. in-process reload).
       void ensureClawXContext().catch((err) => {
-        console.warn('[agents] Failed to ensure ClawX context after agent creation:', err);
+        console.warn('[agents] Failed to ensure LYClaw context after agent creation:', err);
       });
       sendJson(res, 200, { success: true, ...snapshot });
     } catch (error) {
@@ -170,8 +170,26 @@ export async function handleAgentRoutes(
         } catch (syncError) {
           console.warn('[agents] Failed to sync runtime after updating agent model:', syncError);
         }
-        scheduleGatewayReload(ctx, 'update-agent-model');
-        sendJson(res, 200, { success: true, ...snapshot });
+
+        // 热更新：直接通过 RPC 让 Gateway 更新模型配置，无需重启
+        let gatewayUpdated = false;
+        const effectiveModelRef = snapshot.agents.find((agent) => agent.id === agentId)?.modelRef;
+        if (ctx.gatewayManager.isConnected() && effectiveModelRef) {
+          try {
+            await ctx.gatewayManager.rpc('agents.update', {
+              agentId,
+              model: effectiveModelRef,
+            }, 10000);
+            gatewayUpdated = true;
+            console.log('[agents] Gateway model hot-reloaded via agents.update RPC');
+          } catch (rpcError) {
+            console.warn('[agents] Gateway agents.update RPC failed, fallback to reload:', rpcError);
+            // RPC 失败时 fallback 到原有的 reload 逻辑
+            scheduleGatewayReload(ctx, 'update-agent-model-fallback');
+          }
+        }
+
+        sendJson(res, 200, { success: true, ...snapshot, gatewayUpdated });
       } catch (error) {
         sendJson(res, 500, { success: false, error: String(error) });
       }

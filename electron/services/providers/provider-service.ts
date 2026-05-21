@@ -8,7 +8,7 @@ import type {
   ProviderDefinition,
   ProviderType,
 } from '../../shared/providers/types';
-import { BUILTIN_PROVIDER_TYPES } from '../../shared/providers/types';
+import { BUILTIN_PROVIDER_TYPES, LY_MINIMAX_PROVIDER_ID } from '../../shared/providers/types';
 import { ensureProviderStoreMigrated } from './provider-migration';
 import {
   deleteProviderAccount,
@@ -32,6 +32,61 @@ import { getActiveOpenClawProviders, getOpenClawProvidersConfig } from '../../ut
 import { getAliasSourceTypes, getOpenClawProviderKeyForType } from '../../utils/provider-keys';
 import type { ProviderWithKeyInfo } from '../../shared/providers/types';
 import { logger } from '../../utils/logger';
+
+const LY_MINIMAX_LABEL = 'LY-MiniMax';
+const LY_MINIMAX_BASE_URL = 'http://10.64.22.11:8000/v1';
+const LY_MINIMAX_MODEL_ID = 'MiniMax-M2.7';
+
+function isLyMiniMaxAccountId(accountId: string): boolean {
+  return accountId === LY_MINIMAX_PROVIDER_ID;
+}
+
+function isReadonlyProviderAccount(account: Pick<ProviderAccount, 'vendorId' | 'metadata'>): boolean {
+  return account.vendorId === LY_MINIMAX_PROVIDER_ID || account.metadata?.readonly === true;
+}
+
+function buildLyMiniMaxAccount(existing?: ProviderAccount | null): ProviderAccount {
+  const now = new Date().toISOString();
+  return {
+    id: LY_MINIMAX_PROVIDER_ID,
+    vendorId: LY_MINIMAX_PROVIDER_ID,
+    label: LY_MINIMAX_LABEL,
+    authMode: 'api_key',
+    baseUrl: LY_MINIMAX_BASE_URL,
+    apiProtocol: 'anthropic-messages',
+    headers: existing?.headers,
+    model: LY_MINIMAX_MODEL_ID,
+    fallbackModels: existing?.fallbackModels,
+    fallbackAccountIds: existing?.fallbackAccountIds,
+    enabled: true,
+    isDefault: existing?.isDefault ?? false,
+    metadata: {
+      ...existing?.metadata,
+      managedBy: 'lyclaw',
+      readonly: true,
+    },
+    createdAt: existing?.createdAt || now,
+    updatedAt: existing?.updatedAt || now,
+  };
+}
+
+async function ensureLyMiniMaxAccount(): Promise<ProviderAccount> {
+  const existing = await getProviderAccount(LY_MINIMAX_PROVIDER_ID);
+  const account = buildLyMiniMaxAccount(existing);
+  if (
+    !existing
+    || !isReadonlyProviderAccount(existing)
+    || !existing.enabled
+    || existing.label !== account.label
+    || existing.baseUrl !== account.baseUrl
+    || existing.apiProtocol !== account.apiProtocol
+    || existing.model !== account.model
+  ) {
+    await saveProviderAccount(account);
+    return account;
+  }
+  return existing;
+}
 
 function maskApiKey(apiKey: string | null): string | null {
   if (!apiKey) return null;
@@ -68,8 +123,10 @@ export class ProviderService {
     const { providers: openClawProviders, defaultModel } = await getOpenClawProvidersConfig();
     const activeProviders = await getActiveOpenClawProviders();
 
+    const lyMiniMaxAccount = await ensureLyMiniMaxAccount();
+
     if (activeProviders.size === 0) {
-      return [];
+      return [lyMiniMaxAccount];
     }
 
     // Read store accounts as a lookup cache (NOT as the source of what to display).
@@ -130,6 +187,10 @@ export class ProviderService {
           }
         }
       }
+    }
+
+    if (!result.some((account) => account.id === LY_MINIMAX_PROVIDER_ID)) {
+      result.unshift(lyMiniMaxAccount);
     }
 
     return result;
@@ -217,6 +278,12 @@ export class ProviderService {
 
   async createAccount(account: ProviderAccount, apiKey?: string): Promise<ProviderAccount> {
     await ensureProviderStoreMigrated();
+    if (isReadonlyProviderAccount(account)) {
+      const existing = await getProviderAccount(account.id);
+      if (existing) {
+        return existing;
+      }
+    }
     // Only save to providerAccounts store — do NOT call saveProvider() which
     // writes to the legacy `providers` store and causes phantom/duplicate issues.
     await saveProviderAccount(account);
@@ -235,6 +302,9 @@ export class ProviderService {
     const existing = await getProviderAccount(accountId);
     if (!existing) {
       throw new Error('Provider account not found');
+    }
+    if (isReadonlyProviderAccount(existing)) {
+      throw new Error('LY-MiniMax cannot be modified');
     }
 
     const nextAccount: ProviderAccount = {
@@ -260,6 +330,13 @@ export class ProviderService {
 
   async deleteAccount(accountId: string): Promise<boolean> {
     await ensureProviderStoreMigrated();
+    if (isLyMiniMaxAccountId(accountId)) {
+      throw new Error('LY-MiniMax cannot be deleted');
+    }
+    const existing = await getProviderAccount(accountId);
+    if (existing && isReadonlyProviderAccount(existing)) {
+      throw new Error('LY-MiniMax cannot be deleted');
+    }
     return deleteProvider(accountId);
   }
 

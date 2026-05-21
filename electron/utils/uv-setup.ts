@@ -1,10 +1,11 @@
 import { app } from 'electron';
 import { execSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { dirname, join, win32 } from 'path';
 import { getUvMirrorEnv } from './uv-env';
 import { logger } from './logger';
-import { quoteForCmd, needsWinShell } from './paths';
+import { prepareWinSpawn } from './paths';
+import { prependPathEntry } from './env-path';
 
 /**
  * Get the path to the bundled uv binary
@@ -88,19 +89,32 @@ export async function installUv(): Promise<void> {
  * Check if a managed Python 3.12 is ready and accessible
  */
 export async function isPythonReady(): Promise<boolean> {
-  const { bin: uvBin } = resolveUvBin();
-  const useShell = needsWinShell(uvBin);
+  return Boolean(await findManagedPythonPath());
+}
 
-  return new Promise<boolean>((resolve) => {
+export async function findManagedPythonPath(): Promise<string | null> {
+  const { bin: uvBin } = resolveUvBin();
+  const prepared = prepareWinSpawn(uvBin, ['python', 'find', '3.12', '--managed-python', '--no-python-downloads']);
+
+  return new Promise<string | null>((resolve) => {
     try {
-      const child = spawn(useShell ? quoteForCmd(uvBin) : uvBin, ['python', 'find', '3.12'], {
-        shell: useShell,
-        windowsHide: true,
+      const child = spawn(
+        prepared.command,
+        prepared.args,
+        {
+          shell: prepared.shell,
+          windowsHide: true,
+        },
+      );
+      let output = '';
+      child.stdout?.on('data', (data) => { output += data; });
+      child.on('close', (code) => {
+        const pythonPath = output.trim().split(/\r?\n/).find(Boolean)?.trim() || '';
+        resolve(code === 0 && pythonPath ? pythonPath : null);
       });
-      child.on('close', (code) => resolve(code === 0));
-      child.on('error', () => resolve(false));
+      child.on('error', () => resolve(null));
     } catch {
-      resolve(false);
+      resolve(null);
     }
   });
 }
@@ -114,13 +128,13 @@ async function runPythonInstall(
   env: Record<string, string | undefined>,
   label: string,
 ): Promise<void> {
-  const useShell = needsWinShell(uvBin);
+  const prepared = prepareWinSpawn(uvBin, ['python', 'install', '3.12']);
   return new Promise<void>((resolve, reject) => {
     const stderrChunks: string[] = [];
     const stdoutChunks: string[] = [];
 
-    const child = spawn(useShell ? quoteForCmd(uvBin) : uvBin, ['python', 'install', '3.12'], {
-      shell: useShell,
+    const child = spawn(prepared.command, prepared.args, {
+      shell: prepared.shell,
       env,
       windowsHide: true,
     });
@@ -167,6 +181,30 @@ async function runPythonInstall(
   });
 }
 
+export async function getManagedPythonEnv(
+  baseEnv: Record<string, string | undefined> = {},
+): Promise<Record<string, string | undefined>> {
+  const pythonPath = await findManagedPythonPath();
+  if (!pythonPath) return baseEnv;
+
+  const pythonDir = dirname(pythonPath);
+  const scriptsDir = process.platform === 'win32'
+    ? join(pythonDir, 'Scripts')
+    : pythonDir;
+  const pythonBinDir = process.platform === 'win32'
+    ? win32.normalize(pythonDir)
+    : pythonDir;
+
+  const env: Record<string, string | undefined> = {
+    ...baseEnv,
+    OPENCLAW_PINNED_PYTHON: pythonPath,
+    OPENCLAW_PINNED_WRITE_PYTHON: pythonPath,
+  };
+
+  const withScripts = scriptsDir === pythonBinDir ? env : prependPathEntry(env, scriptsDir).env;
+  return prependPathEntry(withScripts, pythonBinDir).env;
+}
+
 /**
  * Use bundled uv to install a managed Python version (default 3.12).
  *
@@ -206,11 +244,11 @@ export async function setupManagedPython(): Promise<void> {
   }
 
   // After installation, verify and log the Python path
-  const verifyShell = needsWinShell(uvBin);
+  const verifySpawn = prepareWinSpawn(uvBin, ['python', 'find', '3.12', '--managed-python', '--no-python-downloads']);
   try {
     const findPath = await new Promise<string>((resolve) => {
-      const child = spawn(verifyShell ? quoteForCmd(uvBin) : uvBin, ['python', 'find', '3.12'], {
-        shell: verifyShell,
+      const child = spawn(verifySpawn.command, verifySpawn.args, {
+        shell: verifySpawn.shell,
         env: { ...process.env, ...uvEnv },
         windowsHide: true,
       });

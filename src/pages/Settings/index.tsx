@@ -80,7 +80,20 @@ export function Settings() {
   } = useSettingsStore();
 
   const { status: gatewayStatus, restart: restartGateway } = useGatewayStore();
-  const currentVersion = useUpdateStore((state) => state.currentVersion);
+  const [currentVersion, setCurrentVersion] = useState('0.0.0');
+
+  useEffect(() => {
+    const fetchVersion = async () => {
+      try {
+        const { invokeIpc } = await import('@/lib/api-client');
+        const version = await invokeIpc<string>('app:version');
+        setCurrentVersion(version);
+      } catch (error) {
+        console.error('Failed to get version:', error);
+      }
+    };
+    fetchVersion();
+  }, []);
   const updateSetAutoDownload = useUpdateStore((state) => state.setAutoDownload);
   const [controlUiInfo, setControlUiInfo] = useState<ControlUiInfo | null>(null);
   const [openclawCliCommand, setOpenclawCliCommand] = useState('');
@@ -113,7 +126,6 @@ export function Settings() {
     timedOut?: boolean;
     error?: string;
   } | null>(null);
-
   const handleShowLogs = async () => {
     try {
       const logs = await hostApiFetch<{ content: string }>('/api/logs?tailLines=100');
@@ -283,7 +295,6 @@ export function Settings() {
   useEffect(() => {
     setWsDiagnosticEnabled(getGatewayWsDiagnosticEnabled());
   }, []);
-
   useEffect(() => {
     if (!devModeUnlocked) return;
     setTelemetryEntries(getUiTelemetrySnapshot(200));
@@ -501,7 +512,7 @@ export function Settings() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant={theme === 'light' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10", theme === 'light' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'light' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('light')}
                   >
                     <Sun className="h-4 w-4 mr-2" />
@@ -509,7 +520,7 @@ export function Settings() {
                   </Button>
                   <Button
                     variant={theme === 'dark' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10", theme === 'dark' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'dark' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('dark')}
                   >
                     <Moon className="h-4 w-4 mr-2" />
@@ -517,7 +528,7 @@ export function Settings() {
                   </Button>
                   <Button
                     variant={theme === 'system' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10", theme === 'system' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'system' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('system')}
                   >
                     <Monitor className="h-4 w-4 mr-2" />
@@ -532,7 +543,7 @@ export function Settings() {
                     <Button
                       key={lang.code}
                       variant={language === lang.code ? 'secondary' : 'outline'}
-                      className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10", language === lang.code ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                      className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", language === lang.code ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                       onClick={() => setLanguage(lang.code)}
                     >
                       {lang.label}
@@ -572,10 +583,10 @@ export function Settings() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium border",
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium border shadow-md shadow-black/10",
                     gatewayStatus.state === 'running' ? "bg-green-500/10 text-green-600 dark:text-green-500 border-green-500/20" :
                       gatewayStatus.state === 'error' ? "bg-red-500/10 text-red-600 dark:text-red-500 border-red-500/20" :
-                        "bg-black/5 dark:bg-white/5 text-muted-foreground border-transparent"
+                        "bg-white text-muted-foreground border-black/10"
                   )}>
                     <div className={cn("w-1.5 h-1.5 rounded-full",
                       gatewayStatus.state === 'running' ? "bg-green-500" :
@@ -583,11 +594,11 @@ export function Settings() {
                     )} />
                     {gatewayStatus.state}
                   </div>
-                  <Button variant="outline" size="sm" onClick={restartGateway} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5">
+                  <Button variant="outline" size="sm" onClick={restartGateway} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
                     <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
                     {t('common:actions.restart')}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleShowLogs} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5">
+                  <Button variant="outline" size="sm" onClick={handleShowLogs} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
                     <FileText className="h-3.5 w-3.5 mr-1.5" />
                     {t('gateway.logs')}
                   </Button>
@@ -627,20 +638,6 @@ export function Settings() {
                 />
               </div>
 
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-[15px] font-medium text-foreground">{t('advanced.devMode')}</Label>
-                  <p className="text-[13px] text-muted-foreground mt-1">
-                    {t('advanced.devModeDesc')}
-                  </p>
-                </div>
-                <Switch
-                  checked={devModeUnlocked}
-                  onCheckedChange={setDevModeUnlocked}
-                  data-testid="settings-dev-mode-switch"
-                />
-              </div>
 
               <div className="flex items-center justify-between">
                 <div>
@@ -1043,7 +1040,7 @@ export function Settings() {
             <div className="space-y-6">
               <UpdateSettings />
 
-              <div className="flex items-center justify-between">
+              {/* <div className="flex items-center justify-between">
                 <div>
                   <Label className="text-[15px] font-medium text-foreground">{t('updates.autoCheck')}</Label>
                   <p className="text-[13px] text-muted-foreground mt-1">
@@ -1070,7 +1067,7 @@ export function Settings() {
                     updateSetAutoDownload(value);
                   }}
                 />
-              </div>
+              </div> */}
             </div>
           </div>
 
@@ -1088,27 +1085,6 @@ export function Settings() {
               <p>{t('about.basedOn')}</p>
               <p>{t('about.version', { version: currentVersion })}</p>
               <div className="flex gap-4 pt-3">
-                <Button
-                  variant="link"
-                  className="h-auto p-0 text-[14px] text-blue-500 hover:text-blue-600 font-medium"
-                  onClick={() => window.electron.openExternal('https://claw-x.com')}
-                >
-                  {t('about.docs')}
-                </Button>
-                <Button
-                  variant="link"
-                  className="h-auto p-0 text-[14px] text-blue-500 hover:text-blue-600 font-medium"
-                  onClick={() => window.electron.openExternal('https://github.com/ValueCell-ai/ClawX')}
-                >
-                  {t('about.github')}
-                </Button>
-                <Button
-                  variant="link"
-                  className="h-auto p-0 text-[14px] text-blue-500 hover:text-blue-600 font-medium"
-                  onClick={() => window.electron.openExternal('https://icnnp7d0dymg.feishu.cn/wiki/UyfOwQ2cAiJIP6kqUW8cte5Bnlc')}
-                >
-                  {t('about.faq')}
-                </Button>
               </div>
             </div>
           </div>

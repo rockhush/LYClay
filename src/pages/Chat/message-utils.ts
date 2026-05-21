@@ -8,7 +8,7 @@ import type { RawMessage, ContentBlock } from '@/stores/chat';
 /**
  * Clean Gateway metadata from user message text for display.
  * Strips: [media attached: ... | ...], [message_id: ...],
- * and the timestamp prefix [Day Date Time Timezone].
+ * [Working Directory: ...], and the timestamp prefix [Day Date Time Timezone].
  */
 function cleanUserText(text: string): string {
   return text
@@ -16,17 +16,45 @@ function cleanUserText(text: string): string {
     .replace(/\s*\[media attached:[^\]]*\]/g, '')
     // Remove [message_id: uuid]
     .replace(/\s*\[message_id:\s*[^\]]+\]/g, '')
+    // Remove [Working Directory: path] workspace context
+    .replace(/\s*\[Working Directory:[^\]]*\]/g, '')
+    // Remove Gateway-injected "Sender (untrusted metadata): ```json...```" block
+    .replace(/Sender\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
+    // Fallback: remove "Sender (...): {...}" without code block wrapper
+    .replace(/Sender\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
     // Remove Gateway-injected "Conversation info (untrusted metadata): ```json...```" block
-    .replace(/^Conversation info\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/i, '')
+    .replace(/Conversation info\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
     // Fallback: remove "Conversation info (...): {...}" without code block wrapper
-    .replace(/^Conversation info\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/i, '')
+    .replace(/Conversation info\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
     // Remove Gateway timestamp prefix like [Fri 2026-02-13 22:39 GMT+8]
-    .replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[^\]]+\]\s*/i, '')
+    .replace(/\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[^\]]+\]\s*/gi, '')
+    // Clean up multiple consecutive newlines
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
 function normalizeProgressiveText(text: string | undefined): string {
   return typeof text === 'string' ? text.replace(/\r\n/g, '\n').trim() : '';
+}
+
+function isInternalText(text: string): boolean {
+  const normalized = text.trim();
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(normalized)) return true;
+  if (/^\s*System\s*\(untrusted\)\s*:/i.test(normalized)) return true;
+  if (/^\s*System\s*:/i.test(normalized)) return true;
+  if (
+    /An async command you ran earlier has completed/i.test(normalized)
+    && /Do not relay it to the user unless explicitly requested/i.test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    /^\s*Current time\s*:/i.test(normalized)
+    && /^\s*Current time\s*:[^\n]*\/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+UTC\s*$/i.test(normalized)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function compactProgressiveParts(parts: string[]): string[] {
@@ -172,11 +200,11 @@ export function extractTextSegments(message: RawMessage | unknown): string[] {
     segments = cleaned ? [cleaned] : [];
   }
 
-  if (!isUser) return segments;
+  if (!isUser) return segments.filter((segment) => !isInternalText(segment));
 
   return segments
     .map((segment) => cleanUserText(segment))
-    .filter((segment) => segment.length > 0);
+    .filter((segment) => segment.length > 0 && !isInternalText(segment));
 }
 
 /**

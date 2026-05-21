@@ -3,7 +3,9 @@
  * Manages the OpenClaw Gateway process lifecycle
  */
 import { app } from 'electron';
+import { stat } from 'fs/promises';
 import path from 'path';
+import { homedir } from 'os';
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { PORTS } from '../utils/config';
@@ -49,7 +51,13 @@ import {
   loadGatewayReloadPolicy,
   type GatewayReloadPolicy,
 } from './reload-policy';
-import { classifyGatewayStderrMessage, recordGatewayStartupStderrLine } from './startup-stderr';
+import {
+  classifyGatewayStderrMessage,
+  parseGatewayStuckSessionDiagnostic,
+  parseSessionWriteLockLog,
+  recordGatewayStartupStderrLine,
+  type GatewayStuckSessionDiagnostic,
+} from './startup-stderr';
 import { runGatewayStartupSequence } from './startup-orchestrator';
 
 export interface GatewayStatus {
@@ -63,6 +71,11 @@ export interface GatewayStatus {
   reconnectAttempts?: number;
   /** True once the gateway's internal subsystems (skills, plugins) are ready for RPC calls. */
   gatewayReady?: boolean;
+  /** Warmup status: 'idle' | 'warming' | 'ready' | 'failed' */
+  warmupStatus?: 'idle' | 'warming' | 'ready' | 'failed';
+  /** Most recent OpenClaw stuck-session diagnostic emitted by Gateway stderr. */
+  lastStuckSessionAt?: number;
+  lastStuckSession?: GatewayStuckSessionDiagnostic;
 }
 
 export type GatewayHealthState = 'healthy' | 'degraded' | 'unresponsive';
@@ -77,6 +90,8 @@ export interface GatewayHealthSummary {
   lastRpcFailureMethod?: string;
   lastChannelsStatusOkAt?: number;
   lastChannelsStatusFailureAt?: number;
+  lastStuckSessionAt?: number;
+  lastStuckSession?: GatewayStuckSessionDiagnostic;
 }
 
 export interface GatewayDiagnosticsSnapshot {
@@ -85,6 +100,8 @@ export interface GatewayDiagnosticsSnapshot {
   lastRpcFailureAt?: number;
   lastRpcFailureMethod?: string;
   lastHeartbeatTimeoutAt?: number;
+  lastStuckSessionAt?: number;
+  lastStuckSession?: GatewayStuckSessionDiagnostic;
   consecutiveHeartbeatMisses: number;
   lastSocketCloseAt?: number;
   lastSocketCloseCode?: number;
@@ -121,7 +138,7 @@ export class GatewayManager extends EventEmitter {
   private processExitCode: number | null = null; // set by exit event, replaces exitCode/signalCode
   private ownsProcess = false;
   private ws: WebSocket | null = null;
-  private status: GatewayStatus = { state: 'stopped', port: PORTS.OPENCLAW_GATEWAY };
+  private status: GatewayStatus = { state: 'stopped', port: PORTS.OPENCLAW_GATEWAY, warmupStatus: 'idle' };
   private readonly stateController: GatewayStateController;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
@@ -155,15 +172,57 @@ export class GatewayManager extends EventEmitter {
   private static readonly HEARTBEAT_TIMEOUT_MS_WIN = 25_000;
   private static readonly HEARTBEAT_MAX_MISSES_WIN = 5;
   public static readonly RESTART_COOLDOWN_MS = 5_000;
-  private static readonly GATEWAY_READY_FALLBACK_MS = 30_000;
+  private static readonly GATEWAY_READY_FALLBACK_MS = 2_000;
+  private static readonly GATEWAY_READY_PROBE_TIMEOUT_MS = 1_500;
   private lastRestartAt = 0;
   /** Set by scheduleReconnect() before calling start() to signal auto-reconnect. */
   private isAutoReconnectStart = false;
   private gatewayReadyFallbackTimer: NodeJS.Timeout | null = null;
+  private isWarmedUp = false;
+  private hasWarmupFailed = false;
+  private warmupTimer: NodeJS.Timeout | null = null;
+  private warmupRequestPromise: Promise<void> | null = null;
+  private warmupStartedAt: number | null = null;
+  private rpcInflight = new Map<string, {
+    method: string;
+    startedAt: number;
+    timeoutMs: number;
+    sessionKey?: string;
+  }>();
+  private chatRunMetrics = new Map<string, {
+    kind: 'user' | 'warmup';
+    sessionKey?: string;
+    requestedAt: number;
+    acceptedAt: number;
+    rpcDurationMs: number;
+    firstEventAt?: number;
+    firstDeltaAt?: number;
+    firstVisibleProgressAt?: number;
+    firstVisibleProgressKind?: string;
+    firstEventWatchdogTimers?: NodeJS.Timeout[];
+    firstVisibleProgressWatchdogTimers?: NodeJS.Timeout[];
+  }>();
+  private warmupRunWaiters = new Map<string, {
+    resolve: (state: string) => void;
+    reject: (error: Error) => void;
+    timeout: NodeJS.Timeout;
+    startedAt: number;
+  }>();
+  private warmupBackgroundReleaseChain: Promise<void> = Promise.resolve();
+  private readonly chatSendWatchdogDelaysMs = [10_000, 30_000, 60_000, 90_000];
+  private readonly chatRunFirstEventWatchdogDelaysMs = [10_000, 30_000, 60_000];
+  private readonly chatRunFirstVisibleProgressWatchdogDelaysMs = [5_000, 10_000, 30_000, 60_000];
   private diagnostics: GatewayDiagnosticsSnapshot = {
     consecutiveHeartbeatMisses: 0,
     consecutiveRpcFailures: 0,
   };
+  private static readonly WARMUP_DELAY_MS = 250;
+  private static readonly WARMUP_FIRST_OUTPUT_TIMEOUT_MS = 120_000;
+  private static readonly WARMUP_BACKGROUND_RPC_RELEASE_MS = 10_000;
+  private static readonly WARMUP_NEAR_COMPLETION_WAIT_MS = 3_000;
+  private static readonly WARMUP_NEAR_COMPLETION_AFTER_MS = 40_000;
+  private static readonly WARMUP_CLEANUP_DELAY_MS = 5_000;
+  private static readonly CHAT_WARMUP_ENABLED = process.env.LYCLAW_ENABLE_CHAT_WARMUP !== '0';
 
   constructor(config?: Partial<ReconnectConfig>) {
     super();
@@ -200,6 +259,7 @@ export class GatewayManager extends EventEmitter {
       if (this.status.state === 'running' && !this.status.gatewayReady) {
         logger.info('Gateway subsystems ready (event received)');
         this.setStatus({ gatewayReady: true });
+        this.warmupGateway();
       }
     });
   }
@@ -207,7 +267,7 @@ export class GatewayManager extends EventEmitter {
   private async initDeviceIdentity(): Promise<void> {
     if (this.deviceIdentity) return; // already loaded
     try {
-      const identityPath = path.join(app.getPath('userData'), 'clawx-device-identity.json');
+      const identityPath = path.join(app.getPath('userData'), 'LYClaw-device-identity.json');
       this.deviceIdentity = await loadOrCreateDeviceIdentity(identityPath);
       logger.debug(`Device identity loaded (deviceId=${this.deviceIdentity.deviceId})`);
     } catch (err) {
@@ -363,6 +423,7 @@ export class GatewayManager extends EventEmitter {
             readyToConnectMs: tReady ? tConnected - tReady : undefined,
             totalMs: tConnected - t0,
           });
+          
         },
         runDoctorRepair: async () => await runOpenClawDoctorRepair(),
         onDoctorRepairSuccess: () => {
@@ -455,8 +516,9 @@ export class GatewayManager extends EventEmitter {
 
     this.restartController.resetDeferredRestart();
     this.isAutoReconnectStart = false;
+    this.isWarmedUp = false;
     this.diagnostics.consecutiveHeartbeatMisses = 0;
-    this.setStatus({ state: 'stopped', error: undefined, pid: undefined, connectedAt: undefined, uptime: undefined, gatewayReady: undefined });
+    this.setStatus({ state: 'stopped', error: undefined, pid: undefined, connectedAt: undefined, uptime: undefined, gatewayReady: undefined, warmupStatus: 'idle' });
   }
 
   /**
@@ -729,7 +791,15 @@ export class GatewayManager extends EventEmitter {
       clearTimeout(this.reloadDebounceTimer);
       this.reloadDebounceTimer = null;
     }
+    this.clearWarmupTimer();
     this.clearGatewayReadyFallback();
+  }
+
+  private clearWarmupTimer(): void {
+    if (this.warmupTimer) {
+      clearTimeout(this.warmupTimer);
+      this.warmupTimer = null;
+    }
   }
 
   private clearGatewayReadyFallback(): void {
@@ -741,13 +811,787 @@ export class GatewayManager extends EventEmitter {
 
   private scheduleGatewayReadyFallback(): void {
     this.clearGatewayReadyFallback();
-    this.gatewayReadyFallbackTimer = setTimeout(() => {
+    this.gatewayReadyFallbackTimer = setTimeout(async () => {
       this.gatewayReadyFallbackTimer = null;
       if (this.status.state === 'running' && !this.status.gatewayReady) {
-        logger.info('Gateway ready fallback triggered (no gateway.ready event within timeout)');
-        this.setStatus({ gatewayReady: true });
+        if (this.hasInflightUserChatSend()) {
+          logger.info('Gateway ready fallback deferred while user chat.send is pending');
+          this.scheduleGatewayReadyFallback();
+          return;
+        }
+
+        logger.info('Gateway ready fallback triggered; probing RPC router before marking ready');
+        
+        // 探测 RPC 路由器是否真的可用
+        try {
+          await this.rpc('system-presence', {}, GatewayManager.GATEWAY_READY_PROBE_TIMEOUT_MS);
+          logger.info('Gateway ready fallback RPC router probe succeeded');
+          this.setStatus({ gatewayReady: true });
+          this.warmupGateway();
+        } catch (error) {
+          logger.warn(`Gateway ready fallback RPC router probe failed: ${String(error)}`);
+          // RPC 路由器还没就绪，不设置 gatewayReady
+          // 前端会使用本地文件系统降级
+          if (this.status.state === 'running' && !this.status.gatewayReady) {
+            this.scheduleGatewayReadyFallback();
+          }
+        }
       }
     }, GatewayManager.GATEWAY_READY_FALLBACK_MS);
+  }
+
+   /**
+   * Warmup Gateway by triggering lazy initialization in background
+   * The first chat message to any session triggers AI provider initialization (60+ seconds).
+   * Subsequent messages to other sessions are fast because they reuse the initialized provider.
+   * This warmup ensures the first user message will be fast.
+   */
+  private warmupGateway(): void {
+    if (!GatewayManager.CHAT_WARMUP_ENABLED) {
+      this.setStatus({ warmupStatus: 'idle' });
+      logger.info('[perf:first-session] gateway.warmup.skipped', {
+        reason: 'chat_warmup_disabled_by_env',
+        envValue: process.env.LYCLAW_ENABLE_CHAT_WARMUP ?? null,
+      });
+      return;
+    }
+
+    if (this.status.state !== 'running' || !this.status.gatewayReady) {
+      logger.info('[perf:first-session] gateway.warmup.skipped', {
+        reason: 'gateway_not_ready',
+        state: this.status.state,
+        gatewayReady: Boolean(this.status.gatewayReady),
+      });
+      return;
+    }
+
+    if (this.isWarmedUp || this.hasWarmupFailed || this.warmupTimer || this.warmupRequestPromise) {
+      if (this.hasWarmupFailed && this.status.warmupStatus !== 'failed') {
+        this.setStatus({ warmupStatus: 'failed' });
+      }
+      logger.info('[perf:first-session] gateway.warmup.already_active', {
+        isWarmedUp: this.isWarmedUp,
+        hasFailed: this.hasWarmupFailed,
+        hasTimer: Boolean(this.warmupTimer),
+        hasRequest: Boolean(this.warmupRequestPromise),
+      });
+      return;
+    }
+
+    if (this.hasInflightUserChatSend() || this.hasActiveUserChatRun()) {
+      logger.info('[perf:first-session] gateway.warmup.skipped', {
+        reason: 'user_chat_has_priority',
+      });
+      return;
+    }
+
+    // Start quickly after the Gateway is connected so normal users benefit
+    // before their first message, while still giving the router a brief settle.
+    logger.info('[perf:first-session] gateway.warmup.scheduled', {
+      delayMs: GatewayManager.WARMUP_DELAY_MS,
+      enabledByDefault: true,
+      envValue: process.env.LYCLAW_ENABLE_CHAT_WARMUP ?? null,
+    });
+    this.warmupTimer = setTimeout(() => {
+      this.warmupTimer = null;
+      void this.runGatewayWarmup();
+    }, GatewayManager.WARMUP_DELAY_MS);
+  }
+
+  private async runGatewayWarmup(): Promise<void> {
+    if (this.isWarmedUp || this.hasWarmupFailed || this.warmupRequestPromise) {
+      return this.warmupRequestPromise ?? Promise.resolve();
+    }
+
+    const warmupStart = Date.now();
+    const warmupSessionKey = 'agent:main:__warmup__';
+    this.warmupStartedAt = warmupStart;
+    this.warmupRequestPromise = (async () => {
+      try {
+        logger.info('[perf:first-session] gateway.warmup.started');
+        logger.info('Gateway warmup: triggering AI provider initialization with real chat request');
+        this.setStatus({ warmupStatus: 'warming' });
+
+        const crypto = await import('crypto');
+        // Send a real chat request to trigger AI provider initialization.
+        // The RPC returns when the run is accepted, so wait for completion
+        // before declaring warmup complete.
+        const warmupResult = await this.rpc('chat.send', {
+          sessionKey: warmupSessionKey,
+          message: '/think off 请只回复 ready。',
+          deliver: true,
+          idempotencyKey: crypto.randomUUID(),
+        }, 120000);
+        const warmupRunId = this.getRunIdFromRpcResult(warmupResult);
+        if (!warmupRunId) {
+          throw new Error('Warmup chat.send did not return runId');
+        }
+        logger.info('[perf:first-session] gateway.warmup.accepted', {
+          runId: warmupRunId,
+          acceptedMs: Date.now() - warmupStart,
+        });
+        if (this.status.state === 'running' && !this.status.gatewayReady) {
+          this.setStatus({ gatewayReady: true });
+        }
+        const warmupFinalState = await this.waitForWarmupCompletion(warmupRunId);
+        if (warmupFinalState !== 'final') {
+          throw new Error(`Warmup run ended with ${warmupFinalState}`);
+        }
+
+        this.isWarmedUp = true;
+        this.hasWarmupFailed = false;
+        this.setStatus({ warmupStatus: 'ready' });
+        logger.info('[perf:first-session] gateway.warmup.completed', {
+          durationMs: Date.now() - warmupStart,
+        });
+        logger.info('Gateway warmup completed - AI provider is ready for user messages');
+      } catch (error) {
+        logger.warn('[perf:first-session] gateway.warmup.failed', {
+          durationMs: Date.now() - warmupStart,
+          error: String(error),
+        });
+        logger.warn(`Gateway warmup failed: ${String(error)}`);
+        this.hasWarmupFailed = true;
+        this.setStatus({ warmupStatus: 'failed' });
+      } finally {
+        this.warmupRequestPromise = null;
+        this.warmupStartedAt = null;
+      }
+    })();
+
+    await this.warmupRequestPromise;
+
+    if (this.isWarmedUp) {
+      setTimeout(() => {
+        void this.cleanupWarmupSession(warmupSessionKey);
+      }, GatewayManager.WARMUP_CLEANUP_DELAY_MS);
+    }
+  }
+
+  private async cleanupWarmupSession(warmupSessionKey: string): Promise<void> {
+    if (this.hasInflightUserChatSend() || this.hasActiveUserChatRun()) {
+      logger.info('[perf:first-session] gateway.warmup.cleanup.deferred', {
+        reason: 'user_chat_has_priority',
+        delayMs: 30_000,
+      });
+      setTimeout(() => {
+        void this.cleanupWarmupSession(warmupSessionKey);
+      }, 30_000);
+      return;
+    }
+
+    try {
+      logger.info('[perf:first-session] gateway.warmup.cleanup.started', {
+        delayMs: GatewayManager.WARMUP_CLEANUP_DELAY_MS,
+      });
+      await this.rpc('sessions.delete', { key: warmupSessionKey }, 5000);
+      logger.info('Gateway warmup: cleaned up warmup session');
+    } catch (cleanupError) {
+      logger.warn('Gateway warmup: failed to cleanup warmup session:', cleanupError);
+    }
+  }
+
+  private isWarmupChatSend(method: string, params?: unknown): boolean {
+    return method === 'chat.send'
+      && Boolean(params)
+      && typeof params === 'object'
+      && (params as { sessionKey?: unknown }).sessionKey === 'agent:main:__warmup__';
+  }
+
+  private isUserChatSend(method: string, params?: unknown): boolean {
+    return method === 'chat.send' && !this.isWarmupChatSend(method, params);
+  }
+
+  private hasInflightUserChatSend(): boolean {
+    return [...this.rpcInflight.values()].some((rpc) =>
+      rpc.method === 'chat.send' && rpc.sessionKey !== 'agent:main:__warmup__'
+    );
+  }
+
+  private hasActiveUserChatRun(): boolean {
+    return [...this.chatRunMetrics.values()].some((run) => run.kind === 'user');
+  }
+
+  private getChatSendSessionKey(params?: unknown): string | undefined {
+    if (!params || typeof params !== 'object') {
+      return undefined;
+    }
+    const sessionKey = (params as { sessionKey?: unknown }).sessionKey;
+    return typeof sessionKey === 'string' ? sessionKey : undefined;
+  }
+
+  private getRpcSessionKey(method: string, params?: unknown): string | undefined {
+    if (!params || typeof params !== 'object') {
+      return undefined;
+    }
+    const p = params as { sessionKey?: unknown; key?: unknown };
+    const value = method === 'sessions.delete' ? p.key : p.sessionKey;
+    return typeof value === 'string' ? value : undefined;
+  }
+
+  private getInflightRpcSnapshot(now = Date.now()): Array<{
+    id: string;
+    method: string;
+    ageMs: number;
+    timeoutMs: number;
+    sessionKey?: string;
+  }> {
+    return [...this.rpcInflight.entries()]
+      .map(([id, rpc]) => ({
+        id,
+        method: rpc.method,
+        ageMs: now - rpc.startedAt,
+        timeoutMs: rpc.timeoutMs,
+        sessionKey: rpc.sessionKey,
+      }))
+      .sort((a, b) => b.ageMs - a.ageMs)
+      .slice(0, 20);
+  }
+
+  private getTrackedChatRunSnapshot(now = Date.now()): Array<{
+    runId: string;
+    kind: 'user' | 'warmup';
+    sessionKey?: string;
+    ageSinceAcceptedMs: number;
+    ageSinceRequestedMs: number;
+    hasFirstDelta: boolean;
+    hasFirstVisibleProgress: boolean;
+    firstVisibleProgressKind?: string;
+  }> {
+    return [...this.chatRunMetrics.entries()].map(([runId, run]) => ({
+      runId,
+      kind: run.kind,
+      sessionKey: run.sessionKey,
+      ageSinceAcceptedMs: now - run.acceptedAt,
+      ageSinceRequestedMs: now - run.requestedAt,
+      hasFirstDelta: Boolean(run.firstDeltaAt),
+      hasFirstVisibleProgress: Boolean(run.firstVisibleProgressAt),
+      firstVisibleProgressKind: run.firstVisibleProgressKind,
+    })).slice(0, 20);
+  }
+
+  private async getPathStatSnapshot(filePath: string): Promise<{
+    path: string;
+    exists: boolean;
+    sizeBytes?: number;
+    mtimeMs?: number;
+    error?: string;
+  }> {
+    try {
+      const stats = await stat(filePath);
+      return {
+        path: filePath,
+        exists: true,
+        sizeBytes: stats.size,
+        mtimeMs: Math.round(stats.mtimeMs),
+      };
+    } catch (error) {
+      const code = (error as { code?: unknown })?.code;
+      if (code === 'ENOENT') {
+        return { path: filePath, exists: false };
+      }
+      return { path: filePath, exists: false, error: String(error) };
+    }
+  }
+
+  private getSessionDiagnosticsPaths(sessionKey?: string): string[] {
+    const openclawDir = path.join(homedir(), '.openclaw');
+    const agentId = sessionKey?.startsWith('agent:')
+      ? sessionKey.split(':')[1] || 'main'
+      : 'main';
+    const sessionId = sessionKey?.startsWith('agent:')
+      ? sessionKey.split(':')[2]
+      : undefined;
+    const sessionsDir = path.join(openclawDir, 'agents', agentId, 'sessions');
+    const paths = [
+      path.join(sessionsDir, 'sessions.json'),
+      path.join(sessionsDir, 'sessions.json.lock'),
+    ];
+    if (sessionId && sessionId !== 'main') {
+      paths.push(path.join(sessionsDir, `${sessionId}.jsonl`));
+    }
+    return paths;
+  }
+
+  private scheduleChatSendWatchdog(args: {
+    requestId: string;
+    method: string;
+    params?: unknown;
+    rpcStart: number;
+  }): NodeJS.Timeout[] {
+    if (!this.isUserChatSend(args.method, args.params)) {
+      return [];
+    }
+
+    const sessionKey = this.getRpcSessionKey(args.method, args.params);
+    return this.chatSendWatchdogDelaysMs.map((delayMs) => setTimeout(() => {
+      if (!this.rpcInflight.has(args.requestId)) {
+        return;
+      }
+      void (async () => {
+        const now = Date.now();
+        const fileStats = await Promise.all(
+          this.getSessionDiagnosticsPaths(sessionKey).map((filePath) => this.getPathStatSnapshot(filePath)),
+        );
+        logger.info('[perf:chat-send-pending]', {
+          requestId: args.requestId,
+          method: args.method,
+          sessionKey,
+          pendingMs: now - args.rpcStart,
+          watchdogDelayMs: delayMs,
+          inflightRpcCount: this.rpcInflight.size,
+          inflightRpcs: this.getInflightRpcSnapshot(now),
+          trackedChatRuns: this.getTrackedChatRunSnapshot(now),
+          recentGatewayStderr: this.recentStartupStderrLines.slice(-20),
+          sessionFiles: fileStats,
+        });
+      })();
+    }, delayMs));
+  }
+
+  private scheduleChatRunFirstEventWatchdog(runId: string): NodeJS.Timeout[] {
+    return this.chatRunFirstEventWatchdogDelaysMs.map((delayMs) => setTimeout(() => {
+      const metrics = this.chatRunMetrics.get(runId);
+      if (!metrics || metrics.firstEventAt) {
+        return;
+      }
+
+      void (async () => {
+        const now = Date.now();
+        const fileStats = await Promise.all(
+          this.getSessionDiagnosticsPaths(metrics.sessionKey).map((filePath) => this.getPathStatSnapshot(filePath)),
+        );
+        logger.info('[perf:chat-run-pending-first-event]', {
+          kind: metrics.kind,
+          runId,
+          sessionKey: metrics.sessionKey,
+          pendingSinceAcceptedMs: now - metrics.acceptedAt,
+          pendingSinceRequestedMs: now - metrics.requestedAt,
+          watchdogDelayMs: delayMs,
+          rpcDurationMs: metrics.rpcDurationMs,
+          inflightRpcCount: this.rpcInflight.size,
+          inflightRpcs: this.getInflightRpcSnapshot(now),
+          trackedChatRuns: this.getTrackedChatRunSnapshot(now),
+          recentGatewayStderr: this.recentStartupStderrLines.slice(-20),
+          sessionFiles: fileStats,
+        });
+      })();
+    }, delayMs));
+  }
+
+  private scheduleChatRunFirstVisibleProgressWatchdog(runId: string): NodeJS.Timeout[] {
+    return this.chatRunFirstVisibleProgressWatchdogDelaysMs.map((delayMs) => setTimeout(() => {
+      const metrics = this.chatRunMetrics.get(runId);
+      if (!metrics || metrics.firstVisibleProgressAt) {
+        return;
+      }
+
+      void (async () => {
+        const now = Date.now();
+        const fileStats = await Promise.all(
+          this.getSessionDiagnosticsPaths(metrics.sessionKey).map((filePath) => this.getPathStatSnapshot(filePath)),
+        );
+        logger.info('[perf:chat-run-pending-first-visible-progress]', {
+          kind: metrics.kind,
+          runId,
+          sessionKey: metrics.sessionKey,
+          pendingSinceAcceptedMs: now - metrics.acceptedAt,
+          pendingSinceRequestedMs: now - metrics.requestedAt,
+          watchdogDelayMs: delayMs,
+          rpcDurationMs: metrics.rpcDurationMs,
+          firstEventAt: metrics.firstEventAt ? metrics.firstEventAt - metrics.acceptedAt : null,
+          firstDeltaAt: metrics.firstDeltaAt ? metrics.firstDeltaAt - metrics.acceptedAt : null,
+          inflightRpcCount: this.rpcInflight.size,
+          inflightRpcs: this.getInflightRpcSnapshot(now),
+          trackedChatRuns: this.getTrackedChatRunSnapshot(now),
+          recentGatewayStderr: this.recentStartupStderrLines.slice(-20),
+          sessionFiles: fileStats,
+        });
+      })();
+    }, delayMs));
+  }
+
+  private classifyVisibleProgress(message: unknown): { visible: boolean; kind: string; messageBlockTypes: string[] } {
+    if (!message || typeof message !== 'object') {
+      return { visible: false, kind: 'none', messageBlockTypes: [] };
+    }
+    const msg = message as Record<string, unknown>;
+    const messageBlockTypes: string[] = [];
+    const content = msg.content;
+    if (Array.isArray(content)) {
+      for (const block of content as Array<Record<string, unknown>>) {
+        if (typeof block.type === 'string') messageBlockTypes.push(block.type);
+      }
+    }
+    if (Array.isArray(msg.tool_calls)) messageBlockTypes.push('tool_calls');
+    if (Array.isArray(msg.toolCalls)) messageBlockTypes.push('toolCalls');
+
+    const role = typeof msg.role === 'string' ? msg.role.toLowerCase() : '';
+    if (role === 'toolresult' || role === 'tool_result') {
+      return { visible: true, kind: 'tool_result', messageBlockTypes };
+    }
+    if (typeof content === 'string') {
+      return content.trim()
+        ? { visible: true, kind: 'assistant_text', messageBlockTypes }
+        : { visible: false, kind: 'placeholder', messageBlockTypes };
+    }
+    const toolCalls = msg.tool_calls ?? msg.toolCalls;
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      return { visible: true, kind: 'tool_use', messageBlockTypes };
+    }
+    if (!Array.isArray(content)) {
+      return Object.keys(msg).length > 0
+        ? { visible: false, kind: 'placeholder', messageBlockTypes }
+        : { visible: false, kind: 'none', messageBlockTypes };
+    }
+
+    let hasThinkingBlock = false;
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+        return { visible: true, kind: 'assistant_text', messageBlockTypes };
+      }
+      if (block.type === 'thinking') {
+        hasThinkingBlock = true;
+        if (typeof block.thinking === 'string' && block.thinking.trim()) {
+          return { visible: true, kind: 'thinking_text', messageBlockTypes };
+        }
+      }
+      if (block.type === 'tool_use' || block.type === 'toolCall') {
+        return { visible: true, kind: 'tool_use', messageBlockTypes };
+      }
+      if (block.type === 'tool_result' || block.type === 'toolResult') {
+        return { visible: true, kind: 'tool_result', messageBlockTypes };
+      }
+      if (block.type === 'image') {
+        return { visible: true, kind: 'image', messageBlockTypes };
+      }
+    }
+    if (hasThinkingBlock) {
+      return { visible: true, kind: 'thinking_block', messageBlockTypes };
+    }
+    return { visible: false, kind: 'placeholder', messageBlockTypes };
+  }
+
+  private recordSessionWriteLockLog(line: string): void {
+    const parsed = parseSessionWriteLockLog(line);
+    if (!parsed) {
+      return;
+    }
+
+    const now = Date.now();
+    logger.info('[perf:session-lock]', {
+      phase: parsed.phase,
+      path: parsed.path,
+      heldMs: parsed.heldMs,
+      maxMs: parsed.maxMs,
+      waitedMs: parsed.waitedMs,
+      inflightRpcCount: this.rpcInflight.size,
+      inflightRpcs: this.getInflightRpcSnapshot(now),
+      trackedChatRuns: this.getTrackedChatRunSnapshot(now),
+      raw: parsed.raw,
+    });
+  }
+
+  private recordStuckSessionDiagnostic(line: string): void {
+    const diagnostic = parseGatewayStuckSessionDiagnostic(line);
+    if (!diagnostic) {
+      return;
+    }
+
+    this.diagnostics.lastStuckSessionAt = Date.now();
+    this.diagnostics.lastStuckSession = diagnostic;
+    this.setStatus({
+      lastStuckSessionAt: this.diagnostics.lastStuckSessionAt,
+      lastStuckSession: diagnostic,
+    });
+  }
+
+  private getRunIdFromRpcResult(result: unknown): string | null {
+    if (!result || typeof result !== 'object') {
+      return null;
+    }
+    const runId = (result as { runId?: unknown }).runId;
+    return typeof runId === 'string' && runId.trim() ? runId : null;
+  }
+
+  private waitForWarmupCompletion(runId: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const startedAt = Date.now();
+      const timeout = setTimeout(() => {
+        this.warmupRunWaiters.delete(runId);
+        reject(new Error(`Warmup completion timeout after ${Date.now() - startedAt}ms`));
+      }, GatewayManager.WARMUP_FIRST_OUTPUT_TIMEOUT_MS);
+
+      this.warmupRunWaiters.set(runId, {
+        resolve,
+        reject,
+        timeout,
+        startedAt,
+      });
+    });
+  }
+
+  private resolveWarmupCompletion(runId: string, state: string): void {
+    const waiter = this.warmupRunWaiters.get(runId);
+    if (!waiter) {
+      return;
+    }
+
+    clearTimeout(waiter.timeout);
+    this.warmupRunWaiters.delete(runId);
+    logger.info('[perf:first-session] gateway.warmup.run_completed', {
+      runId,
+      state,
+      waitedMs: Date.now() - waiter.startedAt,
+    });
+    waiter.resolve(state);
+  }
+
+  private recordChatSendAccepted(args: {
+    method: string;
+    params?: unknown;
+    result: unknown;
+    requestedAt: number;
+    acceptedAt: number;
+    rpcDurationMs: number;
+  }): void {
+    if (args.method !== 'chat.send') {
+      return;
+    }
+
+    const kind = this.isWarmupChatSend(args.method, args.params) ? 'warmup' : 'user';
+    const sessionKey = this.getChatSendSessionKey(args.params);
+    const runId = this.getRunIdFromRpcResult(args.result);
+    if (!runId) {
+      logger.info('[perf:chat-run] chat.send.accepted_without_run_id', {
+        kind,
+        sessionKey,
+        rpcDurationMs: args.rpcDurationMs,
+      });
+      return;
+    }
+
+    if (kind === 'user' && this.status.state === 'running') {
+      this.clearGatewayReadyFallback();
+      if (!this.status.gatewayReady) {
+        this.setStatus({ gatewayReady: true });
+      }
+      if (!this.isWarmedUp) {
+        this.clearWarmupTimer();
+      }
+    }
+
+    this.chatRunMetrics.set(runId, {
+      kind,
+      sessionKey,
+      requestedAt: args.requestedAt,
+      acceptedAt: args.acceptedAt,
+      rpcDurationMs: args.rpcDurationMs,
+      firstEventWatchdogTimers: this.scheduleChatRunFirstEventWatchdog(runId),
+      firstVisibleProgressWatchdogTimers: this.scheduleChatRunFirstVisibleProgressWatchdog(runId),
+    });
+    logger.info('[perf:chat-run] chat.send.accepted', {
+      kind,
+      runId,
+      sessionKey,
+      rpcDurationMs: args.rpcDurationMs,
+      timeToAcceptedMs: args.acceptedAt - args.requestedAt,
+    });
+  }
+
+  private recordChatEventTiming(payload: unknown): void {
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+
+    const event = payload as { state?: unknown; runId?: unknown; message?: unknown };
+    const runId = typeof event.runId === 'string' ? event.runId : '';
+    const state = typeof event.state === 'string' ? event.state : 'unknown';
+    if (!runId) {
+      logger.info('[perf:chat-run] event.without_run_id', {
+        state,
+        hasMessage: Boolean(event.message),
+      });
+      return;
+    }
+
+    const now = Date.now();
+    const metrics = this.chatRunMetrics.get(runId);
+    if (!metrics) {
+      logger.info('[perf:chat-run] event.untracked', {
+        runId,
+        state,
+        hasMessage: Boolean(event.message),
+      });
+      return;
+    }
+
+    if (!metrics.firstEventAt) {
+      metrics.firstEventAt = now;
+      if (metrics.firstEventWatchdogTimers) {
+        for (const timer of metrics.firstEventWatchdogTimers) {
+          clearTimeout(timer);
+        }
+        metrics.firstEventWatchdogTimers = undefined;
+      }
+      logger.info('[perf:chat-run] event.first', {
+        kind: metrics.kind,
+        runId,
+        sessionKey: metrics.sessionKey,
+        state,
+        hasMessage: Boolean(event.message),
+        sinceAcceptedMs: now - metrics.acceptedAt,
+        sinceRequestedMs: now - metrics.requestedAt,
+        rpcDurationMs: metrics.rpcDurationMs,
+      });
+    }
+
+    if (state === 'delta' && !metrics.firstDeltaAt) {
+      metrics.firstDeltaAt = now;
+      logger.info('[perf:chat-run] delta.first', {
+        kind: metrics.kind,
+        runId,
+        sessionKey: metrics.sessionKey,
+        sinceAcceptedMs: now - metrics.acceptedAt,
+        sinceRequestedMs: now - metrics.requestedAt,
+        sinceFirstEventMs: metrics.firstEventAt ? now - metrics.firstEventAt : null,
+        rpcDurationMs: metrics.rpcDurationMs,
+      });
+      if (metrics.kind === 'user' && !this.isWarmedUp) {
+        this.isWarmedUp = true;
+        this.hasWarmupFailed = false;
+        this.setStatus({ warmupStatus: 'ready' });
+        logger.info('[perf:first-session] gateway.warmup.completed_by_user_delta', {
+          runId,
+          sessionKey: metrics.sessionKey,
+          timeToFirstDeltaMs: now - metrics.acceptedAt,
+          rpcDurationMs: metrics.rpcDurationMs,
+        });
+      }
+    }
+
+    const visibleProgress = this.classifyVisibleProgress(event.message);
+    if (visibleProgress.visible && !metrics.firstVisibleProgressAt) {
+      metrics.firstVisibleProgressAt = now;
+      metrics.firstVisibleProgressKind = visibleProgress.kind;
+      if (metrics.firstVisibleProgressWatchdogTimers) {
+        for (const timer of metrics.firstVisibleProgressWatchdogTimers) {
+          clearTimeout(timer);
+        }
+        metrics.firstVisibleProgressWatchdogTimers = undefined;
+      }
+      logger.info('[perf:chat-run] visible_progress.first', {
+        kind: metrics.kind,
+        runId,
+        sessionKey: metrics.sessionKey,
+        state,
+        visibleProgressKind: visibleProgress.kind,
+        messageBlockTypes: visibleProgress.messageBlockTypes,
+        sinceAcceptedMs: now - metrics.acceptedAt,
+        sinceRequestedMs: now - metrics.requestedAt,
+        sinceFirstEventMs: metrics.firstEventAt ? now - metrics.firstEventAt : null,
+        sinceFirstDeltaMs: metrics.firstDeltaAt ? now - metrics.firstDeltaAt : null,
+        rpcDurationMs: metrics.rpcDurationMs,
+      });
+      if (metrics.kind === 'user' && !this.isWarmedUp) {
+        this.isWarmedUp = true;
+        this.hasWarmupFailed = false;
+        this.setStatus({ warmupStatus: 'ready' });
+      }
+    }
+
+    if (state === 'final' || state === 'error' || state === 'aborted') {
+      if (metrics.kind === 'warmup') {
+        this.resolveWarmupCompletion(runId, state);
+      }
+      if (metrics.firstEventWatchdogTimers) {
+        for (const timer of metrics.firstEventWatchdogTimers) {
+          clearTimeout(timer);
+        }
+        metrics.firstEventWatchdogTimers = undefined;
+      }
+      if (metrics.firstVisibleProgressWatchdogTimers) {
+        for (const timer of metrics.firstVisibleProgressWatchdogTimers) {
+          clearTimeout(timer);
+        }
+        metrics.firstVisibleProgressWatchdogTimers = undefined;
+      }
+      logger.info('[perf:chat-run] run.completed', {
+        kind: metrics.kind,
+        runId,
+        sessionKey: metrics.sessionKey,
+        state,
+        totalSinceRequestedMs: now - metrics.requestedAt,
+        totalSinceAcceptedMs: now - metrics.acceptedAt,
+        timeToFirstEventMs: metrics.firstEventAt ? metrics.firstEventAt - metrics.acceptedAt : null,
+        timeToFirstDeltaMs: metrics.firstDeltaAt ? metrics.firstDeltaAt - metrics.acceptedAt : null,
+        timeToFirstVisibleProgressMs: metrics.firstVisibleProgressAt ? metrics.firstVisibleProgressAt - metrics.acceptedAt : null,
+        firstVisibleProgressKind: metrics.firstVisibleProgressKind,
+        rpcDurationMs: metrics.rpcDurationMs,
+      });
+      this.chatRunMetrics.delete(runId);
+    }
+  }
+
+  private async prepareForUserChatSend(method: string, params?: unknown): Promise<void> {
+    if (!this.isUserChatSend(method, params)) {
+      return;
+    }
+
+    if (this.warmupTimer) {
+      this.clearWarmupTimer();
+      logger.info('[perf:first-session] gateway.warmup.skipped', {
+        reason: 'user_chat_before_warmup_started',
+      });
+      return;
+    }
+
+    if (!this.warmupRequestPromise) {
+      return;
+    }
+
+    const waitStart = Date.now();
+    const elapsedWarmupMs = this.warmupStartedAt ? waitStart - this.warmupStartedAt : null;
+    const maxWaitMs = elapsedWarmupMs != null && elapsedWarmupMs >= GatewayManager.WARMUP_NEAR_COMPLETION_AFTER_MS
+      ? GatewayManager.WARMUP_NEAR_COMPLETION_WAIT_MS
+      : GatewayManager.WARMUP_BACKGROUND_RPC_RELEASE_MS;
+    logger.info('[perf:first-session] gateway.warmup.waiting_before_user_chat', {
+      reason: elapsedWarmupMs != null && elapsedWarmupMs >= GatewayManager.WARMUP_NEAR_COMPLETION_AFTER_MS
+        ? 'near_completion_short_wait_before_user_chat'
+        : 'background_release_wait_before_user_chat',
+      elapsedWarmupMs,
+      maxWaitMs,
+    });
+    let warmupSettled = false;
+    await Promise.race([
+      this.warmupRequestPromise.then(
+        () => { warmupSettled = true; },
+        () => { warmupSettled = true; },
+      ),
+      new Promise<void>((resolve) => setTimeout(resolve, maxWaitMs)),
+    ]);
+    if (warmupSettled) {
+      logger.info('[perf:first-session] gateway.warmup.waited_before_user_chat', {
+        waitedMs: Date.now() - waitStart,
+        elapsedWarmupMs: this.warmupStartedAt ? Date.now() - this.warmupStartedAt : elapsedWarmupMs,
+        maxWaitMs,
+        warmupReady: this.isWarmedUp,
+      });
+      return;
+    }
+    logger.info('[perf:first-session] gateway.warmup.not_waiting_before_user_chat', {
+      waitedMs: Date.now() - waitStart,
+      elapsedWarmupMs: this.warmupStartedAt ? Date.now() - this.warmupStartedAt : elapsedWarmupMs,
+      maxWaitMs,
+      warmupReady: this.isWarmedUp,
+    });
+  }
+
+  /**
+   * Check if Gateway has completed warmup
+   */
+  getIsWarmedUp(): boolean {
+    return this.isWarmedUp;
   }
 
   /**
@@ -755,16 +1599,37 @@ export class GatewayManager extends EventEmitter {
    * Uses OpenClaw protocol format: { type: "req", id: "...", method: "...", params: {...} }
    */
   async rpc<T>(method: string, params?: unknown, timeoutMs = 30000): Promise<T> {
+    await this.prepareForUserChatSend(method, params);
+    const rpcStart = Date.now();
+    logger.info(`[rpc] ${method} started (timeout=${timeoutMs}ms)`);
+
+    let requestId: string | null = null;
+    let chatSendWatchdogTimers: NodeJS.Timeout[] = [];
     return await new Promise<T>((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        logger.warn(`[rpc] ${method} failed: Gateway not connected`);
         reject(new Error('Gateway not connected'));
         return;
       }
 
       const id = crypto.randomUUID();
+      requestId = id;
+      this.rpcInflight.set(id, {
+        method,
+        startedAt: rpcStart,
+        timeoutMs,
+        sessionKey: this.getRpcSessionKey(method, params),
+      });
+      chatSendWatchdogTimers = this.scheduleChatSendWatchdog({
+        requestId: id,
+        method,
+        params,
+        rpcStart,
+      });
 
       // Set timeout for request
       const timeout = setTimeout(() => {
+        logger.warn(`[rpc] ${method} timeout after ${Date.now() - rpcStart}ms`);
         rejectPendingGatewayRequest(this.pendingRequests, id, new Error(`RPC timeout: ${method}`));
       }, timeoutMs);
 
@@ -785,17 +1650,38 @@ export class GatewayManager extends EventEmitter {
 
       try {
         this.ws.send(JSON.stringify(request));
+        logger.info(`[rpc] ${method} sent to Gateway`);
       } catch (error) {
+        logger.warn(`[rpc] ${method} send failed: ${String(error)}`);
         rejectPendingGatewayRequest(this.pendingRequests, id, new Error(`Failed to send RPC request: ${error}`));
       }
     }).then((result) => {
+      const duration = Date.now() - rpcStart;
+      logger.info(`[rpc] ${method} completed in ${duration}ms`);
+      this.recordChatSendAccepted({
+        method,
+        params,
+        result,
+        requestedAt: rpcStart,
+        acceptedAt: Date.now(),
+        rpcDurationMs: duration,
+      });
       this.recordRpcSuccess();
       return result;
     }).catch((error) => {
+      const duration = Date.now() - rpcStart;
+      logger.warn(`[rpc] ${method} failed after ${duration}ms: ${String(error)}`);
       if (isTransportRpcFailure(error)) {
         this.recordRpcFailure(method);
       }
       throw error;
+    }).finally(() => {
+      for (const timer of chatSendWatchdogTimers) {
+        clearTimeout(timer);
+      }
+      if (requestId) {
+        this.rpcInflight.delete(requestId);
+      }
     });
   }
 
@@ -880,6 +1766,8 @@ export class GatewayManager extends EventEmitter {
       onStderrLine: (line) => {
         recordGatewayStartupStderrLine(this.recentStartupStderrLines, line);
         const classified = classifyGatewayStderrMessage(line);
+        this.recordSessionWriteLockLog(classified.normalized);
+        this.recordStuckSessionDiagnostic(classified.normalized);
         if (classified.level === 'drop') return;
 
         // Dedup: suppress identical stderr lines after the first occurrence.
@@ -898,6 +1786,11 @@ export class GatewayManager extends EventEmitter {
           return;
         }
         logger.warn(`[Gateway stderr] ${classified.normalized}`);
+      },
+      onStdoutLine: (line) => {
+        const normalized = line.replace(/\r$/, '').trimEnd();
+        if (!normalized.trim()) return;
+        logger.debug(`[Gateway stdout] ${normalized.trim()}`);
       },
       onSpawn: (pid) => {
         this.setStatus({ pid });
@@ -1021,6 +1914,9 @@ export class GatewayManager extends EventEmitter {
 
     // Handle OpenClaw protocol event format: { type: "event", event: "...", payload: {...} }
     if (msg.type === 'event' && typeof msg.event === 'string') {
+      if (msg.event === 'chat') {
+        this.recordChatEventTiming(msg.payload);
+      }
       dispatchProtocolEvent(this, msg.event, msg.payload);
       return;
     }

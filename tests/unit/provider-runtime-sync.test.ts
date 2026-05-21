@@ -84,7 +84,7 @@ function createProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig
     id: 'moonshot',
     name: 'Moonshot',
     type: 'moonshot',
-    model: 'kimi-k2.5',
+    model: 'kimi-k2.6',
     enabled: true,
     createdAt: '2026-03-14T00:00:00.000Z',
     updatedAt: '2026-03-14T00:00:00.000Z',
@@ -92,11 +92,13 @@ function createProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig
   };
 }
 
-function createGateway(state: 'running' | 'stopped' = 'running'): Pick<GatewayManager, 'debouncedReload' | 'debouncedRestart' | 'getStatus'> {
+function createGateway(state: 'running' | 'stopped' = 'running'): Pick<GatewayManager, 'debouncedReload' | 'debouncedRestart' | 'getStatus' | 'isConnected' | 'rpc'> {
   return {
     debouncedReload: vi.fn(),
     debouncedRestart: vi.fn(),
     getStatus: vi.fn(() => ({ state } as ReturnType<GatewayManager['getStatus']>)),
+    isConnected: vi.fn(() => state === 'running'),
+    rpc: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -109,7 +111,7 @@ describe('provider-runtime-sync refresh strategy', () => {
     mocks.getApiKey.mockResolvedValue('sk-test');
     mocks.getDefaultProvider.mockResolvedValue('moonshot');
     mocks.getProvider.mockResolvedValue(createProvider());
-    mocks.getProviderDefaultModel.mockReturnValue('kimi-k2.5');
+    mocks.getProviderDefaultModel.mockReturnValue('kimi-k2.6');
     mocks.getProviderConfig.mockReturnValue({
       api: 'openai-completions',
       baseUrl: 'https://api.moonshot.cn/v1',
@@ -126,11 +128,15 @@ describe('provider-runtime-sync refresh strategy', () => {
     mocks.listAgentsSnapshot.mockResolvedValue({ agents: [] });
   });
 
-  it('uses debouncedReload after saving provider config', async () => {
+  it('hot-updates after saving the default provider config', async () => {
     const gateway = createGateway('running');
     await syncSavedProviderToRuntime(createProvider(), undefined, gateway as GatewayManager);
 
-    expect(gateway.debouncedReload).toHaveBeenCalledTimes(1);
+    expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
+      agentId: 'main',
+      model: 'moonshot/kimi-k2.6',
+    }, 10000);
+    expect(gateway.debouncedReload).not.toHaveBeenCalled();
     expect(gateway.debouncedRestart).not.toHaveBeenCalled();
   });
 
@@ -170,11 +176,15 @@ describe('provider-runtime-sync refresh strategy', () => {
     expect(mocks.removeProviderFromOpenClaw).not.toHaveBeenCalled();
   });
 
-  it('uses debouncedReload after switching default provider when gateway is running', async () => {
+  it('hot-updates after switching default provider when gateway is running', async () => {
     const gateway = createGateway('running');
     await syncDefaultProviderToRuntime('moonshot', gateway as GatewayManager);
 
-    expect(gateway.debouncedReload).toHaveBeenCalledTimes(1);
+    expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
+      agentId: 'main',
+      model: 'moonshot/kimi-k2.6',
+    }, 10000);
+    expect(gateway.debouncedReload).not.toHaveBeenCalled();
     expect(gateway.debouncedRestart).not.toHaveBeenCalled();
   });
 
@@ -258,6 +268,37 @@ describe('provider-runtime-sync refresh strategy', () => {
     );
   });
 
+  it('syncs LY-Mimo provider config to runtime using its own runtime key', async () => {
+    const lyMimoProvider = createProvider({
+      id: 'ly-mimo',
+      type: 'ly-mimo' as ProviderConfig['type'],
+      name: 'LY-Mimo',
+      model: 'MiMo-V2.5',
+      baseUrl: 'http://10.64.22.12:8000/v1',
+    });
+
+    mocks.getProviderConfig.mockReturnValue({
+      api: 'anthropic-messages',
+      baseUrl: 'http://10.64.22.12:8000/v1',
+      apiKeyEnv: 'LY_MIMO_API_KEY',
+    });
+    mocks.getProviderSecret.mockResolvedValue({ type: 'api_key', apiKey: 'sk-mimo' });
+
+    const gateway = createGateway('running');
+    await syncSavedProviderToRuntime(lyMimoProvider, undefined, gateway as GatewayManager);
+
+    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
+      'ly-mimo',
+      'MiMo-V2.5',
+      expect.objectContaining({
+        baseUrl: 'http://10.64.22.12:8000/anthropic',
+        api: 'anthropic-messages',
+        apiKeyEnv: 'LY_MIMO_API_KEY',
+      }),
+    );
+    expect(gateway.debouncedReload).toHaveBeenCalledTimes(1);
+  });
+
   it('syncs Ollama provider config to runtime without adding model prefix', async () => {
     const ollamaProvider = createProvider({
       id: 'ollamafd',
@@ -339,7 +380,11 @@ describe('provider-runtime-sync refresh strategy', () => {
     );
     // Should NOT call the non-override path
     expect(mocks.setOpenClawDefaultModel).not.toHaveBeenCalled();
-    expect(gateway.debouncedReload).toHaveBeenCalledTimes(1);
+    expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
+      agentId: 'main',
+      model: 'ollama-ollamafd/qwen3:30b',
+    }, 10000);
+    expect(gateway.debouncedReload).not.toHaveBeenCalled();
   });
 
   it('removes Ollama provider from runtime on delete', async () => {

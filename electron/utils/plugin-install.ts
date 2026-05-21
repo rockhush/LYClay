@@ -117,9 +117,7 @@ function toErrorDiagnostic(error: unknown): { code?: string; name?: string; mess
 // Some npm packages ship with an openclaw.plugin.json whose "id" field
 // doesn't match the ID the plugin code actually exports.  After copying we
 // patch both the manifest AND the compiled JS so the Gateway accepts them.
-const MANIFEST_ID_FIXES: Record<string, string> = {
-  'wecom-openclaw-plugin': 'wecom',
-};
+const MANIFEST_ID_FIXES: Record<string, string> = {};
 
 /**
  * After a plugin has been copied to ~/.openclaw/extensions/<dir>, fix any
@@ -500,7 +498,11 @@ export function ensureDingTalkPluginInstalled(): { installed: boolean; warning?:
 }
 
 export function ensureWeComPluginInstalled(): { installed: boolean; warning?: string } {
-  return ensurePluginInstalled('wecom', buildCandidateSources('wecom'), 'WeCom');
+  return ensurePluginInstalled(
+    'wecom-openclaw-plugin',
+    buildCandidateSources('wecom-openclaw-plugin'),
+    'WeCom',
+  );
 }
 
 export function ensureFeishuPluginInstalled(): { installed: boolean; warning?: string } {

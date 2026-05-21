@@ -12,11 +12,15 @@ import { handleAgentRoutes } from './routes/agents';
 import { handleChannelRoutes } from './routes/channels';
 import { handleLogRoutes } from './routes/logs';
 import { handleUsageRoutes } from './routes/usage';
+import { handleUsageReportRoutes } from './routes/usage-report';
 import { handleSkillRoutes } from './routes/skills';
 import { handleFileRoutes } from './routes/files';
 import { handleSessionRoutes } from './routes/sessions';
 import { handleCronRoutes } from './routes/cron';
 import { handleDiagnosticsRoutes } from './routes/diagnostics';
+import { handleDingTalkRoutes } from './routes/dingtalk';
+import { handleMcpRoutes } from './routes/mcp';
+import { handleConnectorRoutes } from './routes/connectors';
 import { sendJson, setCorsHeaders, requireJsonContentType } from './route-utils';
 
 type RouteHandler = (
@@ -39,7 +43,11 @@ const coreRouteHandlers: RouteHandler[] = [
   handleCronRoutes,
   handleDiagnosticsRoutes,
   handleLogRoutes,
+  handleDingTalkRoutes,
   handleUsageRoutes,
+  handleUsageReportRoutes,
+  handleConnectorRoutes,
+  handleMcpRoutes,
 ];
 
 function buildRouteHandlers(): RouteHandler[] {

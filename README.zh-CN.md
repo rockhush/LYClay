@@ -91,6 +91,8 @@ ClawX 直接基于官方 **OpenClaw** 核心构建。无需单独安装，我们
 
 我们致力于与上游 OpenClaw 项目保持严格同步，确保你始终可以使用官方发布的最新功能、稳定性改进和生态兼容性。
 
+打开开发者模式后，侧边栏还会提供原生 Dreams 页面，可在 ClawX 内查看 OpenClaw 记忆回顾、梦境日记，并执行基础维护操作；需要更深诊断时仍可从该页面打开完整 OpenClaw Dreams UI。
+
 ---
 
 ## 功能特性
@@ -100,7 +102,8 @@ ClawX 直接基于官方 **OpenClaw** 核心构建。无需单独安装，我们
 
 ### 💬 智能聊天界面
 通过现代化的聊天体验与 AI 智能体交互。支持多会话上下文、消息历史记录、Markdown 富文本渲染（包括 GitHub 风格表格以及由 KaTeX 渲染的 LaTeX 数学公式：`$行内$`、`$$块级$$`、`\(行内\)` 和 `\[块级\]`），以及在多 Agent 场景下通过主输入框中的 `@agent` 直接路由到目标智能体。
-当你使用 `@agent` 选择其他智能体时，ClawX 会直接切换到该智能体自己的对话上下文，而不是经过默认智能体转发。各 Agent 工作区默认彼此分离，但更强的运行时隔离仍取决于 OpenClaw 的 sandbox 配置。
+主输入框也提供“快速 / 思考 / 专家”思考模式，会通过 `sessions.patch` 写入当前 OpenClaw 会话的 `off`、`medium` 或 `high` thinking override。
+当你使用 `@agent` 选择其他智能体时，ClawX 会直接切换到该智能体自己的对话上下文，而不是经过默认智能体转发。工作空间默认不自动挂载目录，需要用户主动选择；更强的运行时隔离仍取决于 OpenClaw 的 sandbox 配置。当某个会话在输入栏选择了工作空间目录后，该会话会显示在左侧栏对应工作空间条目下，其余会话仍按时间分组显示在下方列表中。
 每个 Agent 还可以单独覆盖自己的 `provider/model` 运行时设置；未覆盖的 Agent 会继续继承全局默认模型。
 
 ### 📡 多频道管理
@@ -108,6 +111,9 @@ ClawX 直接基于官方 **OpenClaw** 核心构建。无需单独安装，我们
 现在每个频道支持多个账号，并可在 Channels 页面直接完成账号绑定到 Agent 与默认账号切换。
 对于自定义频道账号 ID，ClawX 现在会强制校验 OpenClaw 兼容的规范格式（`[a-z0-9_-]`、小写、最长 64 位、且必须以字母或数字开头），避免路由匹配异常。
 ClawX 现在还内置了腾讯官方个人微信渠道插件，可直接在 Channels 页面通过内置二维码流程完成微信连接。
+ClawX 进入工作台前需要先完成钉钉登录。启动登录页会内嵌由内置 DWS CLI 发起的钉钉二维码授权流程，因此同一次授权也会生成 DWS 自己的 CLI 登录态；在设置页退出登录后，应用会回到该登录页。开发构建已内置默认企业应用配置，用于非 DWS 的钉钉 API 调用；如需覆盖应用 AppKey、应用密钥或回调端口，可设置 `LYCLAW_DINGTALK_CLIENT_ID`、`LYCLAW_DINGTALK_CLIENT_SECRET` 和 `LYCLAW_DINGTALK_CALLBACK_PORT`。
+
+单企业自动集成（可选）：钉钉登录成功后，若设置了 `LYCLAW_DINGTALK_CHANNEL_CLIENT_ID` / `LYCLAW_DINGTALK_CHANNEL_CLIENT_SECRET`（用于 OpenClaw 钉钉通道；未设置时会依次回退读取 `LYCLAW_DINGTALK_CLIENT_*`、`DINGTALK_CLIENT_*`，与 OAuth 同名即可），会自动写入 `openclaw.json` 的钉钉通道并触发网关重启；若同时设置 `LYCLAW_DINGTALK_BFF_BASE_URL` 与 `LYCLAW_DINGTALK_BFF_API_KEY`，则在**进入工作台（post-login 加载结束）之后**再按员工 `userId` 调用 Python BFF 推送钉钉单聊消息。当环境变量启用自动钉钉通道时，加载页会尽量等待网关侧钉钉就绪（最长约 90 秒）再进入工作台。未设置上述 BFF 变量时不会调用 BFF。
 
 ### ⏰ 定时任务自动化
 调度 AI 任务自动执行。定义触发器、设置时间间隔，让 AI 智能体 7×24 小时不间断工作。
@@ -116,12 +122,14 @@ ClawX 现在还内置了腾讯官方个人微信渠道插件，可直接在 Chan
 
 ### 🧩 可扩展技能系统
 通过预构建的技能扩展 AI 智能体的能力。在集成的技能面板中浏览、安装和管理技能——无需包管理器。
-ClawX 还会内置预装完整的文档处理技能（`pdf`、`xlsx`、`docx`、`pptx`），在启动时自动部署到托管技能目录（默认 `~/.openclaw/skills`），并在首次安装时默认启用。额外预装技能（`find-skills`、`self-improving-agent`、`tavily-search`、`brave-web-search`）也会默认启用；若缺少必需的 API Key，OpenClaw 会在运行时给出配置错误提示。  
+ClawX 还会内置预装完整的文档处理技能（`pdf`、`xlsx`、`docx`、`pptx`），在启动时自动部署到托管技能目录（默认 `~/.openclaw/skills`），并在首次安装时默认启用。额外预装技能（`find-skills`、`self-improving-agent`、`tavily-search`）也会默认启用；若缺少必需的 API Key，OpenClaw 会在运行时给出配置错误提示。  
 Skills 页面可展示来自多个 OpenClaw 来源的技能（托管目录、workspace、额外技能目录），并显示每个技能的实际路径，便于直接打开真实安装位置。
 
 重点搜索技能所需环境变量：
-- `BRAVE_SEARCH_API_KEY`：用于 `brave-web-search`
 - `TAVILY_API_KEY`：用于 `tavily-search`（上游运行时也可能支持 OAuth）
+
+### 🔌 MCP 连接器
+在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。
 
 ### 🔐 安全的供应商集成
 连接多个 AI 供应商（OpenAI、Anthropic 等），凭证安全存储在系统原生密钥链中。OpenAI 同时支持 API Key 与浏览器 OAuth（Codex 订阅）登录。
@@ -271,6 +279,9 @@ ClawX 采用 **双进程 + Host API 统一接入架构**。渲染进程只调用
 - 单实例保护同时使用 Electron 自带锁与本地进程文件锁回退机制，可在桌面会话总线异常时避免重复启动。
 - 滚动升级期间若新旧版本混跑，单实例保护仍可能出现不对称行为。为保证稳定性，建议桌面客户端尽量统一升级到同一版本。
 - 但 OpenClaw Gateway 监听应始终保持**单实例**：`127.0.0.1:18789` 只能有一个监听者。
+- Gateway readiness 以 OpenClaw 的 `system-presence`、`health`、`status` 等核心信号为准；memory、Dreams 或频道失败会显示为能力降级，而不是全局 Gateway 故障。
+- 当 `openclaw.json` 中至少配置了一个频道时，ClawX **不会**设置 `OPENCLAW_SKIP_CHANNELS`，Gateway 会在进程启动时加载频道适配器（钉钉 Stream 等依赖于此）；若未配置任何频道，则仍跳过频道以加快冷启动。
+- **网关日志可见性**：OpenClaw 常把日常频道日志写到 **stdout**，把告警写到 **stderr**。ClawX 会把 stderr 记入应用日志（前缀 `[Gateway stderr]`）；stdout 仅在 **debug** 级别镜像为 `[Gateway stdout]`。需要查看钉钉等 stdout 细节时，请打开更详细的日志级别，或直接在终端手动运行 OpenClaw 的 `gateway` 子命令查看完整输出。
 - 可用以下命令确认监听进程：
   - macOS/Linux：`lsof -nP -iTCP:18789 -sTCP:LISTEN`
   - Windows（PowerShell）：`Get-NetTCPConnection -LocalPort 18789 -State Listen`

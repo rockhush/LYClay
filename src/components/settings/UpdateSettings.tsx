@@ -2,8 +2,8 @@
  * Update Settings Component
  * Displays update status and allows manual update checking/installation
  */
-import { useEffect, useCallback } from 'react';
-import { Download, RefreshCw, Loader2, Rocket, XCircle } from 'lucide-react';
+import { useEffect, useCallback, useState } from 'react';
+import { Download, RefreshCw, Loader2, Rocket, XCircle, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useUpdateStore } from '@/stores/update';
@@ -17,6 +17,11 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+function getFileName(filePath: string): string {
+  const parts = filePath.split(/[/\\]/);
+  return parts[parts.length - 1] || filePath;
+}
+
 export function UpdateSettings() {
   const { t } = useTranslation('settings');
   const {
@@ -27,18 +32,36 @@ export function UpdateSettings() {
     error,
     isInitialized,
     autoInstallCountdown,
+    downloadedFilePath,
     init,
     checkForUpdates,
     downloadUpdate,
     installUpdate,
     cancelAutoInstall,
     clearError,
+    getDownloadedFilePath,
+    openDownloadDirectory,
   } = useUpdateStore();
+
+  const [showDownloadHint, setShowDownloadHint] = useState(false);
 
   // Initialize on mount
   useEffect(() => {
     init();
   }, [init]);
+
+  // 下载完成后获取文件路径并显示提示，自动打开文件目录
+  useEffect(() => {
+    if (status === 'downloaded') {
+      const fetchPath = async () => {
+        await getDownloadedFilePath();
+        setShowDownloadHint(true);
+      };
+      fetchPath();
+    } else {
+      setShowDownloadHint(false);
+    }
+  }, [status, getDownloadedFilePath]);
 
   const handleCheckForUpdates = useCallback(async () => {
     clearError();
@@ -107,30 +130,22 @@ export function UpdateSettings() {
           </Button>
         );
       case 'downloaded':
-        if (autoInstallCountdown != null && autoInstallCountdown >= 0) {
-          return (
-            <Button onClick={cancelAutoInstall} size="sm" variant="outline">
-              <XCircle className="h-4 w-4 mr-2" />
-              {t('updates.action.cancelAutoInstall')}
-            </Button>
-          );
-        }
         return (
-          <Button onClick={installUpdate} size="sm" variant="default">
-            <Rocket className="h-4 w-4 mr-2" />
-            {t('updates.action.install')}
+          <Button onClick={openDownloadDirectory} size="sm" variant="default">
+            <FolderOpen className="h-4 w-4 mr-2" />
+            {t('updates.action.openFolder')}
           </Button>
         );
       case 'error':
         return (
-          <Button onClick={handleCheckForUpdates} variant="outline" size="sm">
+          <Button onClick={handleCheckForUpdates} variant="outline" size="sm" className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
             <RefreshCw className="h-4 w-4 mr-2" />
             {t('updates.action.retry')}
           </Button>
         );
       default:
         return (
-          <Button onClick={handleCheckForUpdates} variant="outline" size="sm">
+          <Button onClick={handleCheckForUpdates} variant="outline" size="sm" className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
             <RefreshCw className="h-4 w-4 mr-2" />
             {t('updates.action.check')}
           </Button>
@@ -171,7 +186,7 @@ export function UpdateSettings() {
             <span>
               {formatBytes(progress.transferred)} / {formatBytes(progress.total)}
             </span>
-            <span>{formatBytes(progress.bytesPerSecond)}/s</span>
+            {/* 隐藏下载速度显示 */}
           </div>
           <Progress value={progress.percent} className="h-2" />
           <p className="text-xs text-muted-foreground text-center">
@@ -200,6 +215,16 @@ export function UpdateSettings() {
         </div>
       )}
 
+      {/* Download Hint */}
+      {showDownloadHint && downloadedFilePath && (
+        <div className="rounded-lg bg-primary/10 p-4 text-sm">
+          <p className="font-medium text-primary mb-2">{t('updates.downloadComplete')}</p>
+          <p className="text-muted-foreground">
+            {t('updates.installHint', { filePath: getFileName(downloadedFilePath) })}
+          </p>
+        </div>
+      )}
+
       {/* Error Details */}
       {status === 'error' && error && (
         <div className="rounded-lg bg-red-50 dark:bg-red-900/10 p-4 text-red-600 dark:text-red-400 text-sm">
@@ -209,9 +234,9 @@ export function UpdateSettings() {
       )}
 
       {/* Help Text */}
-      <p className="text-xs text-muted-foreground">
+      {/* <p className="text-xs text-muted-foreground">
         {t('updates.help')}
-      </p>
+      </p> */}
     </div>
   );
 }

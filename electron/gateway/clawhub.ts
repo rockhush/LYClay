@@ -6,11 +6,12 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { app, shell } from 'electron';
-import { getOpenClawConfigDir, ensureDir, getClawHubCliBinPath, getClawHubCliEntryPath, quoteForCmd } from '../utils/paths';
+import { getOpenClawConfigDir, ensureDir, getClawHubCliBinPath, getClawHubCliEntryPath, prepareWinSpawn } from '../utils/paths';
 
 export interface ClawHubSearchParams {
     query: string;
     limit?: number;
+    sort?: string;
 }
 
 export interface ClawHubInstallParams {
@@ -142,9 +143,13 @@ export class ClawHubService {
     }
 
     /**
-     * Run a ClawHub CLI command
+     * Run a ClawHub CLI command.
+     *
+     * 加入 30 秒兜底超时：CLI 偶发挂死（被杀软拦截、子进程信号丢失、网络盘 I/O 阻塞等）
+     * 不应该把整个 fetchSkills 链路一起拖垮。超时后 reject，由调用方决定降级策略。
      */
-    private async runCommand(args: string[]): Promise<string> {
+    private async runCommand(args: string[], options: { timeoutMs?: number } = {}): Promise<string> {
+        const { timeoutMs = 30_000 } = options;
         return new Promise((resolve, reject) => {
             if (this.useNodeRunner && !fs.existsSync(this.cliEntryPath)) {
                 reject(new Error(`ClawHub CLI entry not found at: ${this.cliEntryPath}`));
@@ -160,8 +165,7 @@ export class ClawHubService {
             const displayCommand = [this.cliPath, ...commandArgs].join(' ');
             console.log(`Running ClawHub command: ${displayCommand}`);
 
-            const isWin = process.platform === 'win32';
-            const useShell = isWin && !this.useNodeRunner;
+            const prepared = prepareWinSpawn(this.cliPath, commandArgs);
             const { NODE_OPTIONS: _nodeOptions, ...baseEnv } = process.env;
             const env = {
                 ...baseEnv,
@@ -171,11 +175,9 @@ export class ClawHubService {
             if (this.useNodeRunner) {
                 env.ELECTRON_RUN_AS_NODE = '1';
             }
-            const spawnCmd = useShell ? quoteForCmd(this.cliPath) : this.cliPath;
-            const spawnArgs = useShell ? commandArgs.map(a => quoteForCmd(a)) : commandArgs;
-            const child = spawn(spawnCmd, spawnArgs, {
+            const child = spawn(prepared.command, prepared.args, {
                 cwd: this.workDir,
-                shell: useShell,
+                shell: prepared.shell,
                 env: {
                     ...env,
                     CLAWHUB_WORKDIR: this.workDir,
@@ -185,21 +187,40 @@ export class ClawHubService {
 
             let stdout = '';
             let stderr = '';
+            let settled = false;
+
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                console.error(`ClawHub command timed out after ${timeoutMs}ms: ${displayCommand}`);
+                try {
+                    child.kill('SIGTERM');
+                } catch (killErr) {
+                    console.error('Failed to kill timed-out ClawHub child:', killErr);
+                }
+                reject(new Error(`ClawHub command timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
 
             child.stdout.on('data', (data) => {
-                stdout += data.toString();
+                stdout += data.toString('utf8');
             });
 
             child.stderr.on('data', (data) => {
-                stderr += data.toString();
+                stderr += data.toString('utf8');
             });
 
             child.on('error', (error) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
                 console.error('ClawHub process error:', error);
                 reject(error);
             });
 
             child.on('close', (code) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
                 if (code !== 0 && code !== null) {
                     console.error(`ClawHub command failed with code ${code}`);
                     console.error('Stderr:', stderr);
@@ -216,9 +237,24 @@ export class ClawHubService {
      * otherwise falls back to the local ClawHub CLI.
      */
     async search(params: ClawHubSearchParams): Promise<ClawHubSkillResult[]> {
+        console.log('[ClawHub] search called with params:', params);
+        console.log('[ClawHub] marketplaceProvider exists:', !!this.marketplaceProvider);
+        console.log('[ClawHub] marketplaceProvider type:', this.marketplaceProvider?.constructor.name);
+        
         if (this.marketplaceProvider) {
-            return this.marketplaceProvider.search(params);
+            console.log('[ClawHub] Using marketplace provider for search');
+            // 添加 os 参数
+            const os = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? '' : 'linux';
+            const paramsWithOs = {
+                ...params,
+                os,
+            };
+            console.log('[ClawHub] search params with os:', paramsWithOs);
+            const result = await this.marketplaceProvider.search(paramsWithOs);
+            console.log('[ClawHub] Marketplace search result count:', result?.length || 0);
+            return result;
         }
+        console.log('[ClawHub] Falling back to local CLI search');
         try {
             // If query is empty, use 'explore' to show trending skills
             if (!params.query || params.query.trim() === '') {
@@ -346,11 +382,18 @@ export class ClawHubService {
     async uninstall(params: ClawHubUninstallParams): Promise<void> {
         const fsPromises = fs.promises;
 
-        // 1. Delete the skill directory
-        const skillDir = path.join(this.workDir, 'skills', params.slug);
-        if (fs.existsSync(skillDir)) {
+        // 1. Find the actual skill directory (handles nested directories)
+        const skillDir = this.resolveSkillDir(params.slug);
+        if (skillDir && fs.existsSync(skillDir)) {
             console.log(`Deleting skill directory: ${skillDir}`);
             await fsPromises.rm(skillDir, { recursive: true, force: true });
+        } else {
+            // Fallback: try the default path
+            const defaultDir = path.join(this.workDir, 'skills', params.slug);
+            if (fs.existsSync(defaultDir)) {
+                console.log(`Deleting skill directory (fallback): ${defaultDir}`);
+                await fsPromises.rm(defaultDir, { recursive: true, force: true });
+            }
         }
 
         // 2. Remove from lock.json
@@ -370,34 +413,109 @@ export class ClawHubService {
     }
 
     /**
-     * List installed skills
+     * List installed skills.
+     *
+     * 重要：磁盘扫描是权威来源，CLI 调用只是补充版本号等元信息。
+     * CLI 调用失败（路径异常、被杀软拦截、超时、lock.json 损坏等）绝不能
+     * 让整个函数返回空数组，否则前端会误认为用户没安装任何技能。
      */
     async listInstalled(): Promise<ClawHubInstalledSkillResult[]> {
-        try {
-            const output = await this.runCommand(['list']);
-            if (!output || output.includes('No installed skills')) {
-                return [];
-            }
+        const cliResults: ClawHubInstalledSkillResult[] = [];
 
-            const lines = output.split('\n').filter(l => l.trim());
-            return lines.map(line => {
-                const cleanLine = this.stripAnsi(line);
-                const match = cleanLine.match(/^(\S+)\s+v?(\d+\.\S+)/);
-                if (match) {
-                    const slug = match[1];
-                    return {
-                        slug,
-                        version: match[2],
-                        source: 'openclaw-managed',
-                        baseDir: path.join(this.workDir, 'skills', slug),
-                    };
-                }
-                return null;
-            }).filter((s): s is ClawHubInstalledSkillResult => s !== null);
+        // 1) 先做磁盘扫描，作为权威来源；任何异常都不允许吞掉整张列表
+        try {
+            const skillsRoot = path.join(this.workDir, 'skills');
+            if (fs.existsSync(skillsRoot)) {
+                const skillDirs = this.scanSkillDirectories(skillsRoot);
+                cliResults.push(...skillDirs);
+            }
         } catch (error) {
-            console.error('ClawHub list error:', error);
-            return [];
+            console.error('ClawHub list: directory scan failed:', error);
         }
+
+        // 2) 再尝试通过 CLI 拉一次列表来补充版本号；CLI 异常不影响最终返回
+        // 这里是用户切页时的高频调用，超时缩短到 5 秒，挂死时立即放弃
+        try {
+            const output = await this.runCommand(['list'], { timeoutMs: 5_000 });
+            if (output && !output.includes('No installed skills')) {
+                const lines = output.split('\n').filter(l => l.trim());
+                for (const line of lines) {
+                    const cleanLine = this.stripAnsi(line);
+                    const match = cleanLine.match(/^(\S+)\s+v?(\d+\.\S+)/);
+                    if (match) {
+                        const slug = match[1];
+                        const version = match[2];
+                        const existing = cliResults.find(r => r.slug === slug);
+                        if (existing) {
+                            // 版本号通常 CLI 更准（package.json 里的真实版本）
+                            if (existing.version === 'unknown' || !existing.version) {
+                                existing.version = version;
+                            }
+                            if (!existing.baseDir) {
+                                existing.baseDir = this.resolveSkillDir(slug)
+                                    || path.join(this.workDir, 'skills', slug);
+                            }
+                        } else {
+                            // CLI 报告了，但磁盘扫描未发现（嵌套层级、符号链接等）
+                            const baseDir = this.resolveSkillDir(slug);
+                            cliResults.push({
+                                slug,
+                                version,
+                                source: 'openclaw-managed',
+                                baseDir: baseDir || path.join(this.workDir, 'skills', slug),
+                            });
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('ClawHub list: CLI invocation failed (non-fatal):', error);
+        }
+
+        return cliResults;
+    }
+    
+    /**
+     * 扫描 skills 目录，查找所有技能（包括嵌套目录）
+     */
+    private scanSkillDirectories(skillsRoot: string): ClawHubInstalledSkillResult[] {
+        const results: ClawHubInstalledSkillResult[] = [];
+        
+        try {
+            const entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
+            
+            for (const entry of entries) {
+                if (!entry.isDirectory()) continue;
+                
+                const dirPath = path.join(skillsRoot, entry.name);
+                const skillManifestPath = path.join(dirPath, 'SKILL.md');
+                
+                if (fs.existsSync(skillManifestPath)) {
+                    // 这是一个技能目录
+                    const frontmatterName = this.extractFrontmatterName(skillManifestPath);
+                    const slug = frontmatterName || entry.name;
+                    
+                    // 尝试从 SKILL.md 中提取版本
+                    const versionMatch = fs.readFileSync(skillManifestPath, 'utf8').match(/version\s*:\s*["']?([\d.]+)["']?/);
+                    const version = versionMatch ? versionMatch[1] : 'unknown';
+                    
+                    results.push({
+                        slug,
+                        version,
+                        source: 'openclaw-managed',
+                        baseDir: dirPath,
+                    });
+                } else {
+                    // 可能是嵌套目录，递归扫描
+                    const nestedResults = this.scanSkillDirectories(dirPath);
+                    results.push(...nestedResults);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to scan skill directories:', error);
+        }
+        
+        return results;
     }
 
     private resolveSkillDir(skillKeyOrSlug: string, fallbackSlug?: string, preferredBaseDir?: string): string | null {

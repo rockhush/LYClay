@@ -37,7 +37,7 @@ function normWin(p) {
 
 const PLUGINS = [
   { npmName: '@soimy/dingtalk', pluginId: 'dingtalk' },
-  { npmName: '@wecom/wecom-openclaw-plugin', pluginId: 'wecom' },
+  { npmName: '@wecom/wecom-openclaw-plugin', pluginId: 'wecom-openclaw-plugin' },
   { npmName: '@larksuite/openclaw-lark', pluginId: 'feishu-openclaw-plugin' },
   { npmName: '@tencent-weixin/openclaw-weixin', pluginId: 'openclaw-weixin' },
 ];

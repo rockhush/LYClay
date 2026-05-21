@@ -24,4 +24,4 @@ if [ -f "$APPARMOR_PROFILE_TARGET" ]; then
     rm -f "$APPARMOR_PROFILE_TARGET"
 fi
 
-echo "ClawX has been removed."
+echo "LYClaw has been removed."

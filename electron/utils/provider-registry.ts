@@ -4,6 +4,8 @@
 
 export {
   BUILTIN_PROVIDER_TYPES,
+  LEGACY_LY_MINIMAX_PROVIDER_ID,
+  LY_MINIMAX_PROVIDER_ID,
   type BuiltinProviderType,
   type ProviderType,
 } from '../shared/providers/types';

@@ -18,10 +18,11 @@ import {
     normalizeOpenClawAccountId,
     toOpenClawChannelType,
 } from './channel-alias';
+import { ensureOpenClawSessionDefaults, type OpenClawDmScope } from './openclaw-config-defaults';
 
 const OPENCLAW_DIR = join(homedir(), '.openclaw');
 const CONFIG_FILE = join(OPENCLAW_DIR, 'openclaw.json');
-const WECOM_PLUGIN_ID = 'wecom';
+const WECOM_PLUGIN_ID = 'wecom-openclaw-plugin';
 // Note: QQBot is a built-in channel since OpenClaw 3.31 — no plugin ID needed.
 const WECHAT_PLUGIN_ID = OPENCLAW_WECHAT_CHANNEL_TYPE;
 const FEISHU_PLUGIN_ID_CANDIDATES = ['openclaw-lark', 'feishu-openclaw-plugin'] as const;
@@ -29,7 +30,7 @@ const DEFAULT_ACCOUNT_ID = 'default';
 // Channels whose top-level schema (additionalProperties:false) does NOT
 // include `defaultAccount`.  We still use the multi-account `accounts`
 // map, but strip `defaultAccount` before persisting to avoid plugin
-// schema validation errors.  ClawX falls back to DEFAULT_ACCOUNT_ID
+// schema validation errors.  LYClaw falls back to DEFAULT_ACCOUNT_ID
 // when `defaultAccount` is absent.
 const CHANNELS_OMIT_DEFAULT_ACCOUNT_KEY = new Set(['dingtalk']);
 const CHANNEL_TOP_LEVEL_KEYS_TO_KEEP = new Set(['accounts', 'defaultAccount', 'enabled']);
@@ -366,6 +367,10 @@ export interface OpenClawConfig {
     channels?: Record<string, ChannelConfigData>;
     plugins?: PluginsConfig;
     commands?: Record<string, unknown>;
+    session?: {
+        dmScope?: OpenClawDmScope;
+        [key: string]: unknown;
+    };
     [key: string]: unknown;
 }
 
@@ -398,6 +403,8 @@ export async function writeOpenClawConfig(config: OpenClawConfig): Promise<void>
     await ensureConfigDir();
 
     try {
+        applyDingTalkMarkdownTableDefault(config);
+
         // Enable graceful in-process reload authorization for SIGUSR1 flows.
         const commands =
             config.commands && typeof config.commands === 'object'
@@ -405,6 +412,8 @@ export async function writeOpenClawConfig(config: OpenClawConfig): Promise<void>
                 : {};
         commands.restart = true;
         config.commands = commands;
+
+        ensureOpenClawSessionDefaults(config as Record<string, unknown>);
 
         await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
     } catch (error) {
@@ -415,6 +424,23 @@ export async function writeOpenClawConfig(config: OpenClawConfig): Promise<void>
 }
 
 // ── Channel operations ───────────────────────────────────────────
+
+function applyDingTalkMarkdownTableDefault(config: OpenClawConfig): void {
+    const dingtalk = config.channels?.dingtalk;
+    if (!dingtalk || typeof dingtalk !== 'object') return;
+
+    if (dingtalk.convertMarkdownTables === undefined) {
+        dingtalk.convertMarkdownTables = false;
+    }
+
+    const accounts = getChannelAccountsMap(dingtalk);
+    if (!accounts) return;
+    for (const account of Object.values(accounts)) {
+        if (account && typeof account === 'object' && account.convertMarkdownTables === undefined) {
+            account.convertMarkdownTables = false;
+        }
+    }
+}
 
 async function ensurePluginAllowlist(currentConfig: OpenClawConfig, channelType: string): Promise<void> {
     if (PLUGIN_CHANNELS.includes(channelType)) {
@@ -502,6 +528,7 @@ async function ensurePluginAllowlist(currentConfig: OpenClawConfig, channelType:
                 ? (currentConfig.plugins.allow as string[])
                 : [];
             const normalizedAllow = allow.filter((pluginId) => pluginId !== 'wecom');
+            delete currentConfig.plugins.entries?.wecom;
             if (!normalizedAllow.includes(WECOM_PLUGIN_ID)) {
                 currentConfig.plugins.allow = [...normalizedAllow, WECOM_PLUGIN_ID];
             } else if (normalizedAllow.length !== allow.length) {
@@ -736,6 +763,16 @@ function assertNoDuplicateCredential(
     }
 }
 
+function applyChannelPersistenceDefaults(channelType: string, config: ChannelConfigData): ChannelConfigData {
+    if (channelType !== 'dingtalk' || config.convertMarkdownTables !== undefined) {
+        return config;
+    }
+    return {
+        ...config,
+        convertMarkdownTables: false,
+    };
+}
+
 export async function saveChannelConfig(
     channelType: string,
     config: ChannelConfigData,
@@ -781,7 +818,8 @@ export async function saveChannelConfig(
         assertNoDuplicateCredential(resolvedChannelType, config, channelSection, resolvedAccountId);
 
         const existingAccountConfig = resolveAccountConfig(channelSection, resolvedAccountId);
-        const transformedConfig = transformChannelConfig(resolvedChannelType, config, existingAccountConfig);
+        const configWithDefaults = applyChannelPersistenceDefaults(resolvedChannelType, config);
+        const transformedConfig = transformChannelConfig(resolvedChannelType, configWithDefaults, existingAccountConfig);
         const uniqueKey = CHANNEL_UNIQUE_CREDENTIAL_KEY[resolvedChannelType];
         if (uniqueKey && typeof transformedConfig[uniqueKey] === 'string') {
             const rawCredentialValue = transformedConfig[uniqueKey] as string;
@@ -993,6 +1031,23 @@ export async function deleteChannelConfig(channelType: string): Promise<void> {
             delete currentConfig.channels[resolvedChannelType];
             if (isWechatChannelType(resolvedChannelType)) {
                 removePluginRegistration(currentConfig, WECHAT_PLUGIN_ID);
+            }
+            // Clean up third-party plugin registrations when their channel is removed.
+            if (resolvedChannelType === 'feishu') {
+                for (const candidateId of FEISHU_PLUGIN_ID_CANDIDATES) {
+                    removePluginRegistration(currentConfig, candidateId);
+                }
+                // Also remove the built-in feishu disable entry since it's no longer needed
+                if (currentConfig.plugins?.entries?.feishu) {
+                    delete currentConfig.plugins.entries.feishu;
+                }
+            }
+            if (resolvedChannelType === 'dingtalk') {
+                removePluginRegistration(currentConfig, 'dingtalk');
+            }
+            if (resolvedChannelType === 'wecom') {
+                removePluginRegistration(currentConfig, WECOM_PLUGIN_ID);
+                removePluginRegistration(currentConfig, 'wecom');
             }
             syncBuiltinChannelsWithPluginAllowlist(currentConfig);
             await writeOpenClawConfig(currentConfig);

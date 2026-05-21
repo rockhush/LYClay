@@ -14,6 +14,7 @@ type BuildGatewayHealthSummaryOptions = {
 };
 
 const CHANNEL_STATUS_FAILURE_WINDOW_MS = 2 * 60_000;
+const STUCK_SESSION_FAILURE_WINDOW_MS = 2 * 60_000;
 const HEARTBEAT_MISS_THRESHOLD_DEFAULT = 3;
 const HEARTBEAT_MISS_THRESHOLD_WIN = 5;
 
@@ -44,6 +45,8 @@ export function buildGatewayHealthSummary(
       lastRpcSuccessAt: options.diagnostics.lastRpcSuccessAt,
       lastRpcFailureAt: options.diagnostics.lastRpcFailureAt,
       lastRpcFailureMethod: options.diagnostics.lastRpcFailureMethod,
+      lastStuckSessionAt: options.diagnostics.lastStuckSessionAt,
+      lastStuckSession: options.diagnostics.lastStuckSession,
       lastChannelsStatusOkAt: options.lastChannelsStatusOkAt,
       lastChannelsStatusFailureAt: options.lastChannelsStatusFailureAt,
     };
@@ -63,6 +66,13 @@ export function buildGatewayHealthSummary(
     reasons.add('channels_status_timeout');
   }
 
+  const stuckSessionIsRecent =
+    typeof options.diagnostics.lastStuckSessionAt === 'number'
+    && now - options.diagnostics.lastStuckSessionAt <= STUCK_SESSION_FAILURE_WINDOW_MS;
+  if (stuckSessionIsRecent) {
+    reasons.add('chat_session_stuck');
+  }
+
   return {
     state: reasons.has('gateway_unresponsive')
       ? 'unresponsive'
@@ -75,6 +85,8 @@ export function buildGatewayHealthSummary(
     lastRpcSuccessAt: options.diagnostics.lastRpcSuccessAt,
     lastRpcFailureAt: options.diagnostics.lastRpcFailureAt,
     lastRpcFailureMethod: options.diagnostics.lastRpcFailureMethod,
+    lastStuckSessionAt: options.diagnostics.lastStuckSessionAt,
+    lastStuckSession: options.diagnostics.lastStuckSession,
     lastChannelsStatusOkAt: options.lastChannelsStatusOkAt,
     lastChannelsStatusFailureAt: options.lastChannelsStatusFailureAt,
   };

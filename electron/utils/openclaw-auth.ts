@@ -26,6 +26,7 @@ import {
   isOpenClawOAuthPluginProviderKey,
 } from './provider-keys';
 import { withConfigLock } from './config-mutex';
+import { ensureOpenClawSessionDefaults } from './openclaw-config-defaults';
 
 const AUTH_STORE_VERSION = 1;
 const AUTH_PROFILE_FILENAME = 'auth-profiles.json';
@@ -348,16 +349,20 @@ async function resolveInstalledFeishuPluginId(): Promise<string | null> {
   return null;
 }
 
-function normalizeAgentsDefaultsCompactionMode(config: Record<string, unknown>): void {
-  const agents = (config.agents && typeof config.agents === 'object'
+function ensureAgentsDefaults(config: Record<string, unknown>): Record<string, unknown> {
+  const agents = (config.agents && typeof config.agents === 'object' && !Array.isArray(config.agents)
     ? config.agents as Record<string, unknown>
-    : null);
-  if (!agents) return;
-
-  const defaults = (agents.defaults && typeof agents.defaults === 'object'
+    : {});
+  const defaults = (agents.defaults && typeof agents.defaults === 'object' && !Array.isArray(agents.defaults)
     ? agents.defaults as Record<string, unknown>
-    : null);
-  if (!defaults) return;
+    : {});
+  agents.defaults = defaults;
+  config.agents = agents;
+  return defaults;
+}
+
+function normalizeAgentsDefaultsCompactionMode(config: Record<string, unknown>): void {
+  const defaults = ensureAgentsDefaults(config);
 
   const compaction = (defaults.compaction && typeof defaults.compaction === 'object'
     ? defaults.compaction as Record<string, unknown>
@@ -370,8 +375,43 @@ function normalizeAgentsDefaultsCompactionMode(config: Record<string, unknown>):
   }
 }
 
+function ensureThinkingDefaultOff(config: Record<string, unknown>): void {
+  const defaults = ensureAgentsDefaults(config);
+  defaults.thinkingDefault = 'off';
+}
+
+function applyDingTalkMarkdownTableDefault(config: Record<string, unknown>): void {
+  const channels = (config.channels && typeof config.channels === 'object'
+    ? config.channels as Record<string, unknown>
+    : null);
+  const dingtalk = (channels?.dingtalk && typeof channels.dingtalk === 'object'
+    ? channels.dingtalk as Record<string, unknown>
+    : null);
+  if (!dingtalk) return;
+
+  if (dingtalk.convertMarkdownTables === undefined) {
+    dingtalk.convertMarkdownTables = false;
+  }
+
+  const accounts = (dingtalk.accounts && typeof dingtalk.accounts === 'object'
+    ? dingtalk.accounts as Record<string, unknown>
+    : null);
+  if (!accounts) return;
+  for (const account of Object.values(accounts)) {
+    if (account && typeof account === 'object') {
+      const accountConfig = account as Record<string, unknown>;
+      if (accountConfig.convertMarkdownTables === undefined) {
+        accountConfig.convertMarkdownTables = false;
+      }
+    }
+  }
+}
+
 async function writeOpenClawJson(config: Record<string, unknown>): Promise<void> {
   normalizeAgentsDefaultsCompactionMode(config);
+  ensureThinkingDefaultOff(config);
+  ensureOpenClawSessionDefaults(config);
+  applyDingTalkMarkdownTableDefault(config);
 
   // Ensure SIGUSR1 graceful reload is authorized by OpenClaw config.
   const commands = (
@@ -721,6 +761,7 @@ interface RuntimeProviderConfigOverride {
   apiKeyEnv?: string;
   headers?: Record<string, string>;
   authHeader?: boolean;
+  modelOverrides?: Record<string, Record<string, unknown>>;
 }
 
 type ProviderEntryBuildOptions = {
@@ -730,6 +771,7 @@ type ProviderEntryBuildOptions = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   modelIds?: string[];
+  modelOverrides?: Record<string, Record<string, unknown>>;
   includeRegistryModels?: boolean;
   mergeExistingModels?: boolean;
 };
@@ -787,7 +829,11 @@ function upsertOpenClawProviderEntry(
   const registryModels = options.includeRegistryModels
     ? ((getProviderConfig(provider)?.models ?? []).map((m) => ({ ...m })) as Array<Record<string, unknown>>)
     : [];
-  const runtimeModels = (options.modelIds ?? []).map((id) => ({ id, name: id }));
+  const runtimeModels = (options.modelIds ?? []).map((id) => ({
+    id,
+    name: id,
+    ...(options.modelOverrides?.[id] ?? {}),
+  }));
 
   const nextProvider: Record<string, unknown> = {
     ...existingProvider,
@@ -836,13 +882,13 @@ function removeLegacyMoonshotKimiSearchConfig(config: Record<string, unknown>): 
   if (!search || !('kimi' in search)) return false;
 
   delete search.kimi;
-  if (Object.keys(search).length === 0) {
+  if (web && Object.keys(search).length === 0) {
     delete web.search;
   }
-  if (Object.keys(web).length === 0) {
+  if (tools && web && Object.keys(web).length === 0) {
     delete tools.web;
   }
-  if (Object.keys(tools).length === 0) {
+  if (tools && Object.keys(tools).length === 0) {
     delete config.tools;
   }
   return true;
@@ -911,6 +957,7 @@ export async function syncProviderConfigToOpenClaw(
         apiKeyEnv: override.apiKeyEnv,
         headers: override.headers,
         modelIds: modelId ? [modelId] : [],
+        modelOverrides: override.modelOverrides,
       });
     }
 
@@ -972,6 +1019,7 @@ export async function setOpenClawDefaultModelWithOverride(
         headers: override.headers,
         authHeader: override.authHeader,
         modelIds: [modelId, ...fallbackModelIds],
+        modelOverrides: override.modelOverrides,
       });
     }
 
@@ -1068,7 +1116,7 @@ export async function getActiveOpenClawProviders(): Promise<Set<string>> {
 
 /**
  * Read models.providers entries and agents.defaults.model from openclaw.json.
- * Used by ClawX to seed the provider store when it's empty but providers are
+ * Used by LYClaw to seed the provider store when it's empty but providers are
  * configured externally (e.g. via CLI or by editing openclaw.json directly).
  */
 export async function getOpenClawProvidersConfig(): Promise<{
@@ -1118,7 +1166,7 @@ export async function getOpenClawProvidersConfig(): Promise<{
 }
 
 /**
- * Write the ClawX gateway token into ~/.openclaw/openclaw.json.
+ * Write the LYClaw gateway token into ~/.openclaw/openclaw.json.
  */
 export async function syncGatewayTokenToConfig(token: string): Promise<void> {
   return withConfigLock(async () => {
@@ -1140,7 +1188,7 @@ export async function syncGatewayTokenToConfig(token: string): Promise<void> {
     auth.token = token;
     gateway.auth = auth;
 
-    // Packaged ClawX loads the renderer from file://, so the gateway must allow
+    // Packaged LYClaw loads the renderer from file://, so the gateway must allow
     // that origin for the chat WebSocket handshake.
     const controlUi = (
       gateway.controlUi && typeof gateway.controlUi === 'object'
@@ -1209,14 +1257,14 @@ export async function syncBrowserConfigToOpenClaw(): Promise<void> {
 }
 
 /**
- * Ensure session idle-reset is configured in ~/.openclaw/openclaw.json.
+ * Ensure session defaults are configured in ~/.openclaw/openclaw.json.
  *
  * By default OpenClaw resets the "main" session daily at 04:00 local time,
- * which means conversations disappear after roughly one day.  ClawX sets
+ * which means conversations disappear after roughly one day.  LYClaw sets
  * `session.idleMinutes` to 10 080 (7 days) so that conversations are
  * preserved for a week unless the user has explicitly configured their own
- * value.  When `idleMinutes` is set without `session.reset` /
- * `session.resetByType`, OpenClaw stays in idle-only mode (no daily reset).
+ * value.  LYClaw also defaults DM routing to per-account peer sessions so
+ * multiple channel DM senders do not share the main session.
  */
 export async function syncSessionIdleMinutesToOpenClaw(): Promise<void> {
   const DEFAULT_IDLE_MINUTES = 10_080; // 7 days
@@ -1230,27 +1278,32 @@ export async function syncSessionIdleMinutesToOpenClaw(): Promise<void> {
         : {}
     ) as Record<string, unknown>;
 
+    let modified = ensureOpenClawSessionDefaults(config);
+
     // Only set idleMinutes if the user has not configured it yet.
-    if (session.idleMinutes !== undefined) return;
+    if (session.idleMinutes === undefined) {
+      // If the user has explicit reset / resetByType / resetByChannel config,
+      // they are actively managing session lifecycle — don't interfere.
+      if (session.reset === undefined
+        && session.resetByType === undefined
+        && session.resetByChannel === undefined) {
+        session.idleMinutes = DEFAULT_IDLE_MINUTES;
+        config.session = session;
+        modified = true;
+      }
+    }
 
-    // If the user has explicit reset / resetByType / resetByChannel config,
-    // they are actively managing session lifecycle — don't interfere.
-    if (session.reset !== undefined
-      || session.resetByType !== undefined
-      || session.resetByChannel !== undefined) return;
-
-    session.idleMinutes = DEFAULT_IDLE_MINUTES;
-    config.session = session;
+    if (!modified) return;
 
     await writeOpenClawJson(config);
-    console.log(`Synced session.idleMinutes=${DEFAULT_IDLE_MINUTES} (7d) to openclaw.json`);
+    console.log(`Synced OpenClaw session defaults to openclaw.json`);
   });
 }
 
 /**
- * Batch-apply gateway token, browser config, and session idle minutes in a
- * single config lock + read + write cycle.  Replaces three separate
- * withConfigLock calls during pre-launch sync.
+ * Batch-apply gateway token, browser config, and session defaults in a single
+ * config lock + read + write cycle. Replaces three separate withConfigLock
+ * calls during pre-launch sync.
  */
 export async function batchSyncConfigFields(token: string): Promise<void> {
   const DEFAULT_IDLE_MINUTES = 10_080; // 7 days
@@ -1320,7 +1373,7 @@ export async function batchSyncConfigFields(token: string): Promise<void> {
       modified = true;
     }
 
-    // ── Session idle minutes ──
+    // ── Session defaults ──
     const session = (
       config.session && typeof config.session === 'object'
         ? { ...(config.session as Record<string, unknown>) }
@@ -1335,10 +1388,11 @@ export async function batchSyncConfigFields(token: string): Promise<void> {
       config.session = session;
       modified = true;
     }
+    modified = ensureOpenClawSessionDefaults(config) || modified;
 
     if (modified) {
       await writeOpenClawJson(config);
-      console.log('Synced gateway token, browser config, and session idle to openclaw.json');
+      console.log('Synced gateway token, browser config, and session defaults to openclaw.json');
     }
   });
 }
@@ -1431,7 +1485,7 @@ export async function updateSingleAgentModelProvider(
  * Removes known-invalid keys that cause OpenClaw's strict Zod validation
  * to reject the entire config on startup.  Uses a conservative **blocklist**
  * approach: only strips keys that are KNOWN to be misplaced by older
- * OpenClaw/ClawX versions or external tools.
+ * OpenClaw/LYClaw versions or external tools.
  *
  * Why blocklist instead of allowlist?
  *   • Allowlist (e.g. `VALID_SKILLS_KEYS`) would strip any NEW valid keys
@@ -1603,7 +1657,7 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
 
     // ── tools.profile & sessions.visibility ───────────────────────
     // OpenClaw 3.8+ requires tools.profile = 'full' and tools.sessions.visibility = 'all'
-    // for ClawX to properly integrate with its updated tool system.
+    // for LYClaw to properly integrate with its updated tool system.
     const toolsConfig = (config.tools as Record<string, unknown> | undefined) || {};
     let toolsModified = false;
 
@@ -1620,7 +1674,7 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
     }
 
     // ── tools.exec approvals (OpenClaw 3.28+) ──────────────────────
-    // ClawX is a local desktop app where the user is the trusted operator.
+    // LYClaw is a local desktop app where the user is the trusted operator.
     // Exec approval prompts add unnecessary friction in this context, so we
     // set security="full" (allow all commands) and ask="off" (never prompt).
     // If a user has manually configured a stricter ~/.openclaw/exec-approvals.json,
@@ -1631,7 +1685,7 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
       execConfig.ask = 'off';
       toolsConfig.exec = execConfig;
       toolsModified = true;
-      console.log('[sanitize] Set tools.exec.security="full" and tools.exec.ask="off" to disable exec approvals for ClawX desktop');
+      console.log('[sanitize] Set tools.exec.security="full" and tools.exec.ask="off" to disable exec approvals for LYClaw desktop');
     }
 
     if (toolsModified) {
@@ -1682,7 +1736,7 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
 
       const installs = isPlainRecord(pluginsObj.installs) ? pluginsObj.installs as Record<string, unknown> : null;
       const acpxInstall = installs && isPlainRecord(installs.acpx) ? installs.acpx as Record<string, unknown> : null;
-      if (acpxInstall) {
+      if (installs && acpxInstall) {
         const currentBundledAcpxDir = join(getOpenClawResolvedDir(), 'dist', 'extensions', 'acpx').replace(/\\/g, '/');
         const sourcePath = typeof acpxInstall.sourcePath === 'string' ? acpxInstall.sourcePath : '';
         const installPath = typeof acpxInstall.installPath === 'string' ? acpxInstall.installPath : '';
@@ -1710,38 +1764,66 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
         || FEISHU_PLUGIN_ID_CANDIDATES.find((id) => Boolean(pEntries[id]));
       const canonicalFeishuId = installedFeishuId || configuredFeishuId || FEISHU_PLUGIN_ID_CANDIDATES[0];
 
-      const existingFeishuEntry =
-        FEISHU_PLUGIN_ID_CANDIDATES.map((id) => pEntries[id]).find(Boolean)
-        || pEntries.feishu;
+      // Only add feishu plugin to plugins.allow and plugins.entries when the
+      // feishu channel is actually configured.  If not configured, remove all
+      // feishu-related entries so they don't linger in the config.
+      const feishuChannelSection = (config.channels as Record<string, Record<string, unknown>> | undefined)?.feishu;
+      const isFeishuConfigured = feishuChannelSection
+        && typeof feishuChannelSection === 'object'
+        && feishuChannelSection.enabled !== false
+        && Object.keys(feishuChannelSection).length > 0;
 
-      const normalizedAllow = allowArr.filter(
-        (id) => id !== 'feishu' && !FEISHU_PLUGIN_ID_CANDIDATES.includes(id as typeof FEISHU_PLUGIN_ID_CANDIDATES[number]),
-      );
-      normalizedAllow.push(canonicalFeishuId);
-      if (JSON.stringify(normalizedAllow) !== JSON.stringify(allowArr)) {
-        pluginsObj.allow = normalizedAllow;
-        modified = true;
-        console.log(`[sanitize] Normalized plugins.allow for feishu -> ${canonicalFeishuId}`);
-      }
+      if (isFeishuConfigured) {
+        const existingFeishuEntry =
+          FEISHU_PLUGIN_ID_CANDIDATES.map((id) => pEntries[id]).find(Boolean)
+          || pEntries.feishu;
 
-      if (existingFeishuEntry || !pEntries[canonicalFeishuId]) {
-        pEntries[canonicalFeishuId] = {
-          ...(existingFeishuEntry || {}),
-          ...(pEntries[canonicalFeishuId] || {}),
-          enabled: true,
-        };
-        modified = true;
-      }
-      for (const id of FEISHU_PLUGIN_ID_CANDIDATES) {
-        if (id !== canonicalFeishuId && pEntries[id]) {
-          delete pEntries[id];
+        const normalizedAllow = allowArr.filter(
+          (id) => id !== 'feishu' && !FEISHU_PLUGIN_ID_CANDIDATES.includes(id as typeof FEISHU_PLUGIN_ID_CANDIDATES[number]),
+        );
+        normalizedAllow.push(canonicalFeishuId);
+        if (JSON.stringify(normalizedAllow) !== JSON.stringify(allowArr)) {
+          pluginsObj.allow = normalizedAllow;
           modified = true;
+          console.log(`[sanitize] Normalized plugins.allow for feishu -> ${canonicalFeishuId}`);
+        }
+
+        if (existingFeishuEntry || !pEntries[canonicalFeishuId]) {
+          pEntries[canonicalFeishuId] = {
+            ...(existingFeishuEntry || {}),
+            ...(pEntries[canonicalFeishuId] || {}),
+            enabled: true,
+          };
+          modified = true;
+        }
+        for (const id of FEISHU_PLUGIN_ID_CANDIDATES) {
+          if (id !== canonicalFeishuId && pEntries[id]) {
+            delete pEntries[id];
+            modified = true;
+          }
+        }
+      } else {
+        // Feishu channel not configured — remove all feishu plugin entries
+        const normalizedAllow = allowArr.filter(
+          (id) => id !== 'feishu' && !FEISHU_PLUGIN_ID_CANDIDATES.includes(id as typeof FEISHU_PLUGIN_ID_CANDIDATES[number]),
+        );
+        if (normalizedAllow.length !== allowArr.length) {
+          pluginsObj.allow = normalizedAllow;
+          modified = true;
+          console.log('[sanitize] Removed unconfigured feishu plugin from plugins.allow');
+        }
+        for (const id of [...FEISHU_PLUGIN_ID_CANDIDATES, 'feishu'] as const) {
+          if (pEntries[id]) {
+            delete pEntries[id];
+            modified = true;
+            console.log(`[sanitize] Removed unconfigured feishu plugin entry: ${id}`);
+          }
         }
       }
 
-      // ── wecom-openclaw-plugin → wecom migration ────────────────
-      const LEGACY_WECOM_ID = 'wecom-openclaw-plugin';
-      const NEW_WECOM_ID = 'wecom';
+      // ── wecom → wecom-openclaw-plugin migration ────────────────
+      const LEGACY_WECOM_ID = 'wecom';
+      const NEW_WECOM_ID = 'wecom-openclaw-plugin';
       if (Array.isArray(pluginsObj.allow)) {
         const allowArr = pluginsObj.allow as string[];
         const legacyIdx = allowArr.indexOf(LEGACY_WECOM_ID);
@@ -1821,31 +1903,31 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
       // ── Disable built-in 'feishu' when official openclaw-lark plugin is active ──
       // OpenClaw ships a built-in 'feishu' extension in dist/extensions/feishu/
       // that conflicts with the official @larksuite/openclaw-lark plugin
-      // (id: 'openclaw-lark').  When the canonical feishu plugin is NOT the
-      // built-in 'feishu' itself, we must:
-      //   1. Remove bare 'feishu' from plugins.allow (already done above at line ~1648)
-      //   2. Delete plugins.entries.feishu entirely — keeping it with enabled:false
-      //      causes the Gateway to report the feishu channel as "disabled".
-      //      Since 'feishu' is not in plugins.allow, the built-in won't load.
+      // (id: 'openclaw-lark').  When the feishu channel IS configured and the
+      // canonical plugin is NOT the built-in 'feishu' itself, we must:
+      //   1. Remove bare 'feishu' from plugins.allow
+      //   2. Explicitly disable the built-in feishu extension
       const allowArr2 = Array.isArray(pluginsObj.allow) ? pluginsObj.allow as string[] : [];
-      const hasCanonicalFeishu = allowArr2.includes(canonicalFeishuId) || !!pEntries[canonicalFeishuId];
-      if (hasCanonicalFeishu && canonicalFeishuId !== 'feishu') {
-        // Remove bare 'feishu' from plugins.allow
-        const bareFeishuIdx = allowArr2.indexOf('feishu');
-        if (bareFeishuIdx !== -1) {
-          allowArr2.splice(bareFeishuIdx, 1);
-          console.log('[sanitize] Removed bare "feishu" from plugins.allow (openclaw-lark plugin is configured)');
-          modified = true;
-        }
-        // Explicitly disable the built-in feishu extension so it doesn't
-        // conflict with the official openclaw-lark plugin at runtime.
-        // Simply deleting the entry is NOT sufficient — the built-in
-        // extension in dist/extensions/feishu/ (enabledByDefault: true) will
-        // still load unless explicitly marked as disabled.
-        if (!pEntries.feishu || (pEntries.feishu as Record<string, unknown>).enabled !== false) {
-          pEntries.feishu = { enabled: false };
-          console.log('[sanitize] Disabled built-in feishu plugin (openclaw-lark plugin is configured)');
-          modified = true;
+      if (isFeishuConfigured) {
+        const hasCanonicalFeishu = allowArr2.includes(canonicalFeishuId) || !!pEntries[canonicalFeishuId];
+        if (hasCanonicalFeishu && canonicalFeishuId !== 'feishu') {
+          // Remove bare 'feishu' from plugins.allow
+          const bareFeishuIdx = allowArr2.indexOf('feishu');
+          if (bareFeishuIdx !== -1) {
+            allowArr2.splice(bareFeishuIdx, 1);
+            console.log('[sanitize] Removed bare "feishu" from plugins.allow (openclaw-lark plugin is configured)');
+            modified = true;
+          }
+          // Explicitly disable the built-in feishu extension so it doesn't
+          // conflict with the official openclaw-lark plugin at runtime.
+          // Simply deleting the entry is NOT sufficient — the built-in
+          // extension in dist/extensions/feishu/ (enabledByDefault: true) will
+          // still load unless explicitly marked as disabled.
+          if (!pEntries.feishu || (pEntries.feishu as Record<string, unknown>).enabled !== false) {
+            pEntries.feishu = { enabled: false };
+            console.log('[sanitize] Disabled built-in feishu plugin (openclaw-lark plugin is configured)');
+            modified = true;
+          }
         }
       }
 
@@ -1899,12 +1981,12 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
       // allowlist because they were excluded from externalPluginIds above.
       if (nextAllow.length > 0) {
         for (const pluginId of bundled.enabledByDefault) {
-          // When the official openclaw-lark (or similar) plugin replaces the
-          // built-in 'feishu' extension, skip re-adding 'feishu' here —
-          // otherwise the enabledByDefault logic undoes the conflict
-          // resolution performed above and the built-in extension keeps
-          // reappearing in plugins.allow on every gateway restart.
-          if (pluginId === 'feishu' && canonicalFeishuId !== 'feishu') {
+          // When feishu is not configured at all, or the official
+          // openclaw-lark plugin replaces the built-in 'feishu' extension,
+          // skip re-adding 'feishu' here — otherwise the enabledByDefault
+          // logic undoes the cleanup performed above and the built-in
+          // extension keeps reappearing in plugins.allow.
+          if (pluginId === 'feishu' && (!isFeishuConfigured || canonicalFeishuId !== 'feishu')) {
             continue;
           }
           if (!nextAllow.includes(pluginId)) {
@@ -1946,9 +2028,8 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
     // credentials from the top level of `channels.<type>`.  Mirror them
     // there so the runtime can discover them.
     //
-    // Channels whose top-level schema (additionalProperties:false) does NOT
-    // include `defaultAccount` but DOES include `accounts`.  Strip only
-    // `defaultAccount` to allow multi-account support.
+    // Channels whose schema (additionalProperties:false) rejects LYClaw-only
+    // metadata. Strip only keys we know were written by older LYClaw builds.
     const channelsObj = config.channels as Record<string, Record<string, unknown>> | undefined;
     const CHANNELS_OMIT_DEFAULT_ACCOUNT_KEY = new Set(['dingtalk']);
 
@@ -1962,6 +2043,41 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
           delete section['defaultAccount'];
           modified = true;
           console.log(`[sanitize] Removed incompatible 'defaultAccount' from channels.${channelType}`);
+        }
+
+        if (channelType === 'dingtalk') {
+          if (section.convertMarkdownTables === undefined) {
+            section.convertMarkdownTables = false;
+            modified = true;
+            console.log('[sanitize] Set channels.dingtalk.convertMarkdownTables=false');
+          }
+
+          for (const key of ['managedBy', 'scope']) {
+            if (key in section) {
+              delete section[key];
+              modified = true;
+              console.log(`[sanitize] Removed incompatible '${key}' from channels.${channelType}`);
+            }
+          }
+
+          const accounts = section.accounts as Record<string, Record<string, unknown>> | undefined;
+          if (accounts && typeof accounts === 'object') {
+            for (const [accountId, account] of Object.entries(accounts)) {
+              if (!account || typeof account !== 'object') continue;
+              if (account.convertMarkdownTables === undefined) {
+                account.convertMarkdownTables = false;
+                modified = true;
+                console.log(`[sanitize] Set channels.dingtalk.accounts.${accountId}.convertMarkdownTables=false`);
+              }
+              for (const key of ['managedBy', 'scope']) {
+                if (key in account) {
+                  delete account[key];
+                  modified = true;
+                  console.log(`[sanitize] Removed incompatible '${key}' from channels.${channelType}.accounts.${accountId}`);
+                }
+              }
+            }
+          }
         }
 
         // Mirror missing keys from default account to top level.

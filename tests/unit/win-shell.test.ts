@@ -49,6 +49,12 @@ describe('quoteForCmd', () => {
       .toBe('"C:\\Users\\John Doe\\AppData\\Local\\uv.exe"');
   });
 
+  it('wraps cmd metacharacters on Windows', () => {
+    setPlatform('win32');
+    expect(quoteForCmd('C:\\tools\\foo&bar.exe')).toBe('"C:\\tools\\foo&bar.exe"');
+    expect(quoteForCmd('value|next')).toBe('"value|next"');
+  });
+
   it('does not double-quote already quoted values', () => {
     setPlatform('win32');
     expect(quoteForCmd('"C:\\Program Files\\uv.exe"')).toBe('"C:\\Program Files\\uv.exe"');
@@ -88,10 +94,17 @@ describe('needsWinShell', () => {
     expect(needsWinShell('pnpm')).toBe(true);
   });
 
-  it('returns false on Windows for absolute paths', () => {
+  it('returns false on Windows for absolute exe and ps1 paths', () => {
     setPlatform('win32');
     expect(needsWinShell('C:\\Program Files\\uv.exe')).toBe(false);
     expect(needsWinShell('D:\\tools\\bin\\uv.exe')).toBe(false);
+    expect(needsWinShell('C:\\tools\\helper.ps1')).toBe(false);
+  });
+
+  it('returns true on Windows for absolute cmd and bat wrappers', () => {
+    setPlatform('win32');
+    expect(needsWinShell('C:\\Program Files\\LYClaw\\openclaw.cmd')).toBe(true);
+    expect(needsWinShell('D:\\tools\\setup.bat')).toBe(true);
   });
 
   it('returns true on Windows for relative paths', () => {
@@ -158,6 +171,22 @@ describe('prepareWinSpawn', () => {
       ['python', 'find', '3.12'],
     );
     expect(relResult.shell).toBe(true);
+  });
+
+  it('auto-detects shell need for cmd wrappers but not ps1 scripts', () => {
+    setPlatform('win32');
+    const cmdResult = prepareWinSpawn(
+      'C:\\Program Files\\LYClaw\\openclaw.cmd',
+      ['doctor'],
+    );
+    expect(cmdResult.shell).toBe(true);
+    expect(cmdResult.command).toBe('"C:\\Program Files\\LYClaw\\openclaw.cmd"');
+
+    const psResult = prepareWinSpawn(
+      'C:\\Program Files\\LYClaw\\update-user-path.ps1',
+      ['-Action', 'add'],
+    );
+    expect(psResult.shell).toBe(false);
   });
 });
 

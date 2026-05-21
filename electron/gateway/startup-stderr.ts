@@ -3,6 +3,24 @@ export type GatewayStderrClassification = {
   normalized: string;
 };
 
+export type GatewayStuckSessionDiagnostic = {
+  sessionId?: string;
+  sessionKey?: string;
+  state?: string;
+  ageSeconds?: number;
+  queueDepth?: number;
+  raw: string;
+};
+
+export type SessionWriteLockLog = {
+  phase: 'releasing' | 'waiting' | 'acquired' | 'unknown';
+  path?: string;
+  heldMs?: number;
+  maxMs?: number;
+  waitedMs?: number;
+  raw: string;
+};
+
 const MAX_STDERR_LINES = 120;
 
 export function classifyGatewayStderrMessage(message: string): GatewayStderrClassification {
@@ -41,6 +59,45 @@ export function classifyGatewayStderrMessage(message: string): GatewayStderrClas
   return { level: 'warn', normalized: msg };
 }
 
+export function parseSessionWriteLockLog(message: string): SessionWriteLockLog | null {
+  const msg = message.trim();
+  if (!msg.includes('[session-write-lock]')) {
+    return null;
+  }
+
+  const releaseMatch = msg.match(/\[session-write-lock\]\s+releasing lock held for\s+(\d+)ms\s+\(max=(\d+)ms\):\s+(.+)$/i);
+  if (releaseMatch) {
+    return {
+      phase: 'releasing',
+      heldMs: Number(releaseMatch[1]),
+      maxMs: Number(releaseMatch[2]),
+      path: releaseMatch[3],
+      raw: msg,
+    };
+  }
+
+  const waitMatch = msg.match(/\[session-write-lock\].*wait(?:ing|ed).*?(\d+)ms.*?:\s+(.+)$/i);
+  if (waitMatch) {
+    return {
+      phase: 'waiting',
+      waitedMs: Number(waitMatch[1]),
+      path: waitMatch[2],
+      raw: msg,
+    };
+  }
+
+  const acquiredMatch = msg.match(/\[session-write-lock\].*acquir(?:ed|ing).*?:\s+(.+)$/i);
+  if (acquiredMatch) {
+    return {
+      phase: msg.includes('acquired') ? 'acquired' : 'waiting',
+      path: acquiredMatch[1],
+      raw: msg,
+    };
+  }
+
+  return { phase: 'unknown', raw: msg };
+}
+
 export function recordGatewayStartupStderrLine(lines: string[], line: string): void {
   const normalized = line.trim();
   if (!normalized) return;
@@ -48,4 +105,26 @@ export function recordGatewayStartupStderrLine(lines: string[], line: string): v
   if (lines.length > MAX_STDERR_LINES) {
     lines.splice(0, lines.length - MAX_STDERR_LINES);
   }
+}
+
+export function parseGatewayStuckSessionDiagnostic(message: string): GatewayStuckSessionDiagnostic | null {
+  const msg = message.trim();
+  if (!msg.includes('stuck session:')) {
+    return null;
+  }
+
+  const sessionId = msg.match(/sessionId=([^\s]+)/)?.[1];
+  const sessionKey = msg.match(/sessionKey=([^\s]+)/)?.[1];
+  const state = msg.match(/state=([^\s]+)/)?.[1];
+  const ageSecondsRaw = msg.match(/age=(\d+)s/)?.[1];
+  const queueDepthRaw = msg.match(/queueDepth=(\d+)/)?.[1];
+
+  return {
+    sessionId,
+    sessionKey,
+    state,
+    ageSeconds: ageSecondsRaw ? Number(ageSecondsRaw) : undefined,
+    queueDepth: queueDepthRaw ? Number(queueDepthRaw) : undefined,
+    raw: msg,
+  };
 }

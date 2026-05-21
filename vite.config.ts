@@ -56,6 +56,7 @@ export default defineConfig({
         },
         vite: {
           build: {
+            sourcemap: true,
             outDir: 'dist-electron/main',
             rollupOptions: {
               external: isMainProcessExternal,
@@ -71,6 +72,7 @@ export default defineConfig({
         },
         vite: {
           build: {
+            sourcemap: true,
             outDir: 'dist-electron/preload',
             rollupOptions: {
               external: ['electron'],
@@ -86,6 +88,7 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
       '@electron': resolve(__dirname, 'electron'),
     },
+    dedupe: ['react', 'react-dom', 'react-i18next', 'zustand', 'sonner', 'lucide-react'],
   },
   server: {
     port: 5173,

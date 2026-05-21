@@ -20,6 +20,8 @@ type ChatLikeState = {
   pendingFinal: boolean;
   lastUserMessageAt: number | null;
   pendingToolImages: unknown[];
+  sending: boolean;
+  loading: boolean;
   loadHistory: ReturnType<typeof vi.fn>;
 };
 
@@ -38,6 +40,8 @@ function makeHarness(initial?: Partial<ChatLikeState>) {
     pendingFinal: false,
     lastUserMessageAt: null,
     pendingToolImages: [],
+    sending: false,
+    loading: false,
     loadHistory: vi.fn(),
     ...initial,
   };
@@ -94,6 +98,23 @@ describe('chat session actions', () => {
     // Truly empty session (no labels, no activity) should be cleaned up
     expect(next.sessions.find((s) => s.key === 'agent:foo:session-b')).toBeUndefined();
     expect(h.read().loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('switchSession clears sending and loading so loadHistory is not blocked', async () => {
+    const { createSessionActions } = await import('@/stores/chat/session-actions');
+    const h = makeHarness({
+      currentSessionKey: 'agent:main:main',
+      sessions: [{ key: 'agent:main:main' }, { key: 'agent:other:main' }],
+      sending: true,
+      loading: true,
+    });
+    const actions = createSessionActions(h.set as never, h.get as never);
+
+    actions.switchSession('agent:other:main');
+    const next = h.read();
+    expect(next.sending).toBe(false);
+    expect(next.loading).toBe(false);
+    expect(next.loadHistory).toHaveBeenCalledTimes(1);
   });
 
   it('deleteSession updates current session and keeps sidebar consistent', async () => {

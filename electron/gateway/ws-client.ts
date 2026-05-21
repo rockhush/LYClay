@@ -10,6 +10,12 @@ import { logger } from '../utils/logger';
 
 export const GATEWAY_CHALLENGE_TIMEOUT_MS = 10_000;
 export const GATEWAY_CONNECT_HANDSHAKE_TIMEOUT_MS = 20_000;
+export const GATEWAY_CONNECT_STARTING_RETRY_MS = 300;
+
+function isGatewayStartingHandshakeError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return message.includes('gateway starting') || message.includes('retry shortly');
+}
 
 export async function probeGatewayReady(
   port: number,
@@ -146,10 +152,10 @@ export function buildGatewayConnectFrame(options: {
       method: 'connect',
       params: {
         minProtocol: 3,
-        maxProtocol: 3,
+        maxProtocol: 4,
         client: {
           id: clientId,
-          displayName: 'ClawX',
+          displayName: 'LYClaw',
           version: '0.1.0',
           platform: options.platform,
           mode: clientMode,
@@ -178,9 +184,41 @@ export async function connectGatewaySocket(options: {
   challengeTimeoutMs?: number;
   connectTimeoutMs?: number;
 }): Promise<WebSocket> {
-  logger.debug(`Connecting Gateway WebSocket (ws://localhost:${options.port}/ws)`);
-  const challengeTimeoutMs = options.challengeTimeoutMs ?? GATEWAY_CHALLENGE_TIMEOUT_MS;
   const connectTimeoutMs = options.connectTimeoutMs ?? GATEWAY_CONNECT_HANDSHAKE_TIMEOUT_MS;
+  const deadline = Date.now() + connectTimeoutMs;
+  let attempt = 0;
+
+  while (true) {
+    attempt++;
+    try {
+      return await connectGatewaySocketOnce(options, Math.max(1, deadline - Date.now()), attempt);
+    } catch (error) {
+      if (!isGatewayStartingHandshakeError(error) || Date.now() + GATEWAY_CONNECT_STARTING_RETRY_MS >= deadline) {
+        throw error;
+      }
+      logger.info(`Gateway connect handshake reported startup state; retrying in ${GATEWAY_CONNECT_STARTING_RETRY_MS}ms (attempt=${attempt})`);
+      await new Promise((resolve) => setTimeout(resolve, GATEWAY_CONNECT_STARTING_RETRY_MS));
+    }
+  }
+}
+
+async function connectGatewaySocketOnce(
+  options: {
+    port: number;
+    deviceIdentity: DeviceIdentity | null;
+    platform: string;
+    pendingRequests: Map<string, PendingGatewayRequest>;
+    getToken: () => Promise<string>;
+    onHandshakeComplete: (ws: WebSocket) => void;
+    onMessage: (message: unknown) => void;
+    onCloseAfterHandshake: (code: number) => void;
+    challengeTimeoutMs?: number;
+  },
+  connectTimeoutMs: number,
+  attempt: number,
+): Promise<WebSocket> {
+  logger.debug(`Connecting Gateway WebSocket (ws://localhost:${options.port}/ws, attempt=${attempt})`);
+  const challengeTimeoutMs = Math.min(options.challengeTimeoutMs ?? GATEWAY_CHALLENGE_TIMEOUT_MS, connectTimeoutMs);
 
   return await new Promise<WebSocket>((resolve, reject) => {
     const wsUrl = `ws://localhost:${options.port}/ws`;
@@ -221,6 +259,11 @@ export async function connectGatewaySocket(options: {
       if (settled) return;
       settled = true;
       cleanupHandshakeRequest();
+      try {
+        ws.terminate();
+      } catch {
+        // ignore
+      }
       reject(error instanceof Error ? error : new Error(String(error)));
     };
 
