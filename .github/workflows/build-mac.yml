@@ -3,6 +3,9 @@ name: Build macOS
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-mac:
     runs-on: macos-latest
@@ -47,17 +50,22 @@ jobs:
           find resources/python -type l -exec ls -la {} \; || true
 
       - name: Build macOS package
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           export CSC_IDENTITY_AUTO_DISCOVERY=false
           export ELECTRON_BUILDER_DISABLE_CODE_SIGNING=true
           pnpm run package:mac
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: LYClaw-mac
-          path: |
+          tag_name: lyclaw-mac-${{ github.run_number }}
+          name: LYClaw macOS ${{ github.run_number }}
+          files: |
             release/*.dmg
-            release/*.zip
-            release/*.pkg
-            release/*.blockmap
+#            release/*.zip
+#            release/*.pkg
+#            release/*.blockmap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
