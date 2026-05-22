@@ -427,7 +427,14 @@ function patchBundledOpenClawAnthropicTransport(outputDir) {
   const distDir = path.join(outputDir, 'dist');
   if (!fs.existsSync(distDir)) return false;
 
-  const fileName = fs.readdirSync(distDir).find((name) => /^provider-stream-.*\.js$/.test(name));
+  const providerStreamFiles = fs.readdirSync(distDir).filter((name) => /^provider-stream-.*\.js$/.test(name));
+  let fileName = null;
+  for (const name of providerStreamFiles) {
+    if (fs.readFileSync(path.join(distDir, name), 'utf8').includes('ensureNonEmptyAnthropicMessages')) {
+      fileName = name;
+      break;
+    }
+  }
   if (!fileName) return false;
 
   const filePath = path.join(distDir, fileName);
