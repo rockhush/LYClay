@@ -40,6 +40,8 @@ const ALLOWED_BUILTIN_SKILLS = new Set([
   'tavily-search',
 ]);
 
+const SKILLS_GATEWAY_RPC_TIMEOUT_MS = 8_000;
+
 type GatewaySkillStatus = {
   skillKey: string;
   slug?: string;
@@ -195,18 +197,17 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       // 关键：使用 allSettled，让任意一个数据源（gateway / hostApi / configs）
       // 在冷启动竞态、CLI 抖动或权限问题下失败时，不会连累其他数据源，
       // 也不会让整个 fetchSkills 走 catch 块导致列表完全不更新。
-      const gatewayDataPromise = useGatewayStore.getState().rpc<GatewaySkillsStatusResult>('skills.status');
+      const gatewayDataPromise = useGatewayStore.getState().rpc<GatewaySkillsStatusResult>(
+        'skills.status',
+        undefined,
+        SKILLS_GATEWAY_RPC_TIMEOUT_MS,
+      );
       const clawhubResultPromise = hostApiFetch<{ success: boolean; results?: ClawHubListResult[]; error?: string }>('/api/clawhub/list');
       const configResultPromise = hostApiFetch<Record<string, { apiKey?: string; env?: Record<string, string> }>>('/api/skills/configs');
-      const marketplaceResultPromise = hostApiFetch<{ success: boolean; results?: MarketplaceSkill[]; error?: string }>('/api/clawhub/search', {
-        method: 'POST',
-        body: JSON.stringify({ query: '', category: '', sort: '-download_count' }),
-      });
-      const [gatewaySettled, clawhubSettled, configSettled, marketplaceSettled] = await Promise.allSettled([
+      const [gatewaySettled, clawhubSettled, configSettled] = await Promise.allSettled([
         gatewayDataPromise,
         clawhubResultPromise,
         configResultPromise,
-        marketplaceResultPromise,
       ]);
 
       const gatewayData: GatewaySkillsStatusResult = gatewaySettled.status === 'fulfilled'
@@ -218,9 +219,6 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       const configResult: Record<string, { apiKey?: string; env?: Record<string, string> }> = configSettled.status === 'fulfilled'
         ? configSettled.value
         : {};
-      const marketplaceResults: MarketplaceSkill[] = marketplaceSettled.status === 'fulfilled' && marketplaceSettled.value.success
-        ? (marketplaceSettled.value.results ?? [])
-        : [];
 
       if (gatewaySettled.status === 'rejected') {
         console.warn('[Skills Store] gateway skills.status RPC failed (non-fatal):', gatewaySettled.reason);
@@ -230,9 +228,6 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       }
       if (configSettled.status === 'rejected') {
         console.warn('[Skills Store] /api/skills/configs failed (non-fatal):', configSettled.reason);
-      }
-      if (marketplaceSettled.status === 'rejected') {
-        console.warn('[Skills Store] /api/clawhub/search failed (non-fatal):', marketplaceSettled.reason);
       }
 
       // 兜底通道：当 hostApi 通道失败或者返回了空列表（冷启动竞态、HTTP server
@@ -294,13 +289,12 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
             return true;
           })
           .map((s: GatewaySkillStatus) => {
-            // Merge with direct config if available
+            const slug = s.slug || s.skillKey;
             const directConfig = resolveDirectSkillConfig([s.skillKey, slug, s.name], configLookup) || {};
 
             // 解析 baseDir：优先使用 Gateway 报告的真实存在路径；
             // 若 Gateway 路径不存在，用 ClawHub list 扫描结果中的真实路径覆盖；
             // 都不可用时标记 pathMissing，但保留技能。
-            const slug = s.slug || s.skillKey;
             const clawhubMatch = clawhubBySlug.get(slug);
             const gatewayExists = tryExistsSync(s.baseDir);
             const clawhubExists = tryExistsSync(clawhubMatch?.baseDir);
@@ -419,13 +413,27 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         }
       }
 
-      combinedSkills = enrichSkillsWithMarketplaceMetadata(combinedSkills, marketplaceResults);
-
       set({
         skills: combinedSkills,
         loading: false,
-        ...(marketplaceResults.length > 0 ? { searchResults: marketplaceResults } : {}),
       });
+
+      void hostApiFetch<{ success: boolean; results?: MarketplaceSkill[]; error?: string }>('/api/clawhub/search', {
+        method: 'POST',
+        body: JSON.stringify({ query: '', category: '', sort: '-download_count' }),
+      })
+        .then((result) => {
+          if (!result.success || !result.results?.length) {
+            return;
+          }
+          set((state) => ({
+            skills: enrichSkillsWithMarketplaceMetadata(state.skills, result.results ?? []),
+            searchResults: result.results ?? [],
+          }));
+        })
+        .catch((error) => {
+          console.warn('[Skills Store] background /api/clawhub/search failed (non-fatal):', error);
+        });
     } catch (error) {
       console.error('Failed to fetch skills:', error);
       const appError = normalizeAppError(error, { module: 'skills', operation: 'fetch' });

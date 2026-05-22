@@ -52,7 +52,7 @@ describe('skills store fetch parallelization', () => {
     expect(rpcMock).toHaveBeenCalledWith('skills.status');
     expect(hostApiFetchMock).toHaveBeenCalledWith('/api/clawhub/list');
     expect(hostApiFetchMock).toHaveBeenCalledWith('/api/skills/configs');
-    expect(hostApiFetchMock).toHaveBeenCalledWith('/api/clawhub/search', expect.objectContaining({ method: 'POST' }));
+    expect(rpcMock).toHaveBeenCalledWith('skills.status', undefined, 8000);
 
     gatewayDeferred.resolve({ skills: [] });
     await fetchPromise;
