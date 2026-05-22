@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Bot, Check, Plus, RefreshCw, Settings2, Trash2, X } from 'lucide-react';
+import { AlertCircle, Bot, Check, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { Switch } from '@/components/ui/switch';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useAgentsStore } from '@/stores/agents';
@@ -177,56 +178,53 @@ export function Agents() {
 
   return (
     <div data-testid="agents-page" className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
-      <div className="w-full max-w-5xl mx-auto flex flex-col h-full p-10 pt-16">
-        <div className="flex flex-col md:flex-row md:items-start justify-between mb-12 shrink-0 gap-4">
-          <div>
-            <h1
-              className="text-5xl md:text-6xl font-serif text-foreground mb-3 font-normal tracking-tight"
-              style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}
-            >
+      <div className="w-full max-w-6xl mx-auto flex flex-col h-full px-8 py-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 shrink-0 gap-3">
+          <div className="min-w-0">
+            <h1 className="text-[20px] font-bold text-foreground leading-tight">
               {t('title')}
             </h1>
-            <p className="text-[17px] text-foreground/70 font-medium">{t('subtitle')}</p>
+            <p className="text-[13px] text-muted-foreground mt-1">{t('subtitle')}</p>
           </div>
-          <div className="flex items-center gap-3 md:mt-2">
+          <div className="flex items-center gap-2 shrink-0">
             <Button
               variant="outline"
               onClick={handleRefresh}
-              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-md shadow-black/10 text-foreground/80 hover:text-foreground transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-3 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground transition-colors"
             >
-              <RefreshCw className={cn('h-3.5 w-3.5 mr-2', isUsingStableValue && 'animate-spin')} />
+              <RefreshCw className={cn('h-3.5 w-3.5 mr-1.5', isUsingStableValue && 'animate-spin')} />
               {t('refresh')}
             </Button>
             <Button
               onClick={() => setShowAddDialog(true)}
-              className="h-9 text-[13px] font-medium rounded-full px-4 bg-[#FF7B00] hover:bg-[#FF6A00] text-white shadow-md shadow-[#FF7B00]/30"
+              className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm"
             >
-              <Plus className="h-3.5 w-3.5 mr-2" />
+              <Plus className="h-3.5 w-3.5 mr-1" />
               {t('addAgent')}
             </Button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto pr-2 pb-10 min-h-0 -mr-2">
+        <div className="flex-1 overflow-y-auto pr-2 pb-6 min-h-0 -mr-2">
           {gatewayStatus.state !== 'running' && (
-            <div className="mb-8 p-4 rounded-xl border border-yellow-500/50 bg-yellow-500/10 flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
-              <span className="text-yellow-700 dark:text-yellow-400 text-sm font-medium">
+            <div className="mb-4 p-3 rounded-lg border border-yellow-500/50 bg-yellow-500/10 flex items-center gap-3">
+              <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+              <span className="text-yellow-700 dark:text-yellow-400 text-[13px] font-medium">
                 {t('gatewayWarning')}
               </span>
             </div>
           )}
 
           {error && (
-            <div className="mb-8 p-4 rounded-xl border border-destructive/50 bg-destructive/10 flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-destructive" />
-              <span className="text-destructive text-sm font-medium">
+            <div className="mb-4 p-3 rounded-lg border border-destructive/50 bg-destructive/10 flex items-center gap-3">
+              <AlertCircle className="h-4 w-4 text-destructive" />
+              <span className="text-destructive text-[13px] font-medium">
                 {error}
               </span>
             </div>
           )}
 
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {visibleAgents.map((agent) => (
               <AgentCard
                 key={agent.id}
@@ -317,91 +315,100 @@ function AgentCard({
   return (
     <div
       className={cn(
-        'group flex items-start gap-4 p-4 rounded-2xl transition-all text-left border relative overflow-hidden bg-transparent border-transparent hover:bg-black/5 dark:hover:bg-white/5',
-        agent.isDefault && 'bg-black/[0.04] dark:bg-white/[0.06]'
+        'group relative flex flex-col gap-1.5 p-4 rounded-xl border transition-colors',
+        'bg-white dark:bg-card border-black/[0.06] dark:border-white/10',
+        'hover:bg-[#FFF7EC] dark:hover:bg-white/[0.04] hover:border-[#FFD79A]/60',
+        agent.isDefault && 'bg-[#FFFBF3] dark:bg-white/[0.04] border-[#FFE4B5]/60 dark:border-white/10',
       )}
     >
-      <div className="h-[46px] w-[46px] shrink-0 flex items-center justify-center text-primary bg-primary/10 rounded-full shadow-sm mb-3">
-        <Bot className="h-[22px] w-[22px]" />
-      </div>
-      <div className="flex flex-col flex-1 min-w-0 py-0.5 mt-1">
-        <div className="flex items-center justify-between gap-3 mb-1">
-          <div className="flex items-center gap-2 min-w-0">
-            <h2 className="text-[16px] font-semibold text-foreground truncate">{agent.name}</h2>
-            {agent.isDefault && (
-              <Badge
-                variant="secondary"
-                className="flex items-center gap-1 font-mono text-[10px] font-medium px-2 py-0.5 rounded-full bg-black/[0.04] dark:bg-white/[0.08] border-0 shadow-none text-foreground/70"
-              >
-                <Check className="h-3 w-3" />
-                {t('defaultBadge')}
-              </Badge>
-            )}
-          </div>
-          <div className="flex items-center gap-1 shrink-0">
-            {!agent.isDefault && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="opacity-0 group-hover:opacity-100 h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all"
-                onClick={onDelete}
-                title={t('deleteAgent')}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
+      <div className="flex items-center gap-2">
+        <div className="h-5 w-5 shrink-0 flex items-center justify-center rounded-md bg-black/5 dark:bg-white/10">
+          <Bot className="h-3 w-3 text-foreground/70" />
+        </div>
+        <h2 className="text-[14px] font-semibold text-foreground truncate flex-1">{agent.name}</h2>
+        {agent.isDefault && (
+          <Badge
+            variant="secondary"
+            className="hidden xl:inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0 h-[18px] rounded-md bg-[#FF922B]/10 border-0 text-[#FF6A00] dark:bg-primary/15 dark:text-primary"
+          >
+            <Check className="h-2.5 w-2.5" />
+            {t('defaultBadge')}
+          </Badge>
+        )}
+        <div className="flex items-center gap-0.5 shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+            onClick={onOpenSettings}
+            title={t('settings')}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          {!agent.isDefault && (
             <Button
               variant="ghost"
               size="icon"
-              className={cn(
-                'h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/10 transition-all',
-                !agent.isDefault && 'opacity-0 group-hover:opacity-100',
-              )}
-              onClick={onOpenSettings}
-              title={t('settings')}
+              className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+              onClick={onDelete}
+              title={t('deleteAgent')}
             >
-              <Settings2 className="h-4 w-4" />
+              <Trash2 className="h-3.5 w-3.5" />
             </Button>
-          </div>
+          )}
+          <Switch
+            checked={agent.isDefault}
+            size="sm"
+            disabled
+            className="ml-1 cursor-default disabled:opacity-100"
+            aria-label={t('defaultBadge')}
+            tabIndex={-1}
+          />
         </div>
-        <p className="text-[13.5px] text-muted-foreground line-clamp-2 leading-[1.5]">
+      </div>
+
+      <p className="text-[12px] text-muted-foreground truncate pl-7">
+        <span>
           {t('modelLine', {
             model: agent.modelDisplay,
             suffix: agent.inheritedModel ? ` (${t('inherited')})` : '',
           })}
-        </p>
-        <p className="text-[13.5px] text-muted-foreground line-clamp-2 leading-[1.5]">
-          {t('channelsLine', { channels: channelsText })}
-        </p>
-      </div>
+        </span>
+        <span className="mx-2 text-muted-foreground/40">|</span>
+        <span>{t('channelsLine', { channels: channelsText })}</span>
+      </p>
     </div>
   );
 }
 
-const inputClasses = 'h-[44px] rounded-xl font-mono text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-[#FF7B00]/50 focus-visible:border-[#FF7B00] shadow-sm transition-all text-foreground placeholder:text-foreground/40';
-const selectClasses = 'h-[44px] w-full rounded-xl font-mono text-[13px] bg-white dark:bg-muted border border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-[#FF7B00]/50 focus-visible:border-[#FF7B00] shadow-sm transition-all text-foreground px-3';
-const labelClasses = 'text-[14px] text-foreground/80 font-bold';
+const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors text-foreground placeholder:text-foreground/40';
+const selectClasses = 'h-9 w-full rounded-lg text-[13px] bg-white dark:bg-muted border border-black/10 dark:border-white/10 px-3 text-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors [background-image:none] appearance-none';
+const labelClasses = 'text-[13px] text-foreground/80 font-medium';
+const outlineButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors';
+const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
+const infoCardClasses = 'space-y-1 rounded-lg bg-white dark:bg-muted border border-black/[0.06] dark:border-white/10 p-3.5';
 
-function ChannelLogo({ type }: { type: ChannelType }) {
+function ChannelLogo({ type, muted = false }: { type: ChannelType; muted?: boolean }) {
+  const iconClass = cn('w-[20px] h-[20px]', muted && 'opacity-45 dark:opacity-60', 'dark:invert');
   switch (type) {
     case 'telegram':
-      return <img src={telegramIcon} alt="Telegram" className="w-[20px] h-[20px] dark:invert" />;
+      return <img src={telegramIcon} alt="Telegram" className={iconClass} />;
     case 'discord':
-      return <img src={discordIcon} alt="Discord" className="w-[20px] h-[20px] dark:invert" />;
+      return <img src={discordIcon} alt="Discord" className={iconClass} />;
     case 'whatsapp':
-      return <img src={whatsappIcon} alt="WhatsApp" className="w-[20px] h-[20px] dark:invert" />;
+      return <img src={whatsappIcon} alt="WhatsApp" className={iconClass} />;
     case 'wechat':
-      return <img src={wechatIcon} alt="WeChat" className="w-[20px] h-[20px] dark:invert" />;
+      return <img src={wechatIcon} alt="WeChat" className={iconClass} />;
     case 'dingtalk':
-      return <img src={dingtalkIcon} alt="DingTalk" className="w-[20px] h-[20px] dark:invert" />;
+      return <img src={dingtalkIcon} alt="DingTalk" className={iconClass} />;
     case 'feishu':
-      return <img src={feishuIcon} alt="Feishu" className="w-[20px] h-[20px] dark:invert" />;
+      return <img src={feishuIcon} alt="Feishu" className={iconClass} />;
     case 'wecom':
-      return <img src={wecomIcon} alt="WeCom" className="w-[20px] h-[20px] dark:invert" />;
+      return <img src={wecomIcon} alt="WeCom" className={iconClass} />;
     case 'qqbot':
-      return <img src={qqIcon} alt="QQ" className="w-[20px] h-[20px] dark:invert" />;
+      return <img src={qqIcon} alt="QQ" className={iconClass} />;
     default:
-      return <span className="text-[20px] leading-none">{CHANNEL_ICONS[type] || '💬'}</span>;
+      return <span className={cn('text-[20px] leading-none', muted && 'opacity-45 dark:opacity-60')}>{CHANNEL_ICONS[type] || '💬'}</span>;
   }
 }
 
@@ -431,18 +438,18 @@ function AddAgentDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <Card className="w-full max-w-md rounded-3xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-2xl font-serif font-normal tracking-tight">
+    <ModalOverlay className="p-4">
+      <Card className="w-full max-w-md rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
+        <CardHeader className="pb-2 px-6 pt-6">
+          <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
             {t('createDialog.title')}
           </CardTitle>
-          <CardDescription className="text-[15px] mt-1 text-foreground/70">
+          <CardDescription className="text-[13px] mt-1 text-muted-foreground">
             {t('createDialog.description')}
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6 pt-4 p-6">
-          <div className="space-y-2.5">
+        <CardContent className="space-y-5 pt-3 px-6 pb-6">
+          <div className="space-y-2">
             <Label htmlFor="agent-name" className={labelClasses}>{t('createDialog.nameLabel')}</Label>
             <Input
               id="agent-name"
@@ -452,33 +459,34 @@ function AddAgentDialog({
               className={inputClasses}
             />
           </div>
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
+          <div className="flex items-center justify-between bg-white dark:bg-muted px-3.5 py-3 rounded-lg border border-black/[0.06] dark:border-white/10">
+            <div className="space-y-0.5 pr-4">
               <Label htmlFor="inherit-workspace" className={labelClasses}>{t('createDialog.inheritWorkspaceLabel')}</Label>
-              <p className="text-[13px] text-foreground/60">{t('createDialog.inheritWorkspaceDescription')}</p>
+              <p className="text-[12px] text-muted-foreground">{t('createDialog.inheritWorkspaceDescription')}</p>
             </div>
             <Switch
               id="inherit-workspace"
+              size="sm"
               checked={inheritWorkspace}
               onCheckedChange={setInheritWorkspace}
             />
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-2 pt-1">
             <Button
               variant="outline"
               onClick={onClose}
-              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors"
             >
               {t('common:actions.cancel')}
             </Button>
             <Button
               onClick={() => void handleSubmit()}
               disabled={saving || !name.trim()}
-              className="h-9 text-[13px] font-medium rounded-full px-4 shadow-none"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
             >
               {saving ? (
                 <>
-                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                   {t('creating')}
                 </>
               ) : (
@@ -488,7 +496,7 @@ function AddAgentDialog({
           </div>
         </CardContent>
       </Card>
-    </div>
+    </ModalOverlay>
   );
 }
 
@@ -550,14 +558,14 @@ function AgentSettingsModal({
   );
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-3xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
-        <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0">
+    <ModalOverlay className="p-4">
+      <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
+        <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0 px-6 pt-6">
           <div>
-            <CardTitle className="text-2xl font-serif font-normal tracking-tight">
+            <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
               {t('settingsDialog.title', { name: agent.name })}
             </CardTitle>
-            <CardDescription className="text-[15px] mt-1 text-foreground/70">
+            <CardDescription className="text-[13px] mt-1 text-muted-foreground">
               {t('settingsDialog.description')}
             </CardDescription>
           </div>
@@ -565,14 +573,14 @@ function AgentSettingsModal({
             variant="ghost"
             size="icon"
             onClick={handleRequestClose}
-            className="rounded-full h-8 w-8 -mr-2 -mt-2 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+            className="rounded-lg h-8 w-8 -mr-1 -mt-1 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
           >
             <X className="h-4 w-4" />
           </Button>
         </CardHeader>
-        <CardContent className="space-y-6 pt-4 overflow-y-auto flex-1 p-6">
+        <CardContent className="space-y-5 pt-2 overflow-y-auto flex-1 px-6 pb-6">
           <div className="space-y-4">
-            <div className="space-y-2.5">
+            <div className="space-y-2">
               <Label htmlFor="agent-settings-name" className={labelClasses}>{t('settingsDialog.nameLabel')}</Label>
               <div className="flex gap-2">
                 <Input
@@ -584,13 +592,12 @@ function AgentSettingsModal({
                 />
                 {!agent.isDefault && (
                   <Button
-                    variant="outline"
                     onClick={() => void handleSaveName()}
                     disabled={savingName || !name.trim() || name.trim() === agent.name}
-                    className="h-[44px] text-[13px] font-medium rounded-xl px-4 border-black/10 dark:border-white/10 bg-white dark:bg-muted hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground"
+                    className={`${primaryButtonClasses} shrink-0`}
                   >
                     {savingName ? (
-                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                     ) : (
                       t('common:actions.save')
                     )}
@@ -599,9 +606,9 @@ function AgentSettingsModal({
               </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-1 rounded-2xl bg-black/5 dark:bg-white/5 border border-transparent p-4">
-                <p className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground/80 font-medium">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className={infoCardClasses}>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-medium">
                   {t('settingsDialog.agentIdLabel')}
                 </p>
                 <p className="font-mono text-[13px] text-foreground">{agent.id}</p>
@@ -609,59 +616,56 @@ function AgentSettingsModal({
               <button
                 type="button"
                 onClick={() => setShowModelModal(true)}
-                className="space-y-1 rounded-2xl bg-black/5 dark:bg-white/5 border border-transparent p-4 text-left hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                className={`${infoCardClasses} text-left hover:border-[#FFD79A]/60 hover:bg-[#FFF2E5]/40 dark:hover:bg-[#FFF2E5]/5 transition-colors`}
               >
-                <p className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground/80 font-medium">
+                <p className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-medium">
                   {t('settingsDialog.modelLabel')}
                 </p>
-                <p className="text-[13.5px] text-foreground">
+                <p className="text-[13px] font-medium text-foreground">
                   {agent.modelDisplay}
                   {agent.inheritedModel ? ` (${t('inherited')})` : ''}
                 </p>
-                <p className="font-mono text-[12px] text-foreground/70 break-all">
+                <p className="font-mono text-[12px] text-muted-foreground break-all">
                   {agent.modelRef || defaultModelRef || '-'}
                 </p>
               </button>
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h3 className="text-xl font-serif text-foreground font-normal tracking-tight">
-                  {t('settingsDialog.channelsTitle')}
-                </h3>
-                <p className="text-[14px] text-foreground/70 mt-1">{t('settingsDialog.channelsDescription')}</p>
-              </div>
+          <div className="space-y-3">
+            <div>
+              <h3 className="text-[14px] font-sans font-semibold text-foreground">
+                {t('settingsDialog.channelsTitle')}
+              </h3>
+              <p className="text-[12px] text-muted-foreground mt-0.5">{t('settingsDialog.channelsDescription')}</p>
             </div>
 
             {assignedChannels.length === 0 && agent.channelTypes.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 p-4 text-[13.5px] text-muted-foreground">
+              <div className="rounded-lg border border-dashed border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-4 text-[13px] text-muted-foreground">
                 {t('settingsDialog.noChannels')}
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {assignedChannels.map((channel) => (
-                  <div key={`${channel.channelType}-${channel.accountId}`} className="flex items-center justify-between rounded-2xl bg-black/5 dark:bg-white/5 border border-transparent p-4">
+                  <div key={`${channel.channelType}-${channel.accountId}`} className="flex items-center justify-between rounded-lg bg-white dark:bg-muted border border-black/[0.06] dark:border-white/10 p-3.5">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="h-[40px] w-[40px] shrink-0 flex items-center justify-center text-foreground bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-full shadow-sm">
-                        <ChannelLogo type={channel.channelType} />
+                      <div className="h-9 w-9 shrink-0 flex items-center justify-center">
+                        <ChannelLogo type={channel.channelType} muted />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-[15px] font-semibold text-foreground">{channel.name}</p>
-                        <p className="text-[13.5px] text-muted-foreground">
+                        <p className="text-[13px] font-medium text-foreground">{channel.name}</p>
+                        <p className="text-[12px] text-muted-foreground">
                           {CHANNEL_NAMES[channel.channelType]} · {channel.accountId === 'default' ? t('settingsDialog.mainAccount') : channel.accountId}
                         </p>
                         {channel.error && (
-                          <p className="text-xs text-destructive mt-1">{channel.error}</p>
+                          <p className="text-[11px] text-destructive mt-0.5">{channel.error}</p>
                         )}
                       </div>
                     </div>
-                    <div className="shrink-0" />
                   </div>
                 ))}
                 {assignedChannels.length === 0 && agent.channelTypes.length > 0 && (
-                  <div className="rounded-2xl border border-dashed border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 p-4 text-[13.5px] text-muted-foreground">
+                  <div className="rounded-lg border border-dashed border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-4 text-[13px] text-muted-foreground">
                     {t('settingsDialog.channelsManagedInChannels')}
                   </div>
                 )}
@@ -689,7 +693,7 @@ function AgentSettingsModal({
         }}
         onCancel={() => setShowCloseConfirm(false)}
       />
-    </div>
+    </ModalOverlay>
   );
 }
 
@@ -825,14 +829,14 @@ function AgentModelModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
-      <Card className="w-full max-w-xl rounded-3xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
-        <CardHeader className="flex flex-row items-start justify-between pb-2">
+    <ModalOverlay className="p-4" zIndexClass="z-[60]">
+      <Card className="w-full max-w-xl rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
+        <CardHeader className="flex flex-row items-start justify-between pb-2 px-6 pt-6">
           <div>
-            <CardTitle className="text-2xl font-serif font-normal tracking-tight">
+            <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
               {t('settingsDialog.modelLabel')}
             </CardTitle>
-            <CardDescription className="text-[15px] mt-1 text-foreground/70">
+            <CardDescription className="text-[13px] mt-1 text-muted-foreground">
               {t('settingsDialog.modelOverrideDescription', { defaultModel: defaultModelRef || '-' })}
             </CardDescription>
           </div>
@@ -840,27 +844,23 @@ function AgentModelModal({
             variant="ghost"
             size="icon"
             onClick={handleRequestClose}
-            className="rounded-full h-8 w-8 -mr-2 -mt-2 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+            className="rounded-lg h-8 w-8 -mr-1 -mt-1 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
           >
             <X className="h-4 w-4" />
           </Button>
         </CardHeader>
-        <CardContent className="space-y-4 p-6 pt-4">
+        <CardContent className="space-y-4 px-6 pb-6 pt-2">
           <div className="space-y-2">
-            <Label htmlFor="agent-model-provider" className="text-[12px] text-foreground/70">{t('settingsDialog.modelProviderLabel')}</Label>
+            <Label htmlFor="agent-model-provider" className={labelClasses}>{t('settingsDialog.modelProviderLabel')}</Label>
             <select
               id="agent-model-provider"
               value={selectedRuntimeProviderKey}
               onChange={(event) => {
                 const nextProvider = event.target.value;
                 setSelectedRuntimeProviderKey(nextProvider);
-                // if (!modelIdInput.trim()) {
-                //   const option = runtimeProviderOptions.find((candidate) => candidate.runtimeProviderKey === nextProvider);
-                //   setModelIdInput(option?.configuredModelId || '');
-                // }
                 const option = runtimeProviderOptions.find((candidate) => candidate.runtimeProviderKey === nextProvider);
-                  setModelIdInput(option?.configuredModelId || '');
-                }}
+                setModelIdInput(option?.configuredModelId || '');
+              }}
               className={selectClasses}
             >
               <option value="">{t('settingsDialog.modelProviderPlaceholder')}</option>
@@ -872,7 +872,7 @@ function AgentModelModal({
             </select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="agent-model-id" className="text-[12px] text-foreground/70">{t('settingsDialog.modelIdLabel')}</Label>
+            <Label htmlFor="agent-model-id" className={labelClasses}>{t('settingsDialog.modelIdLabel')}</Label>
             <Input
               id="agent-model-id"
               value={modelIdInput}
@@ -882,38 +882,38 @@ function AgentModelModal({
             />
           </div>
           {!!nextModelRef && (
-            <p className="text-[12px] font-mono text-foreground/70 break-all">
+            <p className="text-[12px] font-mono text-muted-foreground break-all">
               {t('settingsDialog.modelPreview')}: {nextModelRef}
             </p>
           )}
           {runtimeProviderOptions.length === 0 && (
-            <p className="text-[12px] text-amber-600 dark:text-amber-400">
+            <p className="text-[12px] rounded-lg bg-[#FFF2E5] px-3 py-2 text-[#FF6A00] border border-[#FFD79A]/60">
               {t('settingsDialog.modelProviderEmpty')}
             </p>
           )}
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="flex items-center justify-end gap-2 pt-1">
             <Button
               variant="outline"
               onClick={handleUseDefaultModel}
               disabled={savingModel || !normalizedDefaultModelRef || isUsingDefaultModelInForm}
-              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground"
+              className={outlineButtonClasses}
             >
               {t('settingsDialog.useDefaultModel')}
             </Button>
             <Button
               variant="outline"
               onClick={handleRequestClose}
-              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground"
+              className={outlineButtonClasses}
             >
               {t('common:actions.cancel')}
             </Button>
             <Button
               onClick={() => void handleSaveModel()}
               disabled={savingModel || !selectedRuntimeProviderKey || !trimmedModelId || !modelChanged}
-              className="h-9 text-[13px] font-medium rounded-full px-4 shadow-none"
+              className={primaryButtonClasses}
             >
               {savingModel ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 t('common:actions.save')
               )}
@@ -933,7 +933,7 @@ function AgentModelModal({
         }}
         onCancel={() => setShowCloseConfirm(false)}
       />
-    </div>
+    </ModalOverlay>
   );
 }
 

@@ -3,23 +3,33 @@
     "subtitle": "Browse and manage AI capabilities",
     "refresh": "Refresh",
     "openFolder": "Open Skills Folder",
-    "gatewayWarning": "Gateway is not running. Skills cannot be loaded without an active Gateway.",
+    "gatewayWarning": "Gateway is not ready. You can still browse and toggle skills; chat usage requires an active gateway.",
     "tabs": {
         "installed": "Installed",
-        "marketplace": "Marketplace"
+        "marketplace": "Marketplace",
+        "mine": "My Skills",
+        "market": "Skill Market"
     },
     "filter": {
         "all": "All ({{count}})",
         "builtIn": "Built-in ({{count}})",
-        "marketplace": "Marketplace ({{count}})"
+        "marketplace": "Skill Plaza ({{count}})"
     },
-    "search": "Search skills...",
+    "search": "Search skills",
     "searchMarketplace": "Search marketplace...",
     "searchButton": "Search",
     "actions": {
-        "enableVisible": "Enable Visible",
-        "disableVisible": "Disable Visible",
-        "installSkill": "Install Skills"
+        "enableVisible": "Enable All",
+        "disableVisible": "Disable All",
+        "installSkill": "Install Skills",
+        "addSkill": "Skill Actions",
+        "uploadSkill": "Upload Skill",
+        "createSkill": "Create Skill"
+    },
+    "card": {
+        "downloads": "{{count}}",
+        "downloadsLabel": "Downloads",
+        "authorFallback": "Unknown author"
     },
     "noSkills": "No skills found",
     "noSkillsSearch": "Try a different search term",

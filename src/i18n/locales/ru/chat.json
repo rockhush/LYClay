@@ -3,12 +3,16 @@
     "gatewayRequired": "Для использования чата требуется запущенный шлюз OpenClaw. Он запустится автоматически, или вы можете запустить его в Настройках.",
     "welcome": {
         "title": "Чат LYClaw",
-        "subtitle": "Чем могу помочь?",
-        "askQuestions": "Задачи",
+        "subtitle": "Чем могу помочь",
+        "greeting": "Привет, {{name}}~",
+        "greetingFallback": "Привет~",
+        "canHelpPrefix": "Я могу",
+        "askQuestions": "Почта",
         "askQuestionsDesc": "Работа над задачами",
-        "creativeTasks": "Непрерывное выполнение",
+        "creativeTasks": "Непрерывный режим",
         "creativeTasksDesc": "Выполнение многошаговых задач",
-        "brainstorming": "Параллельные агенты"
+        "brainstorming": "Планировщик",
+        "multiThread": "Многопоточная работа"
     },
     "noLogs": "(Журналы ещё недоступны)",
     "toolbar": {

@@ -484,66 +484,66 @@ export function Settings() {
 
   return (
     <div data-testid="settings-page" className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
-      <div className="w-full max-w-5xl mx-auto flex flex-col h-full p-10 pt-16">
+      <div className="w-full max-w-5xl mx-auto flex flex-col h-full px-8 pt-10 pb-6">
 
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-start justify-between mb-12 shrink-0 gap-4">
+        <div className="flex flex-col md:flex-row md:items-start justify-between mb-6 shrink-0 gap-4">
           <div>
-            <h1 className="text-5xl md:text-6xl font-serif text-foreground mb-3 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
+            <h1 className="text-2xl font-semibold text-foreground mb-1.5">
               {t('title')}
             </h1>
-            <p className="text-[17px] text-foreground/70 font-medium">
+            <p className="text-xs text-foreground/60 font-normal">
               {t('subtitle')}
             </p>
           </div>
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto pr-2 pb-10 min-h-0 -mr-2 space-y-12">
+        <div className="flex-1 overflow-y-auto pr-2 pb-6 min-h-0 -mr-2 space-y-5">
 
           {/* Appearance */}
           <div>
-            <h2 className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
+            <h2 className="text-base font-semibold text-foreground mb-2">
               {t('appearance.title')}
             </h2>
-            <div className="space-y-6">
-              <div className="space-y-3">
-                <Label className="text-[15px] font-medium text-foreground/80">{t('appearance.theme')}</Label>
+            <div className="space-y-2.5">
+              <div className="space-y-1">
+                <Label className="text-sm font-medium text-foreground/70">{t('appearance.theme')}</Label>
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant={theme === 'light' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'light' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full h-7 px-3 text-xs", theme === 'light' ? "bg-[#FFF2E5] text-[#FF922B]" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('light')}
                   >
-                    <Sun className="h-4 w-4 mr-2" />
+                    <Sun className="h-3 w-3 mr-1" />
                     {t('appearance.light')}
                   </Button>
                   <Button
                     variant={theme === 'dark' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'dark' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full h-7 px-3 text-xs", theme === 'dark' ? "bg-[#FFF2E5] text-[#FF922B]" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('dark')}
                   >
-                    <Moon className="h-4 w-4 mr-2" />
+                    <Moon className="h-3 w-3 mr-1" />
                     {t('appearance.dark')}
                   </Button>
                   <Button
                     variant={theme === 'system' ? 'secondary' : 'outline'}
-                    className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", theme === 'system' ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                    className={cn("rounded-full h-7 px-3 text-xs", theme === 'system' ? "bg-[#FFF2E5] text-[#FF922B]" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                     onClick={() => setTheme('system')}
                   >
-                    <Monitor className="h-4 w-4 mr-2" />
+                    <Monitor className="h-3 w-3 mr-1" />
                     {t('appearance.system')}
                   </Button>
                 </div>
               </div>
-              <div className="space-y-3">
-                <Label className="text-[15px] font-medium text-foreground/80">{t('appearance.language')}</Label>
+              <div className="space-y-1">
+                <Label className="text-sm font-medium text-foreground/70">{t('appearance.language')}</Label>
                 <div className="flex flex-wrap gap-2">
                   {SUPPORTED_LANGUAGES.map((lang) => (
                     <Button
                       key={lang.code}
                       variant={language === lang.code ? 'secondary' : 'outline'}
-                      className={cn("rounded-full px-5 h-10 border-black/10 dark:border-white/10 shadow-md shadow-black/10", language === lang.code ? "bg-black/5 dark:bg-white/10 text-foreground" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
+                      className={cn("rounded-full h-7 px-3 text-xs", language === lang.code ? "bg-[#FFF2E5] text-[#FF922B]" : "bg-transparent text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5")}
                       onClick={() => setLanguage(lang.code)}
                     >
                       {lang.label}
@@ -553,40 +553,38 @@ export function Settings() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-[15px] font-medium text-foreground/80">{t('appearance.launchAtStartup')}</Label>
-                  <p className="text-[13px] text-muted-foreground mt-1">
+                  <Label className="text-sm font-medium text-foreground/70">{t('appearance.launchAtStartup')}</Label>
+                  <p className="text-sm text-muted-foreground mt-0.5">
                     {t('appearance.launchAtStartupDesc')}
                   </p>
                 </div>
                 <Switch
+                  size="sm"
                   checked={launchAtStartup}
                   onCheckedChange={setLaunchAtStartup}
                 />
               </div>
             </div>
           </div>
-
-          <Separator className="bg-black/5 dark:bg-white/5" />
-
           {/* Gateway */}
           <div>
-            <h2 className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
+            <h2 className="text-base font-semibold text-foreground mb-2">
               {t('gateway.title')}
             </h2>
-            <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-2.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
                 <div>
-                  <Label className="text-[15px] font-medium text-foreground">{t('gateway.status')}</Label>
-                  <p className="text-[13px] text-muted-foreground mt-1">
+                  <Label className="text-sm font-medium text-foreground/70">{t('gateway.status')}</Label>
+                  <p className="text-sm text-muted-foreground mt-0.5">
                     {t('gateway.port')}: {gatewayStatus.port}
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <div className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium border shadow-md shadow-black/10",
-                    gatewayStatus.state === 'running' ? "bg-green-500/10 text-green-600 dark:text-green-500 border-green-500/20" :
-                      gatewayStatus.state === 'error' ? "bg-red-500/10 text-red-600 dark:text-red-500 border-red-500/20" :
-                        "bg-white text-muted-foreground border-black/10"
+                    "flex items-center gap-1 h-7 px-3 rounded-full text-xs font-medium",
+                    gatewayStatus.state === 'running' ? "bg-green-500/10 text-green-600 dark:text-green-500" :
+                      gatewayStatus.state === 'error' ? "bg-red-500/10 text-red-600 dark:text-red-500" :
+                        "bg-muted-foreground/10 text-muted-foreground"
                   )}>
                     <div className={cn("w-1.5 h-1.5 rounded-full",
                       gatewayStatus.state === 'running' ? "bg-green-500" :
@@ -594,32 +592,32 @@ export function Settings() {
                     )} />
                     {gatewayStatus.state}
                   </div>
-                  <Button variant="outline" size="sm" onClick={restartGateway} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
-                    <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                  <Button variant="outline" size="sm" onClick={restartGateway} className="rounded-full h-7 px-3 text-xs hover:bg-black/5 dark:hover:bg-white/5">
+                    <RefreshCw className="h-3 w-3 mr-1" />
                     {t('common:actions.restart')}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleShowLogs} className="rounded-full h-8 px-4 border-black/10 dark:border-white/10 bg-transparent dark:bg-white/5 hover:bg-black/5 dark:hover:bg-white/10 shadow-md shadow-black/10">
-                    <FileText className="h-3.5 w-3.5 mr-1.5" />
+                  <Button variant="outline" size="sm" onClick={handleShowLogs} className="rounded-full h-7 px-3 text-xs hover:bg-black/5 dark:hover:bg-white/5">
+                    <FileText className="h-3 w-3 mr-1" />
                     {t('gateway.logs')}
                   </Button>
                 </div>
               </div>
 
               {showLogs && (
-                <div className="p-4 rounded-2xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="font-medium text-[14px]">{t('gateway.appLogs')}</p>
-                    <div className="flex gap-2">
-                      <Button variant="ghost" size="sm" className="h-7 text-[12px] rounded-full hover:bg-black/5 dark:hover:bg-white/10" onClick={handleOpenLogDir}>
-                        <ExternalLink className="h-3 w-3 mr-1.5" />
+                <div className="p-2 rounded-lg bg-black/5 dark:bg-white/5">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="font-medium text-xs">{t('gateway.appLogs')}</p>
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="sm" className="h-4 text-xs rounded-full hover:bg-black/5 dark:hover:bg-white/5" onClick={handleOpenLogDir}>
+                        <ExternalLink className="h-1.5 w-1.5 mr-0.5" />
                         {t('gateway.openFolder')}
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-7 text-[12px] rounded-full hover:bg-black/5 dark:hover:bg-white/10" onClick={() => setShowLogs(false)}>
+                      <Button variant="ghost" size="sm" className="h-4 text-xs rounded-full hover:bg-black/5 dark:hover:bg-white/5" onClick={() => setShowLogs(false)}>
                         {t('common:actions.close')}
                       </Button>
                     </div>
                   </div>
-                  <pre className="text-[12px] text-muted-foreground bg-white dark:bg-card p-4 rounded-xl max-h-60 overflow-auto whitespace-pre-wrap font-mono border border-black/5 dark:border-white/5 shadow-inner">
+                  <pre className="text-xs text-muted-foreground bg-white dark:bg-card p-2 rounded-lg max-h-32 overflow-auto whitespace-pre-wrap font-mono">
                     {logContent || t('chat:noLogs')}
                   </pre>
                 </div>
@@ -627,26 +625,27 @@ export function Settings() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-[15px] font-medium text-foreground">{t('gateway.autoStart')}</Label>
-                  <p className="text-[13px] text-muted-foreground mt-1">
+                  <Label className="text-sm font-medium text-foreground/70">{t('gateway.autoStart')}</Label>
+                  <p className="text-sm text-muted-foreground mt-0.5">
                     {t('gateway.autoStartDesc')}
                   </p>
                 </div>
                 <Switch
+                  size="sm"
                   checked={gatewayAutoStart}
                   onCheckedChange={setGatewayAutoStart}
                 />
               </div>
 
-
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-[15px] font-medium text-foreground">{t('advanced.telemetry')}</Label>
-                  <p className="text-[13px] text-muted-foreground mt-1">
+                  <Label className="text-sm font-medium text-foreground/70">{t('advanced.telemetry')}</Label>
+                  <p className="text-sm text-muted-foreground mt-0.5">
                     {t('advanced.telemetryDesc')}
                   </p>
                 </div>
                 <Switch
+                  size="sm"
                   checked={telemetryEnabled}
                   onCheckedChange={setTelemetryEnabled}
                 />
@@ -655,11 +654,9 @@ export function Settings() {
             </div>
           </div>
 
-
           {/* Developer */}
           {devModeUnlocked && (
             <>
-              <Separator className="bg-black/5 dark:bg-white/5" />
               <div data-testid="settings-developer-section">
                 <h2 data-testid="settings-developer-title" className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
                   {t('developer.title')}
@@ -675,6 +672,7 @@ export function Settings() {
                         </p>
                       </div>
                       <Switch
+                        size="sm"
                         checked={proxyEnabledDraft}
                         onCheckedChange={setProxyEnabledDraft}
                         data-testid="settings-proxy-toggle"
@@ -931,6 +929,7 @@ export function Settings() {
                         </p>
                       </div>
                       <Switch
+                        size="sm"
                         checked={wsDiagnosticEnabled}
                         onCheckedChange={handleWsDiagnosticToggle}
                       />
@@ -1030,62 +1029,27 @@ export function Settings() {
             </>
           )}
 
-          <Separator className="bg-black/5 dark:bg-white/5" />
-
           {/* Updates */}
           <div>
-            <h2 className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
+            <h2 className="text-base font-semibold text-foreground mb-2">
               {t('updates.title')}
             </h2>
-            <div className="space-y-6">
+            <div className="space-y-2.5">
               <UpdateSettings />
-
-              {/* <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-[15px] font-medium text-foreground">{t('updates.autoCheck')}</Label>
-                  <p className="text-[13px] text-muted-foreground mt-1">
-                    {t('updates.autoCheckDesc')}
-                  </p>
-                </div>
-                <Switch
-                  checked={autoCheckUpdate}
-                  onCheckedChange={setAutoCheckUpdate}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-[15px] font-medium text-foreground">{t('updates.autoDownload')}</Label>
-                  <p className="text-[13px] text-muted-foreground mt-1">
-                    {t('updates.autoDownloadDesc')}
-                  </p>
-                </div>
-                <Switch
-                  checked={autoDownloadUpdate}
-                  onCheckedChange={(value) => {
-                    setAutoDownloadUpdate(value);
-                    updateSetAutoDownload(value);
-                  }}
-                />
-              </div> */}
             </div>
           </div>
 
-          <Separator className="bg-black/5 dark:bg-white/5" />
-
           {/* About */}
           <div>
-            <h2 className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
+            <h2 className="text-base font-semibold text-foreground mb-2">
               {t('about.title')}
             </h2>
-            <div className="space-y-3 text-[14px] text-muted-foreground">
+            <div className="space-y-1 text-sm text-muted-foreground">
               <p>
                 <strong className="text-foreground font-semibold">{t('about.appName')}</strong> - {t('about.tagline')}
               </p>
               <p>{t('about.basedOn')}</p>
               <p>{t('about.version', { version: currentVersion })}</p>
-              <div className="flex gap-4 pt-3">
-              </div>
             </div>
           </div>
 

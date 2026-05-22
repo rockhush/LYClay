@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { ModalOverlay } from '@/components/ui/modal-overlay';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -72,8 +73,7 @@ export function ConfirmDialog({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    <ModalOverlay
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
@@ -96,18 +96,19 @@ export function ConfirmDialog({
             variant="outline"
             onClick={onCancel}
             disabled={confirming}
+            className="h-8 text-[13px] font-medium rounded-lg px-3 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground transition-colors"
           >
             {cancelLabel}
           </Button>
           <Button
-            variant={variant === 'destructive' ? 'destructive' : 'default'}
             onClick={handleConfirm}
             disabled={confirming}
+            className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm"
           >
             {confirmLabel}
           </Button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

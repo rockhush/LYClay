@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { execSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const target = `${process.platform}-${process.arch}`;
+const bundledNpmCli = path.join(ROOT_DIR, 'resources', 'bin', target, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+
+function hasSystemNpmCli() {
+  if (process.platform !== 'win32') return false;
+  try {
+    const whereOutput = execSync('where.exe node', {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const firstNode = whereOutput.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    if (!firstNode) return false;
+    const nodeDir = path.dirname(firstNode);
+    const candidate = path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    return existsSync(candidate);
+  } catch {
+    return false;
+  }
+}
+
+if (process.platform !== 'win32') {
+  process.exit(0);
+}
+
+if (existsSync(bundledNpmCli)) {
+  console.log(`[ensure-win-binaries] npm-cli.js already present at resources/bin/${target}`);
+  process.exit(0);
+}
+
+if (hasSystemNpmCli()) {
+  console.log('[ensure-win-binaries] Bundled npm-cli.js missing, but system Node/npm is available — skipping download.');
+  process.exit(0);
+}
+
+console.log('[ensure-win-binaries] Downloading bundled Node.js for gateway (current arch only)...');
+const result = spawnSync(process.execPath, [path.join(ROOT_DIR, 'scripts', 'download-bundled-node.mjs')], {
+  cwd: ROOT_DIR,
+  env: process.env,
+  stdio: 'inherit',
+  windowsHide: true,
+});
+
+if (result.status !== 0 || !existsSync(bundledNpmCli)) {
+  console.error(
+    '[ensure-win-binaries] Failed to install bundled npm-cli.js. ' +
+    'Try: pnpm run node:download:win:local',
+  );
+  process.exit(result.status ?? 1);
+}
+
+console.log('[ensure-win-binaries] Gateway npm runtime ready.');

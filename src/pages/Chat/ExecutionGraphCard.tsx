@@ -197,9 +197,12 @@ export function ExecutionGraphCard({
         data-testid="chat-execution-graph"
         data-collapsed="true"
         onClick={() => setExpanded(true)}
-        className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-black/5 hover:text-muted-foreground dark:hover:bg-white/5"
+        className="group flex items-center gap-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:text-foreground"
       >
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
+        {/* Chevron column matches the AI-message avatar column (h-5 w-5 + gap-2) so the summary text below aligns with the AI response text. */}
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+          <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+        </span>
         <span className="truncate">
           {t('executionGraph.collapsedSummary', { toolCount, processCount })}
         </span>
@@ -217,11 +220,13 @@ export function ExecutionGraphCard({
         type="button"
         data-testid="chat-execution-graph-collapse"
         onClick={() => setExpanded(false)}
-        className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-black/5 hover:text-muted-foreground dark:hover:bg-white/5"
+        className="group flex w-full items-center gap-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:text-foreground"
         aria-label={t('executionGraph.collapseAction')}
         title={t('executionGraph.collapseAction')}
       >
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 rotate-90" />
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+          <ChevronRight className="h-3 w-3 rotate-90" />
+        </span>
         <span className="truncate">{t('executionGraph.title')}</span>
       </button>
 

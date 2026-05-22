@@ -327,6 +327,7 @@ export async function handleSessionRoutes(
   if (url.pathname === '/api/sessions/history-local' && req.method === 'GET') {
     const requestStart = Date.now();
     try {
+      const fsP = await import('node:fs/promises');
       const sessionKey = url.searchParams.get('sessionKey')?.trim() || '';
       logger.debug(`[sessions:history-local] Request for sessionKey: ${sessionKey}`);
 

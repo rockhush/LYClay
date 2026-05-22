@@ -24,10 +24,15 @@ export function ChatToolbar() {
   );
 
   return (
-    <div className="flex items-center gap-2">
-      <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-black/10 bg-white/70 px-3 py-1.5 text-[12px] font-medium text-foreground/80 dark:border-white/10 dark:bg-white/5">
-        <Bot className="h-3.5 w-3.5 text-primary" />
-        <span>{t('toolbar.currentAgent', { agent: currentAgentName })}</span>
+    <div className="flex w-full items-center justify-between gap-2">
+      <div className="flex items-center gap-2 text-[13px]">
+        <span className="text-muted-foreground">
+          {t('toolbar.currentAgentLabel', { defaultValue: '当前对话' })}
+        </span>
+        <span className="inline-flex items-center gap-1 font-medium text-foreground">
+          <Bot className="h-3.5 w-3.5 text-[#FF922B]" />
+          {currentAgentName}
+        </span>
       </div>
       {/* Refresh */}
       <Tooltip>

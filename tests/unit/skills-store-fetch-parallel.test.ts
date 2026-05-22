@@ -34,9 +34,12 @@ describe('skills store fetch parallelization', () => {
   it('starts clawhub and config requests before gateway rpc resolves', async () => {
     const gatewayDeferred = deferred<{ skills: Array<Record<string, unknown>> }>();
     rpcMock.mockReturnValueOnce(gatewayDeferred.promise);
-    hostApiFetchMock.mockImplementation((path: unknown) => {
+    hostApiFetchMock.mockImplementation((path: unknown, options?: { method?: string }) => {
       if (path === '/api/clawhub/list') return Promise.resolve({ success: true, results: [] });
       if (path === '/api/skills/configs') return Promise.resolve({});
+      if (path === '/api/clawhub/search' && options?.method === 'POST') {
+        return Promise.resolve({ success: true, results: [] });
+      }
       return Promise.reject(new Error(`Unexpected path: ${String(path)}`));
     });
 
@@ -49,6 +52,7 @@ describe('skills store fetch parallelization', () => {
     expect(rpcMock).toHaveBeenCalledWith('skills.status');
     expect(hostApiFetchMock).toHaveBeenCalledWith('/api/clawhub/list');
     expect(hostApiFetchMock).toHaveBeenCalledWith('/api/skills/configs');
+    expect(hostApiFetchMock).toHaveBeenCalledWith('/api/clawhub/search', expect.objectContaining({ method: 'POST' }));
 
     gatewayDeferred.resolve({ skills: [] });
     await fetchPromise;

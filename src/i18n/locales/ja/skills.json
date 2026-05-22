@@ -6,20 +6,30 @@
     "gatewayWarning": "ゲートウェイが稼働していません。アクティブなゲートウェイがないとスキルを読み込めません。",
     "tabs": {
         "installed": "インストール済み",
-        "marketplace": "マーケットプレイス"
+        "marketplace": "マーケットプレイス",
+        "mine": "マイスキル",
+        "market": "スキルマーケット"
     },
     "filter": {
         "all": "すべて ({{count}})",
         "builtIn": "内蔵 ({{count}})",
-        "marketplace": "マーケットプレイス ({{count}})"
+        "marketplace": "スキル広場 ({{count}})"
     },
-    "search": "スキルを検索...",
+    "search": "スキルを検索",
     "searchMarketplace": "マーケットプレイスを検索...",
     "searchButton": "検索",
     "actions": {
-        "enableVisible": "表示中を一括有効化",
-        "disableVisible": "表示中を一括無効化",
-        "installSkill": "スキルをインストール"
+        "enableVisible": "一括有効化",
+        "disableVisible": "一括無効化",
+        "installSkill": "スキルをインストール",
+        "addSkill": "スキル操作",
+        "uploadSkill": "スキルをアップロード",
+        "createSkill": "スキルを作成"
+    },
+    "card": {
+        "downloads": "{{count}}",
+        "downloadsLabel": "ダウンロード数",
+        "authorFallback": "作者不明"
     },
     "noSkills": "スキルが見つかりません",
     "noSkillsSearch": "別の検索語をお試しください",

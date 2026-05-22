@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { getAllSkillConfigs, updateSkillConfig } from '../../utils/skill-config';
+import { getAllSkillConfigs, setSkillEnabled, updateSkillConfig } from '../../utils/skill-config';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -25,6 +25,25 @@ export async function handleSkillRoutes(
         apiKey: body.apiKey,
         env: body.env,
       }));
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/skills/enabled' && req.method === 'PUT') {
+    try {
+      const body = await parseJsonBody<{
+        skillKey: string;
+        slug?: string;
+        name?: string;
+        enabled: boolean;
+      }>(req);
+      const result = await setSkillEnabled(body.skillKey, body.enabled, {
+        slug: body.slug,
+        name: body.name,
+      });
+      sendJson(res, result.success ? 200 : 500, result);
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }

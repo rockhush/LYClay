@@ -1,6 +1,6 @@
 {
     "name": "lyclaw",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "pnpm": {
         "onlyBuiltDependencies": [
             "@discordjs/opus",
@@ -34,8 +34,8 @@
     "private": true,
     "scripts": {
         "postinstall": "node scripts/patch-browser-hint.mjs",
-        "init": "pnpm install && pnpm run uv:download",
-        "predev": "node scripts/generate-ext-bridge.mjs && zx scripts/prepare-preinstalled-skills-dev.mjs",
+        "init": "pnpm install && pnpm run uv:download && node scripts/ensure-win-binaries.mjs",
+        "predev": "node scripts/generate-ext-bridge.mjs && node scripts/ensure-win-binaries.mjs && zx scripts/prepare-preinstalled-skills-dev.mjs",
         "dev": "vite",
         "ext:bridge": "node scripts/generate-ext-bridge.mjs",
         "build": "node scripts/generate-ext-bridge.mjs && pnpm run build:vite && zx scripts/bundle-openclaw.mjs && zx scripts/bundle-openclaw-plugins.mjs && zx scripts/bundle-preinstalled-skills.mjs && pnpm run dws:download && node scripts/run-electron-builder.mjs",
@@ -65,7 +65,9 @@
         "dws:download:linux": "node scripts/download-dws-cli.mjs --platform=linux",
         "dws:download:all": "node scripts/download-dws-cli.mjs --all",
         "node:download:win": "zx scripts/download-bundled-node.mjs --platform=win",
-        "prep:win-binaries": "pnpm run uv:download:win && pnpm run node:download:win && pnpm run dws:download:win",
+        "node:download:win:local": "zx scripts/download-bundled-node.mjs",
+        "prep:win-gateway": "pnpm run uv:download:win && pnpm run node:download:win:local",
+        "prep:win-binaries": "pnpm run prep:win-gateway && (pnpm run dws:download:win || node -e \"console.warn('[prep:win-binaries] dws download failed (optional for gateway)')\")",
         "icons": "zx scripts/generate-icons.mjs",
         "package": "node scripts/generate-ext-bridge.mjs && pnpm run build:vite && zx scripts/bundle-openclaw.mjs && zx scripts/bundle-openclaw-plugins.mjs && zx scripts/bundle-preinstalled-skills.mjs && node scripts/download-dws-cli.mjs",
         "package:mac": "pnpm run package && node scripts/run-electron-builder.mjs --config electron-builder.yml --mac dmg --arm64 --publish never",

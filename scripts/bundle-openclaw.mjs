@@ -423,6 +423,36 @@ if (mirroredExtRuntimeDeps > 0) {
   echo`   Mirrored ${mirroredExtRuntimeDeps} extension runtime deps into dist/extensions/*/node_modules`;
 }
 
+function patchBundledOpenClawAnthropicTransport(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return false;
+
+  const fileName = fs.readdirSync(distDir).find((name) => /^provider-stream-.*\.js$/.test(name));
+  if (!fileName) return false;
+
+  const filePath = path.join(distDir, fileName);
+  let source = fs.readFileSync(filePath, 'utf8');
+
+  const target = 'const params = {\n\t\tmodel: model.id,\n\t\tmessages: ensureNonEmptyAnthropicMessages(convertAnthropicMessages(context.messages, model, isOAuthToken, { allowReasoningContentReplay: supportsReasoningContentReplay(model) })),\n\t\tmax_tokens: maxTokens,\n\t\tstream: true\n\t};';
+  const replacement = 'const params = {\n\t\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\n\t\tmodel: model.id,\n\t\tmessages: ensureNonEmptyAnthropicMessages(convertAnthropicMessages(context.messages, model, isOAuthToken, { allowReasoningContentReplay: supportsReasoningContentReplay(model) })),\n\t\tmax_tokens: maxTokens,\n\t\tstream: true\n\t};';
+  const systemTarget = 'else if (context.systemPrompt) params.system = [{\n\t\ttype: "text",\n\t\ttext: sanitizeTransportPayloadText(context.systemPrompt)\n\t}];';
+  const systemReplacement = 'else if (context.systemPrompt) params.system = [{\n\t\ttype: "text",\n\t\ttext: (model.provider === \'ly-mimo\' ? \'请用中文进行思考和回复。\\n\\n\' : \'\') + sanitizeTransportPayloadText(context.systemPrompt)\n\t}];';
+  const oauthSystemTarget = 'if (isOAuthToken) params.system = [{\n\t\ttype: "text",\n\t\ttext: "You are Claude Code, Anthropic\'s official CLI for Claude."\n\t}, ...context.systemPrompt ? [{\n\t\ttype: "text",\n\t\ttext: sanitizeTransportPayloadText(context.systemPrompt)\n\t}] : []];';
+  const oauthSystemReplacement = 'if (isOAuthToken) params.system = [{\n\t\ttype: "text",\n\t\ttext: "You are Claude Code, Anthropic\'s official CLI for Claude."\n\t}, ...context.systemPrompt ? [{\n\t\ttype: "text",\n\t\ttext: (model.provider === \'ly-mimo\' ? \'请用中文进行思考和回复。\\n\\n\' : \'\') + sanitizeTransportPayloadText(context.systemPrompt)\n\t}] : []];';
+
+  if (source.includes(replacement) && source.includes(systemReplacement) && source.includes(oauthSystemReplacement)) return true;
+  if (!source.includes(target)) return false;
+  if (!source.includes(systemTarget)) return false;
+  if (!source.includes(oauthSystemTarget)) return false;
+
+  source = source.replace(target, replacement);
+  source = source.replace(systemTarget, systemReplacement);
+  source = source.replace(oauthSystemTarget, oauthSystemReplacement);
+  fs.writeFileSync(filePath, source, 'utf8');
+  echo`   🩹 Patched Anthropic transport for ly-mimo: model params + Chinese language instruction`;
+  return true;
+}
+
 function patchBundledExtensionPackageJsons(extensionsRoot) {
   let patchedCount = 0;
 
@@ -444,6 +474,10 @@ function patchBundledExtensionPackageJsons(extensionsRoot) {
   return patchedCount;
 }
 
+if (!patchBundledOpenClawAnthropicTransport(OUTPUT)) {
+  echo`❌ Failed to patch Anthropic transport for model params`;
+  process.exit(1);
+}
 patchBundledExtensionPackageJsons(extensionsDir);
 
 // 6. Clean up the bundle to reduce package size

@@ -34,8 +34,51 @@ export const LYCLAW_BUILTIN_MCP_KEYS = new Set(['notion', 'github']);
 const OPENCLAW_DIR = join(homedir(), '.openclaw');
 const OPENCLAW_CONFIG_PATH = join(OPENCLAW_DIR, 'openclaw.json');
 const LEGACY_MCP_CONFIG_PATH = join(OPENCLAW_DIR, 'mcp.json');
+const MCP_STATE_PATH = join(OPENCLAW_DIR, '.lyclaw-mcp-state.json');
 const DISABLED_BACKUP_KEY = 'x-lyclaw-disabled-server';
+/** @deprecated Stored in `.lyclaw-mcp-state.json`; stripped from openclaw.json on read. */
 const LEGACY_IMPORT_DONE_KEY = 'x-lyclaw-legacy-mcp-imported';
+
+interface McpStateFile {
+  legacyImportDone?: boolean;
+}
+
+async function readMcpState(): Promise<McpStateFile> {
+  if (!(await fileExists(MCP_STATE_PATH))) return {};
+  try {
+    const raw = await readFile(MCP_STATE_PATH, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    return isRecord(parsed) ? parsed as McpStateFile : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeMcpState(state: McpStateFile): Promise<void> {
+  await writeFile(MCP_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
+
+async function isLegacyImportDone(config: OpenClawConfig): Promise<boolean> {
+  const state = await readMcpState();
+  if (state.legacyImportDone === true) return true;
+  if (config[LEGACY_IMPORT_DONE_KEY] === true) {
+    await writeMcpState({ ...state, legacyImportDone: true });
+    return true;
+  }
+  return false;
+}
+
+async function markLegacyImportDone(): Promise<void> {
+  const state = await readMcpState();
+  await writeMcpState({ ...state, legacyImportDone: true });
+}
+
+/** Remove Lyclaw-only top-level keys that make OpenClaw reject openclaw.json. */
+async function stripLegacyMcpMetaFromOpenClawConfig(config: OpenClawConfig): Promise<boolean> {
+  if (!(LEGACY_IMPORT_DONE_KEY in config)) return false;
+  delete config[LEGACY_IMPORT_DONE_KEY];
+  return true;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -131,13 +174,25 @@ async function deleteLegacyMcpServerIfPresent(name: string): Promise<void> {
 }
 
 async function importLegacyMcpIfNeeded(config: OpenClawConfig): Promise<boolean> {
-  if (config[LEGACY_IMPORT_DONE_KEY] === true) return false;
+  if (await isLegacyImportDone(config)) return false;
   const current = readServersFromConfig(config);
-  if (Object.keys(current).length > 0) return false;
+  if (Object.keys(current).length > 0) {
+    await markLegacyImportDone();
+    return false;
+  }
   const legacy = await readLegacyMcpConfig();
-  config[LEGACY_IMPORT_DONE_KEY] = true;
-  if (!legacy || Object.keys(legacy.servers).length === 0) return true;
+  await markLegacyImportDone();
+  if (!legacy || Object.keys(legacy.servers).length === 0) return false;
   writeServersToConfig(config, legacy.servers);
+  return true;
+}
+
+export async function sanitizeLegacyMcpMetaFromOpenClawConfig(config: OpenClawConfig): Promise<boolean> {
+  if (!(LEGACY_IMPORT_DONE_KEY in config)) return false;
+  if (config[LEGACY_IMPORT_DONE_KEY] === true) {
+    await markLegacyImportDone();
+  }
+  delete config[LEGACY_IMPORT_DONE_KEY];
   return true;
 }
 
@@ -152,7 +207,9 @@ export function emptyMcpConfig(): McpConfigFile {
 export async function readMcpConfig(): Promise<McpConfigFile> {
   return withConfigLock(async () => {
     const config = await readOpenClawConfig();
-    if (await importLegacyMcpIfNeeded(config)) {
+    const strippedLegacyMeta = await stripLegacyMcpMetaFromOpenClawConfig(config);
+    const importedLegacy = await importLegacyMcpIfNeeded(config);
+    if (strippedLegacyMeta || importedLegacy) {
       await writeOpenClawConfig(config);
     }
     return { servers: readServersFromConfig(config) };
@@ -162,7 +219,8 @@ export async function readMcpConfig(): Promise<McpConfigFile> {
 export async function writeMcpConfigAtomic(_path: string, config: McpConfigFile): Promise<void> {
   await withConfigLock(async () => {
     const current = await readOpenClawConfig();
-    current[LEGACY_IMPORT_DONE_KEY] = true;
+    await stripLegacyMcpMetaFromOpenClawConfig(current);
+    await markLegacyImportDone();
     writeServersToConfig(current, config.servers);
     await writeOpenClawConfig(current);
   });
@@ -171,9 +229,10 @@ export async function writeMcpConfigAtomic(_path: string, config: McpConfigFile)
 export async function deleteMcpServerEverywhere(name: string): Promise<void> {
   await withConfigLock(async () => {
     const current = await readOpenClawConfig();
+    await stripLegacyMcpMetaFromOpenClawConfig(current);
+    await markLegacyImportDone();
     const servers = readServersFromConfig(current);
     const { [name]: _removed, ...rest } = servers;
-    current[LEGACY_IMPORT_DONE_KEY] = true;
     writeServersToConfig(current, rest);
     await writeOpenClawConfig(current);
     await deleteLegacyMcpServerIfPresent(name);

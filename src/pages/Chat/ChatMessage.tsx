@@ -10,8 +10,8 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
+import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
 import type { RawMessage, AttachedFileMeta } from '@/stores/chat';
@@ -143,14 +143,14 @@ export const ChatMessage = memo(function ChatMessage({
   return (
     <div
       className={cn(
-        'flex gap-3 group',
+        'flex gap-2 group',
         isUser ? 'flex-row-reverse' : 'flex-row',
       )}
     >
       {/* Avatar */}
       {!isUser && (
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full mt-1 bg-black/5 dark:bg-white/5 text-foreground">
-          <Sparkles className="h-4 w-4" />
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg mt-1 bg-[#FF922B]/10 text-[#FF922B] dark:bg-white/10 dark:text-foreground">
+          <Sparkles className="h-3 w-3" />
         </div>
       )}
 
@@ -355,13 +355,13 @@ function ToolStatusBar({
             key={tool.toolCallId || tool.id || tool.name}
             className={cn(
               'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors',
-              isRunning && 'border-primary/30 bg-primary/5 text-foreground',
-              !isRunning && !isError && 'border-border/50 bg-muted/20 text-muted-foreground',
+              isRunning && 'border-[#FF922B]/30 bg-[#FF922B]/5 text-foreground',
+              !isRunning && !isError && 'border-[#FF922B]/15 bg-[#FF922B]/[0.04] text-muted-foreground',
               isError && 'border-destructive/30 bg-destructive/5 text-destructive',
             )}
           >
-            {isRunning && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />}
-            {!isRunning && !isError && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />}
+            {isRunning && <Loader2 className="h-3.5 w-3.5 animate-spin text-[#FF922B] shrink-0" />}
+            {!isRunning && !isError && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />}
             {isError && <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />}
             <Wrench className="h-3 w-3 shrink-0 opacity-60" />
             <span className="font-mono text-[12px] font-medium">{tool.name}</span>
@@ -418,11 +418,12 @@ function MessageBubble({
   return (
     <div
       className={cn(
-        'relative rounded-2xl px-4 py-3',
+        'relative rounded-2xl',
+        isUser ? 'px-4 py-3' : 'px-0 py-0.5',
         !isUser && 'w-full',
         isUser
-          ? 'bg-[#FF7B00] text-white shadow-sm'
-          : 'bg-[#f8f8f6]/50 dark:bg-white/5 text-foreground',
+          ? 'bg-[#FFF2E5] text-[#0B0B0B] shadow-sm shadow-[#FF922B]/10 dark:bg-white/10 dark:text-foreground'
+          : 'bg-transparent text-[#0B0B0B] dark:text-foreground',
       )}
     >
       {isUser ? (
@@ -625,11 +626,8 @@ function ImageLightbox({
     }
   }, [filePath]);
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
-      onClick={onClose}
-    >
+  return (
+    <ModalOverlay className="bg-black/80 backdrop-blur-sm" onClick={onClose}>
       {/* Image + buttons stacked */}
       <div
         className="flex flex-col items-center gap-3"
@@ -665,8 +663,7 @@ function ImageLightbox({
           </Button>
         </div>
       </div>
-    </div>,
-    document.body,
+    </ModalOverlay>
   );
 }
 
@@ -676,18 +673,18 @@ function ToolCard({ name, input }: { name: string; input: unknown }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="rounded-xl border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 text-[14px]">
+    <div className="rounded-xl border border-[#FF922B]/15 bg-[#FF922B]/[0.04] dark:border-white/10 dark:bg-white/5 text-[14px]">
       <button
         className="flex items-center gap-2 w-full px-3 py-1.5 text-muted-foreground hover:text-foreground transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
-        <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
         <Wrench className="h-3 w-3 shrink-0 opacity-60" />
         <span className="font-mono text-xs">{name}</span>
         {expanded ? <ChevronDown className="h-3 w-3 ml-auto" /> : <ChevronRight className="h-3 w-3 ml-auto" />}
       </button>
       {expanded && input != null && (
-        <pre className="px-3 pb-2 text-xs text-muted-foreground overflow-x-auto">
+        <pre className="px-3 pb-2 text-xs text-muted-foreground overflow-x-auto whitespace-pre-wrap break-all">
           {typeof input === 'string' ? input : JSON.stringify(input, null, 2) as string}
         </pre>
       )}

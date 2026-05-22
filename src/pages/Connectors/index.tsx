@@ -59,64 +59,81 @@ export function Connectors() {
   };
 
   return (
-    <div data-testid="connectors-page" className="mx-auto max-w-5xl space-y-8 pb-16">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-4xl font-serif font-normal tracking-tight text-foreground" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
-            {t('title')}
-          </h1>
-          <p className="mt-2 max-w-2xl text-[15px] text-muted-foreground">
-            {t('subtitle')}
-          </p>
+    <div
+      data-testid="connectors-page"
+      className="flex flex-col -m-6 bg-white dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden"
+    >
+      <div className="w-full max-w-5xl mx-auto flex flex-col h-full pl-[2em] pt-[2em] pr-8 pb-8">
+        {/* Header */}
+        <div className="flex flex-row items-start justify-between mb-5 shrink-0 gap-4">
+          <div>
+            <h1 className="text-[20px] font-bold text-foreground leading-tight">
+              {t('title')}
+            </h1>
+            <p className="text-[13px] text-muted-foreground mt-1">
+              {t('subtitle')}
+            </p>
+          </div>
+          <Button
+            type="button"
+            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors shrink-0"
+            onClick={() => {
+              setConnectorPageTab('custom');
+              setDialog('custom');
+            }}
+          >
+            {t('customConnector')}
+          </Button>
         </div>
-        <Button
-          type="button"
-          className="rounded-full shrink-0"
-          onClick={() => {
-            setConnectorPageTab('custom');
-            setDialog('custom');
-          }}
-        >
-          {t('customConnector')}
-        </Button>
-      </div>
 
-      <ConnectorTabs value={connectorPageTab} onChange={setConnectorPageTab} />
-
-      {mcpServersLoading && (
-        <div className="flex justify-center py-12">
-          <LoadingSpinner />
+        <div className="mb-5 shrink-0">
+          <ConnectorTabs value={connectorPageTab} onChange={setConnectorPageTab} />
         </div>
-      )}
 
-      {!mcpServersLoading && connectorPageTab === 'custom' && (
-        <div className="space-y-4">
-          {customServers.length === 0 ? (
-            <div
-              data-testid="connectors-custom-empty"
-              className="rounded-2xl border border-dashed border-black/15 bg-black/[0.02] px-8 py-16 text-center dark:border-white/15 dark:bg-white/[0.03]"
-            >
-              <p className="text-muted-foreground">{t('custom.empty')}</p>
-              <Button type="button" className="mt-4 rounded-full" variant="secondary" onClick={() => { setConnectorPageTab('custom'); setDialog('custom'); }}>
-                {t('custom.emptyCta')}
-              </Button>
+        <div className="flex-1 overflow-y-auto pr-2 pb-10 min-h-0 -mr-2">
+          {mcpServersLoading && (
+            <div className="flex justify-center py-12">
+              <LoadingSpinner />
             </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4">
-              {customServers.map((s) => (
-                <CustomMcpConnectorCard key={s.name} server={s} />
-              ))}
+          )}
+
+          {!mcpServersLoading && connectorPageTab === 'custom' && (
+            <div className="space-y-4">
+              {customServers.length === 0 ? (
+                <div
+                  data-testid="connectors-custom-empty"
+                  className="rounded-2xl border border-dashed border-black/15 bg-black/[0.02] px-8 py-16 text-center dark:border-white/15 dark:bg-white/[0.03]"
+                >
+                  <p className="text-[13px] text-muted-foreground">{t('custom.empty')}</p>
+                  <Button
+                    type="button"
+                    className="mt-4 h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+                    onClick={() => {
+                      setConnectorPageTab('custom');
+                      setDialog('custom');
+                    }}
+                  >
+                    {t('custom.emptyCta')}
+                  </Button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4">
+                  {customServers.map((s) => (
+                    <CustomMcpConnectorCard key={s.name} server={s} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
 
-      <InstallDialog
-        mode={dialog}
-        onClose={() => setDialog(null)}
-        onSaveCustom={handleSaveCustom}
-        baseConfig={mcpConfig}
-      />
+        <InstallDialog
+          mode={dialog}
+          onClose={() => setDialog(null)}
+          onSaveCustom={handleSaveCustom}
+          baseConfig={mcpConfig}
+        />
+      </div>
     </div>
   );
 }

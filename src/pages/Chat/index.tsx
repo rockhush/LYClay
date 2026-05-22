@@ -6,9 +6,11 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Loader2, Sparkles } from 'lucide-react';
+import chatDoubleIcon from '@/assets/chat-double.svg';
 import { useChatStore, type RawMessage } from '@/stores/chat';
 import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
+import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
 import { hostApiFetch } from '@/lib/host-api';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ChatMessage } from './ChatMessage';
@@ -970,10 +972,35 @@ export function Chat() {
     }
   }, [userRunCards, messages, currentSessionKey]);
 
+  const chatInputElement = (
+    <ChatInput
+      onSend={sendMessage}
+      onStop={abortRun}
+      disabled={!isGatewayRunning}
+      sending={sending || hasActiveExecutionGraph}
+      isEmpty={isEmpty}
+      initialText={editingText || prefilledInput || undefined}
+      onTextChange={(text) => {
+        if (prefilledInput && text !== prefilledInput) {
+          setPrefilledInput(null);
+        }
+      }}
+    />
+  );
+
   return (
-    <div className={cn("relative flex min-h-0 flex-col -m-6 transition-colors duration-500 dark:bg-background")} style={{ height: 'calc(100vh - 2.5rem)' }}>
+    <div
+      className={cn(
+        "relative flex min-h-0 flex-col -m-6 transition-colors duration-500 dark:bg-background",
+      )}
+      style={{
+        height: 'calc(100vh - 2.5rem)',
+        background:
+          'radial-gradient(120% 80% at 80% 20%, hsl(28 60% 95% / 0.85) 0%, hsl(28 50% 96% / 0.6) 35%, hsl(0 0% 100% / 0) 70%), radial-gradient(80% 60% at 20% 90%, hsl(18 80% 92% / 0.55) 0%, hsl(0 0% 100% / 0) 60%)',
+      }}
+    >
       {/* Toolbar */}
-      <div className="flex shrink-0 items-center justify-end px-4 py-2">
+      <div className="flex shrink-0 items-center justify-between px-4 py-2">
         <ChatToolbar />
       </div>
 
@@ -984,12 +1011,23 @@ export function Chat() {
             <div
               ref={contentRef}
               className={cn(
-                "space-y-4 transition-all duration-300 mx-auto",
-                isEmpty ? "w-full max-w-3xl" : "w-full max-w-4xl",
+                "transition-all duration-300 mx-auto",
+                isEmpty
+                  ? "w-full max-w-3xl flex min-h-full flex-col items-center justify-center"
+                  : "w-full max-w-4xl space-y-4",
               )}
             >
               {isEmpty ? (
-                <WelcomeScreen />
+                <>
+                  <WelcomeScreen />
+                  {/* Empty-state input: rendered inline under the welcome
+                      block so the composer sits in the upper-middle of the
+                      page, matching the design. Once messages exist the
+                      composer switches to the bottom-pinned slot below. */}
+                  <div className="w-full mt-2">
+                    {chatInputElement}
+                  </div>
+                </>
               ) : (
                 <>
                   {messages.map((msg, idx) => {
@@ -1133,20 +1171,10 @@ export function Chat() {
         </div>
       )}
 
-      {/* Input Area */}
-      <ChatInput
-        onSend={sendMessage}
-        onStop={abortRun}
-        disabled={!isGatewayRunning}
-        sending={sending || hasActiveExecutionGraph}
-        isEmpty={isEmpty}
-        initialText={editingText || prefilledInput || undefined}
-        onTextChange={(text) => {
-          if (prefilledInput && text !== prefilledInput) {
-            setPrefilledInput(null);
-          }
-        }}
-      />
+      {/* Input Area — only when there are messages. The empty-state
+          composer is rendered inline under the welcome block above so it
+          sits in the upper-middle of the page (per design). */}
+      {!isEmpty && chatInputElement}
 
       {/* Transparent loading overlay */}
       {minLoading && !sending && (
@@ -1167,26 +1195,55 @@ export function Chat() {
 
 function WelcomeScreen() {
   const { t } = useTranslation('chat');
+  const dingtalkUser = useDingTalkAuthStore((s) => s.user);
+  const displayName = dingtalkUser?.name || dingtalkUser?.nickname || '';
+  const greetingText = displayName
+    ? t('welcome.greeting', { name: displayName })
+    : t('welcome.greetingFallback', { defaultValue: '你好～' });
+
   const quickActions = [
     { key: 'askQuestions', label: t('welcome.askQuestions') },
     { key: 'creativeTasks', label: t('welcome.creativeTasks') },
     { key: 'brainstorming', label: t('welcome.brainstorming') },
+    {
+      key: 'multiThread',
+      label: t('welcome.multiThread', { defaultValue: '多线程工作' }),
+    },
   ];
 
   return (
     <div
-      className="flex flex-col items-center justify-center text-center h-[60vh]"
+      className="flex w-full flex-col items-center justify-center text-center pb-3"
       data-testid="chat-welcome"
     >
-      <h1 className="text-4xl md:text-5xl font-serif text-foreground/80 mb-8 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
-        {t('welcome.subtitle')}
-      </h1>
+      <div className="mb-4 flex items-start justify-center gap-3">
+        <div
+          className="flex h-12 w-8 shrink-0 items-center justify-center"
+          aria-hidden
+        >
+          <img
+            src={chatDoubleIcon}
+            alt=""
+            className="h-8 w-8 select-none"
+            draggable={false}
+          />
+        </div>
+        <h1
+          className="text-[26px] md:text-[32px] font-medium text-foreground/85 tracking-tight leading-[1.5] text-left"
+        >
+          <span className="block">{greetingText}</span>
+          <span className="block">{t('welcome.subtitle')}</span>
+        </h1>
+      </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-2.5 max-w-lg w-full">
+      <div className="flex flex-wrap items-center justify-center gap-2.5 max-w-2xl w-full">
+        <span className="text-[13px] text-foreground/55 mr-1">
+          {t('welcome.canHelpPrefix', { defaultValue: '我可以' })}
+        </span>
         {quickActions.map(({ key, label }) => (
-          <button 
+          <button
             key={key}
-            className="px-4 py-1.5 rounded-full border border-black/10 dark:border-white/10 text-[13px] font-medium text-foreground/70 hover:bg-black/5 dark:hover:bg-white/5 transition-colors bg-black/[0.02]"
+            className="px-3.5 py-1 rounded-full text-[13px] text-[#FF922B] bg-[#FF922B]/10 hover:bg-[#FF922B]/15 dark:bg-white/5 dark:text-foreground/80 dark:hover:bg-white/10 transition-colors"
           >
             {label}
           </button>

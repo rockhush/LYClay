@@ -10,6 +10,8 @@ const INVALID_CONFIG_PATTERNS: RegExp[] = [
   /\bconfig invalid\b/i,
   /\bunrecognized key\b/i,
   /\brun:\s*openclaw doctor --fix\b/i,
+  /\bvalidation failed\b/i,
+  /\bZodError\b/,
 ];
 
 const TRANSIENT_START_ERROR_PATTERNS: RegExp[] = [

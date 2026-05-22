@@ -10,7 +10,7 @@
  */
 import { access, mkdir, readFile, writeFile } from 'fs/promises';
 import { constants, readdirSync, readFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { listConfiguredAgentIds } from './agent-config';
 import { getOpenClawResolvedDir } from './paths';
@@ -25,11 +25,26 @@ import {
   isOAuthProviderType,
   isOpenClawOAuthPluginProviderKey,
 } from './provider-keys';
+import { sanitizeLegacyMcpMetaFromOpenClawConfig } from './mcp-json';
 import { withConfigLock } from './config-mutex';
 import { ensureOpenClawSessionDefaults } from './openclaw-config-defaults';
 
 const AUTH_STORE_VERSION = 1;
 const AUTH_PROFILE_FILENAME = 'auth-profiles.json';
+
+function isAbsolutePluginPath(candidate: string): boolean {
+  if (isAbsolute(candidate)) return true;
+  if (process.platform === 'win32') {
+    return /^[a-zA-Z]:[\\/]/.test(candidate) || candidate.startsWith('\\\\');
+  }
+  return candidate.startsWith('/');
+}
+
+function isStaleBundledPluginPath(candidate: string): boolean {
+  const normalized = candidate.replace(/\\/g, '/');
+  return normalized.includes('node_modules/openclaw/extensions')
+    || normalized.includes('/node_modules/.pnpm/openclaw@');
+}
 
 function getOAuthPluginId(provider: string): string {
   return `${provider}-auth`;
@@ -792,21 +807,34 @@ function extractFallbackModelIds(provider: string, fallbackModels: string[]): st
     .map((fallback) => fallback.slice(provider.length + 1));
 }
 
+/** Keys that LYClaw/registry may attach but OpenClaw models.providers schema rejects. */
+const UNSUPPORTED_OPENCLAW_MODEL_KEYS = ['params'] as const;
+
+function stripUnsupportedOpenClawModelKeys(
+  model: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = { ...model };
+  for (const key of UNSUPPORTED_OPENCLAW_MODEL_KEYS) {
+    if (key in next) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
 function mergeProviderModels(
   ...groups: Array<Array<Record<string, unknown>>>
 ): Array<Record<string, unknown>> {
-  const merged: Array<Record<string, unknown>> = [];
-  const seen = new Set<string>();
+  const merged = new Map<string, Record<string, unknown>>();
 
   for (const group of groups) {
     for (const item of group) {
       const id = typeof item?.id === 'string' ? item.id : '';
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      merged.push(item);
+      if (!id) continue;
+      merged.set(id, { ...(merged.get(id) ?? {}), ...stripUnsupportedOpenClawModelKeys(item) });
     }
   }
-  return merged;
+  return Array.from(merged.values());
 }
 
 function upsertOpenClawProviderEntry(
@@ -1403,7 +1431,7 @@ export async function batchSyncConfigFields(token: string): Promise<void> {
 type AgentModelProviderEntry = {
   baseUrl?: string;
   api?: string;
-  models?: Array<{ id: string; name: string }>;
+  models?: Array<Record<string, unknown> & { id: string; name: string }>;
   apiKey?: string;
   /** When true, pi-ai sends Authorization: Bearer instead of x-api-key */
   authHeader?: boolean;
@@ -1438,7 +1466,7 @@ async function updateModelsJsonProviderEntriesForAgents(
 
     const mergedModels = (entry.models ?? []).map((m) => {
       const prev = existingModels.find((e) => e.id === m.id);
-      return prev ? { ...prev, id: m.id, name: m.name } : { ...m };
+      return prev ? { ...prev, ...m, id: m.id, name: m.name } : { ...m };
     });
 
     if (entry.baseUrl !== undefined) existing.baseUrl = entry.baseUrl;
@@ -1545,8 +1573,8 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
       if (Array.isArray(plugins)) {
         const validPlugins: unknown[] = [];
         for (const p of plugins) {
-          if (typeof p === 'string' && p.startsWith('/')) {
-            if (p.includes('node_modules/openclaw/extensions') || !(await fileExists(p))) {
+          if (typeof p === 'string' && isAbsolutePluginPath(p)) {
+            if (isStaleBundledPluginPath(p) || !(await fileExists(p))) {
               console.log(`[sanitize] Removing stale/bundled plugin path "${p}" from openclaw.json`);
               modified = true;
             } else {
@@ -1562,8 +1590,8 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
         if (Array.isArray(pluginsObj.load)) {
           const validLoad: unknown[] = [];
           for (const p of pluginsObj.load) {
-            if (typeof p === 'string' && p.startsWith('/')) {
-              if (p.includes('node_modules/openclaw/extensions') || !(await fileExists(p))) {
+            if (typeof p === 'string' && isAbsolutePluginPath(p)) {
+              if (isStaleBundledPluginPath(p) || !(await fileExists(p))) {
                 console.log(`[sanitize] Removing stale/bundled plugin path "${p}" from openclaw.json`);
                 modified = true;
               } else {
@@ -1581,8 +1609,8 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
             const validPaths: unknown[] = [];
             const countBefore = loadObj.paths.length;
             for (const p of loadObj.paths) {
-              if (typeof p === 'string' && p.startsWith('/')) {
-                if (p.includes('node_modules/openclaw/extensions') || !(await fileExists(p))) {
+              if (typeof p === 'string' && isAbsolutePluginPath(p)) {
+                if (isStaleBundledPluginPath(p) || !(await fileExists(p))) {
                   console.log(`[sanitize] Removing stale/bundled plugin path "${p}" from plugins.load.paths`);
                   modified = true;
                 } else {
@@ -1595,6 +1623,42 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
             if (validPaths.length !== countBefore) {
               loadObj.paths = validPaths;
             }
+          }
+        }
+      }
+    }
+
+    // ── models.providers ───────────────────────────────────────────
+    // LYClaw registry/bootstrap may attach inference tuning under model.params,
+    // but OpenClaw's strict schema rejects that key and aborts Gateway startup.
+    const models = config.models;
+    if (models && typeof models === 'object' && !Array.isArray(models)) {
+      const providersSection = (models as Record<string, unknown>).providers;
+      if (providersSection && typeof providersSection === 'object' && !Array.isArray(providersSection)) {
+        for (const [providerKey, providerEntry] of Object.entries(providersSection as Record<string, unknown>)) {
+          if (!providerEntry || typeof providerEntry !== 'object' || Array.isArray(providerEntry)) {
+            continue;
+          }
+          const modelsList = (providerEntry as Record<string, unknown>).models;
+          if (!Array.isArray(modelsList)) {
+            continue;
+          }
+          let providerModelsModified = false;
+          const sanitizedModels = modelsList.map((model) => {
+            if (!model || typeof model !== 'object' || Array.isArray(model)) {
+              return model;
+            }
+            const modelRecord = model as Record<string, unknown>;
+            if (!('params' in modelRecord)) {
+              return model;
+            }
+            console.log(`[sanitize] Removing unsupported key "models.providers.${providerKey}.models[].params" from openclaw.json`);
+            providerModelsModified = true;
+            return stripUnsupportedOpenClawModelKeys(modelRecord);
+          });
+          if (providerModelsModified) {
+            (providerEntry as Record<string, unknown>).models = sanitizedModels;
+            modified = true;
           }
         }
       }
@@ -1691,6 +1755,11 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
     if (toolsModified) {
       config.tools = toolsConfig;
       modified = true;
+    }
+
+    if (await sanitizeLegacyMcpMetaFromOpenClawConfig(config)) {
+      modified = true;
+      console.log('[sanitize] Moved legacy MCP import flag out of openclaw.json');
     }
 
     // ── plugins.entries.feishu cleanup ──────────────────────────────

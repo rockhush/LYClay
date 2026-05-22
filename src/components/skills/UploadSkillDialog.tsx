@@ -1,6 +1,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
+import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { Upload, X, FileArchive, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
@@ -49,7 +50,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       handleFile(e.dataTransfer.files[0]);
     }
@@ -66,7 +67,6 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
 
     setUploading(true);
     try {
-      // Read file as base64
       const base64Data = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
@@ -82,7 +82,6 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
         reader.readAsDataURL(selectedFile);
       });
 
-      // Call IPC to extract zip to skills directory
       const result = await invokeIpc('skill:uploadZip', {
         fileName: selectedFile.name,
         base64Data,
@@ -90,8 +89,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
 
       if (result.success) {
         toast.success(t('upload.successDesc', { name: result.skillName || selectedFile.name }));
-        
-        // Reset and close
+
         setSelectedFile(null);
         onOpenChange(false);
         onUploadComplete?.();
@@ -120,35 +118,31 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
 
   if (!open) return null;
 
+  const dropZoneActive = dragActive || Boolean(selectedFile);
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    <ModalOverlay
+      className="p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="upload-skill-dialog-title"
       onKeyDown={handleKeyDown}
     >
       <div
-        className={cn(
-          'mx-4 max-w-md rounded-lg border bg-card p-6 shadow-lg',
-          'focus:outline-none'
-        )}
+        className="relative w-full max-w-md rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden focus:outline-none"
         tabIndex={-1}
       >
-        {/* Header */}
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 id="upload-skill-dialog-title" className="text-lg font-semibold">
-              {t('upload.title')}
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {t('upload.subtitle')}
-            </p>
-          </div>
+        <div className="relative px-6 pt-6 pb-2">
+          <h2 id="upload-skill-dialog-title" className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
+            {t('upload.title')}
+          </h2>
+          <p className="mt-1 text-[13px] font-sans text-muted-foreground">
+            {t('upload.subtitle')}
+          </p>
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 -mr-2 -mt-2"
+            className="absolute right-4 top-4 rounded-full h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
             onClick={handleClose}
             disabled={uploading}
           >
@@ -156,16 +150,13 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
           </Button>
         </div>
 
-        {/* Content */}
-        <div className="py-4">
-          {/* Drag & Drop Area */}
+        <div className="px-6 py-4">
           <div
             className={cn(
-              'flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors',
-              dragActive
-                ? 'border-primary bg-primary/5'
-                : 'border-muted-foreground/25 hover:border-primary/50',
-              selectedFile && 'border-primary bg-primary/5'
+              'flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 transition-colors',
+              dropZoneActive
+                ? 'border-[#FFD79A] bg-[#FFF7EC] dark:bg-[#FF922B]/10'
+                : 'border-black/10 dark:border-white/10 bg-[#FFF7EC]/40 dark:bg-white/[0.03] hover:border-[#FFD79A]/70 hover:bg-[#FFF7EC]/80 dark:hover:bg-[#FF922B]/10',
             )}
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
@@ -173,18 +164,20 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
             onDrop={handleDrop}
           >
             {selectedFile ? (
-              <div className="flex items-center gap-3">
-                <FileArchive className="h-10 w-10 text-primary" />
-                <div className="flex flex-col items-start">
-                  <span className="text-sm font-medium">{selectedFile.name}</span>
-                  <span className="text-xs text-muted-foreground">
+              <div className="flex w-full items-center gap-3 rounded-xl border border-[#FFD79A]/50 bg-white/80 dark:bg-card/80 px-3 py-2.5">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15">
+                  <FileArchive className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-medium text-foreground">{selectedFile.name}</p>
+                  <p className="text-[12px] text-muted-foreground">
                     {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                  </span>
+                  </p>
                 </div>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8"
+                  className="h-8 w-8 shrink-0 rounded-lg !text-[#FF922B] hover:!text-[#FF922B] hover:bg-[#FFF2E5] dark:hover:bg-[#FF922B]/15"
                   onClick={() => setSelectedFile(null)}
                   disabled={uploading}
                 >
@@ -192,8 +185,11 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
                 </Button>
               </div>
             ) : (
-              <>                <Upload className="h-10 w-10 text-muted-foreground mb-4" />
-                <p className="text-sm text-muted-foreground mb-2">
+              <>
+                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15">
+                  <Upload className="h-6 w-6" />
+                </div>
+                <p className="mb-3 text-[13px] text-muted-foreground">
                   {t('upload.dragDrop')}
                 </p>
                 <input
@@ -210,6 +206,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
                   type="button"
                   disabled={uploading}
                   onClick={() => fileInputRef.current?.click()}
+                  className="h-8 rounded-lg px-3 text-[13px] font-medium border-[#FFD79A]/60 bg-[#FFF2E5] !text-[#FF922B] hover:!text-[#FF922B] hover:bg-[#FFD79A]/40 dark:bg-[#FF922B]/15 dark:hover:bg-[#FF922B]/25"
                 >
                   {t('upload.browse')}
                 </Button>
@@ -217,35 +214,41 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
             )}
           </div>
 
-          {/* Requirements */}
-          <div className="mt-6">
-            <h4 className="text-sm font-medium mb-2">{t('upload.requirements')}</h4>
-            <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
-              <li>{t('upload.requirement1')}</li>
-              <li>{t('upload.requirement2')}</li>
+          <div className="mt-5 rounded-xl border border-[#FFD79A]/30 bg-[#FFF7EC]/60 px-4 py-3 dark:border-[#FF922B]/20 dark:bg-[#FF922B]/10">
+            <h4 className="text-[13px] font-sans font-semibold text-foreground mb-2">
+              {t('upload.requirements')}
+            </h4>
+            <ul className="space-y-1.5 text-[12px] text-muted-foreground">
+              <li className="flex gap-2">
+                <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-[#FF922B]" />
+                <span>{t('upload.requirement1')}</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-[#FF922B]" />
+                <span>{t('upload.requirement2')}</span>
+              </li>
             </ul>
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="flex justify-end gap-2">
+        <div className="flex justify-end gap-2 border-t border-black/5 dark:border-white/10 px-6 py-4">
           <Button
             ref={cancelRef}
             variant="outline"
-            size="sm"
             onClick={handleClose}
             disabled={uploading}
+            className="h-8 rounded-lg px-3 text-[13px] font-medium border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground"
           >
             {t('upload.cancel')}
           </Button>
-          <Button 
-            size="sm"
-            onClick={handleUpload} 
+          <Button
+            onClick={handleUpload}
             disabled={!selectedFile || uploading}
+            className="h-8 rounded-lg px-4 text-[13px] font-medium bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 disabled:opacity-50"
           >
             {uploading ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                 {t('upload.uploading')}
               </>
             ) : (
@@ -254,6 +257,6 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
           </Button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

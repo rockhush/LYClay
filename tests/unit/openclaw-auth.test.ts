@@ -440,6 +440,41 @@ describe('sanitizeOpenClawConfig', () => {
     expect(defaults.thinkingDefault).toBe('off');
   });
 
+  it('removes unsupported models.providers model params during sanitize', async () => {
+    await writeOpenClawJson({
+      models: {
+        providers: {
+          'ly-mimo': {
+            baseUrl: 'http://10.64.22.12:8000/v1',
+            api: 'anthropic-messages',
+            models: [{
+              id: 'MiMo-V2.5',
+              name: 'MiMo-V2.5',
+              maxTokens: 49152,
+              params: { temperature: 0.2 },
+            }],
+          },
+        },
+      },
+    });
+
+    const { sanitizeOpenClawConfig } = await import('@electron/utils/openclaw-auth');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await sanitizeOpenClawConfig();
+
+    const result = await readOpenClawJson();
+    const providers = ((result.models as Record<string, unknown>).providers as Record<string, unknown>);
+    const models = (providers['ly-mimo'] as Record<string, unknown>).models as Array<Record<string, unknown>>;
+    expect(models[0]).toEqual({
+      id: 'MiMo-V2.5',
+      name: 'MiMo-V2.5',
+      maxTokens: 49152,
+    });
+
+    logSpy.mockRestore();
+  });
+
   it('migrates legacy tools.web.search.kimi into moonshot plugin config', async () => {
     await writeOpenClawJson({
       models: {

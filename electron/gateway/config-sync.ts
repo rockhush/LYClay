@@ -28,6 +28,13 @@ import { buildProxyEnv, resolveProxySettings } from '../utils/proxy';
 import { syncProxyConfigToOpenClaw } from '../utils/openclaw-proxy';
 import { logger } from '../utils/logger';
 import { prependPathEntry } from '../utils/env-path';
+import {
+  buildBundledNpmEnv,
+  ensureBundledNodeReady,
+  getBundledBinDir,
+  hasBundledNpmRuntime,
+  hasNpmCliRuntime,
+} from '../utils/bundled-node';
 import { copyPluginFromNodeModules, fixupPluginManifest, cpSyncSafe } from '../utils/plugin-install';
 import { stripSystemdSupervisorEnv } from './config-sync-env';
 
@@ -40,6 +47,7 @@ export interface GatewayLaunchContext {
   forkEnv: Record<string, string | undefined>;
   mode: 'dev' | 'packaged';
   binPathExists: boolean;
+  npmRuntimeReady: boolean;
   loadedProviderKeyCount: number;
   proxySummary: string;
   channelStartupSummary: string;
@@ -292,22 +300,16 @@ export async function syncGatewayConfigBeforeLaunch(
   // node_modules linked on the next Gateway spawn.
   resetExtensionDepsLinked();
 
-  // Run independent cleanup operations in parallel for faster startup
+  // Sanitize first so plugin upgrade sees a valid config shape.
   await Promise.allSettled([
     syncProxyConfigToOpenClaw(appSettings, { preserveExistingWhenDisabled: true }).catch((err) => {
       logger.warn('Failed to sync proxy config:', err);
     }),
-    
-    sanitizeOpenClawConfig().catch((err) => {
-      logger.warn('Failed to sanitize openclaw.json:', err);
-    }),
-    
+
     cleanupDanglingWeChatPluginState().catch((err) => {
       logger.warn('Failed to clean dangling WeChat plugin state before launch:', err);
     }),
-    
-    // Remove stale copies of built-in extensions (Discord, Telegram) that
-    // override OpenClaw's working built-in plugins and break channel loading.
+
     Promise.resolve().then(() => {
       try {
         cleanupStaleBuiltInExtensions();
@@ -316,6 +318,12 @@ export async function syncGatewayConfigBeforeLaunch(
       }
     }),
   ]);
+
+  try {
+    await sanitizeOpenClawConfig();
+  } catch (err) {
+    logger.warn('Failed to sanitize openclaw.json:', err);
+  }
 
   // Plugin upgrade must run after sanitize completes (depends on config)
   try {
@@ -415,6 +423,15 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
   const appSettings = await getAllSettings();
   await syncGatewayConfigBeforeLaunch(appSettings);
 
+  if (process.platform === 'win32') {
+    await ensureBundledNodeReady();
+    if (!hasNpmCliRuntime()) {
+      logger.warn(
+        '[gateway-launch] npm-cli.js is unavailable (bundled + system); OpenClaw doctor and plugin runtime deps may fail on Windows.',
+      );
+    }
+  }
+
   if (!existsSync(entryScript)) {
     throw new Error(`OpenClaw entry script not found at: ${entryScript}`);
   }
@@ -422,13 +439,10 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
   const gatewayArgs = ['gateway', '--port', String(port), '--token', appSettings.gatewayToken, '--allow-unconfigured'];
   const mode = app.isPackaged ? 'packaged' : 'dev';
 
-  const platform = process.platform;
-  const arch = process.arch;
-  const target = `${platform}-${arch}`;
-  const binPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'bin')
-    : path.join(process.cwd(), 'resources', 'bin', target);
-  const binPathExists = existsSync(binPath);
+  const binPath = getBundledBinDir();
+  const bundledBinReady = hasBundledNpmRuntime();
+  const npmRuntimeReady = hasNpmCliRuntime();
+  const binPathExists = bundledBinReady || existsSync(binPath);
 
   const { providerEnv, loadedProviderKeyCount } = await loadProviderEnv();
   const { skipChannels, channelStartupSummary } = await resolveChannelStartupPolicy();
@@ -451,7 +465,7 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
   const baseEnvPatched = prependPathEntry(baseEnvWithBundledBin, getDwsDir()).env;
   const managedPythonEnv = await getManagedPythonEnv(stripSystemdSupervisorEnv(baseEnvPatched));
 
-  const forkEnv: Record<string, string | undefined> = {
+  const forkEnv: Record<string, string | undefined> = buildBundledNpmEnv({
     ...managedPythonEnv,
     ...providerEnv,
     ...uvEnv,
@@ -467,7 +481,7 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
     // OPENCLAW_NETWORK_TIMEOUT: '1',
     LITELLM_DISABLE_COST_TRACKING: 'true',
     // Additional optimizations for faster startup
-  };
+  });
 
   // Ensure extension-specific packages (e.g. grammy from the telegram
   // extension) are resolvable by shared dist/ chunks via symlinks in
@@ -482,6 +496,7 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
     forkEnv,
     mode,
     binPathExists,
+    npmRuntimeReady,
     loadedProviderKeyCount,
     proxySummary,
     channelStartupSummary,

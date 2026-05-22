@@ -230,6 +230,18 @@ export function shouldInvertInDark(type: ProviderType | string): boolean {
   return type !== LY_MINIMAX_PROVIDER_ID;
 }
 
+/** Shared class names for provider logo images in lists and pickers. */
+export function getProviderIconClassName(
+  type: ProviderType | string,
+  size: 'sm' | 'md' = 'sm',
+  options?: { muted?: boolean },
+): string {
+  const sizeClass = size === 'sm' ? 'h-5 w-5' : 'h-6 w-6';
+  const invertClass = shouldInvertInDark(type) ? ' dark:invert' : '';
+  const mutedClass = options?.muted ? ' opacity-45 dark:opacity-60' : '';
+  return `${sizeClass}${mutedClass}${invertClass}`;
+}
+
 /** Provider list shown in the Setup wizard */
 export const SETUP_PROVIDERS = PROVIDER_TYPE_INFO;
 

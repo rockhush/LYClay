@@ -13,7 +13,7 @@
     "launchAtStartupDesc": "登录系统后自动启动 LYClaw"
   },
   "aiProviders": {
-    "title": "AI 模型提供商",
+    "title": "模型管理",
     "description": "配置 AI 模型提供商和 API 密钥",
     "overview": {
       "title": "提供商账户",
@@ -32,7 +32,7 @@
       "model": "模型配置",
       "fallback": "回退配置"
     },
-    "add": "添加提供商",
+    "add": "新增模型",
     "sendUsageReport": "发送统计",
     "custom": "自定义",
     "notRequired": "非必填",
@@ -211,6 +211,15 @@
         "httpOnly": "HTTP -> IPC",
         "ipcOnly": "仅 IPC"
       }
+    },
+    "contextCompression": {
+      "title": "上下文压缩",
+      "desc": "当对话历史过长时，自动对早期消息进行摘要压缩，避免超出模型上下文限制。",
+      "enabled": "启用上下文压缩",
+      "enabledDesc": "开启后，系统会自动压缩过长的对话历史",
+      "threshold": "Token 阈值",
+      "thresholdDesc": "当估算的 token 数超过此值时触发压缩",
+      "thresholdPlaceholder": "8000"
     },
     "devMode": "开发者模式",
     "devModeDesc": "显示开发者工具和快捷方式",

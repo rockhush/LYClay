@@ -47,6 +47,7 @@ export class AppUpdater extends EventEmitter {
   private autoInstallTimer: NodeJS.Timeout | null = null;
   private autoInstallCountdown = 0;
   private downloadedFilePath: string | null = null;
+  private resolvedUpdateOS: string | null = null;
 
   /** Delay (in seconds) before auto-installing a downloaded update. */
   private static readonly AUTO_INSTALL_DELAY_SECONDS = 5;
@@ -166,45 +167,88 @@ export class AppUpdater extends EventEmitter {
     }
   }
 
+  private getOSCandidates(): string[] {
+    switch (process.platform) {
+      case 'darwin':
+        return ['mac', 'macos', 'darwin', ''];
+      case 'linux':
+        return ['linux'];
+      case 'win32':
+      default:
+        return ['windows', 'win'];
+    }
+  }
+
+  private buildCheckUrl(currentVersion: string, os: string): string {
+    return `${INTERNAL_UPDATE_URL}/aihome/api/installer/check/?current_version=${encodeURIComponent(currentVersion)}&os=${encodeURIComponent(os)}`;
+  }
+
+  private getDownloadOSCandidates(): string[] {
+    const candidates = this.getOSCandidates();
+    return this.resolvedUpdateOS
+      ? [this.resolvedUpdateOS, ...candidates.filter((os) => os !== this.resolvedUpdateOS)]
+      : candidates;
+  }
+
   /**
    * Check for updates using internal API.
    */
   async checkForUpdates(): Promise<UpdateInfo | null> {
     try {
       const currentVersion = app.getVersion();
-      const os = this.getOS();
-      const url = `${INTERNAL_UPDATE_URL}/aihome/api/installer/check/?current_version=${encodeURIComponent(currentVersion)}&os=${encodeURIComponent(os)}`;
-      
-      logger.info(`[Updater] Checking for updates: url=${url}, current_version=${currentVersion}, os=${os}`);
-      
-      const response = await fetch(url);
-      
-      logger.info(`[Updater] Response status: ${response.status}`);
-      
-      if (!response.ok) {
-        const responseText = await response.text().catch(() => 'No response body');
-        logger.error(`[Updater] HTTP error response body: ${responseText}`);
-        throw new Error(`HTTP error! status: ${response.status}`);
+      const osCandidates = this.getOSCandidates();
+      let lastError: Error | null = null;
+      let firstNotAvailableInfo: UpdateInfo | null = null;
+
+      for (const os of osCandidates) {
+        const url = this.buildCheckUrl(currentVersion, os);
+
+        logger.info(`[Updater] Checking for updates: url=${url}, current_version=${currentVersion}, os=${os || '(empty)'}`);
+
+        try {
+          const response = await fetch(url);
+
+          logger.info(`[Updater] Response status: ${response.status}, os=${os || '(empty)'}`);
+
+          if (!response.ok) {
+            const responseText = await response.text().catch(() => 'No response body');
+            logger.error(`[Updater] HTTP error response body for os=${os || '(empty)'}: ${responseText}`);
+            lastError = new Error(`HTTP error! status: ${response.status}`);
+            continue;
+          }
+
+          const data = (await response.json()) as CheckUpdateResponse;
+          logger.info(`[Updater] Check update response for os=${os || '(empty)'}:`, data);
+
+          if (data.need_update && data.latest_version) {
+            const updateInfo = {
+              version: data.latest_version,
+              releaseNotes: data.changelog || undefined,
+              downloadUrl: data.download_url,
+            } as unknown as UpdateInfo;
+            this.resolvedUpdateOS = os;
+            this.updateStatus({ status: 'available', info: updateInfo });
+            return updateInfo;
+          }
+
+          if (!firstNotAvailableInfo) {
+            firstNotAvailableInfo = {
+              version: data.latest_version || currentVersion,
+            } as unknown as UpdateInfo;
+          }
+        } catch (error) {
+          lastError = error as Error;
+          logger.error(`[Updater] Check attempt failed for os=${os || '(empty)'}:`, error);
+        }
       }
 
-      const data: CheckUpdateResponse = await response.json();
-      logger.info('[Updater] Check update response:', data);
-
-      if (data.need_update && data.latest_version) {
-        const updateInfo: UpdateInfo = {
-          version: data.latest_version,
-          releaseNotes: data.changelog || undefined,
-          downloadUrl: data.download_url,
-        };
-        this.updateStatus({ status: 'available', info: updateInfo });
-        return updateInfo;
-      } else {
-        const updateInfo: UpdateInfo = {
-          version: currentVersion,
-        };
-        this.updateStatus({ status: 'not-available', info: updateInfo });
+      if (firstNotAvailableInfo) {
+        this.resolvedUpdateOS = osCandidates[0] ?? this.getOS();
+        this.updateStatus({ status: 'not-available', info: firstNotAvailableInfo });
         return null;
       }
+
+      throw lastError ?? new Error('Check update failed');
     } catch (error) {
       logger.error('[Updater] Check for updates failed:', error);
       // 检查是否为 JSON 解析错误（通常是断网或外网导致返回 HTML 页面）
@@ -222,10 +266,10 @@ export class AppUpdater extends EventEmitter {
    */
   async downloadUpdate(): Promise<void> {
     try {
-      const os = this.getOS();
+      const os = this.getDownloadOSCandidates()[0] ?? this.getOS();
       const downloadUrl = `${INTERNAL_UPDATE_URL}/aihome/api/download/?os=${encodeURIComponent(os)}`;
       
-      logger.info('[Updater] Downloading update from:', downloadUrl);
+      logger.info(`[Updater] Downloading update from: ${downloadUrl}, os=${os || '(empty)'}`);
       
       // 使用直接下载方式，兼容返回安装包文件的接口
       const response = await fetch(downloadUrl);
@@ -250,6 +294,9 @@ export class AppUpdater extends EventEmitter {
       // 下载并保存文件
       const fileStream = await fs.open(filePath, 'w');
       const responseStream = response.body;
+      if (!responseStream) {
+        throw new Error('Download response body is empty');
+      }
       
       let downloadedBytes = 0;
       for await (const chunk of responseStream) {
@@ -261,6 +308,8 @@ export class AppUpdater extends EventEmitter {
           percent: contentLength > 0 ? (downloadedBytes / contentLength) * 100 : 0,
           transferred: downloadedBytes,
           total: contentLength,
+          delta: chunk.length,
+          bytesPerSecond: 0,
         };
         this.updateStatus({ status: 'downloading', progress });
       }

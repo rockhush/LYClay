@@ -7,10 +7,9 @@
  * are sent with the message (no base64 over WebSocket).
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle, Upload } from 'lucide-react';
+import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle, Upload, ChevronDown, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Input } from '@/components/ui/input';
 import { WorkspacePicker } from '@/components/workspace/WorkspacePicker';
 import { ModelPicker } from '@/components/workspace/ModelPicker';
 import { hostApiFetch } from '@/lib/host-api';
@@ -487,20 +486,37 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   const addSkillAttachment = useCallback((skillId: string) => {
     const skill = skills.find(s => s.id === skillId);
     if (!skill) return;
-    
-    const existing = skillAttachments.find(s => s.skillId === skillId);
-    if (existing) return;
 
-    setSkillAttachments(prev => [...prev, {
-      id: crypto.randomUUID(),
-      skillId: skill.id,
-      skillName: skill.name,
-      skillDescription: skill.description,
-      skillIcon: skill.icon || '📦',
-      baseDir: skill.baseDir,
-    }]);
+    // Insert `@<skillName> ` into the textarea instead of pinning a chip
+    // card above the input, so the puzzle-icon picker matches the
+    // slash-search behaviour the user already knows.
+    const mention = `@${skill.name} `;
+    const textarea = textareaRef.current;
+    let nextInput = input;
+    if (textarea) {
+      const start = textarea.selectionStart ?? input.length;
+      const end = textarea.selectionEnd ?? input.length;
+      const needsLeadingSpace = start > 0
+        && !/\s/.test(input.charAt(start - 1))
+        && input.charAt(start - 1) !== '@';
+      const insertion = (needsLeadingSpace ? ' ' : '') + mention;
+      nextInput = input.slice(0, start) + insertion + input.slice(end);
+      const caret = start + insertion.length;
+      // Defer caret restoration until after React rerenders.
+      window.setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = caret;
+          textareaRef.current.selectionEnd = caret;
+          textareaRef.current.focus();
+        }
+      }, 0);
+    } else {
+      nextInput = input + (input && !input.endsWith(' ') ? ' ' : '') + mention;
+    }
+    handleInputChange(nextInput);
     setSkillPickerOpen(false);
-  }, [skills, skillAttachments]);
+    setSkillSearchQuery('');
+  }, [input, skills]);
 
   // 斜杠搜索选择技能后插入到输入框
   const handleSlashSkillSelect = useCallback((skill: Skill) => {
@@ -758,7 +774,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
         )}
 
         {/* Input Container */}
-        <div className={`relative bg-white dark:bg-card rounded-2xl shadow-sm border px-3 pt-2.5 pb-1.5 transition-all ${dragOver ? 'border-primary ring-1 ring-primary' : 'border-black/10 dark:border-white/10'}`}>
+        <div className={`relative bg-white dark:bg-card rounded-2xl shadow-sm border px-3 pt-2.5 pb-1.5 transition-all ${dragOver ? 'border-[#FF922B] ring-1 ring-[#FF922B]' : 'border-[#FF922B]/40 dark:border-white/10'}`}>
           {selectedTarget && (
             <div className="pb-1.5">
               <button
@@ -795,59 +811,6 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
 
           {/* Action Row — icons on their own line */}
           <div className="mt-1.5 flex items-center gap-1">
-            {/* Reasoning mode picker */}
-            <div ref={reasoningRef} className="relative shrink-0">
-              <Button
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  'h-8 rounded-lg px-2.5 text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors',
-                  reasoningOpen && 'bg-primary/10 text-primary hover:bg-primary/20',
-                )}
-                onClick={() => setReasoningOpen((open) => !open)}
-                disabled={disabled || sending}
-                title={t('composer.reasoning.title')}
-                data-testid="chat-reasoning-mode-button"
-              >
-                <CurrentReasoningIcon className="h-3.5 w-3.5" />
-                <span className="ml-1.5 hidden text-xs font-medium sm:inline">{currentReasoning.label}</span>
-              </Button>
-              {reasoningOpen && (
-                <div
-                  className="absolute left-0 bottom-full z-20 mb-2 w-64 overflow-hidden rounded-2xl border border-black/10 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-card"
-                  data-testid="chat-reasoning-mode-menu"
-                >
-                  {reasoningOptions.map((option) => {
-                    const OptionIcon = option.icon;
-                    const selected = option.mode === reasoningMode;
-                    return (
-                      <button
-                        key={option.mode}
-                        type="button"
-                        onClick={() => {
-                          void setReasoningMode(option.mode as ReasoningMode);
-                          setReasoningOpen(false);
-                          textareaRef.current?.focus();
-                        }}
-                        className={cn(
-                          'flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors',
-                          selected ? 'bg-primary/10 text-foreground' : 'hover:bg-black/5 dark:hover:bg-white/5',
-                        )}
-                        data-testid={`chat-reasoning-mode-${option.mode}`}
-                      >
-                        <OptionIcon className="mt-0.5 h-4 w-4 shrink-0 text-foreground" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[14px] font-medium text-foreground">{option.label}</span>
-                          <span className="block text-[11px] text-muted-foreground">{option.description}</span>
-                        </span>
-                        {selected && <Check className="mt-0.5 h-4 w-4 shrink-0 text-foreground" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
             {/* Attach Button */}
             <Button
               variant="ghost"
@@ -886,12 +849,24 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                     {t('composer.skillPickerTitle')}
                   </div>
                   <div className="px-3 pb-2">
-                    <Input
-                      placeholder="搜索技能..."
-                      value={skillSearchQuery}
-                      onChange={(e) => setSkillSearchQuery(e.target.value)}
-                      className="h-8 text-sm border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5"
-                    />
+                    <div className="relative flex items-center rounded-full border border-transparent bg-[#FFF2E5] px-3 py-1.5 transition-colors focus-within:border-[#FF922B]/40 dark:bg-[#FF922B]/15">
+                      <Search className="h-3.5 w-3.5 shrink-0 text-[#FF922B]" />
+                      <input
+                        placeholder={t('search', { ns: 'skills' })}
+                        value={skillSearchQuery}
+                        onChange={(e) => setSkillSearchQuery(e.target.value)}
+                        className="ml-2 w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-[#FF922B]/80"
+                      />
+                      {skillSearchQuery ? (
+                        <button
+                          type="button"
+                          onClick={() => setSkillSearchQuery('')}
+                          className="ml-1 shrink-0 text-[#FF922B]/70 hover:text-[#FF922B]"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     {skillsLoading ? (
@@ -929,8 +904,59 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
             {/* Workspace Picker */}
             <WorkspacePicker disabled={disabled || sending} />
 
-            {/* Model Picker */}
-            <ModelPicker disabled={disabled || sending} />
+            {/* Reasoning mode picker */}
+            <div ref={reasoningRef} className="relative shrink-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  'h-8 rounded-lg px-2.5 text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors',
+                  reasoningOpen && 'bg-primary/10 text-primary hover:bg-primary/20',
+                )}
+                onClick={() => setReasoningOpen((open) => !open)}
+                disabled={disabled || sending}
+                title={t('composer.reasoning.title')}
+                data-testid="chat-reasoning-mode-button"
+              >
+                <CurrentReasoningIcon className="h-3.5 w-3.5" />
+                <span className="ml-1.5 hidden text-xs font-medium sm:inline">{currentReasoning.label}</span>
+                <ChevronDown className="ml-1 h-3 w-3 shrink-0 opacity-60" />
+              </Button>
+              {reasoningOpen && (
+                <div
+                  className="absolute left-0 bottom-full z-20 mb-2 w-64 overflow-hidden rounded-2xl border border-black/10 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-card"
+                  data-testid="chat-reasoning-mode-menu"
+                >
+                  {reasoningOptions.map((option) => {
+                    const OptionIcon = option.icon;
+                    const selected = option.mode === reasoningMode;
+                    return (
+                      <button
+                        key={option.mode}
+                        type="button"
+                        onClick={() => {
+                          void setReasoningMode(option.mode as ReasoningMode);
+                          setReasoningOpen(false);
+                          textareaRef.current?.focus();
+                        }}
+                        className={cn(
+                          'flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors',
+                          selected ? 'bg-primary/10 text-foreground' : 'hover:bg-black/5 dark:hover:bg-white/5',
+                        )}
+                        data-testid={`chat-reasoning-mode-${option.mode}`}
+                      >
+                        <OptionIcon className="mt-0.5 h-4 w-4 shrink-0 text-foreground" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[14px] font-medium text-foreground">{option.label}</span>
+                          <span className="block text-[11px] text-muted-foreground">{option.description}</span>
+                        </span>
+                        {selected && <Check className="mt-0.5 h-4 w-4 shrink-0 text-foreground" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             {showAgentPicker && (
               <div ref={pickerRef} className="relative shrink-0">
@@ -971,29 +997,36 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
               </div>
             )}
 
-            {/* Send Button — pushed to the right */}
-            <Button
-              onClick={sending ? handleStop : handleSend}
-              disabled={sending ? !canStop : !canSend}
-              size="icon"
-              data-testid="chat-composer-send"
-              className={`ml-auto shrink-0 h-8 w-8 rounded-lg transition-colors ${
-                (sending || canSend)
-                  ? 'bg-black/5 dark:bg-white/10 text-foreground hover:bg-black/10 dark:hover:bg-white/20'
-                  : 'text-muted-foreground/50 hover:bg-transparent bg-transparent'
-              }`}
-              variant="ghost"
-              title={sending ? t('composer.stop') : t('composer.send')}
-            >
-              {sending ? (
-                <Square className="h-3.5 w-3.5" fill="currentColor" />
-              ) : (
-                <SendHorizontal className="h-4 w-4" strokeWidth={2} />
-              )}
-            </Button>
+            {/* Right cluster: model + send */}
+            <div className="ml-auto flex items-center gap-1">
+              {/* Model Picker */}
+              <ModelPicker disabled={disabled || sending} />
 
-            {/* Upload Skill Button */}
-            <Button
+              {/* Send Button */}
+              <Button
+                onClick={sending ? handleStop : handleSend}
+                disabled={sending ? !canStop : !canSend}
+                size="icon"
+                data-testid="chat-composer-send"
+                className={cn(
+                  'shrink-0 h-8 w-8 rounded-full transition-colors',
+                  sending || canSend
+                    ? 'bg-[#FF922B] text-white hover:bg-[#FF6A00] dark:bg-white/10 dark:text-foreground dark:hover:bg-white/20'
+                    : 'bg-[#FF922B]/15 text-[#FF922B]/60 hover:bg-[#FF922B]/15 dark:bg-white/5 dark:text-muted-foreground/60',
+                )}
+                variant="ghost"
+                title={sending ? t('composer.stop') : t('composer.send')}
+              >
+                {sending ? (
+                  <Square className="h-3.5 w-3.5" fill="currentColor" />
+                ) : (
+                  <SendHorizontal className="h-4 w-4" strokeWidth={2} />
+                )}
+              </Button>
+            </div>
+
+            {/* Upload Skill Button - temporarily disabled */}
+            {/* <Button
               variant="ghost"
               size="icon"
               className="shrink-0 h-8 w-8 rounded-lg text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors"
@@ -1002,7 +1035,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
               title={t('actions.uploadSkill')}
             >
               <Upload className="h-3.5 w-3.5" />
-            </Button>
+            </Button> */}
           </div>
         </div>
         <div className="mt-2.5 flex items-center justify-between gap-2 text-[11px] text-muted-foreground/60 px-4">
@@ -1059,47 +1092,50 @@ function AttachmentPreview({
   const isImage = attachment.mimeType.startsWith('image/') && attachment.preview;
 
   return (
-    <div className="relative group rounded-lg overflow-hidden border border-border">
-      {isImage ? (
-        // Image thumbnail
-        <div className="w-16 h-16">
-          <img
-            src={attachment.preview!}
-            alt={attachment.fileName}
-            className="w-full h-full object-cover"
-          />
-        </div>
-      ) : (
-        // Generic file card
-        <div className="flex items-center gap-2 px-3 py-2 bg-muted/50 max-w-[200px]">
-          <FileIcon mimeType={attachment.mimeType} className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <div className="min-w-0 overflow-hidden">
-            <p className="text-xs font-medium truncate">{attachment.fileName}</p>
-            <p className="text-[10px] text-muted-foreground">
-              {attachment.fileSize > 0 ? formatFileSize(attachment.fileSize) : '...'}
-            </p>
+    <div className="relative group pt-1 pr-1">
+      <div className="relative rounded-lg overflow-hidden border border-border">
+        {isImage ? (
+          // Image thumbnail
+          <div className="w-16 h-16">
+            <img
+              src={attachment.preview!}
+              alt={attachment.fileName}
+              className="w-full h-full object-cover"
+            />
           </div>
-        </div>
-      )}
+        ) : (
+          // Generic file card
+          <div className="flex items-center gap-2 px-3 py-2 bg-muted/50 max-w-[200px]">
+            <FileIcon mimeType={attachment.mimeType} className="h-5 w-5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 overflow-hidden">
+              <p className="text-xs font-medium truncate">{attachment.fileName}</p>
+              <p className="text-[10px] text-muted-foreground">
+                {attachment.fileSize > 0 ? formatFileSize(attachment.fileSize) : '...'}
+              </p>
+            </div>
+          </div>
+        )}
 
-      {/* Staging overlay */}
-      {attachment.status === 'staging' && (
-        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-          <Loader2 className="h-4 w-4 text-white animate-spin" />
-        </div>
-      )}
+        {/* Staging overlay */}
+        {attachment.status === 'staging' && (
+          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+            <Loader2 className="h-4 w-4 text-white animate-spin" />
+          </div>
+        )}
 
-      {/* Error overlay */}
-      {attachment.status === 'error' && (
-        <div className="absolute inset-0 bg-destructive/20 flex items-center justify-center">
-          <span className="text-[10px] text-destructive font-medium px-1">Error</span>
-        </div>
-      )}
+        {/* Error overlay */}
+        {attachment.status === 'error' && (
+          <div className="absolute inset-0 bg-destructive/20 flex items-center justify-center">
+            <span className="text-[10px] text-destructive font-medium px-1">Error</span>
+          </div>
+        )}
+      </div>
 
       {/* Remove button */}
       <button
         onClick={onRemove}
-        className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+        aria-label="Remove"
+        className="absolute top-0 right-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
       >
         <X className="h-3 w-3" />
       </button>
@@ -1143,21 +1179,24 @@ function SkillAttachmentPreview({
   onRemove: () => void;
 }) {
   return (
-    <div className="relative group rounded-lg overflow-hidden border border-primary/20 bg-primary/5 px-3 py-2 max-w-[200px]">
-      <div className="flex items-center gap-2">
-        <div className={`w-6 h-6 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white rounded-md ${getSkillColor(skill.skillName)}`}>
-          {getSkillInitial(skill.skillName)}
-        </div>
-        <div className="min-w-0 overflow-hidden">
-          <p className="text-xs font-medium truncate text-foreground">{skill.skillName}</p>
-          <p className="text-[10px] text-muted-foreground truncate">{skill.skillDescription}</p>
+    <div className="relative group max-w-[200px] pt-1 pr-1">
+      <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+        <div className="flex items-center gap-2">
+          <div className={`w-6 h-6 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white rounded-md ${getSkillColor(skill.skillName)}`}>
+            {getSkillInitial(skill.skillName)}
+          </div>
+          <div className="min-w-0 overflow-hidden">
+            <p className="text-xs font-medium truncate text-foreground">{skill.skillName}</p>
+            <p className="text-[10px] text-muted-foreground truncate">{skill.skillDescription}</p>
+          </div>
         </div>
       </div>
 
       {/* Remove button */}
       <button
         onClick={onRemove}
-        className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+        aria-label="Remove"
+        className="absolute top-0 right-0 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
       >
         <X className="h-3 w-3" />
       </button>
@@ -1182,18 +1221,30 @@ function SkillPickerItem({
       onClick={onSelect}
       className={cn(
         'relative flex w-full flex-col items-start rounded-xl px-3 py-2 text-left transition-colors',
-        selected ? 'bg-primary/10 text-foreground' : 'hover:bg-black/5 dark:hover:bg-white/5'
+        selected
+          ? 'bg-[#FFF2E5] dark:bg-[#FF922B]/15'
+          : 'hover:bg-black/5 dark:hover:bg-white/5'
       )}
     >
       <div className="flex items-center gap-2">
         <div className={`w-5 h-5 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white rounded-md ${getSkillColor(skill.name)}`}>
           {getSkillInitial(skill.name)}
         </div>
-        <span className="text-[14px] font-medium text-foreground">{skill.name}</span>
+        <span
+          className={cn(
+            'text-[14px] font-medium',
+            selected ? 'text-[#FF6A00] dark:text-primary' : 'text-foreground',
+          )}
+        >
+          {skill.name}
+        </span>
       </div>
       {skill.description && (
         <p
-          className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2 leading-[1.5]"
+          className={cn(
+            'mt-0.5 line-clamp-2 text-[11px] leading-[1.5]',
+            selected ? 'text-[#FF6A00]/80 dark:text-primary/80' : 'text-muted-foreground',
+          )}
           style={{
             display: '-webkit-box',
             WebkitLineClamp: 2,
@@ -1207,7 +1258,7 @@ function SkillPickerItem({
       )}
       {selected && (
         <div className="absolute right-3 top-1/2 -translate-y-1/2">
-          <Check className="h-4 w-4 text-primary" />
+          <Check className="h-4 w-4 text-[#FF6A00] dark:text-primary" />
         </div>
       )}
     </button>

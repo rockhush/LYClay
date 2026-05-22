@@ -1,4 +1,4 @@
-import { app, utilityProcess } from 'electron';
+import { utilityProcess } from 'electron';
 import path from 'path';
 import { existsSync } from 'fs';
 import { getOpenClawDir, getOpenClawEntryPath } from '../utils/paths';
@@ -6,6 +6,14 @@ import { getUvMirrorEnv } from '../utils/uv-env';
 import { isPythonReady, setupManagedPython } from '../utils/uv-setup';
 import { logger } from '../utils/logger';
 import { prependPathEntry } from '../utils/env-path';
+import { buildUtf8ChildProcessEnv, decodeChildProcessOutput } from '../utils/child-output-encoding';
+import {
+  buildBundledNpmEnv,
+  ensureBundledNodeReady,
+  getBundledBinDir,
+  hasBundledNpmRuntime,
+  hasNpmCliRuntime,
+} from '../utils/bundled-node';
 import { probeGatewayReady } from './ws-client';
 
 export function warmupManagedPythonReadiness(): void {
@@ -270,30 +278,30 @@ export async function runOpenClawDoctorRepair(): Promise<boolean> {
     return false;
   }
 
-  const platform = process.platform;
-  const arch = process.arch;
-  const target = `${platform}-${arch}`;
-  const binPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'bin')
-    : path.join(process.cwd(), 'resources', 'bin', target);
-  const binPathExists = existsSync(binPath);
+  if (process.platform === 'win32') {
+    await ensureBundledNodeReady();
+  }
+
+  const binPath = getBundledBinDir();
+  const bundledBinReady = hasBundledNpmRuntime();
+  const npmRuntimeReady = hasNpmCliRuntime();
   const baseProcessEnv = process.env as Record<string, string | undefined>;
-  const baseEnvPatched = binPathExists
+  const baseEnvPatched = bundledBinReady
     ? prependPathEntry(baseProcessEnv, binPath).env
     : baseProcessEnv;
 
   const uvEnv = await getUvMirrorEnv();
   const doctorArgs = ['doctor', '--fix', '--yes', '--non-interactive'];
   logger.info(
-    `Running OpenClaw doctor repair (entry="${entryScript}", args="${doctorArgs.join(' ')}", cwd="${openclawDir}", bundledBin=${binPathExists ? 'yes' : 'no'})`,
+    `Running OpenClaw doctor repair (entry="${entryScript}", args="${doctorArgs.join(' ')}", cwd="${openclawDir}", npmRuntime=${npmRuntimeReady ? 'yes' : 'no'}, bundledBin=${bundledBinReady ? 'yes' : 'no'})`,
   );
 
   return await new Promise<boolean>((resolve) => {
-    const forkEnv: Record<string, string | undefined> = {
+    const forkEnv: Record<string, string | undefined> = buildUtf8ChildProcessEnv(buildBundledNpmEnv({
       ...baseEnvPatched,
       ...uvEnv,
       OPENCLAW_NO_RESPAWN: '1',
-    };
+    }));
 
     const child = utilityProcess.fork(entryScript, doctorArgs, {
       cwd: openclawDir,
@@ -325,7 +333,7 @@ export async function runOpenClawDoctorRepair(): Promise<boolean> {
     });
 
     child.stdout?.on('data', (data) => {
-      const raw = data.toString();
+      const raw = decodeChildProcessOutput(data as Buffer);
       for (const line of raw.split(/\r?\n/)) {
         const normalized = line.trim();
         if (!normalized) continue;
@@ -334,7 +342,7 @@ export async function runOpenClawDoctorRepair(): Promise<boolean> {
     });
 
     child.stderr?.on('data', (data) => {
-      const raw = data.toString();
+      const raw = decodeChildProcessOutput(data as Buffer);
       for (const line of raw.split(/\r?\n/)) {
         const normalized = line.trim();
         if (!normalized) continue;

@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { useChannelsStore } from '@/stores/channels';
 
 import { hostApiFetch } from '@/lib/host-api';
@@ -62,10 +63,10 @@ interface ChannelConfigModalProps {
   onChannelSaved?: (channelType: ChannelType) => void | Promise<void>;
 }
 
-const inputClasses = 'h-[44px] rounded-xl font-mono text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:ring-2 focus-visible:ring-[#FF7B00]/50 focus-visible:border-[#FF7B00] shadow-sm transition-all text-foreground placeholder:text-foreground/40';
-const labelClasses = 'text-[14px] text-foreground/80 font-bold';
-const outlineButtonClasses = 'h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-none text-foreground/80 hover:text-foreground';
-const primaryButtonClasses = 'h-9 text-[13px] font-medium rounded-full px-4 shadow-none';
+const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors text-foreground placeholder:text-foreground/40';
+const labelClasses = 'text-[13px] text-foreground/80 font-medium';
+const outlineButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors';
+const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
 
 export function ChannelConfigModal({
   initialSelectedType = null,
@@ -491,8 +492,8 @@ export function ChannelConfigModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+    <ModalOverlay
+      className="p-4"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -500,20 +501,20 @@ export function ChannelConfigModal({
       }}
     >
       <Card
-        className="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-3xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden"
+        className="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden"
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
-        <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0">
+        <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0 px-6 pt-6">
           <div>
-            <CardTitle className="text-2xl font-serif font-normal tracking-tight">
+            <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
               {selectedType
                 ? isExistingConfig
                   ? t('dialog.updateTitle', { name: CHANNEL_NAMES[selectedType] })
                   : t('dialog.configureTitle', { name: CHANNEL_NAMES[selectedType] })
                 : t('dialog.addTitle')}
             </CardTitle>
-            <CardDescription className="text-[15px] mt-1 text-foreground/70">
+            <CardDescription className="text-[13px] mt-1 text-muted-foreground">
               {selectedType && isExistingConfig
                 ? t('dialog.existingDesc')
                 : meta ? t(meta.description.replace('channels:', '')) : t('dialog.selectDesc')}
@@ -523,12 +524,12 @@ export function ChannelConfigModal({
             variant="ghost"
             size="icon"
             onClick={onClose}
-            className="rounded-full h-8 w-8 -mr-2 -mt-2 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+            className="rounded-lg h-8 w-8 -mr-2 -mt-2 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
           >
             <X className="h-4 w-4" />
           </Button>
         </CardHeader>
-        <CardContent className="space-y-6 pt-4 overflow-y-auto flex-1 p-6">
+        <CardContent className="space-y-5 pt-3 overflow-y-auto flex-1 px-6 pb-6">
           {!selectedType ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {getPrimaryChannels().map((type) => {
@@ -604,30 +605,30 @@ export function ChannelConfigModal({
               </div>
             </div>
           ) : loadingConfig ? (
-            <div className="flex items-center justify-center py-10 rounded-2xl bg-[#eeece3] dark:bg-muted border border-black/10 dark:border-white/10">
+            <div className="flex items-center justify-center py-10 rounded-lg bg-white dark:bg-card border border-black/[0.06] dark:border-white/10">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-[14px] text-muted-foreground">{t('dialog.loadingConfig')}</span>
+              <span className="ml-2 text-[13px] text-muted-foreground">{t('dialog.loadingConfig')}</span>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-5">
               {isExistingConfig && (
-                <div className="bg-blue-500/10 text-blue-600 dark:text-blue-400 p-4 rounded-2xl text-[13.5px] flex items-center gap-2 border border-blue-500/20">
+                <div className="bg-[#FFF2E5] text-[#FF6A00] dark:bg-[#FF922B]/15 dark:text-primary p-3.5 rounded-lg text-[13px] flex items-center gap-2 border border-[#FFD79A]/60 dark:border-[#FF922B]/30">
                   <CheckCircle className="h-4 w-4 shrink-0" />
                   <span>{t('dialog.existingHint')}</span>
                 </div>
               )}
 
-              <div className="bg-[#eeece3] dark:bg-muted p-4 rounded-2xl space-y-4 shadow-sm border border-black/10 dark:border-white/10">
+              <div className="bg-white dark:bg-card p-3.5 rounded-lg space-y-3 border border-black/[0.06] dark:border-white/10">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className={labelClasses}>{t('dialog.howToConnect')}</p>
-                    <p className="text-[13px] text-muted-foreground mt-1">
+                    <p className="text-[12px] text-muted-foreground mt-1">
                       {meta ? t(meta.description.replace('channels:', '')) : ''}
                     </p>
                   </div>
                   <Button
-                    variant="outline"
-                    className={cn(outlineButtonClasses, 'h-8 px-3 shrink-0')}
+                    variant="ghost"
+                    className="h-8 px-3 shrink-0 text-[12px] text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15"
                     onClick={openDocs}
                   >
                     <BookOpen className="h-3 w-3 mr-1" />
@@ -635,7 +636,7 @@ export function ChannelConfigModal({
                     <ExternalLink className="h-3 w-3 ml-1" />
                   </Button>
                 </div>
-                <ol className="list-decimal pl-5 text-[13px] text-muted-foreground leading-relaxed space-y-1.5">
+                <ol className="list-decimal pl-5 text-[12px] text-muted-foreground leading-relaxed space-y-1.5">
                   {meta?.instructions.map((instruction, index) => (
                     <li key={index}>{t(instruction)}</li>
                   ))}
@@ -643,7 +644,7 @@ export function ChannelConfigModal({
               </div>
 
               {showChannelName && (
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   <Label htmlFor="name" className={labelClasses}>{t('dialog.channelName')}</Label>
                   <Input
                     ref={firstInputRef}
@@ -657,7 +658,7 @@ export function ChannelConfigModal({
               )}
 
               {showAccountIdEditor && (
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   <Label htmlFor="account-id" className={labelClasses}>{t('account.customIdLabel')}</Label>
                   <Input
                     id="account-id"
@@ -669,7 +670,7 @@ export function ChannelConfigModal({
                       }
                     }}
                     placeholder={t('account.customIdPlaceholder')}
-                    className={cn(inputClasses, accountIdError && 'border-destructive/50 focus-visible:ring-destructive/30')}
+                    className={cn(inputClasses, accountIdError && 'border-destructive/50 focus-visible:border-destructive')}
                   />
                   {accountIdError ? (
                     <p className="text-[12px] text-destructive">{accountIdError}</p>
@@ -695,7 +696,7 @@ export function ChannelConfigModal({
               {validationResult && (
                 <div
                   className={cn(
-                    'p-4 rounded-2xl text-sm border',
+                    'p-3.5 rounded-lg text-sm border',
                     validationResult.valid
                       ? 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
                       : 'bg-destructive/10 text-destructive border-destructive/20'
@@ -742,7 +743,7 @@ export function ChannelConfigModal({
 
               <Separator className="bg-black/10 dark:bg-white/10" />
 
-              <div className="flex flex-col sm:flex-row sm:justify-end gap-3 pt-2">
+              <div className="flex flex-col sm:flex-row sm:justify-end gap-2 pt-1">
                 <div className="flex flex-col sm:flex-row gap-2">
                   {meta?.connectionType === 'token' && shouldUseCredentialValidation && (
                     <Button
@@ -753,12 +754,12 @@ export function ChannelConfigModal({
                     >
                       {validating ? (
                         <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                           {t('dialog.validating')}
                         </>
                       ) : (
                         <>
-                          <ShieldCheck className="h-4 w-4 mr-2" />
+                          <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />
                           {t('dialog.validateConfig')}
                         </>
                       )}
@@ -773,14 +774,14 @@ export function ChannelConfigModal({
                   >
                     {connecting ? (
                       <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                         {meta?.connectionType === 'qr' ? t('dialog.generatingQR') : t('dialog.validatingAndSaving')}
                       </>
                     ) : meta?.connectionType === 'qr' ? (
                       t('dialog.generateQRCode')
                     ) : (
                       <>
-                        <Check className="h-4 w-4 mr-2" />
+                        <Check className="h-3.5 w-3.5 mr-1.5" />
                         {isExistingConfig ? t('dialog.updateAndReconnect') : t('dialog.saveAndConnect')}
                       </>
                     )}
@@ -791,7 +792,7 @@ export function ChannelConfigModal({
           )}
         </CardContent>
       </Card>
-    </div>
+    </ModalOverlay>
   );
 }
 
@@ -831,7 +832,7 @@ function ConfigField({ field, value, onChange, showSecret, onToggleSecret }: Con
   const isPassword = field.type === 'password';
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-2">
       <Label htmlFor={field.key} className={labelClasses}>
         {t(field.label)}
         {field.required && <span className="text-destructive ml-1">*</span>}
@@ -851,14 +852,14 @@ function ConfigField({ field, value, onChange, showSecret, onToggleSecret }: Con
             variant="outline"
             size="icon"
             onClick={onToggleSecret}
-            className="h-[44px] w-[44px] rounded-xl bg-[#eeece3] dark:bg-muted border-black/10 dark:border-white/10 text-muted-foreground hover:text-foreground shrink-0 shadow-sm"
+            className="h-9 w-9 rounded-lg bg-white dark:bg-muted border-black/10 dark:border-white/10 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 shrink-0"
           >
             {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
         )}
       </div>
       {field.description && (
-        <p className="text-[13px] text-muted-foreground leading-relaxed">
+        <p className="text-[12px] text-muted-foreground leading-relaxed">
           {t(field.description)}
         </p>
       )}

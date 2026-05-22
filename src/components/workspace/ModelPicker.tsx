@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Sparkles, Check, RefreshCw } from 'lucide-react';
+import { Sparkles, Check, RefreshCw, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useProviderStore } from '@/stores/providers';
@@ -81,13 +81,19 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   // Disable during streaming or if already disabled
   const isDisabled = disabled || isStreaming;
 
+  // Current selected provider/model label
+  const currentItem = configuredProviders.find((item) => item.account.id === defaultAccountId) ?? configuredProviders[0];
+  const currentLabel = currentItem
+    ? currentItem.account.model || currentItem.vendor?.name || currentItem.account.label
+    : t('composer.switchModel');
+
   return (
     <div ref={pickerRef} className="relative shrink-0">
       <Button
         variant="ghost"
-        size="icon"
+        size="sm"
         className={cn(
-          'h-8 w-8 rounded-lg text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors',
+          'h-8 max-w-[200px] rounded-lg px-2.5 text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors',
           pickerOpen && 'bg-primary/10 text-primary hover:bg-primary/20',
           isDisabled && 'opacity-40 cursor-not-allowed'
         )}
@@ -95,11 +101,13 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
         disabled={isDisabled}
         title={t('composer.switchModel')}
       >
-        <Sparkles className="h-3.5 w-3.5" />
+        <Sparkles className="h-3.5 w-3.5 shrink-0" />
+        <span className="ml-1.5 truncate text-xs font-medium">{currentLabel}</span>
+        <ChevronDown className="ml-1 h-3 w-3 shrink-0 opacity-60" />
       </Button>
 
       {pickerOpen && (
-        <div className="absolute left-0 bottom-full z-20 mb-2 w-72 overflow-hidden rounded-2xl border border-black/10 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-card">
+        <div className="absolute right-0 bottom-full z-20 mb-2 w-72 overflow-hidden rounded-2xl border border-black/10 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-card">
           <div className="px-3 py-2 text-[11px] font-medium text-muted-foreground/80">
             {t('composer.modelPickerTitle')}
           </div>

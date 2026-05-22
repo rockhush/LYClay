@@ -4,8 +4,34 @@ import 'zx/globals';
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const NODE_VERSION = '22.19.0';
-const BASE_URL = `https://nodejs.org/dist/v${NODE_VERSION}`;
 const OUTPUT_BASE = path.join(ROOT_DIR, 'resources', 'bin');
+
+function buildDownloadUrls(filename) {
+  return [
+    `https://nodejs.org/dist/v${NODE_VERSION}/${filename}`,
+    `https://npmmirror.com/mirrors/node/v${NODE_VERSION}/${filename}`,
+  ];
+}
+
+async function downloadWithFallback(urls, archivePath) {
+  let lastError = null;
+  for (const downloadUrl of urls) {
+    try {
+      echo`⬇️ Downloading: ${downloadUrl}`;
+      const response = await fetch(downloadUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      }
+      const buffer = await response.arrayBuffer();
+      await fs.writeFile(archivePath, Buffer.from(buffer));
+      return;
+    } catch (error) {
+      lastError = error;
+      echo(chalk.yellow`⚠️ Download failed from ${downloadUrl}: ${error}`);
+    }
+  }
+  throw lastError ?? new Error('All download mirrors failed');
+}
 
 const TARGETS = {
   'win32-x64': {
@@ -32,7 +58,7 @@ async function setupTarget(id) {
   const targetDir = path.join(OUTPUT_BASE, id);
   const tempDir = path.join(ROOT_DIR, 'temp_node_extract');
   const archivePath = path.join(ROOT_DIR, target.filename);
-  const downloadUrl = `${BASE_URL}/${target.filename}`;
+  const downloadUrls = buildDownloadUrls(target.filename);
 
   echo(chalk.blue`\n📦 Setting up Node.js for ${id}...`);
 
@@ -52,11 +78,7 @@ async function setupTarget(id) {
   await fs.ensureDir(tempDir);
 
   try {
-    echo`⬇️ Downloading: ${downloadUrl}`;
-    const response = await fetch(downloadUrl);
-    if (!response.ok) throw new Error(`Failed to download: ${response.statusText}`);
-    const buffer = await response.arrayBuffer();
-    await fs.writeFile(archivePath, Buffer.from(buffer));
+    await downloadWithFallback(downloadUrls, archivePath);
 
     echo`📂 Extracting...`;
     if (os.platform() === 'win32') {
@@ -94,7 +116,12 @@ async function setupTarget(id) {
       await fs.move(sourcePath, outputPath, { overwrite: true });
     }
 
-    echo(chalk.green`✅ Success: ${outputNode} + npm/npx`);
+    const npmCliPath = path.join(targetDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (!(await fs.pathExists(npmCliPath))) {
+      throw new Error(`Extracted npm package is incomplete: missing ${npmCliPath}`);
+    }
+
+    echo(chalk.green`✅ Success: ${outputNode} + npm-cli.js`);
   } finally {
     await fs.remove(archivePath);
     await fs.remove(tempDir);

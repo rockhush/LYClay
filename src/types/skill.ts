@@ -29,6 +29,12 @@ export interface Skill {
    * 仅作为 UI 提示使用，不会把技能从列表中移除。
    */
   pathMissing?: boolean;
+  /**
+   * Optional download count surfaced for marketplace-sourced skills.
+   * Installed skills may not always carry this value; UI should gracefully
+   * fall back when undefined.
+   */
+  downloads?: number;
 }
 
 /**

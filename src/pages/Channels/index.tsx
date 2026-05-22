@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { RefreshCw, Trash2, AlertCircle, Plus, Copy, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
+import { RefreshCw, Trash2, AlertCircle, Plus, Copy, RotateCcw, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -517,35 +517,35 @@ export function Channels() {
 
   return (
     <div data-testid="channels-page" className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
-      <div className="w-full max-w-5xl mx-auto flex flex-col h-full p-10 pt-16">
-        <div className="flex flex-col md:flex-row md:items-start justify-between mb-12 shrink-0 gap-4">
-          <div>
-            <h1 className="text-5xl md:text-6xl font-serif text-foreground mb-3 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
+      <div className="w-full max-w-6xl mx-auto flex flex-col h-full px-8 py-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 shrink-0 gap-3">
+          <div className="min-w-0">
+            <h1 className="text-[20px] font-bold text-foreground leading-tight">
               {t('title')}
             </h1>
-            <p className="text-[17px] text-foreground/70 font-medium">
+            <p className="text-[13px] text-muted-foreground mt-1">
               {t('subtitle')}
             </p>
           </div>
 
-          <div className="flex items-center gap-3 md:mt-2">
+          <div className="flex items-center gap-2 shrink-0">
             <Button
               variant="outline"
               onClick={handleRefresh}
               disabled={gatewayStatus.state !== 'running'}
-              className="h-9 text-[13px] font-medium rounded-full px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-md shadow-black/10 text-foreground/80 hover:text-foreground transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-3 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground transition-colors"
             >
-              <RefreshCw className={cn('h-3.5 w-3.5 mr-2', isUsingStableValue && 'animate-spin')} />
+              <RefreshCw className={cn('h-3.5 w-3.5 mr-1.5', isUsingStableValue && 'animate-spin')} />
               {t('refresh')}
             </Button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto pr-2 pb-10 min-h-0 -mr-2">
+        <div className="flex-1 overflow-y-auto pr-2 pb-6 min-h-0 -mr-2">
           {gatewayStatus.state !== 'running' && (
-            <div className="mb-8 p-4 rounded-xl border border-yellow-500/50 bg-yellow-500/10 flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
-              <span className="text-yellow-700 dark:text-yellow-400 text-sm font-medium">
+            <div className="mb-4 p-3 rounded-lg border border-yellow-500/50 bg-yellow-500/10 flex items-center gap-3">
+              <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+              <span className="text-yellow-700 dark:text-yellow-400 text-[13px] font-medium">
                 {t('gatewayWarning')}
               </span>
             </div>
@@ -632,29 +632,29 @@ export function Channels() {
           )}
 
           {error && (
-            <div className="mb-8 p-4 rounded-xl border border-destructive/50 bg-destructive/10 flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-destructive" />
-              <span className="text-destructive text-sm font-medium">
+            <div className="mb-4 p-3 rounded-lg border border-destructive/50 bg-destructive/10 flex items-center gap-3">
+              <AlertCircle className="h-4 w-4 text-destructive" />
+              <span className="text-destructive text-[13px] font-medium">
                 {error}
               </span>
             </div>
           )}
 
           {configuredGroups.length > 0 && (
-            <div className="mb-12">
-              <h2 className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
+            <div className="mb-8">
+              <h2 className="text-[15px] font-bold text-foreground mb-3 leading-tight">
                 {t('configured')}
               </h2>
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {configuredGroups.map((group) => (
-                  <div key={group.channelType} className="rounded-2xl border border-black/10 dark:border-white/10 p-4 bg-transparent">
+                  <div key={group.channelType} className="rounded-xl border border-black/[0.06] dark:border-white/10 p-4 bg-white dark:bg-card">
                     <div className="flex items-center justify-between gap-2 mb-3">
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="h-[40px] w-[40px] shrink-0 flex items-center justify-center text-foreground bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-full shadow-sm">
-                          <ChannelLogo type={group.channelType as ChannelType} />
+                        <div className="h-[36px] w-[36px] shrink-0 flex items-center justify-center rounded-lg">
+                          <ChannelLogo type={group.channelType as ChannelType} muted />
                         </div>
                         <div className="min-w-0">
-                          <h3 className="text-[16px] font-semibold text-foreground truncate">
+                          <h3 className="text-[14px] font-semibold text-foreground truncate">
                             {CHANNEL_NAMES[group.channelType as ChannelType] || group.channelType}
                           </h3>
                           <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
@@ -681,7 +681,7 @@ export function Channels() {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-8 text-xs rounded-full shadow-md shadow-black/10"
+                          className="h-8 text-xs rounded-lg border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
                           onClick={() => {
                             const shouldUseGeneratedAccountId = !usesPluginManagedQrAccounts(group.channelType);
                             const nextAccountId = shouldUseGeneratedAccountId
@@ -705,11 +705,11 @@ export function Channels() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                          className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
                           onClick={() => setDeleteTarget({ channelType: group.channelType })}
                           title={t('account.deleteChannel')}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </div>
@@ -721,9 +721,9 @@ export function Channels() {
                             ? t('account.mainAccount')
                             : account.name;
                         return (
-                        <div key={`${group.channelType}-${account.accountId}`} className="rounded-xl bg-black/5 dark:bg-white/5 px-3 py-2">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
+                        <div key={`${group.channelType}-${account.accountId}`} className="rounded-lg bg-black/[0.03] dark:bg-white/5 px-3 py-2">
+                          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                            <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2">
                                 <p className="text-[13px] font-medium text-foreground truncate">{displayName}</p>
                               </div>
@@ -737,10 +737,10 @@ export function Channels() {
                               )}
                             </div>
 
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-muted-foreground">{t('account.bindAgentLabel')}</span>
+                            <div className="flex items-center gap-2 ml-auto">
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">{t('account.bindAgentLabel')}</span>
                               <select
-                                className="h-8 rounded-lg border border-black/10 dark:border-white/10 bg-background px-2 text-xs"
+                                className="h-8 max-w-[120px] rounded-lg border border-black/10 dark:border-white/10 bg-background px-2 text-xs"
                                 value={account.agentId || ''}
                                 onChange={(event) => {
                                   void handleBindAgent(group.channelType, account.accountId, event.target.value);
@@ -754,7 +754,7 @@ export function Channels() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-8 text-xs rounded-full shadow-md shadow-black/10"
+                                className="h-8 text-xs rounded-lg border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
                                   onClick={() => {
                                     void (async () => {
                                       try {
@@ -781,11 +781,11 @@ export function Channels() {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
                                 onClick={() => setDeleteTarget({ channelType: group.channelType, accountId: account.accountId })}
                                 title={t('account.delete')}
                               >
-                                <Trash2 className="h-4 w-4" />
+                                <Trash2 className="h-3.5 w-3.5" />
                               </Button>
                             </div>
                           </div>
@@ -800,11 +800,7 @@ export function Channels() {
           )}
 
           <div className="mb-8">
-            <h2 className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
-              {t('supportedChannels')}
-            </h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {unsupportedGroups.map((type) => {
                 const meta = CHANNEL_META[type];
                 return (
@@ -820,25 +816,31 @@ export function Channels() {
                       setShowConfigModal(true);
                     }}
                     className={cn(
-                      'group flex items-start gap-4 p-4 rounded-2xl transition-all text-left border relative overflow-hidden bg-transparent border-transparent hover:bg-black/5 dark:hover:bg-white/5'
+                      'group relative flex items-start gap-3 p-4 rounded-xl transition-colors text-left border',
+                      'bg-white dark:bg-card border-black/[0.06] dark:border-white/10',
+                      'hover:bg-[#FFF7EC] dark:hover:bg-white/[0.04] hover:border-[#FFD79A]/60',
                     )}
                   >
-                    <div className="h-[46px] w-[46px] shrink-0 flex items-center justify-center text-foreground bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-full shadow-sm mb-3">
-                      <ChannelLogo type={type} />
+                    <div className="h-7 w-7 shrink-0 flex items-center justify-center rounded-md">
+                      <ChannelLogo type={type} size="sm" muted />
                     </div>
-                    <div className="flex flex-col flex-1 min-w-0 py-0.5 mt-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="text-[16px] font-semibold text-foreground truncate">{meta.name}</h3>
+                    <div className="flex flex-col flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <h3 className="text-[14px] font-semibold text-foreground truncate">{meta.name}</h3>
                         {meta.isPlugin && (
-                          <Badge variant="secondary" className="font-mono text-[10px] font-medium px-2 py-0.5 rounded-full bg-black/[0.04] dark:bg-white/[0.08] border-0 shadow-none text-foreground/70">
+                          <Badge variant="secondary" className="font-mono text-[10px] font-medium px-1.5 py-0 h-[18px] rounded-md bg-black/[0.04] dark:bg-white/[0.08] border-0 shadow-none text-foreground/70">
                             {t('pluginBadge')}
                           </Badge>
                         )}
                       </div>
-                      <p className="text-[13.5px] text-muted-foreground line-clamp-2 leading-[1.5]">
+                      <p className="text-[12px] text-muted-foreground line-clamp-2 leading-[1.5]">
                         {t(meta.description.replace('channels:', ''))}
                       </p>
                     </div>
+                    <Pencil
+                      className="absolute top-3 right-3 h-3.5 w-3.5 text-[#FF6A00] opacity-0 group-hover:opacity-100 transition-opacity dark:text-primary"
+                      aria-hidden
+                    />
                   </button>
                 );
               })}
@@ -896,26 +898,29 @@ export function Channels() {
   );
 }
 
-function ChannelLogo({ type }: { type: ChannelType }) {
+function ChannelLogo({ type, size = 'md', muted = false }: { type: ChannelType; size?: 'sm' | 'md'; muted?: boolean }) {
+  const sizeClass = size === 'sm' ? 'w-[16px] h-[16px]' : 'w-[22px] h-[22px]';
+  const fontClass = size === 'sm' ? 'text-[16px] leading-none' : 'text-[22px]';
+  const iconClass = cn(sizeClass, muted && 'opacity-45 dark:opacity-60', 'dark:invert');
   switch (type) {
     case 'telegram':
-      return <img src={telegramIcon} alt="Telegram" className="w-[22px] h-[22px] dark:invert" />;
+      return <img src={telegramIcon} alt="Telegram" className={iconClass} />;
     case 'discord':
-      return <img src={discordIcon} alt="Discord" className="w-[22px] h-[22px] dark:invert" />;
+      return <img src={discordIcon} alt="Discord" className={iconClass} />;
     case 'whatsapp':
-      return <img src={whatsappIcon} alt="WhatsApp" className="w-[22px] h-[22px] dark:invert" />;
+      return <img src={whatsappIcon} alt="WhatsApp" className={iconClass} />;
     case 'wechat':
-      return <img src={wechatIcon} alt="WeChat" className="w-[22px] h-[22px] dark:invert" />;
+      return <img src={wechatIcon} alt="WeChat" className={iconClass} />;
     case 'dingtalk':
-      return <img src={dingtalkIcon} alt="DingTalk" className="w-[22px] h-[22px] dark:invert" />;
+      return <img src={dingtalkIcon} alt="DingTalk" className={iconClass} />;
     case 'feishu':
-      return <img src={feishuIcon} alt="Feishu" className="w-[22px] h-[22px] dark:invert" />;
+      return <img src={feishuIcon} alt="Feishu" className={iconClass} />;
     case 'wecom':
-      return <img src={wecomIcon} alt="WeCom" className="w-[22px] h-[22px] dark:invert" />;
+      return <img src={wecomIcon} alt="WeCom" className={iconClass} />;
     case 'qqbot':
-      return <img src={qqIcon} alt="QQ" className="w-[22px] h-[22px] dark:invert" />;
+      return <img src={qqIcon} alt="QQ" className={iconClass} />;
     default:
-      return <span className="text-[22px]">{CHANNEL_ICONS[type] || '💬'}</span>;
+      return <span className={fontClass}>{CHANNEL_ICONS[type] || '💬'}</span>;
   }
 }
 

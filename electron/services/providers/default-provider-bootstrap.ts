@@ -28,8 +28,12 @@ const LY_MIMO_PROVIDER_ID = 'ly-mimo';
 const LY_MIMO_LABEL = 'LY-Mimo';
 const LY_MIMO_BASE_URL = 'http://10.64.22.12:8000/v1';
 const LY_MIMO_MODEL_ID = 'MiMo-V2.5';
-const LY_MIMO_MAX_TOKENS = 98304;
+const LY_MIMO_MAX_TOKENS = 49152;
 const LY_MIMO_API_KEY = 'EMPTY';
+const LY_MIMO_MODEL_OPTIONS = {
+  input: ['text', 'image'],
+  maxTokens: LY_MIMO_MAX_TOKENS,
+};
 
 function createLyMiniMaxAccount(existing?: ProviderAccount | null, legacy?: ProviderAccount | null): ProviderAccount {
   const now = new Date().toISOString();
@@ -208,9 +212,13 @@ async function ensureOpenClawDefaultModel(modelRef: string): Promise<boolean> {
   });
 }
 
-async function syncManagedProviderToAgentModels(account: ProviderAccount, modelId: string, maxTokens: number, input?: string[]): Promise<void> {
+async function syncManagedProviderToAgentModels(
+  account: ProviderAccount,
+  modelId: string,
+  modelOptions: Record<string, unknown>,
+): Promise<void> {
   const runtimeProviderKey = getOpenClawProviderKeyForType(account.vendorId, account.id);
-  const modelEntry = { id: modelId, name: modelId, ...(input ? { input } : {}), maxTokens } as { id: string; name: string };
+  const modelEntry = { id: modelId, name: modelId, ...modelOptions };
   await updateAgentModelProvider(runtimeProviderKey, {
     baseUrl: account.baseUrl?.replace(/\/v1$/, '/anthropic').replace(/\/anthropic$/, '/anthropic'),
     api: account.apiProtocol,
@@ -262,7 +270,7 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
       },
     },
   });
-  await syncManagedProviderToAgentModels(account, LY_MINIMAX_MODEL_ID, LY_MINIMAX_MAX_TOKENS);
+  await syncManagedProviderToAgentModels(account, LY_MINIMAX_MODEL_ID, { maxTokens: LY_MINIMAX_MAX_TOKENS });
 
   const lyMimoRuntimeProviderKey = getOpenClawProviderKeyForType(lyMimoAccount.vendorId, lyMimoAccount.id);
   await syncProviderConfigToOpenClaw(lyMimoRuntimeProviderKey, LY_MIMO_MODEL_ID, {
@@ -270,13 +278,10 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     api: lyMimoAccount.apiProtocol,
     apiKeyEnv: 'LY_MIMO_API_KEY',
     modelOverrides: {
-      [LY_MIMO_MODEL_ID]: {
-        input: ['text', 'image'],
-        maxTokens: LY_MIMO_MAX_TOKENS,
-      },
+      [LY_MIMO_MODEL_ID]: LY_MIMO_MODEL_OPTIONS,
     },
   });
-  await syncManagedProviderToAgentModels(lyMimoAccount, LY_MIMO_MODEL_ID, LY_MIMO_MAX_TOKENS, ['text', 'image']);
+  await syncManagedProviderToAgentModels(lyMimoAccount, LY_MIMO_MODEL_ID, LY_MIMO_MODEL_OPTIONS);
 
   const modelRef = modelId.startsWith(`${runtimeProviderKey}/`) ? modelId : `${runtimeProviderKey}/${modelId}`;
   const changed = await ensureOpenClawDefaultModel(modelRef);

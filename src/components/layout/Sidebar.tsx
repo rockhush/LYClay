@@ -28,6 +28,7 @@ import {
   X,
   LogOut,
   User,
+  CheckCircle2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { rendererExtensionRegistry } from '@/extensions/registry';
@@ -41,6 +42,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { hostApiFetch } from '@/lib/host-api';
 import { toUserMessage } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
@@ -96,9 +98,9 @@ function NavItem({ to, icon, label, badge, collapsed, onClick, testId }: NavItem
         cn(
           'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-all',
           !isActive &&
-            'hover:bg-black/10 hover:shadow-md hover:shadow-black/[0.12] dark:hover:bg-white/10 dark:hover:shadow-md dark:hover:shadow-white/[0.12]',
+            'hover:bg-white/60 hover:shadow-sm dark:hover:bg-white/10 dark:hover:shadow-md dark:hover:shadow-white/[0.12]',
           isActive
-            ? 'bg-[#FF7B00] text-white shadow-md shadow-[#FF7B00]/30 dark:bg-white/10 dark:text-foreground dark:shadow-none'
+            ? 'bg-white text-[#FF922B] shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground dark:shadow-none'
             : 'text-foreground/80',
           collapsed && 'justify-center px-0'
         )
@@ -109,7 +111,7 @@ function NavItem({ to, icon, label, badge, collapsed, onClick, testId }: NavItem
           <div
             className={cn(
               'flex shrink-0 items-center justify-center transition-colors',
-              isActive ? 'text-white dark:text-foreground' : 'text-muted-foreground',
+              isActive ? 'text-[#FF922B] dark:text-foreground' : 'text-muted-foreground',
             )}
           >
             {icon}
@@ -169,6 +171,7 @@ export function Sidebar() {
   const customSessionLabels = useChatStore((s) => s.customSessionLabels);
   const sessionLastActivity = useChatStore((s) => s.sessionLastActivity);
   const sessionWorkspaceIds = useChatStore((s) => s.sessionWorkspaceIds);
+  const sessionStreamingStates = useChatStore((s) => s.sessionStreamingStates);
   const switchSession = useChatStore((s) => s.switchSession);
   const newSession = useChatStore((s) => s.newSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
@@ -222,11 +225,24 @@ export function Sidebar() {
     [allWorkspaces],
   );
 
+  /**
+   * The session entry for a freshly-clicked "+ 新对话" that hasn't sent any
+   * messages yet is hidden from the sidebar lists. It only shows up once the
+   * user actually sends a message (which assigns activity / messages).
+   */
+  const isPendingNewSession = (sessionKey: string): boolean => {
+    if (sessionKey !== currentSessionKey) return false;
+    if (messages.length > 0) return false;
+    if (sessionLastActivity[sessionKey]) return false;
+    return true;
+  };
+
   const sessionsByWorkspaceId = useMemo(() => {
     const map: Record<string, ChatSession[]> = Object.fromEntries(
       allWorkspaces.map((workspace) => [workspace.id, [] as ChatSession[]]),
     );
     for (const session of sessions) {
+      if (isPendingNewSession(session.key)) continue;
       const wid = sessionWorkspaceIds[session.key];
       if (wid && workspaceIdsKnown.has(wid)) {
         const list = map[wid];
@@ -242,7 +258,8 @@ export function Sidebar() {
       }
     }
     return map;
-  }, [allWorkspaces, sessions, sessionWorkspaceIds, workspaceIdsKnown, sessionLastActivity]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isPendingNewSession depends on currentSessionKey/messages/sessionLastActivity which are all listed below
+  }, [allWorkspaces, sessions, sessionWorkspaceIds, workspaceIdsKnown, sessionLastActivity, currentSessionKey, messages.length]);
 
   const isSessionListedUnderWorkspace = (sessionKey: string) => {
     const wid = sessionWorkspaceIds[sessionKey];
@@ -349,6 +366,16 @@ export function Sidebar() {
 
   const navigate = useNavigate();
   const isOnChat = useLocation().pathname === '/';
+
+  // Distinguish "+ 新对话" active state from "session selected" active state.
+  // A session is considered "really opened" only when it has actual history
+  // (messages already loaded or known activity on disk). Otherwise the user
+  // is on a fresh empty new-chat scratchpad and the "+ 新对话" item should be
+  // the highlighted one — not any session row.
+  const currentSessionHasContent =
+    messages.length > 0 || !!sessionLastActivity[currentSessionKey];
+  const isNewChatActive = isOnChat && !currentSessionHasContent;
+  const isSessionViewActive = isOnChat && currentSessionHasContent;
 
   const getSessionLabel = (key: string, displayName?: string, label?: string) =>
     customSessionLabels[key] ?? sessionLabels[key] ?? label ?? displayName ?? key;
@@ -481,6 +508,19 @@ export function Sidebar() {
   const renderChatSessionRow = (s: ChatSession) => {
     const agentId = getAgentIdFromSessionKey(s.key);
     const agentName = agentNameById[agentId] || agentId;
+    const isCurrent = currentSessionKey === s.key;
+    // Per-session running status. For the currently-viewed session, use the
+    // live `isChatActive` flag (sending / activeRunId). For other sessions,
+    // fall back to the snapshot saved in `sessionStreamingStates` when the
+    // user switched away — so a session still streaming in the background
+    // keeps its orange indicator no matter which session is being viewed.
+    const otherSessionState = sessionStreamingStates[s.key];
+    const isOtherSessionRunning =
+      !isCurrent && !!(otherSessionState?.sending || otherSessionState?.activeRunId);
+    const isRunning = (isCurrent && isChatActive) || isOtherSessionRunning;
+    const statusTitle = isRunning
+      ? t('chat:sidebar.statusRunning', { defaultValue: '问答进行中' })
+      : t('chat:sidebar.statusCompleted', { defaultValue: '已完成' });
     return (
       <div key={s.key} className="group relative flex items-center">
         <button
@@ -504,14 +544,30 @@ export function Sidebar() {
           }
           className={cn(
             'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors pr-12',
-            'hover:bg-black/10 dark:hover:bg-white/10',
-            isOnChat && currentSessionKey === s.key
-              ? 'bg-black/10 dark:bg-white/10 text-[#FF7B00] font-medium dark:text-foreground'
+            'hover:bg-white/60 dark:hover:bg-white/10',
+            isSessionViewActive && currentSessionKey === s.key
+              ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground'
               : 'text-foreground/75',
             firstResponsePreparingLocksSwitch && s.key !== currentSessionKey && 'opacity-50 cursor-not-allowed',
           )}
         >
           <div className="flex min-w-0 items-center gap-2">
+            <span
+              className="flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+              title={statusTitle}
+              aria-label={statusTitle}
+              data-testid={`sidebar-session-status-${s.key}`}
+              data-status={isRunning ? 'running' : 'completed'}
+            >
+              {isRunning ? (
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#FF922B] opacity-60" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-[#FF922B]" />
+                </span>
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" strokeWidth={2.25} />
+              )}
+            </span>
             <span className="shrink-0 rounded-full bg-black/[0.14] px-2 py-0.5 text-[10px] font-medium text-foreground/70 dark:bg-white/[0.12]">
               {agentName}
             </span>
@@ -535,7 +591,7 @@ export function Sidebar() {
               setSessionToRename({ key: s.key, label: currentLabel });
               setRenameDraft(currentLabel);
             }}
-            className="flex items-center justify-center rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10"
+            className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
@@ -550,7 +606,7 @@ export function Sidebar() {
                 label: getSessionLabel(s.key, s.displayName, s.label),
               });
             }}
-            className="flex items-center justify-center rounded p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+            className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -576,6 +632,7 @@ export function Sidebar() {
     (sessionLastActivity[b.key] ?? 0) - (sessionLastActivity[a.key] ?? 0)
   )) {
     if (isSessionListedUnderWorkspace(session.key)) continue;
+    if (isPendingNewSession(session.key)) continue;
     const bucketKey = getSessionBucket(sessionLastActivity[session.key] ?? 0, nowMs);
     sessionBucketMap[bucketKey].sessions.push(session);
   }
@@ -584,12 +641,12 @@ export function Sidebar() {
   const extraNavItems = rendererExtensionRegistry.getExtraNavItems();
 
   const coreNavItems = [
+    { to: '/cron', icon: <Clock className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.cronTasks'), testId: 'sidebar-nav-cron' },
     { to: '/models', icon: <Cpu className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
     { to: '/agents', icon: <Bot className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.agents'), testId: 'sidebar-nav-agents' },
-    { to: '/channels', icon: <Network className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
     { to: '/skills', icon: <Puzzle className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
+    { to: '/channels', icon: <Network className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
     { to: '/connectors', icon: <Link2 className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.connectors'), testId: 'sidebar-nav-connectors' },
-    { to: '/cron', icon: <Clock className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.cronTasks'), testId: 'sidebar-nav-cron' },
   ];
 
   const navItems = [
@@ -606,7 +663,7 @@ export function Sidebar() {
     <aside
       data-testid="sidebar"
       className={cn(
-        'flex min-h-0 shrink-0 flex-col overflow-hidden border-r bg-[#f8f8f6]/50 dark:bg-background transition-all duration-300',
+        'flex min-h-0 shrink-0 flex-col overflow-hidden border-r border-[#f5e4d6] bg-[linear-gradient(177deg,_#FFF1EB_0.66%,_#FFFAF6_99.87%)] dark:border-border dark:bg-background dark:bg-none transition-all duration-300',
         sidebarCollapsed ? 'w-16' : 'w-64'
       )}
     >
@@ -645,9 +702,14 @@ export function Sidebar() {
           data-testid="sidebar-new-chat"
           type="button"
           onClick={() => {
-            const { messages: ms } = useChatStore.getState();
-            if (ms.length > 0) {
-              if (blockSessionSwitchIfFirstResponsePreparing()) return;
+            // Always create a fresh empty session so the user lands on the
+            // welcome screen regardless of which page they were on or what
+            // history the previously-selected session still has on disk.
+            if (blockSessionSwitchIfFirstResponsePreparing()) return;
+            const { messages: ms, currentSessionKey: ck, sessionLastActivity: sla } = useChatStore.getState();
+            const currentIsAlreadyFreshEmpty =
+              ms.length === 0 && !sla[ck];
+            if (!currentIsAlreadyFreshEmpty) {
               newSession();
             }
             navigate('/');
@@ -659,13 +721,20 @@ export function Sidebar() {
               : undefined
           }
           className={cn(
-            'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-colors mb-2',
-            'bg-black/10 dark:bg-accent shadow-none border border-transparent text-foreground',
+            'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-all mb-2 border border-transparent',
+            isNewChatActive
+              ? 'bg-white text-[#FF922B] shadow-sm shadow-black/[0.04] hover:bg-white/80 dark:bg-accent dark:text-foreground dark:shadow-none'
+              : 'text-foreground/80 hover:bg-white/60 hover:shadow-sm dark:hover:bg-white/10',
             sidebarCollapsed && 'justify-center px-0',
             firstResponsePreparingLocksSwitch && messages.length > 0 && 'opacity-50 cursor-not-allowed',
           )}
         >
-          <div className="flex shrink-0 items-center justify-center text-foreground/80">
+          <div
+            className={cn(
+              'flex shrink-0 items-center justify-center',
+              isNewChatActive ? 'text-[#FF922B] dark:text-foreground/80' : 'text-muted-foreground',
+            )}
+          >
             <Plus className="h-[18px] w-[18px]" strokeWidth={2} />
           </div>
           {!sidebarCollapsed && <span className="flex-1 text-left overflow-hidden text-ellipsis whitespace-nowrap">{t('sidebar.newChat')}</span>}
@@ -681,160 +750,164 @@ export function Sidebar() {
       </nav>
 
       {/* Workspace section */}
-      {!sidebarCollapsed && allWorkspaces.length > 0 && (
-        <div data-testid="sidebar-workspaces-section" className="px-2 pt-4 pb-2">
-          <div
-            className="flex items-center justify-between px-2.5 pb-1 cursor-pointer hover:bg-black/10 dark:hover:bg-white/10 rounded-lg"
-            onClick={toggleWorkspaceSection}
-          >
-            <span className="text-[14px] font-medium text-foreground tracking-tight">
-              {t('sidebar.workspaces')}
-            </span>
-            <ChevronRight
-              className={cn(
-                'h-3 w-3 text-muted-foreground transition-transform',
-                !workspacesCollapsed && 'rotate-90',
-              )}
-            />
-          </div>
-          {!workspacesCollapsed && (
-            <div className="space-y-0.5 mt-1">
-              {allWorkspaces
-                .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
-                .map((workspace) => {
-                  const displayName = workspace.name;
-                  const isSelected = currentWorkspaceId === workspace.id;
-                  const sessionCount = sessionsByWorkspaceId[workspace.id]?.length ?? 0;
-                  const chatsExpanded =
-                    sessionCount > 0 && !workspaceChatsCollapsedIds.has(workspace.id);
+      {/* Session list */}
+      {!sidebarCollapsed && (
+        <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 pb-2 space-y-2 pt-4">
+          {/* Workspaces */}
+          {allWorkspaces.length > 0 && (
+            <div data-testid="sidebar-workspaces-section" className="pb-2">
+              <div
+                className="flex items-center justify-between px-2.5 py-2 cursor-pointer hover:bg-white dark:hover:bg-white/10 rounded-lg"
+                onClick={toggleWorkspaceSection}
+              >
+                <span className="text-[14px] font-medium text-foreground tracking-tight">
+                  {t('sidebar.workspaces')}
+                </span>
+                <ChevronRight
+                  className={cn(
+                    'h-3 w-3 text-muted-foreground transition-transform',
+                    !workspacesCollapsed && 'rotate-90',
+                  )}
+                />
+              </div>
+              {!workspacesCollapsed && (
+                <div className="space-y-0.5 mt-1">
+                  {allWorkspaces
+                    .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
+                    .map((workspace) => {
+                      const displayName = workspace.name;
+                      const isSelected = currentWorkspaceId === workspace.id;
+                      const sessionCount = sessionsByWorkspaceId[workspace.id]?.length ?? 0;
+                      const chatsExpanded =
+                        sessionCount > 0 && !workspaceChatsCollapsedIds.has(workspace.id);
 
-                  const handleWorkspaceBodyClick = () => {
-                    const wid = workspace.id;
-                    const alreadySelected = currentWorkspaceId === wid;
-                    selectWorkspace(wid);
-                    if (sessionCount === 0) return;
-                    if (alreadySelected) {
-                      toggleWorkspaceChatsCollapsed(wid);
-                    } else {
-                      setWorkspaceChatsCollapsedIds((prev) => {
-                        const next = new Set(prev);
-                        next.delete(wid);
-                        return next;
-                      });
-                    }
-                  };
+                      const handleWorkspaceBodyClick = () => {
+                        const wid = workspace.id;
+                        const alreadySelected = currentWorkspaceId === wid;
+                        selectWorkspace(wid);
+                        if (sessionCount === 0) return;
+                        if (alreadySelected) {
+                          toggleWorkspaceChatsCollapsed(wid);
+                        } else {
+                          setWorkspaceChatsCollapsedIds((prev) => {
+                            const next = new Set(prev);
+                            next.delete(wid);
+                            return next;
+                          });
+                        }
+                      };
 
-                  return (
-                    <div key={workspace.id}>
-                      <div
-                        data-testid={`sidebar-workspace-row-${workspace.id}`}
-                        className={cn(
-                          'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors flex items-center gap-2 cursor-pointer group',
-                          'hover:bg-black/10 dark:hover:bg-white/10',
-                          'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors flex items-center gap-1 group',
-                          'hover:bg-black/5 dark:hover:bg-white/5',
-                          isSelected
-                            ? 'bg-black/10 dark:bg-white/10 text-foreground font-medium'
-                            : 'text-foreground/75',
-                        )}
-                      >
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          data-testid={
-                            sessionCount > 0
-                              ? `sidebar-workspace-chats-toggle-${workspace.id}`
-                              : undefined
-                          }
-                          aria-expanded={sessionCount > 0 ? chatsExpanded : undefined}
-                          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                          onClick={handleWorkspaceBodyClick}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              handleWorkspaceBodyClick();
-                            }
-                          }}
-                          title={workspace.path}
-                        >
-                          {sessionCount > 0 ? (
-                            <ChevronRight
-                              className={cn(
-                                'h-3 w-3 shrink-0 text-muted-foreground transition-transform pointer-events-none',
-                                chatsExpanded && 'rotate-90',
+                      return (
+                        <div key={workspace.id}>
+                          <div
+                            data-testid={`sidebar-workspace-row-${workspace.id}`}
+                            className={cn(
+                              'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors flex items-center gap-1 cursor-pointer group',
+                              'hover:bg-white/60 dark:hover:bg-white/10',
+                              isSelected
+                                ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground'
+                                : 'text-foreground/75',
+                            )}
+                          >
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              data-testid={
+                                sessionCount > 0
+                                  ? `sidebar-workspace-chats-toggle-${workspace.id}`
+                                  : undefined
+                              }
+                              aria-expanded={sessionCount > 0 ? chatsExpanded : undefined}
+                              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                              onClick={handleWorkspaceBodyClick}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  handleWorkspaceBodyClick();
+                                }
+                              }}
+                              title={workspace.path}
+                            >
+                              {sessionCount > 0 ? (
+                                <ChevronRight
+                                  className={cn(
+                                    'h-3 w-3 shrink-0 text-muted-foreground transition-transform pointer-events-none',
+                                    chatsExpanded && 'rotate-90',
+                                  )}
+                                  aria-hidden
+                                />
+                              ) : (
+                                <span className="inline-flex h-3 w-3 shrink-0" aria-hidden />
                               )}
-                              aria-hidden
-                            />
-                          ) : (
-                            <span className="inline-flex h-3 w-3 shrink-0" aria-hidden />
-                          )}
-                          {isSelected ? (
-                            <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-                          ) : (
-                            <Folder className="h-3.5 w-3.5 shrink-0" />
-                          )}
-                          <span className="truncate">{displayName}</span>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            type="button"
-                            className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              window.electron.ipcRenderer.invoke('shell:openPath', workspace.path);
-                            }}
-                            title="打开文件夹"
-                          >
-                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                          </button>
-                          <button
-                            type="button"
-                            className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeTemporaryWorkspace(workspace.id);
-                            }}
-                            title="移除工作空间"
-                          >
-                            <X className="h-3 w-3 text-muted-foreground" />
-                          </button>
-                        </div>
-                      </div>
+                              {isSelected ? (
+                                <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                              ) : (
+                                <Folder className="h-3.5 w-3.5 shrink-0" />
+                              )}
+                              <span className="truncate">{displayName}</span>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.electron.ipcRenderer.invoke('shell:openPath', workspace.path);
+                                }}
+                                title="打开文件夹"
+                              >
+                                <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                              </button>
+                              <button
+                                type="button"
+                                className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeTemporaryWorkspace(workspace.id);
+                                }}
+                                title="移除工作空间"
+                              >
+                                <X className="h-3 w-3 text-muted-foreground" />
+                              </button>
+                            </div>
+                          </div>
 
-                      {sessionCount > 0 ? (
-                        <div
-                          data-testid={`sidebar-workspace-sessions-${workspace.id}`}
-                          className="ml-6 mt-1"
-                        >
-                          {chatsExpanded ? (
-                            <div className="max-h-40 space-y-0.5 overflow-y-auto overflow-x-hidden scrollbar-thin">
-                              {sessionsByWorkspaceId[workspace.id]!.map(renderChatSessionRow)}
+                          {sessionCount > 0 ? (
+                            <div
+                              data-testid={`sidebar-workspace-sessions-${workspace.id}`}
+                              className="ml-6 mt-1"
+                            >
+                              {chatsExpanded ? (
+                                <div className="space-y-0.5 overflow-y-auto overflow-x-hidden scrollbar-thin">
+                                  {sessionsByWorkspaceId[workspace.id]!.map(renderChatSessionRow)}
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
-                        </div>
-                      ) : null}
 
-                    </div>
-                  );
-                })}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
             </div>
           )}
-        </div>
-      )}
 
-      {/* Session list — below Settings, only when expanded */}
-      {!sidebarCollapsed && sessions.some((s) => !isSessionListedUnderWorkspace(s.key)) && (
-        <div className="mt-4 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-2 space-y-0.5">
-          {sessionBuckets.map((bucket) => (
-            bucket.sessions.length > 0 ? (
-              <div key={bucket.key} className="pt-2">
-                <div className="px-2.5 pb-1 text-[11px] font-medium text-muted-foreground/60 tracking-tight">
-                  {bucket.label}
-                </div>
-                {bucket.sessions.map(renderChatSessionRow)}
-              </div>
-            ) : null
-          ))}
+          {/* Session list — below workspaces */}
+          {sessions.some((s) => !isSessionListedUnderWorkspace(s.key) && !isPendingNewSession(s.key)) && (
+            <div className="space-y-0.5">
+              {sessionBuckets.map((bucket) => (
+                bucket.sessions.length > 0 ? (
+                  <div key={bucket.key} className="pt-2">
+                    <div className="px-2.5 pb-1 text-[11px] font-medium text-muted-foreground/60 tracking-tight">
+                      {bucket.label}
+                    </div>
+                    {bucket.sessions.map(renderChatSessionRow)}
+                  </div>
+                ) : null
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -869,11 +942,11 @@ export function Sidebar() {
                   onClick={handleDingTalkLogout}
                   disabled={dingtalkLoading}
                   className={cn(
-                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium text-[#FF7B00] transition-colors hover:bg-[#FF7B00]/10 disabled:opacity-60',
+                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium text-[#FF922B] transition-colors hover:bg-[#FF922B]/10 disabled:opacity-60',
                     sidebarCollapsed ? 'justify-center px-0 w-10 h-10' : 'text-left w-full'
                   )}
                 >
-                  <div className="flex shrink-0 items-center justify-center text-[#FF7B00]">
+                  <div className="flex shrink-0 items-center justify-center text-[#FF922B]">
                     {dingtalkLoading ? (
                       <Loader2 className="h-[18px] w-[18px] animate-spin" strokeWidth={2} />
                     ) : (
@@ -920,15 +993,15 @@ export function Sidebar() {
             className={({ isActive }) =>
               cn(
                 'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-colors',
-                'hover:bg-black/10 dark:hover:bg-white/10 text-foreground/80',
-                isActive && 'bg-black/10 dark:bg-white/10 text-foreground',
+                !isActive && 'hover:bg-white/60 dark:hover:bg-white/10 text-foreground/80',
+                isActive && 'bg-white text-[#FF922B] shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground',
                 sidebarCollapsed ? 'justify-center px-0 w-full' : ''
               )
             }
           >
           {({ isActive }) => (
             <>
-              <div className={cn("flex shrink-0 items-center justify-center", isActive ? "text-foreground" : "text-muted-foreground")}>
+              <div className={cn("flex shrink-0 items-center justify-center", isActive ? "text-[#FF922B] dark:text-foreground" : "text-muted-foreground")}>
                 <SettingsIcon className="h-[18px] w-[18px]" strokeWidth={2} />
               </div>
               {!sidebarCollapsed && <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t('sidebar.settings')}</span>}
@@ -978,8 +1051,7 @@ export function Sidebar() {
       />
 
       {sessionToRename && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        <ModalOverlay
           role="dialog"
           aria-modal="true"
           aria-labelledby="rename-session-title"
@@ -1018,6 +1090,7 @@ export function Sidebar() {
                 onClick={closeRenameDialog}
                 disabled={renameSaving}
                 data-testid="sidebar-session-rename-cancel"
+                className="h-8 text-[13px] font-medium rounded-lg px-3 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground transition-colors"
               >
                 {t('common:actions.cancel')}
               </Button>
@@ -1025,12 +1098,13 @@ export function Sidebar() {
                 onClick={() => void submitRename()}
                 disabled={renameSaving || !renameDraft.trim()}
                 data-testid="sidebar-session-rename-save"
+                className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm"
               >
                 {renameSaving ? t('common:status.saving') : t('common:actions.save')}
               </Button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </aside>
   );

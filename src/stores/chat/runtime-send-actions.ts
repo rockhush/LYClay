@@ -1,6 +1,8 @@
 import i18n from '@/i18n';
 import { invokeIpc } from '@/lib/api-client';
 import { useAgentsStore } from '@/stores/agents';
+import { useSettingsStore } from '@/stores/settings';
+import { compressHistory, resetCompactorSession } from './context-compactor';
 import {
   beginFirstSessionPerf,
   markFirstSessionRpcCompleted,
@@ -284,6 +286,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       if (targetSessionKey !== get().currentSessionKey) {
         const current = get();
         const leavingEmpty = !current.currentSessionKey.endsWith(':main') && current.messages.length === 0;
+        resetCompactorSession(targetSessionKey);
         set((s) => ({
           currentSessionKey: targetSessionKey,
           currentAgentId: getAgentIdFromSessionKey(targetSessionKey),
@@ -336,6 +339,25 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           hasMedia,
         });
       }
+
+      // ========== Context Compression ==========
+      const { contextCompressionEnabled, contextCompressionThreshold } = useSettingsStore.getState();
+      if (contextCompressionEnabled && !isInternalStagedExecution) {
+        const currentMessages = get().messages;
+        if (currentMessages.length >= 10) {
+          const compression = await compressHistory(
+            currentMessages,
+            currentSessionKey,
+            (method, params, timeoutMs) => invokeIpc('gateway:rpc', method, params, timeoutMs),
+            { threshold: contextCompressionThreshold },
+          );
+          if (compression) {
+            set({ messages: [compression.summaryMessage, ...compression.compressedMessages] });
+            console.log('[context-compactor] compressed', compression.originalCount, 'messages');
+          }
+        }
+      }
+      // ==========================================
 
       // Add user message optimistically (with local file metadata for UI display)
       const nowMs = Date.now();

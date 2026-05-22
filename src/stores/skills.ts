@@ -7,6 +7,12 @@ import { hostApiFetch } from '@/lib/host-api';
 import { invokeIpc } from '@/lib/api-client';
 import { AppError, normalizeAppError } from '@/lib/error-model';
 import { reportSkillDownload } from '@/lib/usage-reporter';
+import {
+  enrichSkillsWithMarketplaceMetadata,
+  isPlaceholderSkillDescription,
+  mergeSkillWithMarketplaceMetadata,
+  normalizeSkillLookupKey,
+} from '@/lib/skill-metadata';
 import { useGatewayStore } from './gateway';
 import type { Skill, MarketplaceSkill } from '../types/skill';
 
@@ -57,10 +63,62 @@ type GatewaySkillsStatusResult = {
 
 type ClawHubListResult = {
   slug: string;
+  name?: string;
+  description?: string;
+  author?: string;
   version?: string;
   source?: string;
   baseDir?: string;
 };
+
+function applyClawHubMetadata(existing: Skill, cs: ClawHubListResult): void {
+  if (cs.baseDir) {
+    existing.baseDir = cs.baseDir;
+  }
+  if (!existing.source && cs.source) {
+    existing.source = cs.source;
+  }
+  if (cs.name?.trim() && (!existing.name || existing.name === existing.slug || existing.name === existing.id)) {
+    existing.name = cs.name.trim();
+  }
+  if (cs.description?.trim() && isPlaceholderSkillDescription(existing.description)) {
+    existing.description = cs.description.trim();
+  }
+  if (cs.author?.trim() && !existing.author) {
+    existing.author = cs.author.trim();
+  }
+  if (cs.version && cs.version.toLowerCase() !== 'unknown' && (!existing.version || existing.version.toLowerCase() === 'unknown')) {
+    existing.version = cs.version;
+  }
+}
+
+type SkillConfigEntry = { apiKey?: string; env?: Record<string, string>; enabled?: boolean };
+
+function buildSkillConfigLookup(configResult: Record<string, SkillConfigEntry>) {
+  const byKey = new Map<string, SkillConfigEntry>();
+  const byNormalized = new Map<string, SkillConfigEntry>();
+
+  for (const [key, entry] of Object.entries(configResult)) {
+    byKey.set(key, entry);
+    byNormalized.set(normalizeSkillLookupKey(key), entry);
+  }
+
+  return { byKey, byNormalized };
+}
+
+function resolveDirectSkillConfig(
+  candidates: Array<string | undefined>,
+  lookup: ReturnType<typeof buildSkillConfigLookup>,
+): SkillConfigEntry | undefined {
+  for (const candidate of candidates) {
+    if (!candidate?.trim()) continue;
+    const direct = lookup.byKey.get(candidate);
+    if (direct) return direct;
+    const normalized = lookup.byNormalized.get(normalizeSkillLookupKey(candidate));
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
 
 function mapErrorCodeToSkillErrorKey(
   code: AppError['code'],
@@ -140,10 +198,15 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       const gatewayDataPromise = useGatewayStore.getState().rpc<GatewaySkillsStatusResult>('skills.status');
       const clawhubResultPromise = hostApiFetch<{ success: boolean; results?: ClawHubListResult[]; error?: string }>('/api/clawhub/list');
       const configResultPromise = hostApiFetch<Record<string, { apiKey?: string; env?: Record<string, string> }>>('/api/skills/configs');
-      const [gatewaySettled, clawhubSettled, configSettled] = await Promise.allSettled([
+      const marketplaceResultPromise = hostApiFetch<{ success: boolean; results?: MarketplaceSkill[]; error?: string }>('/api/clawhub/search', {
+        method: 'POST',
+        body: JSON.stringify({ query: '', category: '', sort: '-download_count' }),
+      });
+      const [gatewaySettled, clawhubSettled, configSettled, marketplaceSettled] = await Promise.allSettled([
         gatewayDataPromise,
         clawhubResultPromise,
         configResultPromise,
+        marketplaceResultPromise,
       ]);
 
       const gatewayData: GatewaySkillsStatusResult = gatewaySettled.status === 'fulfilled'
@@ -155,6 +218,9 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       const configResult: Record<string, { apiKey?: string; env?: Record<string, string> }> = configSettled.status === 'fulfilled'
         ? configSettled.value
         : {};
+      const marketplaceResults: MarketplaceSkill[] = marketplaceSettled.status === 'fulfilled' && marketplaceSettled.value.success
+        ? (marketplaceSettled.value.results ?? [])
+        : [];
 
       if (gatewaySettled.status === 'rejected') {
         console.warn('[Skills Store] gateway skills.status RPC failed (non-fatal):', gatewaySettled.reason);
@@ -164,6 +230,9 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       }
       if (configSettled.status === 'rejected') {
         console.warn('[Skills Store] /api/skills/configs failed (non-fatal):', configSettled.reason);
+      }
+      if (marketplaceSettled.status === 'rejected') {
+        console.warn('[Skills Store] /api/clawhub/search failed (non-fatal):', marketplaceSettled.reason);
       }
 
       // 兜底通道：当 hostApi 通道失败或者返回了空列表（冷启动竞态、HTTP server
@@ -187,6 +256,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
 
       let combinedSkills: Skill[] = [];
       const currentSkills = get().skills;
+      const configLookup = buildSkillConfigLookup(configResult);
 
       // 预先建立 ClawHub list 结果索引，作为权威的"本机真实路径"来源。
       // 这样即使 Gateway 报告的 baseDir 已经失效（用户名变更、配置目录搬家、
@@ -225,7 +295,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
           })
           .map((s: GatewaySkillStatus) => {
             // Merge with direct config if available
-            const directConfig = configResult[s.skillKey] || {};
+            const directConfig = resolveDirectSkillConfig([s.skillKey, slug, s.name], configLookup) || {};
 
             // 解析 baseDir：优先使用 Gateway 报告的真实存在路径；
             // 若 Gateway 路径不存在，用 ClawHub list 扫描结果中的真实路径覆盖；
@@ -275,7 +345,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
               slug,
               name: s.name || s.skillKey,
               description: s.description || '',
-              enabled: !s.disabled,
+              enabled: typeof directConfig.enabled === 'boolean' ? directConfig.enabled : !s.disabled,
               icon: s.emoji || '📦',
               version,
               author: s.author,
@@ -312,25 +382,19 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
               existing.baseDir = cs.baseDir;
               if (clawhubExists !== false) existing.pathMissing = false;
             }
-            if (!existing.source && cs.source) {
-              existing.source = cs.source;
-            }
-            // 更新版本号，避免显示 'unknown'
-            if (cs.version && (existing.version === 'unknown' || !existing.version)) {
-              existing.version = cs.version;
-            }
+            applyClawHubMetadata(existing, cs);
             return;
           }
-          const directConfig = configResult[cs.slug] || {};
+          const directConfig = resolveDirectSkillConfig([cs.slug, cs.name], configLookup) || {};
           combinedSkills.push({
             id: cs.slug,
             slug: cs.slug,
-            name: cs.slug,
-            description: 'Recently installed, initializing...',
-            enabled: false,
+            name: cs.name || cs.slug,
+            description: cs.description || '',
+            enabled: typeof directConfig.enabled === 'boolean' ? directConfig.enabled : false,
             icon: '⌛',
-            version: cs.version || 'unknown',
-            author: undefined,
+            version: cs.version && cs.version.toLowerCase() !== 'unknown' ? cs.version : '1.0.0',
+            author: cs.author,
             config: directConfig,
             isCore: false,
             isBundled: false,
@@ -355,7 +419,13 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         }
       }
 
-      set({ skills: combinedSkills, loading: false });
+      combinedSkills = enrichSkillsWithMarketplaceMetadata(combinedSkills, marketplaceResults);
+
+      set({
+        skills: combinedSkills,
+        loading: false,
+        ...(marketplaceResults.length > 0 ? { searchResults: marketplaceResults } : {}),
+      });
     } catch (error) {
       console.error('Failed to fetch skills:', error);
       const appError = normalizeAppError(error, { module: 'skills', operation: 'fetch' });
@@ -418,22 +488,24 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       void reportSkillDownload(slug, 1);
 
       // 添加新安装的技能到状态中，确保即时显示
-      const newSkill: Skill = {
+      const installedSkill = get().searchResults.find((s) => s.slug === slug);
+      const newSkill: Skill = mergeSkillWithMarketplaceMetadata({
         id: slug,
-        slug: slug,
-        name: slug,
-        description: 'Recently installed, initializing...',
-        enabled: true,  // 安装后默认启用
+        slug,
+        name: installedSkill?.name || slug,
+        description: installedSkill?.description || '',
+        enabled: true,
         icon: '📦',
-        version: version || 'unknown',
-        author: undefined,
+        version: version || installedSkill?.version || '1.0.0',
+        author: installedSkill?.author,
         config: {},
         isCore: false,
         isBundled: false,
         source: result.source || 'openclaw-managed',
         baseDir: result.baseDir,
         filePath: undefined,
-      };
+        downloads: installedSkill?.downloads,
+      }, installedSkill);
       
       // 更新状态，添加新技能
       set((state) => {
@@ -483,10 +555,22 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   },
 
   enableSkill: async (skillId) => {
-    const { updateSkill } = get();
+    const { updateSkill, skills } = get();
+    const skill = skills.find((item) => item.id === skillId);
 
     try {
-      await useGatewayStore.getState().rpc('skills.update', { skillKey: skillId, enabled: true });
+      const result = await hostApiFetch<{ success: boolean; skillKey?: string; error?: string }>('/api/skills/enabled', {
+        method: 'PUT',
+        body: JSON.stringify({
+          skillKey: skillId,
+          slug: skill?.slug,
+          name: skill?.name,
+          enabled: true,
+        }),
+      });
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to enable skill');
+      }
       updateSkill(skillId, { enabled: true });
     } catch (error) {
       console.error('Failed to enable skill:', error);
@@ -503,7 +587,18 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     }
 
     try {
-      await useGatewayStore.getState().rpc('skills.update', { skillKey: skillId, enabled: false });
+      const result = await hostApiFetch<{ success: boolean; skillKey?: string; error?: string }>('/api/skills/enabled', {
+        method: 'PUT',
+        body: JSON.stringify({
+          skillKey: skillId,
+          slug: skill?.slug,
+          name: skill?.name,
+          enabled: false,
+        }),
+      });
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to disable skill');
+      }
       updateSkill(skillId, { enabled: false });
     } catch (error) {
       console.error('Failed to disable skill:', error);

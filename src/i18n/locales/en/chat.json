@@ -3,12 +3,16 @@
     "gatewayRequired": "The OpenClaw Gateway needs to be running to use chat. It will start automatically, or you can start it from Settings.",
     "welcome": {
         "title": "LYClaw Chat",
-        "subtitle": "What can I do for you?",
-        "askQuestions": "Handle Tasks",
+        "subtitle": "What can I do for you",
+        "greeting": "Hi {{name}}~",
+        "greetingFallback": "Hi there~",
+        "canHelpPrefix": "I can",
+        "askQuestions": "Email handling",
         "askQuestionsDesc": "Work on task-oriented requests",
-        "creativeTasks": "Continuous Execution",
+        "creativeTasks": "Continuous run",
         "creativeTasksDesc": "Keep running through multi-step work",
-        "brainstorming": "Multi-Agent Parallel"
+        "brainstorming": "Cron tasks",
+        "multiThread": "Multi-thread work"
     },
     "noLogs": "(No logs available yet)",
     "toolbar": {

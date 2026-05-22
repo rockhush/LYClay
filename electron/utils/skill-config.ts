@@ -91,25 +91,85 @@ async function writeConfig(config: OpenClawConfig): Promise<void> {
     await writeFile(OPENCLAW_CONFIG_PATH, json, 'utf-8');
 }
 
+export function normalizeSkillConfigLookupKey(value: string): string {
+    return value.trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+export async function resolveSkillConfigKey(candidates: string[]): Promise<string> {
+    const uniqueCandidates = [...new Set(
+        candidates.map((candidate) => candidate.trim()).filter(Boolean),
+    )];
+    if (uniqueCandidates.length === 0) {
+        throw new Error('skillKey is required');
+    }
+
+    const config = await readConfig();
+    const entries = config.skills?.entries || {};
+
+    for (const candidate of uniqueCandidates) {
+        if (Object.prototype.hasOwnProperty.call(entries, candidate)) {
+            return candidate;
+        }
+    }
+
+    const normalizedIndex = new Map<string, string>();
+    for (const key of Object.keys(entries)) {
+        normalizedIndex.set(normalizeSkillConfigLookupKey(key), key);
+    }
+
+    for (const candidate of uniqueCandidates) {
+        const matched = normalizedIndex.get(normalizeSkillConfigLookupKey(candidate));
+        if (matched) {
+            return matched;
+        }
+    }
+
+    return uniqueCandidates[0];
+}
+
+export async function setSkillEnabled(
+    skillKey: string,
+    enabled: boolean,
+    aliases: { slug?: string; name?: string } = {},
+): Promise<{ success: boolean; skillKey: string; error?: string }> {
+    try {
+        const resolvedKey = await resolveSkillConfigKey([
+            skillKey,
+            aliases.slug,
+            aliases.name,
+        ].filter((value): value is string => Boolean(value && value.trim())));
+
+        await withConfigLock(async () => {
+            const config = await readConfig();
+            if (!config.skills) {
+                config.skills = {};
+            }
+            if (!config.skills.entries) {
+                config.skills.entries = {};
+            }
+            const entry = config.skills.entries[resolvedKey] || {};
+            entry.enabled = enabled;
+            config.skills.entries[resolvedKey] = entry;
+            await writeConfig(config);
+        });
+
+        return { success: true, skillKey: resolvedKey };
+    } catch (err) {
+        logger.error(`Failed to set skill enabled state for "${skillKey}":`, err);
+        return { success: false, skillKey, error: String(err) };
+    }
+}
+
 async function setSkillsEnabled(skillKeys: string[], enabled: boolean): Promise<void> {
     if (skillKeys.length === 0) {
         return;
     }
-    return withConfigLock(async () => {
-        const config = await readConfig();
-        if (!config.skills) {
-            config.skills = {};
+    for (const skillKey of skillKeys) {
+        const result = await setSkillEnabled(skillKey, enabled);
+        if (!result.success) {
+            throw new Error(result.error || `Failed to update skill "${skillKey}"`);
         }
-        if (!config.skills.entries) {
-            config.skills.entries = {};
-        }
-        for (const skillKey of skillKeys) {
-            const entry = config.skills.entries[skillKey] || {};
-            entry.enabled = enabled;
-            config.skills.entries[skillKey] = entry;
-        }
-        await writeConfig(config);
-    });
+    }
 }
 
 /**

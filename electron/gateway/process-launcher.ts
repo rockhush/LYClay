@@ -5,6 +5,7 @@ import type { GatewayLaunchContext } from './config-sync';
 import type { GatewayLifecycleState } from './process-policy';
 import { logger } from '../utils/logger';
 import { appendNodeRequireToNodeOptions } from '../utils/paths';
+import { buildUtf8ChildProcessEnv, decodeChildProcessOutput } from '../utils/child-output-encoding';
 
 const GATEWAY_FETCH_PRELOAD_SOURCE = `'use strict';
 (function () {
@@ -108,17 +109,18 @@ export async function launchGatewayProcess(options: {
     forkEnv,
     mode,
     binPathExists,
+    npmRuntimeReady,
     loadedProviderKeyCount,
     proxySummary,
     channelStartupSummary,
   } = options.launchContext;
 
   logger.info(
-    `Starting Gateway process (mode=${mode}, port=${options.port}, entry="${entryScript}", args="${options.sanitizeSpawnArgs(gatewayArgs).join(' ')}", cwd="${openclawDir}", bundledBin=${binPathExists ? 'yes' : 'no'}, providerKeys=${loadedProviderKeyCount}, channels=${channelStartupSummary}, proxy=${proxySummary})`,
+    `Starting Gateway process (mode=${mode}, port=${options.port}, entry="${entryScript}", args="${options.sanitizeSpawnArgs(gatewayArgs).join(' ')}", cwd="${openclawDir}", npmRuntime=${npmRuntimeReady ? 'yes' : 'no'}, bundledBin=${binPathExists ? 'yes' : 'no'}, providerKeys=${loadedProviderKeyCount}, channels=${channelStartupSummary}, proxy=${proxySummary})`,
   );
   const lastSpawnSummary = `mode=${mode}, entry="${entryScript}", args="${options.sanitizeSpawnArgs(gatewayArgs).join(' ')}", cwd="${openclawDir}"`;
 
-  const runtimeEnv = { ...forkEnv };
+  const runtimeEnv = buildUtf8ChildProcessEnv({ ...forkEnv });
   // Only apply the fetch/child_process preload in dev mode.
   // In packaged builds Electron's UtilityProcess rejects NODE_OPTIONS
   // with --require, logging "Most NODE_OPTIONs are not supported in
@@ -176,7 +178,7 @@ export async function launchGatewayProcess(options: {
     });
 
     child.stderr?.on('data', (data) => {
-      const raw = data.toString();
+      const raw = decodeChildProcessOutput(data as Buffer);
       for (const line of raw.split(/\r?\n/)) {
         options.onStderrLine(line);
       }
@@ -185,7 +187,7 @@ export async function launchGatewayProcess(options: {
     if (options.onStdoutLine) {
       const onOut = options.onStdoutLine;
       child.stdout?.on('data', (data) => {
-        const raw = data.toString();
+        const raw = decodeChildProcessOutput(data as Buffer);
         for (const line of raw.split(/\r?\n/)) {
           onOut(line);
         }

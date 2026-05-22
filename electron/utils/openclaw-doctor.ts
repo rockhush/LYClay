@@ -1,9 +1,17 @@
-import { app, utilityProcess } from 'electron';
+import { utilityProcess } from 'electron';
 import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { getOpenClawDir, getOpenClawEntryPath } from './paths';
 import { logger } from './logger';
 import { getUvMirrorEnv } from './uv-env';
+import { prependPathEntry } from './env-path';
+import { buildUtf8ChildProcessEnv, decodeChildProcessOutput } from './child-output-encoding';
+import {
+  buildBundledNpmEnv,
+  ensureBundledNodeReady,
+  getBundledBinDir,
+  hasBundledNpmRuntime,
+  hasNpmCliRuntime,
+} from './bundled-node';
 
 const OPENCLAW_DOCTOR_TIMEOUT_MS = 60_000;
 const MAX_DOCTOR_OUTPUT_BYTES = 10 * 1024 * 1024;
@@ -39,14 +47,14 @@ function appendDoctorOutput(
   const chunk = typeof data === 'string' ? Buffer.from(data) : data;
   if (currentBytes + chunk.length <= MAX_DOCTOR_OUTPUT_BYTES) {
     return {
-      output: current + chunk.toString(),
+      output: current + decodeChildProcessOutput(chunk),
       bytes: currentBytes + chunk.length,
       truncated: false,
     };
   }
 
   const remaining = Math.max(0, MAX_DOCTOR_OUTPUT_BYTES - currentBytes);
-  const appended = remaining > 0 ? chunk.subarray(0, remaining).toString() : '';
+  const appended = remaining > 0 ? decodeChildProcessOutput(chunk.subarray(0, remaining)) : '';
   logger.warn(
     `OpenClaw doctor ${stream} exceeded ${MAX_DOCTOR_OUTPUT_BYTES} bytes; truncating additional output`,
   );
@@ -56,13 +64,6 @@ function appendDoctorOutput(
     bytes: MAX_DOCTOR_OUTPUT_BYTES,
     truncated: true,
   };
-}
-
-function getBundledBinPath(): string {
-  const target = `${process.platform}-${process.arch}`;
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'bin')
-    : path.join(process.cwd(), 'resources', 'bin', target);
 }
 
 async function runDoctorCommandWithArgs(
@@ -90,27 +91,32 @@ async function runDoctorCommandWithArgs(
     };
   }
 
-  const binPath = getBundledBinPath();
-  const binPathExists = existsSync(binPath);
-  const finalPath = binPathExists
-    ? `${binPath}${path.delimiter}${process.env.PATH || ''}`
-    : process.env.PATH || '';
+  if (process.platform === 'win32') {
+    await ensureBundledNodeReady();
+  }
+
+  const binPath = getBundledBinDir();
+  const bundledBinReady = hasBundledNpmRuntime();
+  const npmRuntimeReady = hasNpmCliRuntime();
+  const baseEnv = process.env as Record<string, string | undefined>;
+  const envWithBin = bundledBinReady
+    ? prependPathEntry(baseEnv, binPath).env
+    : baseEnv;
   const uvEnv = await getUvMirrorEnv();
 
   logger.info(
-    `Running OpenClaw doctor (mode=${mode}, entry="${entryScript}", args="${args.join(' ')}", cwd="${openclawDir}", bundledBin=${binPathExists ? 'yes' : 'no'})`,
+    `Running OpenClaw doctor (mode=${mode}, entry="${entryScript}", args="${args.join(' ')}", cwd="${openclawDir}", npmRuntime=${npmRuntimeReady ? 'yes' : 'no'}, bundledBin=${bundledBinReady ? 'yes' : 'no'})`,
   );
 
   return await new Promise<OpenClawDoctorResult>((resolve) => {
     const child = utilityProcess.fork(entryScript, args, {
       cwd: openclawDir,
       stdio: 'pipe',
-      env: {
-        ...process.env,
+      env: buildUtf8ChildProcessEnv(buildBundledNpmEnv({
+        ...envWithBin,
         ...uvEnv,
-        PATH: finalPath,
         OPENCLAW_NO_RESPAWN: '1',
-      } as NodeJS.ProcessEnv,
+      })) as NodeJS.ProcessEnv,
     });
 
     let stdout = '';

@@ -228,7 +228,7 @@ module.exports = {
         // mode and stays vivid in dark mode), so no CSS variable needed.
         // Pair with `brand-hover` for the hover state.
         brand: {
-          DEFAULT: '#FF7B00',
+          DEFAULT: '#FF922B',
           hover: '#FF6A00',
         },
 

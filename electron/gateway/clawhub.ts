@@ -36,6 +36,9 @@ export interface ClawHubSkillResult {
 
 export interface ClawHubInstalledSkillResult {
     slug: string;
+    name?: string;
+    description?: string;
+    author?: string;
     version: string;
     source?: string;
     baseDir?: string;
@@ -94,18 +97,42 @@ export class ClawHubService {
     }
 
     private extractFrontmatterName(skillManifestPath: string): string | null {
+        return this.parseSkillManifest(skillManifestPath).name ?? null;
+    }
+
+    private parseSkillManifest(skillManifestPath: string): {
+        name?: string;
+        slug?: string;
+        description?: string;
+        version?: string;
+        author?: string;
+    } {
         try {
             const raw = fs.readFileSync(skillManifestPath, 'utf8');
-            // Match the first frontmatter block and read `name: ...`
             const frontmatterMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/);
-            if (!frontmatterMatch) return null;
+            if (!frontmatterMatch) return {};
+
             const body = frontmatterMatch[1];
-            const nameMatch = body.match(/^\s*name\s*:\s*["']?([^"'\n]+)["']?\s*$/m);
-            if (!nameMatch) return null;
-            const name = nameMatch[1].trim();
-            return name || null;
+            const readScalar = (key: string): string | undefined => {
+                const quoted = body.match(new RegExp(`^\\s*${key}\\s*:\\s*"([^"]*)"\\s*$`, 'm'));
+                if (quoted?.[1] != null) {
+                    const value = quoted[1].trim();
+                    return value || undefined;
+                }
+                const plain = body.match(new RegExp(`^\\s*${key}\\s*:\\s*([^\\n]+?)\\s*$`, 'm'));
+                const value = plain?.[1]?.trim();
+                return value || undefined;
+            };
+
+            return {
+                name: readScalar('name'),
+                slug: readScalar('slug'),
+                description: readScalar('description'),
+                version: readScalar('version'),
+                author: readScalar('author'),
+            };
         } catch {
-            return null;
+            return {};
         }
     }
 
@@ -133,9 +160,11 @@ export class ClawHubService {
             const skillManifestPath = path.join(skillDir, 'SKILL.md');
             if (!fs.existsSync(skillManifestPath)) continue;
 
-            const frontmatterName = this.extractFrontmatterName(skillManifestPath);
-            if (!frontmatterName) continue;
-            if (wanted.has(frontmatterName.toLowerCase())) {
+            const manifest = this.parseSkillManifest(skillManifestPath);
+            const manifestKeys = [manifest.slug, manifest.name, entry.name]
+                .filter((value): value is string => Boolean(value && value.trim()))
+                .map((value) => value.trim().toLowerCase());
+            if (manifestKeys.some((key) => wanted.has(key))) {
                 return skillDir;
             }
         }
@@ -491,16 +520,16 @@ export class ClawHubService {
                 const skillManifestPath = path.join(dirPath, 'SKILL.md');
                 
                 if (fs.existsSync(skillManifestPath)) {
-                    // 这是一个技能目录
-                    const frontmatterName = this.extractFrontmatterName(skillManifestPath);
-                    const slug = frontmatterName || entry.name;
-                    
-                    // 尝试从 SKILL.md 中提取版本
-                    const versionMatch = fs.readFileSync(skillManifestPath, 'utf8').match(/version\s*:\s*["']?([\d.]+)["']?/);
-                    const version = versionMatch ? versionMatch[1] : 'unknown';
-                    
+                    const manifest = this.parseSkillManifest(skillManifestPath);
+                    const slug = manifest.slug || entry.name;
+                    const name = manifest.name || entry.name;
+                    const version = manifest.version || 'unknown';
+
                     results.push({
                         slug,
+                        name,
+                        description: manifest.description,
+                        author: manifest.author,
                         version,
                         source: 'openclaw-managed',
                         baseDir: dirPath,

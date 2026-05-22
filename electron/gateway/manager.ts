@@ -59,6 +59,7 @@ import {
   type GatewayStuckSessionDiagnostic,
 } from './startup-stderr';
 import { runGatewayStartupSequence } from './startup-orchestrator';
+import { isInvalidConfigSignal } from './startup-recovery';
 
 export interface GatewayStatus {
   state: GatewayLifecycleState;
@@ -1791,6 +1792,9 @@ export class GatewayManager extends EventEmitter {
         const normalized = line.replace(/\r$/, '').trimEnd();
         if (!normalized.trim()) return;
         logger.debug(`[Gateway stdout] ${normalized.trim()}`);
+        if (isInvalidConfigSignal(normalized)) {
+          recordGatewayStartupStderrLine(this.recentStartupStderrLines, normalized);
+        }
       },
       onSpawn: (pid) => {
         this.setStatus({ pid });

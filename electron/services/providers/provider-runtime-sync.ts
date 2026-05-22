@@ -322,12 +322,32 @@ async function syncRuntimeProviderConfig(
   config: ProviderConfig,
   context: RuntimeProviderSyncContext,
 ): Promise<void> {
+  const modelOverrides = buildModelOverridesFromRegistry(context.meta?.models, config.model);
   await syncProviderConfigToOpenClaw(context.runtimeProviderKey, config.model, {
     baseUrl: normalizeProviderBaseUrl(config, config.baseUrl || context.meta?.baseUrl, context.api),
     api: context.api,
     apiKeyEnv: context.meta?.apiKeyEnv,
     headers: config.headers ?? context.meta?.headers,
+    modelOverrides,
   });
+}
+
+function buildModelOverridesFromRegistry(
+  registryModels: Array<Record<string, unknown>> | undefined,
+  modelId: string | undefined,
+): Record<string, Record<string, unknown>> | undefined {
+  if (!registryModels || !modelId) {
+    return undefined;
+  }
+  const model = registryModels.find((m) => m.id === modelId);
+  if (!model) {
+    return undefined;
+  }
+  const { params: _params, ...modelWithoutParams } = model;
+  if ('params' in model) {
+    return { [modelId]: modelWithoutParams };
+  }
+  return { [modelId]: model };
 }
 
 async function syncCustomProviderAgentModel(
@@ -433,7 +453,7 @@ async function buildAgentModelProviderEntry(
 ): Promise<{
   baseUrl?: string;
   api?: string;
-  models?: Array<{ id: string; name: string }>;
+  models?: Array<Record<string, unknown> & { id: string; name: string }>;
   apiKey?: string;
   authHeader?: boolean;
 } | null> {
@@ -461,10 +481,13 @@ async function buildAgentModelProviderEntry(
     apiKey = (await getApiKey(config.id)) || undefined;
   }
 
+  const registryModel = meta?.models?.find((model) => model.id === modelId);
+  const { params: _params, ...registryModelWithoutParams } = registryModel ?? {};
+
   return {
     baseUrl,
     api,
-    models: [{ id: modelId, name: modelId }],
+    models: [{ ...(registryModelWithoutParams ?? {}), id: modelId, name: registryModel?.name ?? modelId }],
     apiKey,
     authHeader,
   };

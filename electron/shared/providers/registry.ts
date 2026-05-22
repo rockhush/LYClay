@@ -342,7 +342,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
           input: ['text', 'image'],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 256000,
-          maxTokens: 98304,
+          maxTokens: 49152,
         },
       ],
     },

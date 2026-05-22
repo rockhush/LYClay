@@ -212,6 +212,15 @@
         "ipcOnly": "IPC only"
       }
     },
+    "contextCompression": {
+      "title": "Context Compression",
+      "desc": "Automatically summarize older messages when conversation history gets too long, preventing context overflow.",
+      "enabled": "Enable Context Compression",
+      "enabledDesc": "When enabled, system will automatically compress long conversation history",
+      "threshold": "Token Threshold",
+      "thresholdDesc": "Trigger compression when estimated tokens exceed this value",
+      "thresholdPlaceholder": "8000"
+    },
     "devMode": "Developer Mode",
     "devModeDesc": "Show developer tools and shortcuts",
     "telemetry": "Anonymous Usage Data",

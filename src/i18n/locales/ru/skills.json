@@ -6,20 +6,30 @@
     "gatewayWarning": "Шлюз не запущен. Навыки не могут быть загружены без активного шлюза.",
     "tabs": {
         "installed": "Установленные",
-        "marketplace": "Маркетплейс"
+        "marketplace": "Маркетплейс",
+        "mine": "Мои навыки",
+        "market": "Магазин навыков"
     },
     "filter": {
         "all": "Все ({{count}})",
         "builtIn": "Встроенные ({{count}})",
-        "marketplace": "Маркетплейс ({{count}})"
+        "marketplace": "Площадка навыков ({{count}})"
     },
-    "search": "Поиск навыков...",
+    "search": "Поиск навыков",
     "searchMarketplace": "Поиск на маркетплейсе...",
     "searchButton": "Поиск",
     "actions": {
-        "enableVisible": "Включить видимые",
-        "disableVisible": "Выключить видимые",
-        "installSkill": "Установить навыки"
+        "enableVisible": "Включить все",
+        "disableVisible": "Выключить все",
+        "installSkill": "Установить навыки",
+        "addSkill": "Действия с навыками",
+        "uploadSkill": "Загрузить навык",
+        "createSkill": "Создать навык"
+    },
+    "card": {
+        "downloads": "{{count}}",
+        "downloadsLabel": "Загрузки",
+        "authorFallback": "Неизвестный автор"
     },
     "noSkills": "Навыки не найдены",
     "noSkillsSearch": "Попробуйте другой поисковый запрос",

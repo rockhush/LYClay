@@ -11,7 +11,7 @@
     "gatewayNotRunning": "网关未运行",
     "models": {
         "title": "模型",
-        "subtitle": "管理您的 AI 提供商并监控 Token 用量"
+        "subtitle": "管理 AI 模型并监控 token 用量"
     },
     "quickActions": {
         "title": "快捷操作",
@@ -32,7 +32,7 @@
     "enableSome": "启用一些技能",
     "more": "+{{count}} 更多",
     "recentTokenHistory": {
-        "title": "最近 Token 消耗",
+        "title": "Token 消耗量",
         "description": "展示最近的助手回复与工具结果中的模型/提供商用量记录。",
         "loading": "正在加载 token 消耗历史...",
         "empty": "还没有 token 消耗历史",

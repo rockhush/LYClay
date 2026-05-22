@@ -2,7 +2,6 @@ import { useState } from 'react';
 import {
   Sheet,
   SheetContent,
-  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
@@ -15,6 +14,11 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import type { McpConfigFile, McpTransportType } from '@/types/connector';
 import { LYCLAW_BUILTIN_MCP_KEYS } from '@/lib/mcp-builtins';
+
+const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors text-foreground placeholder:text-foreground/40';
+const labelClasses = 'text-[13px] text-foreground/80 font-medium';
+const selectClasses = 'h-9 w-full rounded-lg text-[13px] bg-white dark:bg-muted border border-black/10 dark:border-white/10 px-3 text-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors [background-image:none] appearance-none';
+const textareaClasses = 'flex min-h-[72px] w-full rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-muted px-3 py-2 text-[13px] text-foreground placeholder:text-foreground/40 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors';
 
 export type InstallDialogMode = 'custom' | null;
 
@@ -125,20 +129,23 @@ export function InstallDialog({
 
   return (
     <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-md">
-        <SheetHeader className="text-left">
-          <SheetTitle>{t('dialog.custom.title')}</SheetTitle>
+      <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-md bg-white dark:bg-card">
+        <SheetHeader className="text-left pb-2">
+          <SheetTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
+            {t('dialog.custom.title')}
+          </SheetTitle>
         </SheetHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1.5">
-            <Label>{t('dialog.custom.name')}</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" />
+        <div className="space-y-4 py-2 flex-1">
+          <div className="space-y-2">
+            <Label className={labelClasses}>{t('dialog.custom.name')}</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" className={inputClasses} />
           </div>
-          <div className="space-y-1.5">
-            <Label>{t('dialog.custom.type')}</Label>
+          <div className="space-y-2">
+            <Label className={labelClasses}>{t('dialog.custom.type')}</Label>
             <Select
               value={transport}
               onChange={(e) => setTransport(e.target.value as McpTransportType)}
+              className={selectClasses}
             >
               <option value="stdio">stdio</option>
               <option value="streamable-http">streamable-http</option>
@@ -147,41 +154,53 @@ export function InstallDialog({
           </div>
           {transport === 'stdio' ? (
             <>
-              <div className="space-y-1.5">
-                <Label>{t('dialog.custom.command')}</Label>
-                <Input value={command} onChange={(e) => setCommand(e.target.value)} />
+              <div className="space-y-2">
+                <Label className={labelClasses}>{t('dialog.custom.command')}</Label>
+                <Input value={command} onChange={(e) => setCommand(e.target.value)} className={inputClasses} />
               </div>
-              <div className="space-y-1.5">
-                <Label>{t('dialog.custom.args')}</Label>
-                <Input value={argsText} onChange={(e) => setArgsText(e.target.value)} placeholder="-y, @scope/pkg" />
+              <div className="space-y-2">
+                <Label className={labelClasses}>{t('dialog.custom.args')}</Label>
+                <Input value={argsText} onChange={(e) => setArgsText(e.target.value)} placeholder="-y, @scope/pkg" className={inputClasses} />
               </div>
             </>
           ) : (
-            <div className="space-y-1.5">
-              <Label>{t('dialog.custom.url')}</Label>
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
+            <div className="space-y-2">
+              <Label className={labelClasses}>{t('dialog.custom.url')}</Label>
+              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" className={inputClasses} />
             </div>
           )}
-          <div className="space-y-1.5">
-            <Label>{t('dialog.custom.env')}</Label>
+          <div className="space-y-2">
+            <Label className={labelClasses}>{t('dialog.custom.env')}</Label>
             <textarea
-              className="flex min-h-[72px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className={textareaClasses}
               value={envText}
               onChange={(e) => setEnvText(e.target.value)}
               placeholder="KEY=value"
             />
           </div>
-          <div className="flex items-center justify-between">
-            <Label>{t('dialog.custom.disabled')}</Label>
-            <Switch checked={disabled} onCheckedChange={setDisabled} />
+          <div className="flex items-center justify-between bg-white dark:bg-muted px-3.5 py-3 rounded-lg border border-black/[0.06] dark:border-white/10">
+            <Label className={labelClasses}>{t('dialog.custom.disabled')}</Label>
+            <Switch size="sm" checked={disabled} onCheckedChange={setDisabled} />
           </div>
         </div>
-        <SheetFooter className="mt-4 sm:justify-end">
-          <Button type="button" variant="outline" onClick={onClose}>{t('dialog.cancel')}</Button>
-          <Button type="button" onClick={() => void handleCustomSubmit()} disabled={busy || !name.trim()}>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            className="h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors"
+          >
+            {t('dialog.cancel')}
+          </Button>
+          <Button
+            type="button"
+            onClick={() => void handleCustomSubmit()}
+            disabled={busy || !name.trim()}
+            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+          >
             {t('dialog.save')}
           </Button>
-        </SheetFooter>
+        </div>
       </SheetContent>
     </Sheet>
   );

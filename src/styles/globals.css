@@ -4,6 +4,7 @@
 
 @layer base {
   :root {
+    color-scheme: light;
     /* White theme */
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
@@ -29,6 +30,7 @@
 
   /* Neutral deep-gray dark palette */
   .dark {
+    color-scheme: dark;
     --background: 240 4% 11%;
     --foreground: 210 20% 96%;
     --card: 240 3% 14%;
@@ -59,6 +61,20 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Native <select> dropdown options: ensure readable colors in both themes.
+     Without this, Chromium falls back to OS defaults (white popup) and
+     options become unreadable in dark mode. */
+  select option {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+  }
+
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']):not([type='hidden']),
+  textarea,
+  select {
+    @apply focus:outline-none focus-visible:outline-none focus-visible:ring-0;
   }
 }
 
@@ -105,6 +121,7 @@
 }
 
 .prose p {
+  margin-top: 0;
   margin-bottom: 0.75em;
 }
 
