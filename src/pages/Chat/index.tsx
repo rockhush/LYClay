@@ -154,6 +154,7 @@ export function Chat() {
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
   const sessionLabels = useChatStore((s) => s.sessionLabels);
+  const sessionLastActivity = useChatStore((s) => s.sessionLastActivity);
   const loading = useChatStore((s) => s.loading);
   const sending = useChatStore((s) => s.sending);
   const error = useChatStore((s) => s.error);
@@ -238,6 +239,31 @@ export function Chat() {
   // spam `chat.history` / local history IPC (each completion toggles `loading`).
   useEffect(() => {
     if (messages.length === 0 && !loading) {
+      const state = useChatStore.getState();
+      const hasLocalSession = Boolean(
+        state.sessionLabels[state.currentSessionKey]
+        || state.sessionLastActivity[state.currentSessionKey],
+      );
+      if (hasLocalSession) {
+        const snapshot = state.sessionStreamingStates[state.currentSessionKey]?.messagesSnapshot;
+        if (snapshot && snapshot.length > 0) {
+          useChatStore.setState({ messages: snapshot });
+        } else {
+          const label = state.sessionLabels[state.currentSessionKey];
+          if (label) {
+            const activity = state.sessionLastActivity[state.currentSessionKey] ?? Date.now();
+            useChatStore.setState({
+              messages: [{
+                role: 'user',
+                content: label.endsWith('…') ? label.slice(0, -1) : label,
+                timestamp: activity / 1000,
+                id: `local-${state.currentSessionKey}`,
+              }],
+            });
+          }
+        }
+        return;
+      }
       void loadHistory();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally omit `loading` to avoid empty-thread refetch loops
@@ -361,7 +387,11 @@ export function Chat() {
     firstResponseBarSeconds,
   );
 
-  const isEmpty = messages.length === 0 && !sending && !loading;
+  const isEmpty = messages.length === 0
+    && !sending
+    && !loading
+    && !sessionLabels[currentSessionKey]
+    && !sessionLastActivity[currentSessionKey];
 
   const {
     foldedNarrationIndices,

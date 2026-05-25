@@ -47,7 +47,9 @@ import type { Skill, MarketplaceSkill } from '@/types/skill';
 import {
   buildMarketplaceLookupMaps,
   findMarketplaceSkillMatch,
+  formatSkillVersionLabel,
   isPlaceholderSkillDescription,
+  resolveSkillDisplayName,
 } from '@/lib/skill-metadata';
 import { rendererExtensionRegistry } from '@/extensions/registry';
 import { useTranslation } from 'react-i18next';
@@ -93,6 +95,7 @@ function getSkillColor(name: string): string {
 // Skill detail dialog component
 interface SkillDetailDialogProps {
   skill: Skill | null;
+  marketplaceMatch?: MarketplaceSkill;
   isOpen: boolean;
   onClose: () => void;
   onToggle: (enabled: boolean) => void;
@@ -115,7 +118,7 @@ function resolveSkillSourceLabel(skill: Skill, t: TFunction<'skills'>): string {
   return source;
 }
 
-function SkillDetailDialog({ skill, isOpen, onClose, onToggle, onUninstall, onOpenFolder }: SkillDetailDialogProps) {
+function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle, onUninstall, onOpenFolder }: SkillDetailDialogProps) {
   const { t } = useTranslation('skills');
   const { fetchSkills } = useSkillsStore();
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([]);
@@ -235,10 +238,13 @@ function SkillDetailDialog({ skill, isOpen, onClose, onToggle, onUninstall, onOp
 
   if (!skill) return null;
 
-  const initial = getSkillInitial(skill.name);
-  const colorClass = getSkillColor(skill.name);
-  const displayVersion =
-    skill.version && skill.version.toLowerCase() !== 'unknown' ? skill.version : '1.0.0';
+  const displayName = resolveSkillDisplayName(skill, marketplaceMatch);
+  const initial = getSkillInitial(displayName);
+  const colorClass = getSkillColor(displayName);
+  const displayVersion = formatSkillVersionLabel(
+    skill.version,
+    t('card.versionUnknown', { defaultValue: '未知' }),
+  );
   const useInitialBadge = !skill.icon || ['⌛', '📦', '🔧'].includes(skill.icon);
   const sourceLabel = resolveSkillSourceLabel(skill, t);
   const installLabel = skill.isCore
@@ -266,14 +272,14 @@ function SkillDetailDialog({ skill, isOpen, onClose, onToggle, onUninstall, onOp
 
             <div className="flex-1 min-w-0">
               <SheetTitle className="text-[18px] font-semibold text-foreground leading-tight truncate">
-                {skill.name}
+                {displayName}
               </SheetTitle>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <Badge
                   variant="secondary"
                   className="rounded-full border-0 bg-black/[0.05] dark:bg-white/10 px-2.5 py-0.5 font-mono text-[11px] text-foreground/70"
                 >
-                  v{displayVersion}
+                  {displayVersion}
                 </Badge>
                 <Badge
                   variant="secondary"
@@ -324,17 +330,6 @@ function SkillDetailDialog({ skill, isOpen, onClose, onToggle, onUninstall, onOp
                 {skill.description}
               </p>
             </section>
-          )}
-
-          {skill.pathMissing && (
-            <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-800 dark:text-amber-300">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-              <div className="text-[12.5px] leading-relaxed">
-                {t('detail.pathMissingHint', {
-                  defaultValue: '此技能在本机未找到对应目录。请尝试卸载后重新安装来修复路径。',
-                })}
-              </div>
-            </div>
           )}
 
           <section className="rounded-2xl border border-black/[0.06] dark:border-white/10 bg-white/90 dark:bg-card px-4 py-3.5 shadow-sm space-y-3">
@@ -472,11 +467,13 @@ interface SkillCardProps {
 }
 
 function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardProps) {
-  const initial = getSkillInitial(marketplaceMatch?.name || skill.name);
-  const colorClass = getSkillColor(marketplaceMatch?.name || skill.name);
-  const rawVersion = (marketplaceMatch?.version || skill.version || '').trim();
-  const version =
-    rawVersion && rawVersion.toLowerCase() !== 'unknown' ? rawVersion : '1.0.0';
+  const displayName = resolveSkillDisplayName(skill, marketplaceMatch);
+  const initial = getSkillInitial(displayName);
+  const colorClass = getSkillColor(displayName);
+  const versionLabel = formatSkillVersionLabel(
+    marketplaceMatch?.version || skill.version,
+    t('card.versionUnknown', { defaultValue: '未知' }),
+  );
   const description = isPlaceholderSkillDescription(skill.description)
     ? (marketplaceMatch?.description?.trim() || skill.description || '—')
     : (skill.description || marketplaceMatch?.description?.trim() || '—');
@@ -512,31 +509,16 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
           <div className="flex flex-col gap-0.5">
             <div className="flex items-center gap-1.5">
               <h3 className="text-[14px] font-semibold text-foreground truncate">
-                {marketplaceMatch?.name || skill.name}
+                {displayName}
               </h3>
               {skill.isCore ? (
                 <Lock className="h-3 w-3 text-muted-foreground shrink-0" />
               ) : skill.isBundled ? (
                 <Puzzle className="h-3 w-3 text-blue-500/70 shrink-0" />
               ) : null}
-              {skill.pathMissing && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex items-center text-amber-700 dark:text-amber-400 shrink-0">
-                      <AlertTriangle className="h-3 w-3" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-xs whitespace-normal break-words">
-                    {t('detail.pathMissingHint', {
-                      defaultValue:
-                        '此技能在本机未找到对应目录。请尝试重新安装以修复路径。',
-                    })}
-                  </TooltipContent>
-                </Tooltip>
-              )}
             </div>
             <span className="text-[11px] font-mono text-muted-foreground/70 shrink-0">
-              v{version}
+              {versionLabel}
             </span>
           </div>
         </div>
@@ -587,7 +569,10 @@ function MarketplaceSkillCard({
 }: MarketplaceSkillCardProps) {
   const initial = getSkillInitial(skill.name);
   const colorClass = getSkillColor(skill.name);
-  const version = (skill.version || '').trim() || '1.0.0';
+  const versionLabel = formatSkillVersionLabel(
+    skill.version,
+    t('card.versionUnknown', { defaultValue: '未知' }),
+  );
   const author =
     (skill.author || '').trim() ||
     t('card.authorFallback', { defaultValue: '未知作者' });
@@ -617,7 +602,7 @@ function MarketplaceSkillCard({
           <div className="flex flex-col gap-0.5">
             <h3 className="text-[14px] font-semibold text-foreground truncate">{skill.name}</h3>
             <span className="text-[11px] font-mono text-muted-foreground/70 shrink-0">
-              v{version}
+              {versionLabel}
             </span>
           </div>
         </div>
@@ -636,7 +621,7 @@ function MarketplaceSkillCard({
           {isLoading ? (
             <LoadingSpinner size="sm" />
           ) : isInstalled ? (
-            <Upload className="h-3.5 w-3.5" />
+            <Trash2 className="h-3.5 w-3.5" />
           ) : (
             <Download className="h-3.5 w-3.5" />
           )}
@@ -698,7 +683,7 @@ export function Skills() {
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [selectedType, setSelectedType] = useState<string>('');
   const [selectedSource, setSelectedSource] = useState<'all' | 'built-in' | 'marketplace'>('all');
-  const [installFilter, setInstallFilter] = useState<'all' | 'installed' | 'uninstalled'>('installed');
+  const [installFilter, setInstallFilter] = useState<'all' | 'installed' | 'uninstalled'>('all');
   const [sortBy, setSortBy] = useState<'download_count' | 'update_time'>('download_count');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [scrollPosition, setScrollPosition] = useState(0);
@@ -707,6 +692,7 @@ export function Skills() {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
+  const previousTabRef = useRef<'mine' | 'market'>(activeTab);
 
   // Close the "新增技能" dropdown on outside click
   useEffect(() => {
@@ -726,6 +712,13 @@ export function Skills() {
   useEffect(() => {
     void fetchSkills();
   }, [fetchSkills]);
+
+  useEffect(() => {
+    if (previousTabRef.current === 'market' && activeTab === 'mine') {
+      void fetchSkills();
+    }
+    previousTabRef.current = activeTab;
+  }, [activeTab, fetchSkills]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -834,10 +827,11 @@ export function Skills() {
 
   const isMarketplaceSkillInstalled = useCallback((skill: MarketplaceSkill) => (
     safeSkills.some(s =>
-      s.id === skill.slug ||
+      !s.pathMissing &&
+      (s.id === skill.slug ||
       s.slug === skill.slug ||
       s.name === skill.name ||
-      s.baseDir?.includes(skill.slug)
+      s.baseDir?.includes(skill.slug))
     )
   ), [safeSkills]);
 
@@ -953,12 +947,13 @@ export function Skills() {
   }, []);
 
   useEffect(() => {
+    if (activeTab !== 'market') return;
     // 下拉框选择或排序变化时立即调用接口
     // 服务器端规则：带-号是降序，不带是升序
     const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
     console.log('[Skills] Search triggered with params:', { query: installQuery.trim(), category: selectedType, sort });
     searchSkills(installQuery.trim(), selectedType, sort);
-  }, [selectedType, sortBy, sortOrder, installQuery]);
+  }, [activeTab, selectedType, sortBy, sortOrder, installQuery, searchSkills]);
 
   const handleSearch = useCallback(() => {
     // 服务器端规则：带-号是降序，不带是升序
@@ -979,40 +974,11 @@ export function Skills() {
       
       await installSkill(slug);
       await enableSkill(slug);
-      
-      // 本地更新搜索结果，标记技能为已安装
-      const updatedSearchResults = searchResults.map(skill => {
-        if (skill.slug === slug) {
-          return { ...skill, __installed: true };
-        }
-        return skill;
-      });
-      setSearchResults(updatedSearchResults);
-      
-      // 在 safeSkills 中添加新安装的技能
-      const installedSkill = searchResults.find(s => s.slug === slug);
-      if (installedSkill) {
-        const newSkill: Skill = {
-          id: installedSkill.slug,
-          slug: installedSkill.slug,
-          name: installedSkill.name,
-          description: installedSkill.description || '',
-          enabled: true,
-          icon: getSkillInitial(installedSkill.name),
-          version: installedSkill.version || 'unknown',
-          author: installedSkill.author,
-          config: {},
-          isCore: false,
-          isBundled: false,
-          source: 'openclaw-managed',
-          baseDir: undefined,
-          filePath: undefined,
-        };
-        // 检查是否已存在，避免重复添加
-        const exists = safeSkills.some(s => s.id === slug || s.slug === slug);
-        if (!exists) {
-          setSkills([...safeSkills, newSkill]);
-        }
+      await fetchSkills();
+
+      if (activeTab === 'market') {
+        const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+        await searchSkills(installQuery.trim(), selectedType, sort);
       }
       
       // 恢复滚动位置
@@ -1029,7 +995,7 @@ export function Skills() {
         toast.error(t('toast.failedInstall') + ': ' + errorMessage);
       }
     }
-  }, [installSkill, enableSkill, searchResults, safeSkills, setSkills, setSearchResults, t, skillsDirPath]);
+  }, [installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
 
   const handleUninstall = useCallback(async (slug: string) => {
     try {
@@ -1069,13 +1035,7 @@ export function Skills() {
     }
   }, [uninstallSkill, searchResults, safeSkills, setSkills, setSearchResults, t]);
 
-  if (loading) {
-    return (
-      <div className="flex flex-col -m-6 dark:bg-background min-h-[calc(100vh-2.5rem)] items-center justify-center">
-        <LoadingSpinner size="lg" />
-      </div>
-    );
-  }
+  const showInitialLoading = loading && safeSkills.length === 0;
 
   return (
     <div
@@ -1274,8 +1234,9 @@ export function Skills() {
                 { key: 'all', label: '全部', count: sourceStats.all },
                 { key: 'built-in', label: '内置', count: sourceStats.builtIn },
                 { key: 'marketplace', label: '技能广场', count: sourceStats.marketplace },
-              ] as const).map(({ key, label }) => {
+              ] as const).map(({ key, label, count }) => {
                 const isActive = selectedSource === key;
+                const filterKey = key === 'built-in' ? 'builtIn' : key;
                 return (
                   <button
                     key={key}
@@ -1287,7 +1248,7 @@ export function Skills() {
                         : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
                     )}
                   >
-                    {label}
+                    {t(`filter.${filterKey}`, { count, defaultValue: `${label} (${count})` })}
                   </button>
                 );
               })}
@@ -1298,7 +1259,7 @@ export function Skills() {
         {/* Filter chips for market tab */}
         {activeTab === 'market' && (
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4 shrink-0">
-            <div className="flex items-center flex-wrap gap-2">
+            <div className="flex items-center flex-wrap gap-1">
               {marketplaceCategoryOptions.map(({ key, label }) => {
                 const isActive = selectedType === key;
                 return (
@@ -1359,12 +1320,14 @@ export function Skills() {
               </div>
 
               <div className="flex items-center gap-0 rounded">
-                {(['installed', 'uninstalled'] as const).map((filter, index) => {
+                {(['all', 'installed', 'uninstalled'] as const).map((filter, index) => {
                   const counts = {
+                    all: searchResults.length,
                     installed: installedMarketplaceCount,
                     uninstalled: uninstalledMarketplaceCount,
                   };
                   const labels = {
+                    all: '全部',
                     installed: '已安装',
                     uninstalled: '未安装',
                   };
@@ -1376,7 +1339,7 @@ export function Skills() {
                       className={cn(
                         'px-3 py-1 text-[12.5px] transition-all flex items-center justify-center',
                         index === 0 && 'rounded-l',
-                        index === 1 && 'rounded-r',
+                        index === 2 && 'rounded-r',
                         isSelected
                           ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
                           : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
@@ -1405,7 +1368,29 @@ export function Skills() {
           )}
 
           {activeTab === 'mine' ? (
-            filteredSkills.length === 0 ? (
+            showInitialLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <div
+                    key={`skill-skeleton-${index}`}
+                    className="rounded-2xl border border-black/[0.06] dark:border-white/10 bg-white/70 dark:bg-white/[0.04] p-4 animate-pulse"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-7 w-7 rounded-lg bg-black/[0.06] dark:bg-white/10" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 w-2/5 rounded bg-black/[0.06] dark:bg-white/10" />
+                        <div className="h-3 w-16 rounded bg-black/[0.05] dark:bg-white/10" />
+                      </div>
+                      <div className="h-5 w-9 rounded-full bg-black/[0.06] dark:bg-white/10" />
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <div className="h-3 w-full rounded bg-black/[0.05] dark:bg-white/10" />
+                      <div className="h-3 w-4/5 rounded bg-black/[0.05] dark:bg-white/10" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : filteredSkills.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Puzzle className="h-10 w-10 mb-4 opacity-50" />
                 <p>{searchQuery ? t('noSkillsSearch') : t('noSkillsAvailable')}</p>
@@ -1414,7 +1399,7 @@ export function Skills() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {filteredSkills.map((skill) => (
                   <SkillCard
-                    key={skill.id}
+                    key={skill.baseDir || skill.slug || skill.id}
                     skill={skill}
                     onClick={() => setSelectedSkill(skill)}
                     onToggle={(checked) => handleToggle(skill.id, checked)}
@@ -1478,6 +1463,7 @@ export function Skills() {
       {/* Skill Detail Dialog */}
       <SkillDetailDialog
         skill={selectedSkill}
+        marketplaceMatch={selectedSkill ? findMarketplaceSkillMatch(selectedSkill, marketplaceLookup) : undefined}
         isOpen={!!selectedSkill}
         onClose={() => setSelectedSkill(null)}
         onToggle={(enabled) => {

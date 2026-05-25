@@ -29,6 +29,10 @@ export type UpdateStatus =
   | 'downloaded'
   | 'error';
 
+export function shouldShowUpdateAvailableBadge(status: UpdateStatus): boolean {
+  return status === 'available' || status === 'downloaded';
+}
+
 interface UpdateState {
   status: UpdateStatus;
   currentVersion: string;
@@ -44,6 +48,7 @@ interface UpdateState {
   // Actions
   init: () => Promise<void>;
   checkForUpdates: () => Promise<void>;
+  checkForUpdatesAfterGatewayReady: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   installUpdate: () => void;
   cancelAutoInstall: () => Promise<void>;
@@ -53,6 +58,8 @@ interface UpdateState {
   getDownloadedFilePath: () => Promise<string | null>;
   openDownloadDirectory: () => Promise<void>;
 }
+
+let gatewayStartupUpdateCheckDone = false;
 
 export const useUpdateStore = create<UpdateState>((set, get) => ({
   status: 'idle',
@@ -182,6 +189,15 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         set({ status: 'error', error: 'Update check completed without a result. This usually means the app is running in dev mode.' });
       }
     }
+  },
+
+  checkForUpdatesAfterGatewayReady: async () => {
+    if (gatewayStartupUpdateCheckDone) return;
+    gatewayStartupUpdateCheckDone = true;
+    if (!get().isInitialized) {
+      await get().init();
+    }
+    await get().checkForUpdates();
   },
 
   downloadUpdate: async () => {

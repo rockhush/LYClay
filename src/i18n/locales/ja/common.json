@@ -19,7 +19,8 @@
         "renameSessionPlaceholder": "新しい会話名を入力",
         "renameSessionEmpty": "会話名を空にすることはできません",
         "renameSessionFailed": "セッション名の変更に失敗しました",
-        "openClawPage": "OpenClaw ページ"
+        "openClawPage": "OpenClaw ページ",
+        "updateAvailable": "（アップグレード可）"
     },
     "actions": {
         "save": "保存",

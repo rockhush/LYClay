@@ -12,6 +12,24 @@ export function isPlaceholderSkillDescription(description: string | undefined): 
   return !trimmed || trimmed === SKILL_INITIALIZING_DESCRIPTION;
 }
 
+export function isUnknownSkillVersion(version: string | undefined): boolean {
+  const trimmed = version?.trim();
+  return !trimmed || trimmed.toLowerCase() === 'unknown';
+}
+
+export function shouldIncludeInMySkills(skill: Pick<Skill, 'isCore' | 'isBundled' | 'pathMissing'>): boolean {
+  if (skill.isCore || skill.isBundled) return true;
+  return !skill.pathMissing;
+}
+
+export function formatSkillVersionLabel(
+  version: string | undefined,
+  unknownLabel = '未知',
+): string {
+  if (isUnknownSkillVersion(version)) return unknownLabel;
+  return `v${version!.trim()}`;
+}
+
 export function buildMarketplaceLookupMaps(marketplaceSkills: MarketplaceSkill[]): {
   bySlug: Map<string, MarketplaceSkill>;
   byName: Map<string, MarketplaceSkill>;
@@ -38,7 +56,7 @@ export function buildMarketplaceLookupMaps(marketplaceSkills: MarketplaceSkill[]
 }
 
 export function findMarketplaceSkillMatch(
-  skill: Pick<Skill, 'id' | 'slug' | 'name'>,
+  skill: Pick<Skill, 'id' | 'slug' | 'name' | 'baseDir'>,
   lookup: ReturnType<typeof buildMarketplaceLookupMaps>,
 ): MarketplaceSkill | undefined {
   const candidates = [skill.slug, skill.id, skill.name].filter(
@@ -55,7 +73,31 @@ export function findMarketplaceSkillMatch(
     }
   }
 
+  if (skill.baseDir?.trim()) {
+    const segments = skill.baseDir.split(/[/\\]/).filter(Boolean);
+    for (let index = segments.length - 1; index >= 0; index -= 1) {
+      const segment = segments[index];
+      const direct = lookup.bySlug.get(segment) || lookup.byName.get(segment);
+      if (direct) return direct;
+      const normalized = normalizeSkillLookupKey(segment);
+      if (normalized) {
+        const matched = lookup.byNormalized.get(normalized);
+        if (matched) return matched;
+      }
+    }
+  }
+
   return undefined;
+}
+
+export function resolveSkillDisplayName(
+  skill: Pick<Skill, 'name' | 'isBundled' | 'isCore'>,
+  marketplace?: Pick<MarketplaceSkill, 'name'>,
+): string {
+  if (!skill.isBundled && !skill.isCore && marketplace?.name?.trim()) {
+    return marketplace.name.trim();
+  }
+  return skill.name?.trim() || '';
 }
 
 export function mergeSkillWithMarketplaceMetadata(
@@ -66,16 +108,8 @@ export function mergeSkillWithMarketplaceMetadata(
 
   const next: Skill = { ...skill };
 
-  if (marketplace.name?.trim()) {
-    const currentName = skill.name?.trim();
-    const looksLikeSlug =
-      !currentName ||
-      currentName === skill.slug ||
-      currentName === skill.id ||
-      currentName.replace(/[\s_-]+/g, '').toLowerCase() === normalizeSkillLookupKey(skill.slug || skill.id);
-    if (looksLikeSlug) {
-      next.name = marketplace.name;
-    }
+  if (marketplace.name?.trim() && !skill.isBundled && !skill.isCore) {
+    next.name = marketplace.name.trim();
   }
 
   if (marketplace.description?.trim() && isPlaceholderSkillDescription(skill.description)) {
@@ -104,11 +138,127 @@ export function mergeSkillWithMarketplaceMetadata(
   return next;
 }
 
+export function normalizeBaseDirKey(baseDir: string | undefined): string {
+  if (!baseDir?.trim()) return '';
+  return baseDir.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+export function findExistingInstalledSkill(
+  skills: Skill[],
+  candidate: Pick<Skill, 'id' | 'slug' | 'name' | 'baseDir'>,
+): Skill | undefined {
+  const baseDirKey = normalizeBaseDirKey(candidate.baseDir);
+  const candidateKeys = [candidate.slug, candidate.id, candidate.name]
+    .map(normalizeSkillLookupKey)
+    .filter(Boolean);
+
+  return skills.find((skill) => {
+    const skillBaseDirKey = normalizeBaseDirKey(skill.baseDir);
+    if (baseDirKey && skillBaseDirKey && baseDirKey === skillBaseDirKey) {
+      return true;
+    }
+    const skillKeys = [skill.slug, skill.id, skill.name]
+      .map(normalizeSkillLookupKey)
+      .filter(Boolean);
+    return candidateKeys.some((key) => skillKeys.includes(key));
+  });
+}
+
+export function isSkillPresentOnDisk(
+  skill: Pick<Skill, 'id' | 'slug' | 'name' | 'baseDir' | 'isBundled' | 'isCore'>,
+  diskSkills: Array<Pick<Skill, 'id' | 'slug' | 'name' | 'baseDir'>>,
+): boolean {
+  if (skill.isBundled || skill.isCore) return true;
+  if (diskSkills.length === 0) return false;
+  return findExistingInstalledSkill(diskSkills as Skill[], skill) !== undefined;
+}
+
+function installedSkillDedupeScore(skill: Skill): number {
+  let score = 0;
+  if (!skill.pathMissing) score += 16;
+  if (skill.description?.trim() && !isPlaceholderSkillDescription(skill.description)) score += 8;
+  if (skill.icon && !['⌛', '📦', '🔧'].includes(skill.icon)) score += 4;
+  if (skill.source && skill.source !== 'openclaw-managed') score += 2;
+  if (!isUnknownSkillVersion(skill.version)) score += 2;
+  if (skill.filePath) score += 1;
+  return score;
+}
+
+function mergeInstalledSkillRecords(primary: Skill, secondary: Skill): Skill {
+  return {
+    ...primary,
+    slug: primary.slug || secondary.slug,
+    name: primary.name?.trim() ? primary.name : secondary.name,
+    description: !isPlaceholderSkillDescription(primary.description)
+      ? primary.description
+      : secondary.description,
+    version: !isUnknownSkillVersion(primary.version) ? primary.version : secondary.version,
+    author: primary.author || secondary.author,
+    config: { ...secondary.config, ...primary.config },
+    enabled: primary.enabled,
+    baseDir: primary.baseDir || secondary.baseDir,
+    filePath: primary.filePath || secondary.filePath,
+    pathMissing: Boolean(primary.pathMissing && secondary.pathMissing),
+    source: primary.source || secondary.source,
+    icon: primary.icon && primary.icon !== '⌛' ? primary.icon : secondary.icon,
+  };
+}
+
+export function dedupeInstalledSkills(skills: Skill[]): Skill[] {
+  const kept: Skill[] = [];
+  const indexByBaseDir = new Map<string, number>();
+  const indexByNormalizedKey = new Map<string, number>();
+
+  const registerSkill = (skill: Skill, index: number) => {
+    const baseDirKey = normalizeBaseDirKey(skill.baseDir);
+    if (baseDirKey) indexByBaseDir.set(baseDirKey, index);
+    for (const key of [skill.slug, skill.id, skill.name]) {
+      const normalized = normalizeSkillLookupKey(key);
+      if (normalized) indexByNormalizedKey.set(normalized, index);
+    }
+  };
+
+  const findExistingIndex = (skill: Skill): number | undefined => {
+    const baseDirKey = normalizeBaseDirKey(skill.baseDir);
+    if (baseDirKey && indexByBaseDir.has(baseDirKey)) {
+      return indexByBaseDir.get(baseDirKey);
+    }
+    for (const key of [skill.slug, skill.id, skill.name]) {
+      const normalized = normalizeSkillLookupKey(key);
+      if (normalized && indexByNormalizedKey.has(normalized)) {
+        return indexByNormalizedKey.get(normalized);
+      }
+    }
+    return undefined;
+  };
+
+  for (const skill of skills) {
+    const existingIndex = findExistingIndex(skill);
+    if (existingIndex !== undefined) {
+      const existing = kept[existingIndex];
+      const preferred =
+        installedSkillDedupeScore(skill) > installedSkillDedupeScore(existing) ? skill : existing;
+      const other = preferred === skill ? existing : skill;
+      kept[existingIndex] = mergeInstalledSkillRecords(preferred, other);
+      registerSkill(kept[existingIndex], existingIndex);
+      continue;
+    }
+
+    const index = kept.length;
+    kept.push(skill);
+    registerSkill(skill, index);
+  }
+
+  return kept;
+}
+
 export function enrichSkillsWithMarketplaceMetadata(
   skills: Skill[],
   marketplaceSkills: MarketplaceSkill[],
 ): Skill[] {
-  if (marketplaceSkills.length === 0) return skills;
+  if (marketplaceSkills.length === 0) return dedupeInstalledSkills(skills);
   const lookup = buildMarketplaceLookupMaps(marketplaceSkills);
-  return skills.map((skill) => mergeSkillWithMarketplaceMetadata(skill, findMarketplaceSkillMatch(skill, lookup)));
+  return dedupeInstalledSkills(
+    skills.map((skill) => mergeSkillWithMarketplaceMetadata(skill, findMarketplaceSkillMatch(skill, lookup))),
+  );
 }

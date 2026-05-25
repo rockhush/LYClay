@@ -9,9 +9,13 @@ import { AppError, normalizeAppError } from '@/lib/error-model';
 import { reportSkillDownload } from '@/lib/usage-reporter';
 import {
   enrichSkillsWithMarketplaceMetadata,
+  findExistingInstalledSkill,
   isPlaceholderSkillDescription,
+  isSkillPresentOnDisk,
   mergeSkillWithMarketplaceMetadata,
   normalizeSkillLookupKey,
+  shouldIncludeInMySkills,
+  dedupeInstalledSkills,
 } from '@/lib/skill-metadata';
 import { useGatewayStore } from './gateway';
 import type { Skill, MarketplaceSkill } from '../types/skill';
@@ -204,10 +208,18 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       );
       const clawhubResultPromise = hostApiFetch<{ success: boolean; results?: ClawHubListResult[]; error?: string }>('/api/clawhub/list');
       const configResultPromise = hostApiFetch<Record<string, { apiKey?: string; env?: Record<string, string> }>>('/api/skills/configs');
-      const [gatewaySettled, clawhubSettled, configSettled] = await Promise.allSettled([
+      const marketplaceResultPromise = hostApiFetch<{ success: boolean; results?: MarketplaceSkill[]; error?: string }>(
+        '/api/clawhub/search',
+        {
+          method: 'POST',
+          body: JSON.stringify({ query: '', category: '', sort: '-download_count' }),
+        },
+      );
+      const [gatewaySettled, clawhubSettled, configSettled, marketplaceSettled] = await Promise.allSettled([
         gatewayDataPromise,
         clawhubResultPromise,
         configResultPromise,
+        marketplaceResultPromise,
       ]);
 
       const gatewayData: GatewaySkillsStatusResult = gatewaySettled.status === 'fulfilled'
@@ -228,6 +240,14 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       }
       if (configSettled.status === 'rejected') {
         console.warn('[Skills Store] /api/skills/configs failed (non-fatal):', configSettled.reason);
+      }
+      if (marketplaceSettled.status === 'rejected') {
+        console.warn('[Skills Store] /api/clawhub/search failed (non-fatal):', marketplaceSettled.reason);
+      }
+
+      let marketplaceResults: MarketplaceSkill[] = [];
+      if (marketplaceSettled.status === 'fulfilled' && marketplaceSettled.value.success) {
+        marketplaceResults = marketplaceSettled.value.results ?? [];
       }
 
       // 兜底通道：当 hostApi 通道失败或者返回了空列表（冷启动竞态、HTTP server
@@ -329,9 +349,9 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
                 console.log(`Failed to read package.json for skill ${s.skillKey}:`, err);
               }
             }
-            // 如果还是未知，使用默认版本号
+            // 如果还是未知，保留 unknown，UI 展示「未知」
             if (version === 'unknown' || !version) {
-              version = '1.0.0';
+              version = 'unknown';
             }
 
             return {
@@ -363,7 +383,12 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       // Merge with ClawHub results
       if (clawhubResult.success && clawhubResult.results) {
         clawhubResult.results.forEach((cs: ClawHubListResult) => {
-          const existing = combinedSkills.find(s => s.id === cs.slug || s.slug === cs.slug);
+          const existing = findExistingInstalledSkill(combinedSkills, {
+            id: cs.slug,
+            slug: cs.slug,
+            name: cs.name,
+            baseDir: cs.baseDir,
+          });
           const clawhubExists = tryExistsSync(cs.baseDir);
           if (existing) {
             // 如果当前 baseDir 缺失或在本机不存在，且 ClawHub 给了一个真实存在的路径，
@@ -379,6 +404,9 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
             applyClawHubMetadata(existing, cs);
             return;
           }
+          if (clawhubExists === false) {
+            return;
+          }
           const directConfig = resolveDirectSkillConfig([cs.slug, cs.name], configLookup) || {};
           combinedSkills.push({
             id: cs.slug,
@@ -387,53 +415,39 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
             description: cs.description || '',
             enabled: typeof directConfig.enabled === 'boolean' ? directConfig.enabled : false,
             icon: '⌛',
-            version: cs.version && cs.version.toLowerCase() !== 'unknown' ? cs.version : '1.0.0',
+            version: cs.version && cs.version.toLowerCase() !== 'unknown' ? cs.version : 'unknown',
             author: cs.author,
             config: directConfig,
             isCore: false,
             isBundled: false,
             source: cs.source || 'openclaw-managed',
             baseDir: cs.baseDir,
-            pathMissing: clawhubExists === false,
+            pathMissing: false,
           });
         });
       }
 
-      // 最后兜底：如果上一次状态里存在的"非内置"技能在本次新数据中丢失了
-      // （后端某次 RPC 抖动、CLI 偶发挂死等），不要让它从 UI 中凭空消失。
-      // 保留下来并打 pathMissing 标记，让用户能看到、能选择卸载或重装。
-      if (currentSkills.length > 0) {
-        const seen = new Set(combinedSkills.map(s => s.id));
-        const seenSlugs = new Set(combinedSkills.map(s => s.slug).filter(Boolean));
-        for (const prev of currentSkills) {
-          if (prev.isBundled || prev.isCore) continue;
-          if (seen.has(prev.id)) continue;
-          if (prev.slug && seenSlugs.has(prev.slug)) continue;
-          combinedSkills.push({ ...prev, pathMissing: true });
-        }
+      if (clawhubResult.success && Array.isArray(clawhubResult.results)) {
+        const diskSkills = clawhubResult.results.map((cs) => ({
+          id: cs.slug,
+          slug: cs.slug,
+          name: cs.name,
+          baseDir: cs.baseDir,
+        }));
+        combinedSkills = combinedSkills.filter((skill) => isSkillPresentOnDisk(skill, diskSkills));
+      }
+
+      combinedSkills = dedupeInstalledSkills(combinedSkills).filter(shouldIncludeInMySkills);
+      if (marketplaceResults.length > 0) {
+        combinedSkills = enrichSkillsWithMarketplaceMetadata(combinedSkills, marketplaceResults).filter(
+          shouldIncludeInMySkills,
+        );
       }
 
       set({
         skills: combinedSkills,
         loading: false,
       });
-
-      void hostApiFetch<{ success: boolean; results?: MarketplaceSkill[]; error?: string }>('/api/clawhub/search', {
-        method: 'POST',
-        body: JSON.stringify({ query: '', category: '', sort: '-download_count' }),
-      })
-        .then((result) => {
-          if (!result.success || !result.results?.length) {
-            return;
-          }
-          set((state) => ({
-            skills: enrichSkillsWithMarketplaceMetadata(state.skills, result.results ?? []),
-            searchResults: result.results ?? [],
-          }));
-        })
-        .catch((error) => {
-          console.warn('[Skills Store] background /api/clawhub/search failed (non-fatal):', error);
-        });
     } catch (error) {
       console.error('Failed to fetch skills:', error);
       const appError = normalizeAppError(error, { module: 'skills', operation: 'fetch' });
@@ -504,7 +518,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         description: installedSkill?.description || '',
         enabled: true,
         icon: '📦',
-        version: version || installedSkill?.version || '1.0.0',
+        version: version || installedSkill?.version || 'unknown',
         author: installedSkill?.author,
         config: {},
         isCore: false,

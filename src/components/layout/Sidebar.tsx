@@ -38,6 +38,7 @@ import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
 import { useWorkspacesStore } from '@/stores/workspaces';
 import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
+import { useUpdateStore, shouldShowUpdateAvailableBadge } from '@/stores/update';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -174,6 +175,7 @@ export function Sidebar() {
   const sessionStreamingStates = useChatStore((s) => s.sessionStreamingStates);
   const switchSession = useChatStore((s) => s.switchSession);
   const newSession = useChatStore((s) => s.newSession);
+  const bindCurrentSessionWorkspace = useChatStore((s) => s.bindCurrentSessionWorkspace);
   const deleteSession = useChatStore((s) => s.deleteSession);
   const renameSession = useChatStore((s) => s.renameSession);
   const loadSessions = useChatStore((s) => s.loadSessions);
@@ -187,6 +189,8 @@ export function Sidebar() {
   const gatewayStatus = useGatewayStore((s) => s.status);
   const isGatewayRunning = gatewayStatus.state === 'running';
   const isGatewayReady = isGatewayRunning && gatewayStatus.gatewayReady === true;
+  const updateStatus = useUpdateStore((s) => s.status);
+  const checkForUpdatesAfterGatewayReady = useUpdateStore((s) => s.checkForUpdatesAfterGatewayReady);
   const isChatActive = chatSending || !!activeRunId;
 
   const firstResponsePreparingLocksSwitch = useMemo(
@@ -234,6 +238,7 @@ export function Sidebar() {
     if (sessionKey !== currentSessionKey) return false;
     if (messages.length > 0) return false;
     if (sessionLastActivity[sessionKey]) return false;
+    if (sessionLabels[sessionKey]) return false;
     return true;
   };
 
@@ -259,7 +264,7 @@ export function Sidebar() {
     }
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isPendingNewSession depends on currentSessionKey/messages/sessionLastActivity which are all listed below
-  }, [allWorkspaces, sessions, sessionWorkspaceIds, workspaceIdsKnown, sessionLastActivity, currentSessionKey, messages.length]);
+  }, [allWorkspaces, sessions, sessionWorkspaceIds, workspaceIdsKnown, sessionLastActivity, sessionLabels, currentSessionKey, messages.length]);
 
   const isSessionListedUnderWorkspace = (sessionKey: string) => {
     const wid = sessionWorkspaceIds[sessionKey];
@@ -290,6 +295,7 @@ export function Sidebar() {
 
   const selectWorkspace = (workspaceId: string) => {
     setCurrentWorkspace(workspaceId);
+    bindCurrentSessionWorkspace(workspaceId);
 
     // 切换到对应 Agent 的主会话
     const agentsStore = useAgentsStore.getState();
@@ -357,6 +363,12 @@ export function Sidebar() {
       }
     };
   }, [isGatewayReady, isChatActive, gatewayStatus.state, gatewayStatus.gatewayReady, loadSessions]);
+
+  useEffect(() => {
+    if (!isGatewayReady) return;
+    void checkForUpdatesAfterGatewayReady();
+  }, [isGatewayReady, checkForUpdatesAfterGatewayReady]);
+
   const agents = useAgentsStore((s) => s.agents);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
 
@@ -373,7 +385,10 @@ export function Sidebar() {
   // is on a fresh empty new-chat scratchpad and the "+ 新对话" item should be
   // the highlighted one — not any session row.
   const currentSessionHasContent =
-    messages.length > 0 || !!sessionLastActivity[currentSessionKey];
+    messages.length > 0
+    || !!sessionLastActivity[currentSessionKey]
+    || !!sessionLabels[currentSessionKey]
+    || !!customSessionLabels[currentSessionKey];
   const isNewChatActive = isOnChat && !currentSessionHasContent;
   const isSessionViewActive = isOnChat && currentSessionHasContent;
 
@@ -678,6 +693,11 @@ export function Sidebar() {
               </span>
               <span className="text-[10px] font-medium text-muted-foreground/70">
                 v{version}
+                {shouldShowUpdateAvailableBadge(updateStatus) && (
+                  <span className="text-red-500 font-medium">
+                    {t('common:sidebar.updateAvailable')}
+                  </span>
+                )}
               </span>
             </div>
           </div>
@@ -706,10 +726,11 @@ export function Sidebar() {
             // welcome screen regardless of which page they were on or what
             // history the previously-selected session still has on disk.
             if (blockSessionSwitchIfFirstResponsePreparing()) return;
-            const { messages: ms, currentSessionKey: ck, sessionLastActivity: sla } = useChatStore.getState();
+            const { messages: ms, currentSessionKey: ck, sessionLastActivity: sla, sessionLabels: sl } =
+              useChatStore.getState();
             const currentIsAlreadyFreshEmpty =
-              ms.length === 0 && !sla[ck];
-            if (!currentIsAlreadyFreshEmpty) {
+              ms.length === 0 && !sla[ck] && !sl[ck];
+            if (!currentIsAlreadyFreshEmpty || ck.endsWith(':main')) {
               newSession();
             }
             navigate('/');

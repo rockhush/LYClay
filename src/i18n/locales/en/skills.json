@@ -29,7 +29,8 @@
     "card": {
         "downloads": "{{count}}",
         "downloadsLabel": "Downloads",
-        "authorFallback": "Unknown author"
+        "authorFallback": "Unknown author",
+        "versionUnknown": "Unknown"
     },
     "noSkills": "No skills found",
     "noSkillsSearch": "Try a different search term",

@@ -886,6 +886,119 @@ function getLatestOptimisticUserMessage(messages: RawMessage[], userTimestampMs:
   );
 }
 
+/** Keep locally sent user messages when Gateway transcript has not persisted them yet (e.g. after abort). */
+function mergeMissingLocalUserMessages(
+  pipelineMessages: RawMessage[],
+  localMessages: RawMessage[],
+): RawMessage[] {
+  let merged = [...pipelineMessages];
+  for (const localMsg of localMessages) {
+    if (localMsg.role !== 'user') continue;
+    const localText = normalizeComparableUserText(localMsg.content);
+    if (!localText) continue;
+    const exists = merged.some(
+      (message) => message.role === 'user' && normalizeComparableUserText(message.content) === localText,
+    );
+    if (!exists) {
+      merged.push(localMsg);
+    }
+  }
+  if (merged.length === pipelineMessages.length) return pipelineMessages;
+  merged.sort((a, b) => {
+    const ta = a.timestamp != null ? toMs(a.timestamp as number) : 0;
+    const tb = b.timestamp != null ? toMs(b.timestamp as number) : 0;
+    return ta - tb;
+  });
+  return merged;
+}
+
+function buildSessionRegistrationPatch(
+  state: Pick<ChatState, 'sessions' | 'sessionLabels' | 'sessionLastActivity' | 'sessionWorkspaceIds'>,
+  sessionKey: string,
+  userMessage: RawMessage | null,
+  workspaceId: string | null,
+): Partial<Pick<ChatState, 'sessions' | 'sessionLabels' | 'sessionLastActivity' | 'sessionWorkspaceIds'>> {
+  if (!userMessage) return {};
+  const rawText = stripGatewayUserMetadata(getMessageText(userMessage.content)).trim();
+  if (!rawText) return {};
+
+  const truncated = rawText.length > 50 ? `${rawText.slice(0, 50)}…` : rawText;
+  const nowMs = userMessage.timestamp != null ? toMs(userMessage.timestamp as number) : Date.now();
+  const boundWorkspaceId = state.sessionWorkspaceIds[sessionKey] ?? workspaceId ?? null;
+
+  return {
+    sessions: ensureSessionEntry(state.sessions, sessionKey),
+    sessionLabels: state.sessionLabels[sessionKey]
+      ? state.sessionLabels
+      : { ...state.sessionLabels, [sessionKey]: truncated },
+    sessionLastActivity: { ...state.sessionLastActivity, [sessionKey]: nowMs },
+    sessionWorkspaceIds: boundWorkspaceId
+      ? { ...state.sessionWorkspaceIds, [sessionKey]: boundWorkspaceId }
+      : state.sessionWorkspaceIds,
+  };
+}
+
+function createEmptySessionStreamingState(): SessionStreamingState {
+  return {
+    activeRunId: null,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingFinal: false,
+    lastUserMessageAt: null,
+    pendingToolImages: [],
+    runAborted: false,
+    sending: false,
+    messagesSnapshot: [],
+  };
+}
+
+function resolveFinalMessagesWithLocalPreservation(
+  sessionKey: string,
+  pipelineMessages: RawMessage[],
+  get: () => ChatState,
+): RawMessage[] {
+  const state = get();
+  let finalMessages = mergeMissingLocalUserMessages(pipelineMessages, state.messages);
+
+  const userMsgAt = state.lastUserMessageAt;
+  if (state.sending && userMsgAt) {
+    const userMsMs = toMs(userMsgAt);
+    const optimistic = getLatestOptimisticUserMessage(state.messages, userMsMs);
+    if (optimistic) {
+      const optimisticText = normalizeComparableUserText(optimistic.content);
+      const hasMatchingUser = optimisticText.length > 0
+        ? finalMessages.some((message) => {
+            if (message.role !== 'user') return false;
+            return normalizeComparableUserText(message.content) === optimisticText;
+          })
+        : false;
+      if (!hasMatchingUser) {
+        finalMessages = [...finalMessages, optimistic];
+      }
+    }
+  }
+
+  if (finalMessages.length > 0) return finalMessages;
+  if (state.messages.length > 0) return state.messages;
+
+  const snapshot = state.sessionStreamingStates[sessionKey]?.messagesSnapshot;
+  if (snapshot && snapshot.length > 0) return snapshot;
+
+  const label = state.sessionLabels[sessionKey];
+  if (label) {
+    const activity = state.sessionLastActivity[sessionKey] ?? Date.now();
+    return [{
+      role: 'user',
+      content: label.endsWith('…') ? label.slice(0, -1) : label,
+      timestamp: activity / 1000,
+      id: `local-${sessionKey}`,
+    }];
+  }
+
+  return finalMessages;
+}
+
 /** Extract plain text from message content (string or content blocks) */
 function getMessageText(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -1621,6 +1734,34 @@ function ensureSessionEntry(sessions: ChatSession[], sessionKey: string): ChatSe
     return sessions;
   }
   return [...sessions, { key: sessionKey, displayName: sessionKey }];
+}
+
+/** Empty `:main` is a shared scratchpad — promote to a dedicated session key before the first send. */
+function promoteEmptyMainSessionIfNeeded(
+  get: () => ChatState,
+  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+): string {
+  const state = get();
+  const { currentSessionKey, messages, sessionLastActivity, sessions } = state;
+  if (!currentSessionKey.endsWith(':main')) return currentSessionKey;
+  if (messages.length > 0 || sessionLastActivity[currentSessionKey]) return currentSessionKey;
+
+  const prefix = getCanonicalPrefixFromSessionKey(currentSessionKey)
+    ?? getCanonicalPrefixFromSessions(sessions)
+    ?? DEFAULT_CANONICAL_PREFIX;
+  const newKey = `${prefix}:session-${Date.now()}`;
+  const currentWorkspaceId = useWorkspacesStore.getState().currentWorkspaceId;
+
+  set((s) => ({
+    currentSessionKey: newKey,
+    currentAgentId: getAgentIdFromSessionKey(newKey),
+    sessions: ensureSessionEntry(s.sessions, newKey),
+    sessionWorkspaceIds: currentWorkspaceId
+      ? { ...s.sessionWorkspaceIds, [newKey]: currentWorkspaceId }
+      : s.sessionWorkspaceIds,
+  }));
+
+  return newKey;
 }
 
 function clearSessionEntryFromMap<T extends Record<string, unknown>>(entries: T, sessionKey: string): T {
@@ -2858,12 +2999,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (!isCurrentSession()) return;
         set((state) => {
           const hasMessages = state.messages.length > 0;
+          const hasRegisteredSession = Boolean(state.sessionLabels[currentSessionKey]);
           // Suppress RPC timeout errors for chat.history as they are transient
           // and will be retried automatically
           const shouldSuppressError = errorMessage?.includes('RPC timeout: chat.history');
           return {
             error: !quiet && errorMessage && !shouldSuppressError ? errorMessage : state.error,
-            ...(hasMessages ? {} : { messages: [] as RawMessage[] }),
+            ...(hasMessages || hasRegisteredSession ? {} : { messages: [] as RawMessage[] }),
           };
         });
         clearHistoryLoadingIfCurrent();
@@ -2890,28 +3032,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(interruptedOut.resumePatch);
       }
       const pipelineMessages = interruptedOut.messages;
-
-      // Preserve the optimistic user message during an active send.
-      // The Gateway may not include the user's message in chat.history
-      // until the run completes, causing it to flash out of the UI.
-      let finalMessages = pipelineMessages;
-      const userMsgAt = get().lastUserMessageAt;
-      if (get().sending && userMsgAt) {
-        const userMsMs = toMs(userMsgAt);
-        const optimistic = getLatestOptimisticUserMessage(get().messages, userMsMs);
-        if (optimistic) {
-          const optimisticText = normalizeComparableUserText(optimistic.content);
-          const hasMatchingUser = optimisticText.length > 0
-            ? pipelineMessages.some((message) => {
-                if (message.role !== 'user') return false;
-                return normalizeComparableUserText(message.content) === optimisticText;
-              })
-            : false;
-          if (!hasMatchingUser) {
-            finalMessages = [...pipelineMessages, optimistic];
-          }
-        }
-      }
+      const finalMessages = resolveFinalMessagesWithLocalPreservation(currentSessionKey, pipelineMessages, get);
 
       set({ messages: finalMessages, thinkingLevel });
 
@@ -3243,7 +3364,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await get().loadHistory(true);
     }
 
-    const currentSessionKey = targetSessionKey;
+    let currentSessionKey = get().currentSessionKey;
     const reasoningMode = get().reasoningMode;
     const hasMedia = Boolean(attachments && attachments.length > 0);
     const reasoningDecision = getReasoningDecision(trimmed, reasoningMode, hasMedia);
@@ -3270,6 +3391,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const attachmentCount = attachments?.length ?? 0;
     const originalRuntimeMessage = trimmed || (attachmentCount > 0 ? 'Process the attached file(s).' : '');
     const isInternalStagedExecution = trimmed.includes(COMPLEX_TASK_EXECUTION_MARKER);
+
+    if (!isInternalStagedExecution) {
+      currentSessionKey = promoteEmptyMainSessionIfNeeded(get, set);
+    }
+
     const usePlanningPhase = shouldUseComplexTaskPlanning(originalRuntimeMessage, attachmentCount);
     const runtimeMessage = usePlanningPhase
       ? buildComplexTaskPlanningRequest(originalRuntimeMessage)
@@ -3301,34 +3427,54 @@ export const useChatStore = create<ChatState>((set, get) => ({
         filePath: a.stagedPath,
       })),
     };
-    set((s) => ({
-      messages: isInternalStagedExecution ? s.messages : [...s.messages, userMsg],
-      sending: true,
-      error: null,
-      streamingText: '',
-      streamingMessage: null,
-      streamingTools: [],
-      pendingFinal: false,
-      lastUserMessageAt: nowMs,
-      isFirstMessageEver: _isFirstMessageEver, // Store flag in state for UI access
-      runAborted: false,
-    }));
+    const isFirstMessage = !get().messages.some((m) => m.role === 'user');
+    const truncated = trimmed.length > 50 ? `${trimmed.slice(0, 50)}…` : trimmed;
+    const shouldSetLabel = !isInternalStagedExecution
+      && isFirstMessage
+      && Boolean(trimmed)
+      && !get().sessionLabels[currentSessionKey];
+    const selectedWorkspaceId = useWorkspacesStore.getState().currentWorkspaceId;
+
+    set((s) => {
+      const boundWorkspaceId = s.sessionWorkspaceIds[currentSessionKey] ?? selectedWorkspaceId ?? null;
+      const nextMessages = isInternalStagedExecution ? s.messages : [...s.messages, userMsg];
+      const prevStream = s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState();
+      return {
+        messages: nextMessages,
+        sending: true,
+        error: null,
+        streamingText: '',
+        streamingMessage: null,
+        streamingTools: [],
+        pendingFinal: false,
+        lastUserMessageAt: nowMs,
+        isFirstMessageEver: _isFirstMessageEver, // Store flag in state for UI access
+        runAborted: false,
+        sessions: ensureSessionEntry(s.sessions, currentSessionKey),
+        sessionLabels: shouldSetLabel
+          ? { ...s.sessionLabels, [currentSessionKey]: truncated }
+          : s.sessionLabels,
+        sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: nowMs },
+        sessionWorkspaceIds: boundWorkspaceId
+          ? { ...s.sessionWorkspaceIds, [currentSessionKey]: boundWorkspaceId }
+          : s.sessionWorkspaceIds,
+        sessionStreamingStates: {
+          ...s.sessionStreamingStates,
+          [currentSessionKey]: {
+            ...prevStream,
+            messagesSnapshot: nextMessages,
+            sending: true,
+            lastUserMessageAt: nowMs,
+            runAborted: false,
+          },
+        },
+      };
+    });
 
     // Mark that first message has been sent (for the entire app lifecycle)
     if (_isFirstMessageEver && !isInternalStagedExecution) {
       markFirstMessageSent();
     }
-
-    // Update session label with first user message text as soon as it's sent
-    const { sessionLabels, messages } = get();
-    const isFirstMessage = !messages.slice(0, -1).some((m) => m.role === 'user');
-    if (!isInternalStagedExecution && !currentSessionKey.endsWith(':main') && isFirstMessage && !sessionLabels[currentSessionKey] && trimmed) {
-      const truncated = trimmed.length > 50 ? `${trimmed.slice(0, 50)}…` : trimmed;
-      set((s) => ({ sessionLabels: { ...s.sessionLabels, [currentSessionKey]: truncated } }));
-    }
-
-    // Mark this session as most recently active
-    set((s) => ({ sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: nowMs } }));
 
     // Start the local transcript fallback and safety timeout IMMEDIATELY (before the
     // RPC await) because the gateway's chat.send RPC may block until the
@@ -3549,20 +3695,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
   abortRun: async () => {
     clearHistoryPoll();
     clearErrorRecoveryTimer();
-    const { currentSessionKey } = get();
+    const { currentSessionKey, messages } = get();
     if (_interruptedSendSession?.sessionKey === currentSessionKey) {
       _interruptedSendSession = null;
     }
-    set({
+    const lastUser = getLastRealUserSnapshot(messages);
+    const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
+    set((s) => ({
+      ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
       sending: false,
+      activeRunId: null,
       streamingText: '',
       streamingMessage: null,
       pendingFinal: false,
       lastUserMessageAt: null,
       pendingToolImages: [],
       runAborted: true,
-    });
-    set({ streamingTools: [] });
+      streamingTools: [],
+      sessionStreamingStates: {
+        ...s.sessionStreamingStates,
+        [currentSessionKey]: {
+          ...(s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState()),
+          messagesSnapshot: messages.length > 0 ? [...messages] : (s.sessionStreamingStates[currentSessionKey]?.messagesSnapshot ?? []),
+          sending: false,
+          runAborted: true,
+          activeRunId: null,
+        },
+      },
+    }));
 
     try {
       await useGatewayStore.getState().rpc(
@@ -3891,7 +4051,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case 'aborted': {
         clearHistoryPoll();
         clearErrorRecoveryTimer();
-        set({
+        const lastUser = getLastRealUserSnapshot(get().messages);
+        const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
+        set((s) => ({
+          ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
           sending: false,
           activeRunId: null,
           streamingText: '',
@@ -3900,7 +4063,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           pendingFinal: false,
           lastUserMessageAt: null,
           pendingToolImages: [],
-        });
+        }));
         break;
       }
       default: {

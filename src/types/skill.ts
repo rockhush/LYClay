@@ -26,7 +26,7 @@ export interface Skill {
   /**
    * 当 Gateway 报告的 baseDir 在本机文件系统中不存在，
    * 且 ClawHub 扫描结果也无法给出一个有效路径时，置为 true。
-   * 仅作为 UI 提示使用，不会把技能从列表中移除。
+   * 此类技能不会出现在「我的技能」列表中，需在技能广场重新安装。
    */
   pathMissing?: boolean;
   /**

@@ -19,7 +19,8 @@
         "renameSessionPlaceholder": "Enter a new conversation name",
         "renameSessionEmpty": "Conversation name cannot be empty",
         "renameSessionFailed": "Failed to rename session",
-        "openClawPage": "OpenClaw Page"
+        "openClawPage": "OpenClaw Page",
+        "updateAvailable": " (Upgrade available)"
     },
     "actions": {
         "save": "Save",

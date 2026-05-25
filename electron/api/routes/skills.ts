@@ -77,9 +77,19 @@ export async function handleSkillRoutes(
 
   if (url.pathname === '/api/clawhub/install' && req.method === 'POST') {
     try {
-      const body = await parseJsonBody<Record<string, unknown>>(req);
+      const body = await parseJsonBody<{ slug?: string; version?: string; force?: boolean }>(req);
+      const slug = typeof body.slug === 'string' ? body.slug.trim() : '';
       await ctx.clawHubService.install(body);
-      sendJson(res, 200, { success: true });
+      const installed = slug
+        ? (await ctx.clawHubService.listInstalled()).find(
+            (skill) => skill.slug === slug || skill.name === slug,
+          )
+        : undefined;
+      sendJson(res, 200, {
+        success: true,
+        baseDir: installed?.baseDir,
+        source: installed?.source,
+      });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }

@@ -1,0 +1,175 @@
+/**
+ * Durable UI metadata stored alongside OpenClaw data (~/.openclaw).
+ * Survives app reinstall/upgrade when the OpenClaw folder is preserved.
+ */
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { getOpenClawConfigDir } from './paths';
+import { logger } from './logger';
+
+export interface UiStateWorkspaceEntry {
+  id: string;
+  name: string;
+  agentId: string;
+  agentName: string;
+  path: string;
+  createdAt: number;
+  lastAccessedAt: number;
+}
+
+export interface LyclawUiState {
+  version: 1;
+  updatedAt: number;
+  workspaces: {
+    currentWorkspaceId: string | null;
+    currentWorkspacePath: string | null;
+    temporaryWorkspaces: UiStateWorkspaceEntry[];
+  };
+  chat: {
+    sessionWorkspaceIds: Record<string, string>;
+    customSessionLabels: Record<string, string>;
+  };
+}
+
+const UI_STATE_FILE = 'lyclaw-ui-state.json';
+
+function getUiStatePath(): string {
+  return join(getOpenClawConfigDir(), UI_STATE_FILE);
+}
+
+export function createEmptyUiState(): LyclawUiState {
+  return {
+    version: 1,
+    updatedAt: Date.now(),
+    workspaces: {
+      currentWorkspaceId: null,
+      currentWorkspacePath: null,
+      temporaryWorkspaces: [],
+    },
+    chat: {
+      sessionWorkspaceIds: {},
+      customSessionLabels: {},
+    },
+  };
+}
+
+function sanitizeStringRecord(input: unknown): Record<string, string> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof key === 'string' && key && typeof value === 'string' && value) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function sanitizeWorkspaceEntry(raw: unknown): UiStateWorkspaceEntry | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.id !== 'string' || !entry.id) return null;
+  if (typeof entry.name !== 'string' || !entry.name) return null;
+  if (typeof entry.path !== 'string' || !entry.path) return null;
+  const createdAt = typeof entry.createdAt === 'number' ? entry.createdAt : Date.now();
+  const lastAccessedAt = typeof entry.lastAccessedAt === 'number' ? entry.lastAccessedAt : createdAt;
+  return {
+    id: entry.id,
+    name: entry.name,
+    agentId: typeof entry.agentId === 'string' ? entry.agentId : 'temp',
+    agentName: typeof entry.agentName === 'string' ? entry.agentName : entry.name,
+    path: entry.path,
+    createdAt,
+    lastAccessedAt,
+  };
+}
+
+function sanitizeWorkspaceEntries(input: unknown): UiStateWorkspaceEntry[] {
+  if (!Array.isArray(input)) return [];
+  return input.map(sanitizeWorkspaceEntry).filter((entry): entry is UiStateWorkspaceEntry => entry != null);
+}
+
+export function normalizeUiState(raw: unknown): LyclawUiState {
+  const empty = createEmptyUiState();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return empty;
+  const data = raw as Record<string, unknown>;
+  const workspacesRaw = data.workspaces;
+  const chatRaw = data.chat;
+  const workspacesObj = workspacesRaw && typeof workspacesRaw === 'object' && !Array.isArray(workspacesRaw)
+    ? workspacesRaw as Record<string, unknown>
+    : {};
+  const chatObj = chatRaw && typeof chatRaw === 'object' && !Array.isArray(chatRaw)
+    ? chatRaw as Record<string, unknown>
+    : {};
+
+  return {
+    version: 1,
+    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now(),
+    workspaces: {
+      currentWorkspaceId: typeof workspacesObj.currentWorkspaceId === 'string'
+        ? workspacesObj.currentWorkspaceId
+        : null,
+      currentWorkspacePath: typeof workspacesObj.currentWorkspacePath === 'string'
+        ? workspacesObj.currentWorkspacePath
+        : null,
+      temporaryWorkspaces: sanitizeWorkspaceEntries(workspacesObj.temporaryWorkspaces),
+    },
+    chat: {
+      sessionWorkspaceIds: sanitizeStringRecord(chatObj.sessionWorkspaceIds),
+      customSessionLabels: sanitizeStringRecord(chatObj.customSessionLabels),
+    },
+  };
+}
+
+export function readUiState(): LyclawUiState {
+  const path = getUiStatePath();
+  if (!existsSync(path)) return createEmptyUiState();
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    return normalizeUiState(raw);
+  } catch (error) {
+    logger.warn('[ui-state] Failed to read UI state, using defaults', { error: String(error) });
+    return createEmptyUiState();
+  }
+}
+
+export function writeUiState(next: LyclawUiState): LyclawUiState {
+  const dir = getOpenClawConfigDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const normalized: LyclawUiState = {
+    ...normalizeUiState(next),
+    version: 1,
+    updatedAt: Date.now(),
+  };
+  const path = getUiStatePath();
+  const tempPath = `${path}.tmp`;
+  writeFileSync(tempPath, JSON.stringify(normalized, null, 2), 'utf8');
+  if (existsSync(path)) {
+    renameSync(tempPath, path);
+  } else {
+    renameSync(tempPath, path);
+  }
+  return normalized;
+}
+
+export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>): LyclawUiState {
+  const normalizedPatch = normalizeUiState({ ...base, ...patch, version: 1 });
+  const workspaceMap = new Map<string, UiStateWorkspaceEntry>();
+  for (const entry of base.workspaces.temporaryWorkspaces) workspaceMap.set(entry.id, entry);
+  for (const entry of normalizedPatch.workspaces.temporaryWorkspaces) workspaceMap.set(entry.id, entry);
+
+  return {
+    version: 1,
+    updatedAt: Date.now(),
+    workspaces: {
+      currentWorkspaceId: normalizedPatch.workspaces.currentWorkspaceId ?? base.workspaces.currentWorkspaceId,
+      currentWorkspacePath: normalizedPatch.workspaces.currentWorkspacePath ?? base.workspaces.currentWorkspacePath,
+      temporaryWorkspaces: [...workspaceMap.values()].sort((a, b) => b.lastAccessedAt - a.lastAccessedAt),
+    },
+    chat: {
+      sessionWorkspaceIds: { ...base.chat.sessionWorkspaceIds, ...normalizedPatch.chat.sessionWorkspaceIds },
+      customSessionLabels: { ...base.chat.customSessionLabels, ...normalizedPatch.chat.customSessionLabels },
+    },
+  };
+}

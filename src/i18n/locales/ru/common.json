@@ -19,7 +19,8 @@
         "renameSessionPlaceholder": "Введите новое название чата",
         "renameSessionEmpty": "Название чата не может быть пустым",
         "renameSessionFailed": "Не удалось переименовать сессию",
-        "openClawPage": "Страница OpenClaw"
+        "openClawPage": "Страница OpenClaw",
+        "updateAvailable": " (Доступно обновление)"
     },
     "actions": {
         "save": "Сохранить",

@@ -29,7 +29,8 @@
     "card": {
         "downloads": "{{count}}",
         "downloadsLabel": "下载量",
-        "authorFallback": "未知作者"
+        "authorFallback": "未知作者",
+        "versionUnknown": "未知"
     },
     "noSkills": "未找到技能",
     "noSkillsSearch": "尝试不同的搜索词",

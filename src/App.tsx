@@ -40,6 +40,7 @@ import {
   isOpenClawDingTalkChannelRuntimeReady,
   type ChannelsStatusRpcPayload,
 } from './lib/dingtalk-channels-runtime';
+import { hydrateUiStateFromDisk } from './lib/ui-state-persistence';
 
 /**
  * Error Boundary to catch and display React rendering errors
@@ -132,6 +133,10 @@ function App() {
   useEffect(() => {
     initSettings();
   }, [initSettings]);
+
+  useEffect(() => {
+    void hydrateUiStateFromDisk();
+  }, []);
 
   useEffect(() => {
     initDingTalkAuth();

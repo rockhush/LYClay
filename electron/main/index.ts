@@ -42,6 +42,7 @@ import { getSetting } from '../utils/store';
 import { ensureBuiltinSkillsInstalled, ensurePreinstalledSkillsInstalled } from '../utils/skill-config';
 import { ensureDwsEnvironmentInitialized } from '../utils/dws-env-setup';
 import { ensureDwsCliInstalled } from '../utils/dws-cli-installer';
+import { migrateLegacyUserDataIfNeeded } from '../utils/user-data-migration';
 
 import { startHostApiServer } from '../api/server';
 import { HostEventBus } from '../api/event-bus';
@@ -59,6 +60,8 @@ const requestedUserDataDir = process.env.CLAWX_USER_DATA_DIR?.trim();
 if (isE2EMode && requestedUserDataDir) {
   app.setPath('userData', requestedUserDataDir);
 }
+
+migrateLegacyUserDataIfNeeded();
 
 // Disable GPU hardware acceleration globally for maximum stability across
 // all GPU configurations (no GPU, integrated, discrete).
