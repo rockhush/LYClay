@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { getAllSkillConfigs, setSkillEnabled, updateSkillConfig } from '../../utils/skill-config';
+import { loadCompanyMarketplaceInstallState } from '../../utils/company-marketplace-installs';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -78,17 +79,38 @@ export async function handleSkillRoutes(
   if (url.pathname === '/api/clawhub/install' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{ slug?: string; version?: string; force?: boolean }>(req);
-      const slug = typeof body.slug === 'string' ? body.slug.trim() : '';
-      await ctx.clawHubService.install(body);
-      const installed = slug
-        ? (await ctx.clawHubService.listInstalled()).find(
-            (skill) => skill.slug === slug || skill.name === slug,
-          )
-        : undefined;
+      const installKey = typeof body.slug === 'string' ? body.slug.trim() : '';
+      const installResult = await ctx.clawHubService.install(body);
+      const installedSlug = installResult?.slug?.trim();
+      const installed = installedSlug
+        ? (await ctx.clawHubService.listInstalled()).find((skill) => skill.slug === installedSlug)
+        : installKey
+          ? (await ctx.clawHubService.listInstalled()).find(
+              (skill) => skill.slug === installKey || skill.name === installKey,
+            )
+          : undefined;
       sendJson(res, 200, {
         success: true,
-        baseDir: installed?.baseDir,
+        slug: installedSlug || installed?.slug,
+        baseDir: installResult?.baseDir || installed?.baseDir,
         source: installed?.source,
+      });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/clawhub/company-install-map' && req.method === 'GET') {
+    try {
+      const { registry, byPackageSlug } = await loadCompanyMarketplaceInstallState();
+      sendJson(res, 200, {
+        success: true,
+        installs: Object.fromEntries(
+          Object.entries(registry.byMarketplaceId).map(([marketplaceId, entry]) => [marketplaceId, entry.packageSlug]),
+        ),
+        entries: registry.byMarketplaceId,
+        byPackageSlug,
       });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });

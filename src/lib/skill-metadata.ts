@@ -48,6 +48,11 @@ export function buildMarketplaceLookupMaps(marketplaceSkills: MarketplaceSkill[]
   const byNormalized = new Map<string, MarketplaceSkill>();
 
   for (const skill of marketplaceSkills) {
+    if (skill.id != null && String(skill.id).trim()) {
+      bySlug.set(String(skill.id), skill);
+      const normalizedId = normalizeSkillLookupKey(String(skill.id));
+      if (normalizedId) byNormalized.set(normalizedId, skill);
+    }
     if (skill.slug) {
       bySlug.set(skill.slug, skill);
       const normalizedSlug = normalizeSkillLookupKey(skill.slug);
@@ -61,6 +66,19 @@ export function buildMarketplaceLookupMaps(marketplaceSkills: MarketplaceSkill[]
   }
 
   return { bySlug, byName, byNormalized };
+}
+
+export function companyInstallEntriesToMarketplaceSkills(
+  entries: Record<string, { packageSlug: string; name: string; version: string; author?: string; description?: string }>,
+): MarketplaceSkill[] {
+  return Object.entries(entries).map(([marketplaceId, entry]) => ({
+    id: Number(marketplaceId) || marketplaceId,
+    slug: entry.packageSlug,
+    name: entry.name,
+    description: entry.description || '',
+    version: entry.version,
+    author: entry.author,
+  }));
 }
 
 export function findMarketplaceSkillMatch(

@@ -16,6 +16,7 @@ import {
   normalizeSkillLookupKey,
   shouldIncludeInMySkills,
   dedupeInstalledSkills,
+  companyInstallEntriesToMarketplaceSkills,
 } from '@/lib/skill-metadata';
 import { useGatewayStore } from './gateway';
 import type { Skill, MarketplaceSkill } from '../types/skill';
@@ -150,9 +151,19 @@ function mapErrorCodeToSkillErrorKey(
   return `${operation}Error`;
 }
 
+interface CompanyInstallEntry {
+  packageSlug: string;
+  name: string;
+  version: string;
+  author?: string;
+  description?: string;
+}
+
 interface SkillsState {
   skills: Skill[];
   searchResults: MarketplaceSkill[];
+  companyInstallMap: Record<string, string>;
+  companyInstallEntries: Record<string, CompanyInstallEntry>;
   loading: boolean;
   searching: boolean;
   searchError: string | null;
@@ -162,7 +173,7 @@ interface SkillsState {
   // Actions
   fetchSkills: () => Promise<void>;
   searchSkills: (query: string, category?: string, sort?: string) => Promise<void>;
-  installSkill: (slug: string, version?: string) => Promise<void>;
+  installSkill: (slug: string, version?: string) => Promise<string | undefined>;
   uninstallSkill: (slug: string) => Promise<void>;
   enableSkill: (skillId: string) => Promise<void>;
   disableSkill: (skillId: string) => Promise<void>;
@@ -182,6 +193,8 @@ function clearErrorTimeout(): void {
 export const useSkillsStore = create<SkillsState>((set, get) => ({
   skills: [],
   searchResults: [],
+  companyInstallMap: {},
+  companyInstallEntries: {},
   loading: false,
   searching: false,
   searchError: null,
@@ -214,11 +227,17 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
           body: JSON.stringify({ query: '', category: '', sort: '-download_count' }),
         },
       );
-      const [gatewaySettled, clawhubSettled, configSettled, marketplaceSettled] = await Promise.allSettled([
+      const companyInstallMapPromise = hostApiFetch<{
+        success: boolean;
+        installs?: Record<string, string>;
+        entries?: Record<string, CompanyInstallEntry>;
+      }>('/api/clawhub/company-install-map');
+      const [gatewaySettled, clawhubSettled, configSettled, marketplaceSettled, companyInstallMapSettled] = await Promise.allSettled([
         gatewayDataPromise,
         clawhubResultPromise,
         configResultPromise,
         marketplaceResultPromise,
+        companyInstallMapPromise,
       ]);
 
       const gatewayData: GatewaySkillsStatusResult = gatewaySettled.status === 'fulfilled'
@@ -242,6 +261,16 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       }
       if (marketplaceSettled.status === 'rejected') {
         console.warn('[Skills Store] /api/clawhub/search failed (non-fatal):', marketplaceSettled.reason);
+      }
+      if (companyInstallMapSettled.status === 'rejected') {
+        console.warn('[Skills Store] /api/clawhub/company-install-map failed (non-fatal):', companyInstallMapSettled.reason);
+      }
+
+      let companyInstallMap = get().companyInstallMap;
+      let companyInstallEntries = get().companyInstallEntries;
+      if (companyInstallMapSettled.status === 'fulfilled' && companyInstallMapSettled.value.success) {
+        companyInstallMap = companyInstallMapSettled.value.installs ?? {};
+        companyInstallEntries = companyInstallMapSettled.value.entries ?? {};
       }
 
       let marketplaceResults: MarketplaceSkill[] = [];
@@ -437,14 +466,20 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       }
 
       combinedSkills = dedupeInstalledSkills(combinedSkills).filter(shouldIncludeInMySkills);
-      if (marketplaceResults.length > 0) {
-        combinedSkills = enrichSkillsWithMarketplaceMetadata(combinedSkills, marketplaceResults).filter(
+      const marketplaceMetadata = [
+        ...marketplaceResults,
+        ...companyInstallEntriesToMarketplaceSkills(companyInstallEntries),
+      ];
+      if (marketplaceMetadata.length > 0) {
+        combinedSkills = enrichSkillsWithMarketplaceMetadata(combinedSkills, marketplaceMetadata).filter(
           shouldIncludeInMySkills,
         );
       }
 
       set({
         skills: combinedSkills,
+        companyInstallMap,
+        companyInstallEntries,
         loading: false,
       });
     } catch (error) {
@@ -492,28 +527,32 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   installSkill: async (slug: string, version?: string) => {
     set((state) => ({ installing: { ...state.installing, [slug]: true } }));
     try {
-      const result = await hostApiFetch<{ success: boolean; error?: string; baseDir?: string; source?: string }>('/api/clawhub/install', {
+      const result = await hostApiFetch<{
+        success: boolean;
+        error?: string;
+        slug?: string;
+        baseDir?: string;
+        source?: string;
+      }>('/api/clawhub/install', {
         method: 'POST',
         body: JSON.stringify({ slug, version }),
       });
       if (!result.success) {
-        // 保留原始错误消息，不要转换为通用错误代码
         const errorMessage = result.error || 'Install failed';
         console.error('[SkillsStore] Install failed with error:', errorMessage);
         throw new Error(errorMessage);
       }
 
-      // Queue a skill-download record for the management/claw/report uploader.
-      // Fire-and-forget — the reporter swallows its own errors so install UX
-      // is never blocked by a stats hiccup.
-      void reportSkillDownload(slug, 1);
+      const packageSlug = result.slug?.trim()
+        || result.baseDir?.split(/[/\\]/).filter(Boolean).pop()
+        || slug;
+      void reportSkillDownload(packageSlug, 1);
 
-      // 添加新安装的技能到状态中，确保即时显示
       const installedSkill = get().searchResults.find((s) => s.slug === slug);
       const newSkill: Skill = mergeSkillWithMarketplaceMetadata({
-        id: slug,
-        slug,
-        name: installedSkill?.name || slug,
+        id: packageSlug,
+        slug: packageSlug,
+        name: installedSkill?.name || packageSlug,
         description: installedSkill?.description || '',
         enabled: true,
         icon: '📦',
@@ -527,20 +566,43 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         filePath: undefined,
         downloads: installedSkill?.downloads,
       }, installedSkill);
-      
-      // 更新状态，添加新技能
+
       set((state) => {
-        const existingIndex = state.skills.findIndex(s => s.id === slug);
+        const existingIndex = state.skills.findIndex((s) => s.id === packageSlug || s.slug === packageSlug);
+        const nextInstallMap = { ...state.companyInstallMap };
+        const nextInstallEntries = { ...state.companyInstallEntries };
+        const marketplaceId = installedSkill?.id != null
+          ? String(installedSkill.id)
+          : (/^\d+$/.test(slug) ? slug : undefined);
+        if (marketplaceId) {
+          nextInstallMap[marketplaceId] = packageSlug;
+          nextInstallEntries[marketplaceId] = {
+            packageSlug,
+            name: installedSkill?.name || packageSlug,
+            version: installedSkill?.version || version || 'unknown',
+            author: installedSkill?.author,
+            description: installedSkill?.description,
+          };
+        }
+
         if (existingIndex >= 0) {
-          // 更新现有技能
           const newSkills = [...state.skills];
           newSkills[existingIndex] = { ...newSkills[existingIndex], ...newSkill };
-          return { skills: newSkills };
-        } else {
-          // 添加新技能
-          return { skills: [...state.skills, newSkill] };
+          return {
+            skills: newSkills,
+            companyInstallMap: nextInstallMap,
+            companyInstallEntries: nextInstallEntries,
+          };
         }
+
+        return {
+          skills: [...state.skills, newSkill],
+          companyInstallMap: nextInstallMap,
+          companyInstallEntries: nextInstallEntries,
+        };
       });
+
+      return packageSlug;
     } catch (error) {
       console.error('Install error:', error);
       throw error;

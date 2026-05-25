@@ -7,6 +7,11 @@ import fs from 'fs';
 import path from 'path';
 import { app, shell } from 'electron';
 import { getOpenClawConfigDir, ensureDir, getClawHubCliBinPath, getClawHubCliEntryPath, prepareWinSpawn } from '../utils/paths';
+import {
+    forgetCompanyMarketplaceInstall,
+    readCompanyMarketplaceSidecarSync,
+    resolveCompanyMarketplacePackageSlug,
+} from '../utils/company-marketplace-installs';
 
 export interface ClawHubSearchParams {
     query: string;
@@ -18,6 +23,11 @@ export interface ClawHubInstallParams {
     slug: string;
     version?: string;
     force?: boolean;
+}
+
+export interface ClawHubInstallResult {
+    slug?: string;
+    baseDir?: string;
 }
 
 export interface ClawHubUninstallParams {
@@ -48,7 +58,7 @@ export interface ClawHubInstalledSkillResult {
 export interface MarketplaceProvider {
     getCapability(): Promise<{ mode: string; canSearch: boolean; canInstall: boolean; reason?: string }>;
     search(params: ClawHubSearchParams): Promise<ClawHubSkillResult[]>;
-    install(params: ClawHubInstallParams): Promise<void>;
+    install(params: ClawHubInstallParams): Promise<ClawHubInstallResult | void>;
 }
 
 export class ClawHubService {
@@ -389,7 +399,7 @@ export class ClawHubService {
      * Install a skill. Delegates to the marketplace provider if one is set,
      * otherwise falls back to the local ClawHub CLI.
      */
-    async install(params: ClawHubInstallParams): Promise<void> {
+    async install(params: ClawHubInstallParams): Promise<ClawHubInstallResult | void> {
         if (this.marketplaceProvider) {
             return this.marketplaceProvider.install(params);
         }
@@ -411,15 +421,21 @@ export class ClawHubService {
      */
     async uninstall(params: ClawHubUninstallParams): Promise<void> {
         const fsPromises = fs.promises;
+        let slug = params.slug.trim();
+        const mappedSlug = await resolveCompanyMarketplacePackageSlug(slug);
+        if (mappedSlug) {
+            await forgetCompanyMarketplaceInstall(slug);
+            slug = mappedSlug;
+        }
 
         // 1. Find the actual skill directory (handles nested directories)
-        const skillDir = this.resolveSkillDir(params.slug);
+        const skillDir = this.resolveSkillDir(slug);
         if (skillDir && fs.existsSync(skillDir)) {
             console.log(`Deleting skill directory: ${skillDir}`);
             await fsPromises.rm(skillDir, { recursive: true, force: true });
         } else {
             // Fallback: try the default path
-            const defaultDir = path.join(this.workDir, 'skills', params.slug);
+            const defaultDir = path.join(this.workDir, 'skills', slug);
             if (fs.existsSync(defaultDir)) {
                 console.log(`Deleting skill directory (fallback): ${defaultDir}`);
                 await fsPromises.rm(defaultDir, { recursive: true, force: true });
@@ -431,9 +447,9 @@ export class ClawHubService {
         if (fs.existsSync(lockFile)) {
             try {
                 const lockData = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
-                if (lockData.skills && lockData.skills[params.slug]) {
-                    console.log(`Removing ${params.slug} from lock.json`);
-                    delete lockData.skills[params.slug];
+                if (lockData.skills && lockData.skills[slug]) {
+                    console.log(`Removing ${slug} from lock.json`);
+                    delete lockData.skills[slug];
                     await fsPromises.writeFile(lockFile, JSON.stringify(lockData, null, 2));
                 }
             } catch (err) {
@@ -522,15 +538,16 @@ export class ClawHubService {
                 
                 if (fs.existsSync(skillManifestPath)) {
                     const manifest = this.parseSkillManifest(skillManifestPath);
+                    const sidecar = readCompanyMarketplaceSidecarSync(dirPath);
                     const slug = manifest.slug || entry.name;
-                    const name = manifest.name || entry.name;
-                    const version = manifest.version || 'unknown';
+                    const name = sidecar?.name || manifest.name || entry.name;
+                    const version = sidecar?.version || manifest.version || 'unknown';
 
                     results.push({
                         slug,
                         name,
-                        description: manifest.description,
-                        author: manifest.author,
+                        description: sidecar?.description || manifest.description,
+                        author: sidecar?.author || manifest.author,
                         version,
                         source: 'openclaw-managed',
                         baseDir: dirPath,

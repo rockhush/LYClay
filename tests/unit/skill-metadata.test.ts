@@ -10,6 +10,7 @@ import {
   isSkillPresentOnDisk,
   isUnknownSkillVersion,
   getMarketplaceSkillKey,
+  companyInstallEntriesToMarketplaceSkills,
   mergeSkillWithMarketplaceMetadata,
   normalizeSkillLookupKey,
   resolveSkillDisplayName,
@@ -26,6 +27,54 @@ describe('skill metadata helpers', () => {
   it('prefers marketplace id over slug for React list keys', () => {
     expect(getMarketplaceSkillKey({ id: 42, slug: '全网搜索' })).toBe('42');
     expect(getMarketplaceSkillKey({ slug: 'local-skill' })).toBe('local-skill');
+  });
+
+  it('matches installed package folders to company marketplace metadata', () => {
+    const lookup = buildMarketplaceLookupMaps(companyInstallEntriesToMarketplaceSkills({
+      '12': {
+        packageSlug: 'resume-analyzer',
+        name: '候选人简历画像匹配分析',
+        version: '1.0.1',
+        author: '胡世炬',
+      },
+    }));
+
+    const matched = findMarketplaceSkillMatch(
+      {
+        id: 'resume-analyzer',
+        slug: 'resume-analyzer',
+        name: 'resume-analyzer',
+        baseDir: 'C:\\Users\\me\\.openclaw\\skills\\resume-analyzer',
+      },
+      lookup,
+    );
+
+    expect(matched?.name).toBe('候选人简历画像匹配分析');
+    expect(matched?.version).toBe('1.0.1');
+  });
+
+  it('merges company marketplace display metadata onto installed skills', () => {
+    const enriched = mergeSkillWithMarketplaceMetadata(
+      {
+        id: 'resume-analyzer',
+        slug: 'resume-analyzer',
+        name: 'resume-analyzer',
+        description: '',
+        enabled: true,
+        version: 'unknown',
+      },
+      {
+        id: 12,
+        slug: 'resume-analyzer',
+        name: '候选人简历画像匹配分析',
+        description: 'Plaza description',
+        version: '1.0.1',
+      },
+    );
+
+    expect(enriched.name).toBe('候选人简历画像匹配分析');
+    expect(enriched.version).toBe('1.0.1');
+    expect(enriched.description).toBe('Plaza description');
   });
 
   it('matches installed skills to marketplace entries across slug variants', () => {

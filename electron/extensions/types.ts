@@ -42,7 +42,7 @@ export interface MarketplaceCapability {
 export interface MarketplaceProviderExtension extends Extension {
   getCapability(): Promise<MarketplaceCapability>;
   search(params: ClawHubSearchParams): Promise<ClawHubSkillResult[]>;
-  install(params: ClawHubInstallParams): Promise<void>;
+  install(params: ClawHubInstallParams): Promise<import('../../gateway/clawhub').ClawHubInstallResult | void>;
 }
 
 export interface AuthStatus {

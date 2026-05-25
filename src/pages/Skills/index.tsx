@@ -2,7 +2,7 @@
  * Skills Page
  * Browse and manage AI skills
  */
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useChatStore } from '@/stores/chat';
 import {
@@ -47,6 +47,7 @@ import { toast } from 'sonner';
 import type { Skill, MarketplaceSkill } from '@/types/skill';
 import {
   buildMarketplaceLookupMaps,
+  companyInstallEntriesToMarketplaceSkills,
   findMarketplaceSkillMatch,
   getMarketplaceSkillKey,
   formatSkillVersionLabel,
@@ -676,7 +677,9 @@ export function Skills() {
     setSkills,
     searching,
     searchError,
-    installing
+    installing,
+    companyInstallMap,
+    companyInstallEntries,
   } = useSkillsStore();
   const { t } = useTranslation('skills');
   const gatewayStatus = useGatewayStore((state) => state.status);
@@ -813,7 +816,12 @@ export function Skills() {
 
   // Build lookup tables so installed skills can borrow author / download
   // count from the marketplace (技能广场) response when available.
-  const marketplaceLookup = buildMarketplaceLookupMaps(searchResults);
+  const marketplaceLookup = useMemo(() => (
+    buildMarketplaceLookupMaps([
+      ...searchResults,
+      ...companyInstallEntriesToMarketplaceSkills(companyInstallEntries),
+    ])
+  ), [searchResults, companyInstallEntries]);
 
   const marketplaceCategoryOptions = [
     { key: '', label: '全部' },
@@ -829,15 +837,21 @@ export function Skills() {
     { key: 'other', label: '其他' },
   ];
 
-  const isMarketplaceSkillInstalled = useCallback((skill: MarketplaceSkill) => (
-    safeSkills.some(s =>
-      !s.pathMissing &&
-      (s.id === skill.slug ||
-      s.slug === skill.slug ||
-      s.name === skill.name ||
-      s.baseDir?.includes(skill.slug))
-    )
-  ), [safeSkills]);
+  const isMarketplaceSkillInstalled = useCallback((skill: MarketplaceSkill) => {
+    const packageSlug = skill.id != null ? companyInstallMap[String(skill.id)] : undefined;
+    return safeSkills.some((s) => {
+      if (s.pathMissing) return false;
+      if (packageSlug && (s.slug === packageSlug || s.id === packageSlug)) return true;
+      if (packageSlug && s.baseDir) {
+        const folder = s.baseDir.split(/[/\\]/).filter(Boolean).pop();
+        if (folder === packageSlug) return true;
+      }
+      return s.slug === skill.slug
+        || s.id === skill.slug
+        || s.name === skill.name
+        || (!!skill.slug && !!s.baseDir && s.baseDir.includes(skill.slug));
+    });
+  }, [safeSkills, companyInstallMap]);
 
   const installedMarketplaceCount = searchResults.filter(isMarketplaceSkillInstalled).length;
   const uninstalledMarketplaceCount = searchResults.length - installedMarketplaceCount;
@@ -973,23 +987,29 @@ export function Skills() {
 
   const handleInstall = useCallback(async (slug: string) => {
     try {
-      // 保存当前滚动位置
       const currentScroll = listRef.current?.scrollTop || 0;
-      
-      await installSkill(slug);
-      await enableSkill(slug);
+
+      const packageSlug = await installSkill(slug);
       await fetchSkills();
+
+      if (packageSlug) {
+        const installed = useSkillsStore.getState().skills.find(
+          (skill) => skill.slug === packageSlug || skill.id === packageSlug,
+        );
+        await enableSkill(installed?.id || packageSlug);
+      } else {
+        await enableSkill(slug);
+      }
 
       if (activeTab === 'market') {
         const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
         await searchSkills(installQuery.trim(), selectedType, sort);
       }
-      
-      // 恢复滚动位置
+
       setTimeout(() => {
         listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
       }, 0);
-      
+
       toast.success(t('toast.installed'));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);

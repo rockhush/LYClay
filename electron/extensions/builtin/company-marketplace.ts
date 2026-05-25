@@ -7,6 +7,7 @@ import type {
 import type {
   ClawHubSearchParams,
   ClawHubInstallParams,
+  ClawHubInstallResult,
   ClawHubSkillResult,
 } from '../../gateway/clawhub';
 import * as fs from 'fs';
@@ -14,6 +15,15 @@ import * as path from 'path';
 import { app } from 'electron';
 import { spawn } from 'child_process';
 import { getOpenClawConfigDir, prepareWinSpawn } from '../../utils/paths';
+import {
+  locateSkillContentDir,
+  parseZipBasenameFromContentDisposition,
+  resolvePackageDirName,
+} from '../../utils/company-skill-package';
+import {
+  rememberCompanyMarketplaceInstall,
+  writeCompanyMarketplaceSidecar,
+} from '../../utils/company-marketplace-installs';
 
 const COMPANY_API_BASE = 'http://portal.srv.lstech.com/aihome/api/skill';
 // const COMPANY_API_BASE = 'http://100.0.4.203/aihome/api/skill';
@@ -198,7 +208,8 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
 
       let results = skills.map(skill => ({
         id: skill.id,
-        slug: skill.name,
+        // Install key uses marketplace id; display name stays separate.
+        slug: String(skill.id),
         name: skill.name,
         version: skill.version,
         description: skill.skill_detail,
@@ -235,13 +246,28 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
     }
   }
 
-  async install(params: ClawHubInstallParams): Promise<void> {
-    console.log('[CompanyMarketplace] Install called with params:', params);
-    try {
-      const skillName = params.slug;
-      console.log('[CompanyMarketplace] Installing skill:', skillName);
+  private findTargetSkill(skills: CompanySkill[], installKey: string): CompanySkill | undefined {
+    const trimmed = installKey.trim();
+    if (!trimmed) return undefined;
 
-      // 先获取技能列表，找到对应的skillId
+    if (/^\d+$/.test(trimmed)) {
+      const marketplaceId = Number(trimmed);
+      return skills.find((skill) => skill.id === marketplaceId);
+    }
+
+    return skills.find((skill) => skill.name === trimmed);
+  }
+
+  async install(params: ClawHubInstallParams): Promise<ClawHubInstallResult> {
+    console.log('[CompanyMarketplace] Install called with params:', params);
+    const fsPromises = fs.promises;
+    const installKey = params.slug.trim();
+    const tempExtractDir = path.join(app.getPath('temp'), `lyclaw-skill-${installKey}-${Date.now()}`);
+    let tempZipPath = '';
+
+    try {
+      console.log('[CompanyMarketplace] Installing skill key:', installKey);
+
       const skillsUrl = `${COMPANY_API_BASE}/list/`;
       const skillsResponse = await fetch(skillsUrl, {
         method: 'GET',
@@ -255,18 +281,15 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       }
 
       const data = await skillsResponse.json();
-      
-      // 检查返回的数据结构
       if (!data || typeof data !== 'object' || !Array.isArray(data.skills)) {
         console.error('[CompanyMarketplace] API returned invalid data format:', typeof data, data);
         throw new Error('Invalid response format: expected object with skills array');
       }
 
       const skills: CompanySkill[] = data.skills;
-      const targetSkill = skills.find(s => s.name === skillName);
-
+      const targetSkill = this.findTargetSkill(skills, installKey);
       if (!targetSkill) {
-        const errorMsg = `Skill not found: ${skillName}`;
+        const errorMsg = `Skill not found: ${installKey}`;
         console.error('[CompanyMarketplace]', errorMsg);
         throw new Error(errorMsg);
       }
@@ -277,76 +300,76 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       const url = `${COMPANY_API_BASE}/download/${skillId}/`;
       console.log('[CompanyMarketplace] Download URL:', url);
 
-      const response = await fetch(url, {
-        method: 'GET',
-      });
-
-      console.log('[CompanyMarketplace] Download response status:', response.status);
-      console.log('[CompanyMarketplace] Download response ok:', response.ok);
-
+      const response = await fetch(url, { method: 'GET' });
       if (!response.ok) {
         const errorMsg = `Company API download error: ${response.status} (${response.statusText})`;
         console.error('[CompanyMarketplace]', errorMsg);
         throw new Error(errorMsg);
       }
 
-      console.log('[CompanyMarketplace] Skill name:', skillName);
+      const zipBasename =
+        parseZipBasenameFromContentDisposition(response.headers.get('content-disposition'))
+        || `${skillId}.zip`;
+      tempZipPath = path.join(app.getPath('temp'), zipBasename);
 
       const buffer = await response.arrayBuffer();
-      console.log('[CompanyMarketplace] Downloaded buffer size:', buffer.byteLength);
-      
       const uint8Array = new Uint8Array(buffer);
 
-      const fsPromises = fs.promises;
-
       const workDir = getOpenClawConfigDir();
-      console.log('[CompanyMarketplace] OpenClaw config dir:', workDir);
-      
       const skillsRoot = path.join(workDir, 'skills');
-      console.log('[CompanyMarketplace] Skills root dir:', skillsRoot);
-      
       if (!fs.existsSync(skillsRoot)) {
-        console.log('[CompanyMarketplace] Creating skills root dir:', skillsRoot);
         fs.mkdirSync(skillsRoot, { recursive: true });
       }
 
-      const tempZipPath = path.join(app.getPath('temp'), `${skillName}.zip`);
-      const skillDir = path.join(skillsRoot, skillName);
-      console.log('[CompanyMarketplace] Temp zip path:', tempZipPath);
-      console.log('[CompanyMarketplace] Skill install dir:', skillDir);
-
-      // 确保技能目录不存在
-      if (fs.existsSync(skillDir)) {
-        console.log('[CompanyMarketplace] Removing existing skill dir:', skillDir);
-        await fsPromises.rm(skillDir, { recursive: true });
-      }
-
-      console.log('[CompanyMarketplace] Writing temp zip file...');
+      await fsPromises.mkdir(tempExtractDir, { recursive: true });
       await fsPromises.writeFile(tempZipPath, uint8Array);
-      console.log('[CompanyMarketplace] Temp zip file written successfully');
+      await this.extractZip(tempZipPath, tempExtractDir);
 
-      try {
+      const packageDirName = await resolvePackageDirName(tempExtractDir, zipBasename);
+      const contentDir = await locateSkillContentDir(tempExtractDir);
+      const skillDir = path.join(skillsRoot, packageDirName);
+
+      if (fs.existsSync(skillDir)) {
+        await fsPromises.rm(skillDir, { recursive: true, force: true });
+      }
+      await fsPromises.mkdir(path.dirname(skillDir), { recursive: true });
+
+      if (contentDir === tempExtractDir) {
         await fsPromises.mkdir(skillDir, { recursive: true });
-        await this.extractZip(tempZipPath, skillDir);
-        console.log('[CompanyMarketplace] Unzip successful');
-        
-        // 检查是否存在嵌套目录（如 test-hr/test-hr/）
-        await this.fixNestedDirectory(skillDir);
-      } catch (unzipError) {
-        console.error('[CompanyMarketplace] Unzip failed, trying manual extraction:', unzipError);
-        await fsPromises.mkdir(skillDir, { recursive: true });
-        await fsPromises.cp(tempZipPath, path.join(skillDir, 'skill.zip'));
-        console.log('[CompanyMarketplace] Manual extraction completed');
+        const extractedEntries = await fsPromises.readdir(contentDir, { withFileTypes: true });
+        for (const entry of extractedEntries) {
+          await fsPromises.rename(
+            path.join(contentDir, entry.name),
+            path.join(skillDir, entry.name),
+          );
+        }
+      } else {
+        await fsPromises.rename(contentDir, skillDir);
       }
 
-      console.log('[CompanyMarketplace] Removing temp zip file...');
-      await fsPromises.unlink(tempZipPath);
+      await this.fixNestedDirectory(skillDir);
 
-      console.log('[CompanyMarketplace] Skill installed successfully:', skillName);
+      const installEntry = {
+        packageSlug: packageDirName,
+        name: targetSkill.name,
+        version: targetSkill.version,
+        author: targetSkill.author,
+        description: targetSkill.skill_detail,
+      };
+      await rememberCompanyMarketplaceInstall(skillId, installEntry);
+      await writeCompanyMarketplaceSidecar(skillDir, skillId, installEntry);
+
+      console.log('[CompanyMarketplace] Skill installed successfully:', packageDirName);
+      return { slug: packageDirName, baseDir: skillDir };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       console.error('[CompanyMarketplace] Install error:', errorMsg);
       throw new Error(`Company marketplace install failed: ${errorMsg}`);
+    } finally {
+      if (tempZipPath) {
+        await fsPromises.unlink(tempZipPath).catch(() => undefined);
+      }
+      await fsPromises.rm(tempExtractDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 }
