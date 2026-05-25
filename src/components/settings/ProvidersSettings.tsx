@@ -17,7 +17,7 @@ import {
   Copy,
   XCircle,
   ChevronDown,
-  Send,
+  // Send,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -54,7 +54,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
-import { flushUsageReports } from '@/lib/usage-reporter';
+// import { flushUsageReports } from '@/lib/usage-reporter';
 import { invokeIpc } from '@/lib/api-client';
 import { useSettingsStore } from '@/stores/settings';
 import { hostApiFetch } from '@/lib/host-api';
@@ -177,7 +177,7 @@ export function ProvidersSettings() {
 
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
-  const [usageReportSending, setUsageReportSending] = useState(false);
+  // const [usageReportSending, setUsageReportSending] = useState(false);
   const vendorMap = new Map(vendors.map((vendor) => [vendor.id, vendor]));
   const existingVendorIds = new Set(accounts.map((account) => account.vendorId));
   const displayProviders = useMemo(
@@ -251,6 +251,9 @@ export function ProvidersSettings() {
     }
   };
 
+  // Manual trigger for the management/claw/report uploader. Uncomment together
+  // with the "发送统计" button below when QA needs a manual flush entry point.
+  /*
   const handleSendUsageReport = async () => {
     if (usageReportSending) return;
     setUsageReportSending(true);
@@ -275,6 +278,7 @@ export function ProvidersSettings() {
       setUsageReportSending(false);
     }
   };
+  */
 
   return (
     <div data-testid="providers-settings" className="space-y-3">
@@ -283,20 +287,24 @@ export function ProvidersSettings() {
           {t('aiProviders.title', 'AI Providers')}
         </h2>
         <div className="flex items-center gap-2">
-          <Button
-            data-testid="providers-send-usage-report-button"
-            onClick={handleSendUsageReport}
-            disabled={usageReportSending}
-            variant="outline"
-            className="rounded-lg px-3 h-8 font-medium text-[13px] border-black/10 dark:border-white/15 bg-transparent hover:bg-black/5 dark:hover:bg-white/10"
-          >
-            {usageReportSending ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-            ) : (
-              <Send className="h-3.5 w-3.5 mr-1.5" />
-            )}
-            {t('aiProviders.sendUsageReport', { defaultValue: '发送统计' })}
-          </Button>
+          {/*
+            "发送统计" — temporarily hidden; uncomment this block together with
+            usageReportSending, handleSendUsageReport, Send icon, and flushUsageReports import.
+            <Button
+              data-testid="providers-send-usage-report-button"
+              onClick={handleSendUsageReport}
+              disabled={usageReportSending}
+              variant="outline"
+              className="rounded-lg px-3 h-8 font-medium text-[13px] border-black/10 dark:border-white/15 bg-transparent hover:bg-black/5 dark:hover:bg-white/10"
+            >
+              {usageReportSending ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5 mr-1.5" />
+              )}
+              {t('aiProviders.sendUsageReport', { defaultValue: '发送统计' })}
+            </Button>
+          */}
           <Button data-testid="providers-add-button" onClick={() => setShowAddDialog(true)} className="rounded-lg px-3 h-8 font-medium text-[13px] bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm">
             <Plus className="h-3.5 w-3.5 mr-1" />
             {t('aiProviders.add')}
