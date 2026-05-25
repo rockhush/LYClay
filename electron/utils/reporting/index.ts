@@ -16,6 +16,10 @@ import {
 } from './queue';
 import { flushUsageReports } from './uploader';
 import { formatReportDate } from './time';
+import {
+  hydrateWorkNoCacheFromStore,
+  resolveWorkNo,
+} from './work-no';
 
 export {
   flushUsageReports,
@@ -24,6 +28,10 @@ export {
   startUsageReportScheduler,
   stopUsageReportScheduler,
 } from './scheduler';
+export {
+  hydrateWorkNoCacheFromStore,
+  ensureWorkNoReady,
+} from './work-no';
 export type {
   ReportingFlushResult,
   TokenConsumeRecord,
@@ -31,17 +39,6 @@ export type {
   SkillInvokeRecord,
   UsageReportQueueSnapshot,
 } from './types';
-
-/**
- * Resolve the current user's workNo from electron-store (the DingTalk
- * jobNumber). Returns empty string when nobody is signed in — records are
- * still kept (the backend may attribute them later), but operators can
- * easily spot them in logs.
- */
-async function resolveWorkNo(): Promise<string> {
-  const user = await getSetting('dingtalkUser');
-  return (user?.jobNumber || '').trim();
-}
 
 export interface RecordTokenConsumeInput {
   model: string;

@@ -16,11 +16,7 @@ import { logger } from '../logger';
 import { getSetting, setSetting } from '../store';
 import { getRecentTokenUsageHistory, type TokenUsageHistoryEntry } from '../token-usage';
 import { appendTokenConsumeRecord } from './queue';
-
-async function resolveWorkNo(): Promise<string> {
-  const user = await getSetting('dingtalkUser');
-  return (user?.jobNumber || '').trim();
-}
+import { resolveWorkNo } from './work-no';
 
 // 200 is plenty: even a heavy day rarely produces this many assistant turns,
 // and the dashboard already caps its own page at much less. We re-scan from

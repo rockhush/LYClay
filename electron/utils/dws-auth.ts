@@ -33,6 +33,7 @@ export interface DwsCliLoginUser {
   userId: string;
   unionId: string;
   name: string;
+  jobNumber?: string;
   avatar?: string;
   corpId?: string;
   corpName?: string;
@@ -153,6 +154,11 @@ function normalizeDwsLoginUser(raw: unknown): DwsCliLoginUser {
     name: getPathStringValue(payload, ['orgEmployeeModel', 'orgUserName'])
       || getStringValue(payload, ['name', 'nick', 'nickname', 'displayName'])
       || getStringValue(employee, ['orgUserName']),
+    jobNumber: getPathStringValue(payload, ['orgEmployeeModel', 'jobNumber'])
+      || getPathStringValue(payload, ['orgEmployeeModel', 'jobNo'])
+      || getPathStringValue(payload, ['orgEmployeeModel', 'job_number'])
+      || getPathStringValue(employee, ['jobNumber', 'jobNo', 'job_number', 'staffId'])
+      || getStringValue(payload, ['jobNumber', 'jobNo', 'job_number', 'staffId']),
     avatar: getStringValue(payload, ['avatar', 'avatarUrl']),
     corpId: getPathStringValue(payload, ['orgEmployeeModel', 'corpId']) || getStringValue(payload, ['corpId']),
     corpName: getPathStringValue(payload, ['orgEmployeeModel', 'orgName']) || getStringValue(payload, ['corpName', 'orgName']),

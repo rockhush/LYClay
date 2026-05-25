@@ -46,7 +46,7 @@ import { migrateLegacyUserDataIfNeeded } from '../utils/user-data-migration';
 
 import { startHostApiServer } from '../api/server';
 import { HostEventBus } from '../api/event-bus';
-import { startUsageReportScheduler, stopUsageReportScheduler } from '../utils/reporting';
+import { startUsageReportScheduler, stopUsageReportScheduler, ensureWorkNoReady } from '../utils/reporting';
 import { deviceOAuthManager } from '../utils/device-oauth';
 import { browserOAuthManager } from '../utils/browser-oauth';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
@@ -394,6 +394,9 @@ async function initialize(): Promise<void> {
   // unref'd so it does not keep the event loop alive after the window
   // closes; it'll re-arm on the next launch.
   if (!isE2EMode) {
+    void ensureWorkNoReady().catch((error) => {
+      logger.warn('[UsageReport] Failed to hydrate cached workNo on startup:', error);
+    });
     startUsageReportScheduler();
   }
 

@@ -669,6 +669,36 @@ async function fetchUserDetail(appAccessToken: string, userId: string): Promise<
 }
 
 /**
+ * Fill missing profile fields (especially jobNumber) via the DingTalk 通讯录 API.
+ * DWS CLI login only returns orgEmployeeModel basics and leaves jobNumber empty.
+ */
+export async function enrichDingTalkUserProfile(user: DingTalkUserInfo): Promise<DingTalkUserInfo> {
+  if ((user.jobNumber || '').trim()) {
+    return user;
+  }
+  const userId = (user.userId || '').trim();
+  if (!userId) {
+    return user;
+  }
+
+  try {
+    const config = getDingTalkConfig();
+    const appAccessToken = await getAppAccessToken(config);
+    const detail = await fetchUserDetail(appAccessToken, userId);
+    return {
+      ...user,
+      ...detail,
+      jobNumber: (detail.jobNumber || user.jobNumber || '').trim(),
+      avatar: detail.avatar || user.avatar,
+      name: detail.name || user.name,
+    };
+  } catch (error) {
+    logger.warn(`[DingTalkOAuth] Failed to enrich user profile for ${userId}:`, error);
+    return user;
+  }
+}
+
+/**
  * Main login flow using OAuth 2.0.
  */
 function timeoutPromise(ms: number): Promise<never> {

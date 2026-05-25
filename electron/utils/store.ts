@@ -142,6 +142,8 @@ export interface AppSettings {
    * restarts never double-count the same assistant turn.
    */
   usageReportTokenScanCursor: string | null;
+  /** Last known DingTalk jobNumber for usage-report payloads. */
+  usageReportCachedWorkNo: string | null;
 }
 
 /**
@@ -209,6 +211,7 @@ function createDefaultSettings(): AppSettings {
       skillInvoke: null,
     },
     usageReportTokenScanCursor: null,
+    usageReportCachedWorkNo: null,
   };
 }
 

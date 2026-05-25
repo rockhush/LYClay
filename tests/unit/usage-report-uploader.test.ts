@@ -194,4 +194,23 @@ describe('flushUsageReports', () => {
     const after = await getUsageReportQueueSnapshot();
     expect(after.tokenConsume).toHaveLength(1);
   });
+
+  it('backfills empty workNo from cache before upload', async () => {
+    settingsStub.usageReportCachedWorkNo = 'EMP00999';
+    fetchMock.mockResolvedValue(jsonResponse({ code: 200, msg: 'ok', data: true }));
+    await appendTokenConsumeRecord({
+      workNo: '',
+      model: 'deepseek-v4-pro',
+      consume: 25604,
+      consumeTime: '2026-05-25 16:11:15',
+    });
+
+    await flushUsageReports('test');
+
+    const tokenCall = fetchMock.mock.calls.find(
+      (c) => (c[0] as string).endsWith('token-consume'),
+    );
+    const tokenBody = JSON.parse((tokenCall![1] as RequestInit).body as string);
+    expect(tokenBody[0].workNo).toBe('EMP00999');
+  });
 });

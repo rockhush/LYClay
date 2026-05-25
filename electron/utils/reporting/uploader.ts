@@ -22,6 +22,10 @@ import {
   restoreFailedRecords,
 } from './queue';
 import { scanTranscriptsForTokenConsume } from './transcript-scan';
+import {
+  applyWorkNoToQueueSnapshot,
+  ensureWorkNoReady,
+} from './work-no';
 import type {
   ReportingChannel,
   ReportingChannelDiagnostic,
@@ -162,7 +166,12 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       logger.warn(`[UsageReport] flush(${reason}) transcript scan failed:`, error);
     }
 
-    const detached = await detachAllRecords();
+    const detachedRaw = await detachAllRecords();
+    const workNo = await ensureWorkNoReady();
+    const detached = applyWorkNoToQueueSnapshot(detachedRaw, workNo);
+    if (workNo && detachedRaw.tokenConsume.some((record) => !record.workNo?.trim())) {
+      logger.info(`[UsageReport] flush(${reason}) backfilled empty workNo with ${workNo}`);
+    }
 
     // Only POST channels that actually have queued records. Empty `[]`
     // payloads were previously sent so the backend access log would show a

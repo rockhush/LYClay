@@ -37,6 +37,8 @@ import {
   type DwsCliLoginSession,
   type DwsCliLoginUser,
 } from '../../utils/dws-auth';
+import { enrichDingTalkUserProfile } from '../../utils/dingtalk-oauth';
+import { cacheWorkNo, clearCachedWorkNo, ensureWorkNoReady } from '../../utils/reporting/work-no';
 
 type DingTalkUserStore = NonNullable<AppSettings['dingtalkUser']>;
 type LoginSessionRecord = {
@@ -143,7 +145,7 @@ function dwsUserToDingTalkUser(user: DwsCliLoginUser): DingTalkUserInfo {
     mobile: user.mobile || '',
     email: user.email || '',
     orgEmail: user.email || '',
-    jobNumber: '',
+    jobNumber: user.jobNumber?.trim() || '',
     title: '',
     workPlace: '',
     userId: user.userId || '',
@@ -204,12 +206,15 @@ export async function handleDingTalkRoutes(
         },
       });
 
+      const enrichedUser = await enrichDingTalkUserProfile(result.user);
+
       // Store user info in electron-store
-      const userStore = toUserStore(result.user);
+      const userStore = toUserStore(enrichedUser);
 
       await setSetting('dingtalkUser', userStore);
-      await syncDingTalkUserToWorkspaceIfNeeded(previousUser, result.user);
-      await runDingTalkChannelProvisionAfterLogin(ctx, result.user);
+      await cacheWorkNo(userStore.jobNumber || userStore.userId);
+      await syncDingTalkUserToWorkspaceIfNeeded(previousUser, enrichedUser);
+      await runDingTalkChannelProvisionAfterLogin(ctx, enrichedUser);
 
       // Save access token to environment variable and file
       try {
@@ -271,10 +276,12 @@ export async function handleDingTalkRoutes(
           const oauthUser = 'accessToken' in result
             ? result.user
             : dwsUserToDingTalkUser(result.user);
-          const userStore = toUserStore(oauthUser);
+          const enrichedUser = await enrichDingTalkUserProfile(oauthUser);
+          const userStore = toUserStore(enrichedUser);
           await setSetting('dingtalkUser', userStore);
-          await syncDingTalkUserToWorkspaceIfNeeded(previousUser, oauthUser);
-          await runDingTalkChannelProvisionAfterLogin(ctx, oauthUser);
+          await cacheWorkNo(userStore.jobNumber || userStore.userId);
+          await syncDingTalkUserToWorkspaceIfNeeded(previousUser, enrichedUser);
+          await runDingTalkChannelProvisionAfterLogin(ctx, enrichedUser);
 
           if ('accessToken' in result) {
             try {
@@ -339,9 +346,13 @@ export async function handleDingTalkRoutes(
   if (url.pathname === '/api/dingtalk/user' && req.method === 'GET') {
     try {
       const user = await getSetting('dingtalkUser');
+      if (user) {
+        await ensureWorkNoReady();
+      }
+      const refreshedUser = await getSetting('dingtalkUser');
       sendJson(res, 200, {
         success: true,
-        user: user || null,
+        user: refreshedUser || null,
       });
     } catch (error) {
       sendJson(res, 500, {
@@ -385,6 +396,7 @@ export async function handleDingTalkRoutes(
     try {
       // Clear user info from electron-store
       await setSetting('dingtalkUser', null);
+      await clearCachedWorkNo();
       activeLoginSession?.session.cancel();
       activeLoginSession = null;
 
