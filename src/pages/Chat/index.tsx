@@ -12,7 +12,7 @@ import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
 import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
 import { hostApiFetch } from '@/lib/host-api';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { LoaderBadge } from '@/components/common/LoadingSpinner';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard } from './ExecutionGraphCard';
@@ -1212,9 +1212,7 @@ export function Chat() {
           data-testid="chat-history-loading-overlay"
           className="absolute inset-0 z-50 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-xl pointer-events-auto"
         >
-          <div className="bg-background shadow-lg rounded-full p-2.5 border border-border">
-            <LoadingSpinner size="md" />
-          </div>
+          <LoaderBadge />
         </div>
       )}
     </div>

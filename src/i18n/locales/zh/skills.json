@@ -18,6 +18,7 @@
     "search": "搜索技能",
     "searchMarketplace": "请输入技能的名称、描述、上传者",
     "searchButton": "搜索",
+    "loadingMine": "正在加载我的技能...",
     "actions": {
         "enableVisible": "批量启用",
         "disableVisible": "批量禁用",

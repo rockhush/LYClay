@@ -16,6 +16,34 @@ const sizeClasses = {
   lg: 'h-12 w-12',
 };
 
+/** White circular badge with the standard md spinner (used in chat + skills loading). */
+export function LoaderBadge({ className }: { className?: string }) {
+  return (
+    <div className={cn('rounded-full border border-border bg-background p-2.5 shadow-lg', className)}>
+      <LoadingSpinner size="md" />
+    </div>
+  );
+}
+
+interface CenteredLoaderProps {
+  message?: string;
+  className?: string;
+  testId?: string;
+}
+
+/** Centered page loading block with unified badge size. */
+export function CenteredLoader({ message, className, testId }: CenteredLoaderProps) {
+  return (
+    <div
+      className={cn('flex flex-col items-center justify-center py-20 text-muted-foreground', className)}
+      data-testid={testId}
+    >
+      <LoaderBadge />
+      {message ? <p className="mt-4 text-sm">{message}</p> : null}
+    </div>
+  );
+}
+
 export function LoadingSpinner({ size = 'md', className }: LoadingSpinnerProps) {
   return (
     <div className={cn('flex items-center justify-center', className)}>

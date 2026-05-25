@@ -13,6 +13,7 @@
         "models": "Модели",
         "workspaces": "Рабочие области",
         "deleteSessionConfirm": "Вы уверены, что хотите удалить сессию \"{{label}}\"?",
+        "deleteWorkspaceConfirm": "Вы уверены, что хотите удалить рабочую область \"{{label}}\"?",
         "renameSession": "Переименовать сессию",
         "renameSessionTitle": "Изменить название чата",
         "renameSessionDescription": "Выберите удобное имя — оно сохраняется после перезапуска приложения.",

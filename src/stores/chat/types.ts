@@ -132,6 +132,8 @@ export interface ChatState {
   setPrefilledInput: (text: string | null) => void;
   /** Associate the active chat session with a workspace id (or clear). */
   bindCurrentSessionWorkspace: (workspaceId: string | null) => void;
+  /** Remove all session bindings pointing at the given workspace id. */
+  clearSessionWorkspaceBindings: (workspaceId: string) => void;
   deleteSession: (key: string) => Promise<void>;
   /**
    * Rename a chat session. Stores the new title under `customSessionLabels`

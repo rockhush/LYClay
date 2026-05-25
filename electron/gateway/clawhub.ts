@@ -25,6 +25,7 @@ export interface ClawHubUninstallParams {
 }
 
 export interface ClawHubSkillResult {
+    id?: string | number;
     slug: string;
     name: string;
     description: string;

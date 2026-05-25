@@ -56,6 +56,8 @@ export interface SkillBundle {
  * Marketplace skill data
  */
 export interface MarketplaceSkill {
+  /** Stable marketplace record id (company API id or local folder slug). */
+  id?: string | number;
   slug: string;
   name: string;
   description: string;

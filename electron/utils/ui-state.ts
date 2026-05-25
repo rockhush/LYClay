@@ -155,21 +155,34 @@ export function writeUiState(next: LyclawUiState): LyclawUiState {
 
 export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>): LyclawUiState {
   const normalizedPatch = normalizeUiState({ ...base, ...patch, version: 1 });
-  const workspaceMap = new Map<string, UiStateWorkspaceEntry>();
-  for (const entry of base.workspaces.temporaryWorkspaces) workspaceMap.set(entry.id, entry);
-  for (const entry of normalizedPatch.workspaces.temporaryWorkspaces) workspaceMap.set(entry.id, entry);
+  const replaceWorkspaces = patch.workspaces != null;
+  const replaceChat = patch.chat != null;
+
+  const temporaryWorkspaces = replaceWorkspaces
+    ? normalizedPatch.workspaces.temporaryWorkspaces
+    : normalizedPatch.workspaces.temporaryWorkspaces.length > 0
+      ? normalizedPatch.workspaces.temporaryWorkspaces
+      : base.workspaces.temporaryWorkspaces;
 
   return {
     version: 1,
     updatedAt: Date.now(),
     workspaces: {
-      currentWorkspaceId: normalizedPatch.workspaces.currentWorkspaceId ?? base.workspaces.currentWorkspaceId,
-      currentWorkspacePath: normalizedPatch.workspaces.currentWorkspacePath ?? base.workspaces.currentWorkspacePath,
-      temporaryWorkspaces: [...workspaceMap.values()].sort((a, b) => b.lastAccessedAt - a.lastAccessedAt),
+      currentWorkspaceId: replaceWorkspaces
+        ? normalizedPatch.workspaces.currentWorkspaceId
+        : normalizedPatch.workspaces.currentWorkspaceId ?? base.workspaces.currentWorkspaceId,
+      currentWorkspacePath: replaceWorkspaces
+        ? normalizedPatch.workspaces.currentWorkspacePath
+        : normalizedPatch.workspaces.currentWorkspacePath ?? base.workspaces.currentWorkspacePath,
+      temporaryWorkspaces: [...temporaryWorkspaces].sort((a, b) => b.lastAccessedAt - a.lastAccessedAt),
     },
     chat: {
-      sessionWorkspaceIds: { ...base.chat.sessionWorkspaceIds, ...normalizedPatch.chat.sessionWorkspaceIds },
-      customSessionLabels: { ...base.chat.customSessionLabels, ...normalizedPatch.chat.customSessionLabels },
+      sessionWorkspaceIds: replaceChat
+        ? normalizedPatch.chat.sessionWorkspaceIds
+        : { ...base.chat.sessionWorkspaceIds, ...normalizedPatch.chat.sessionWorkspaceIds },
+      customSessionLabels: replaceChat
+        ? normalizedPatch.chat.customSessionLabels
+        : { ...base.chat.customSessionLabels, ...normalizedPatch.chat.customSessionLabels },
     },
   };
 }

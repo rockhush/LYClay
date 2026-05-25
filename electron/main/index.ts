@@ -87,14 +87,18 @@ if (process.platform === 'linux') {
   app.setDesktopName('LYClaw.desktop');
 }
 
-// Prevent multiple instances of the app from running simultaneously.
+// Prevent multiple instances of the packaged app from running simultaneously.
 // Without this, two instances each spawn their own gateway process on the
 // same port, then each treats the other's gateway as "orphaned" and kills
 // it — creating an infinite kill/restart loop on Windows.
 // The losing process must exit immediately so it never reaches Gateway startup.
-const gotElectronLock = isE2EMode ? true : app.requestSingleInstanceLock();
+// Dev mode (`pnpm dev`) skips this so a stale lock from a crashed process
+// does not block local development.
+const isDevRuntime = !app.isPackaged;
+const gotElectronLock = isE2EMode || isDevRuntime ? true : app.requestSingleInstanceLock();
 if (!gotElectronLock) {
   console.info('[LYClaw] Another instance already holds the single-instance lock; exiting duplicate process');
+  console.info('[LYClaw] Close other LYClaw windows, check the system tray, or end LYClaw/Electron in Task Manager, then retry.');
   app.exit(0);
 }
 let releaseProcessInstanceFileLock: () => void = () => {};

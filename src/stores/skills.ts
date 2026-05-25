@@ -42,6 +42,8 @@ const ALLOWED_BUILTIN_SKILLS = new Set([
   'self-improving-agent',
   'healthcheck',
   'tavily-search',
+  'dws',
+  'lingyi-baishitong',
 ]);
 
 const SKILLS_GATEWAY_RPC_TIMEOUT_MS = 8_000;
@@ -192,10 +194,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   },
 
   fetchSkills: async () => {
-    // Only show loading state if we have no skills yet (initial load)
-    if (get().skills.length === 0) {
-      set({ loading: true, error: null });
-    }
+    set({ loading: true, error: null });
     try {
       // Fetch all skill sources in parallel to reduce first-load latency.
       // 关键：使用 allSettled，让任意一个数据源（gateway / hostApi / configs）

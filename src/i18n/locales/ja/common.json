@@ -13,6 +13,7 @@
         "models": "モデル",
         "workspaces": "ワークスペース",
         "deleteSessionConfirm": "セッション \"{{label}}\" を削除してもよろしいですか？",
+        "deleteWorkspaceConfirm": "ワークスペース \"{{label}}\" を削除してもよろしいですか？",
         "renameSession": "セッション名を変更",
         "renameSessionTitle": "会話タイトルを編集",
         "renameSessionDescription": "分かりやすい名前を入力してください。アプリ再起動後も保持されます。",

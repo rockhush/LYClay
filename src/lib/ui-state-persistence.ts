@@ -1,7 +1,6 @@
 import { hostApiFetch } from '@/lib/host-api';
 import { useChatStore } from '@/stores/chat';
 import { useWorkspacesStore } from '@/stores/workspaces';
-import type { WorkspaceEntry } from '@/types/workspace';
 
 export interface LyclawUiState {
   version: 1;
@@ -107,31 +106,34 @@ function readLocalUiState(): LyclawUiState {
   };
 }
 
-function countUiState(state: LyclawUiState): number {
-  return state.workspaces.temporaryWorkspaces.length
-    + Object.keys(state.chat.sessionWorkspaceIds).length
-    + Object.keys(state.chat.customSessionLabels).length
-    + (state.workspaces.currentWorkspaceId ? 1 : 0);
+function hasLocalWorkspacePersist(): boolean {
+  return WORKSPACE_STORAGE_KEYS.some((key) => window.localStorage.getItem(key) != null);
+}
+
+function hasLocalChatPersist(): boolean {
+  return SESSION_WORKSPACE_KEYS.some((key) => window.localStorage.getItem(key) != null)
+    || CUSTOM_LABEL_KEYS.some((key) => window.localStorage.getItem(key) != null);
 }
 
 function mergeUiState(disk: LyclawUiState | null, local: LyclawUiState): LyclawUiState {
-  const base = disk ?? local;
-  const workspaceMap = new Map<string, WorkspaceEntry>();
-  for (const entry of base.workspaces.temporaryWorkspaces) workspaceMap.set(entry.id, entry);
-  for (const entry of local.workspaces.temporaryWorkspaces) workspaceMap.set(entry.id, entry);
+  const workspaces = hasLocalWorkspacePersist()
+    ? local.workspaces
+    : (disk?.workspaces ?? local.workspaces);
+
+  const chat = hasLocalChatPersist()
+    ? local.chat
+    : disk
+      ? {
+          sessionWorkspaceIds: { ...disk.chat.sessionWorkspaceIds, ...local.chat.sessionWorkspaceIds },
+          customSessionLabels: { ...disk.chat.customSessionLabels, ...local.chat.customSessionLabels },
+        }
+      : local.chat;
 
   return {
     version: 1,
     updatedAt: Date.now(),
-    workspaces: {
-      currentWorkspaceId: local.workspaces.currentWorkspaceId ?? base.workspaces.currentWorkspaceId,
-      currentWorkspacePath: local.workspaces.currentWorkspacePath ?? base.workspaces.currentWorkspacePath,
-      temporaryWorkspaces: [...workspaceMap.values()].sort((a, b) => b.lastAccessedAt - a.lastAccessedAt),
-    },
-    chat: {
-      sessionWorkspaceIds: { ...base.chat.sessionWorkspaceIds, ...local.chat.sessionWorkspaceIds },
-      customSessionLabels: { ...base.chat.customSessionLabels, ...local.chat.customSessionLabels },
-    },
+    workspaces,
+    chat,
   };
 }
 
@@ -187,10 +189,18 @@ export function scheduleUiStateSync(): void {
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
     syncTimer = null;
-    void persistUiStateToDisk(buildUiStateFromStores()).catch((error) => {
+    void flushUiStateSync().catch((error) => {
       console.warn('[ui-state] Failed to persist UI metadata:', error);
     });
   }, 400);
+}
+
+export async function flushUiStateSync(): Promise<void> {
+  if (syncTimer) {
+    clearTimeout(syncTimer);
+    syncTimer = null;
+  }
+  await persistUiStateToDisk(buildUiStateFromStores());
 }
 
 export function startUiStateSync(): void {
@@ -235,16 +245,13 @@ export async function hydrateUiStateFromDisk(): Promise<void> {
     const merged = mergeUiState(disk, local);
     applyUiStateToStores(merged);
 
-    const shouldWriteDisk = !disk || countUiState(merged) > countUiState(disk);
-    if (shouldWriteDisk && countUiState(merged) > 0) {
-      try {
-        await persistUiStateToDisk(merged);
-      } catch (error) {
-        console.warn('[ui-state] Failed to migrate UI metadata to disk:', error);
-      }
-    }
-
     startUiStateSync();
+
+    try {
+      await flushUiStateSync();
+    } catch (error) {
+      console.warn('[ui-state] Failed to sync UI metadata to disk after hydrate:', error);
+    }
   })();
 
   return hydratePromise;

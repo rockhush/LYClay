@@ -22,7 +22,7 @@ import { getOpenClawDir, getOpenClawEntryPath, isOpenClawPresent } from '../util
 import { getDwsDir } from '../utils/dws-env-setup';
 import { getUvMirrorEnv } from '../utils/uv-env';
 import { getManagedPythonEnv } from '../utils/uv-setup';
-import { cleanupDanglingWeChatPluginState, listConfiguredChannelsFromConfig, readOpenClawConfig } from '../utils/channel-config';
+import { cleanupDanglingWeChatPluginState, listConfiguredChannelsFromConfig, listConfiguredChannelAccountsFromConfig, readOpenClawConfig } from '../utils/channel-config';
 import { sanitizeOpenClawConfig, batchSyncConfigFields } from '../utils/openclaw-auth';
 import { buildProxyEnv, resolveProxySettings } from '../utils/proxy';
 import { syncProxyConfigToOpenClaw } from '../utils/openclaw-proxy';
@@ -36,6 +36,8 @@ import {
   hasNpmCliRuntime,
 } from '../utils/bundled-node';
 import { copyPluginFromNodeModules, fixupPluginManifest, cpSyncSafe } from '../utils/plugin-install';
+import { assignChannelAccountToAgent } from '../utils/agent-config';
+import { ensureDingTalkDedicatedAgent, DINGTALK_DEDICATED_AGENT_ID } from '../utils/dingtalk-auto-provision';
 import { stripSystemdSupervisorEnv } from './config-sync-env';
 
 
@@ -332,6 +334,21 @@ export async function syncGatewayConfigBeforeLaunch(
 
     ensureConfiguredPluginsUpgraded(configuredChannels);
     cleanupUnconfiguredChannelPlugins(configuredChannels);
+
+    // Auto-create dingtalk agent + binding when dingtalk channel is configured
+    if (configuredChannels.includes('dingtalk')) {
+      try {
+        await ensureDingTalkDedicatedAgent();
+        const channelAccounts = listConfiguredChannelAccountsFromConfig(rawCfg);
+        const dingtalkAccounts = channelAccounts['dingtalk']?.accountIds ?? ['default'];
+        for (const accountId of dingtalkAccounts) {
+          await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, 'dingtalk', accountId);
+        }
+        logger.info('[GatewaySync] Ensured dingtalk agent + channel bindings');
+      } catch (err) {
+        logger.warn('[GatewaySync] Failed to ensure dingtalk agent:', err);
+      }
+    }
   } catch (err) {
     logger.warn('Failed to auto-upgrade plugins:', err);
   }

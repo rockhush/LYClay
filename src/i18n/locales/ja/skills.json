@@ -18,6 +18,7 @@
     "search": "スキルを検索",
     "searchMarketplace": "マーケットプレイスを検索...",
     "searchButton": "検索",
+    "loadingMine": "マイスキルを読み込み中...",
     "actions": {
         "enableVisible": "一括有効化",
         "disableVisible": "一括無効化",

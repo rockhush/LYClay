@@ -9,6 +9,7 @@ import {
   isPlaceholderSkillDescription,
   isSkillPresentOnDisk,
   isUnknownSkillVersion,
+  getMarketplaceSkillKey,
   mergeSkillWithMarketplaceMetadata,
   normalizeSkillLookupKey,
   resolveSkillDisplayName,
@@ -20,6 +21,11 @@ describe('skill metadata helpers', () => {
   it('normalizes lookup keys for slug/name matching', () => {
     expect(normalizeSkillLookupKey('Data-Analysis')).toBe('dataanalysis');
     expect(normalizeSkillLookupKey('Data Analysis')).toBe('dataanalysis');
+  });
+
+  it('prefers marketplace id over slug for React list keys', () => {
+    expect(getMarketplaceSkillKey({ id: 42, slug: '全网搜索' })).toBe('42');
+    expect(getMarketplaceSkillKey({ slug: 'local-skill' })).toBe('local-skill');
   });
 
   it('matches installed skills to marketplace entries across slug variants', () => {

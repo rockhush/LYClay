@@ -122,6 +122,7 @@ function parseSkillManifest(manifestPath: string, slug: string): ClawHubSkillRes
   }
   
   return {
+    id: slug,
     slug: slug,
     name: skillData.name || slug,
     description: skillData.description || '本地技能',

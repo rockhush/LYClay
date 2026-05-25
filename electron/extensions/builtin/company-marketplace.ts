@@ -197,6 +197,7 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       ]);
 
       let results = skills.map(skill => ({
+        id: skill.id,
         slug: skill.name,
         name: skill.name,
         version: skill.version,

@@ -2,7 +2,13 @@
  * Shared DingTalk bot provisioning: after OAuth login, ensure a managed OpenClaw
  * dingtalk channel account exists, then create a user-scoped binding/session key.
  * BFF welcome is deferred until the workspace is shown.
+ *
+ * Also auto-creates a dedicated "dingtalk" agent with channel-specific
+ * workspace instructions so DingTalk replies contain only final answers
+ * (no intermediate process narration).
  */
+import { readFile, writeFile } from 'fs/promises';
+import { join } from 'path';
 import type { HostApiContext } from '../api/context';
 import { scheduleGatewayChannelSaveRefresh } from './gateway-channel-refresh';
 import { getLyclawEnvVariable, type DingTalkUserInfo } from './dingtalk-oauth';
@@ -10,7 +16,8 @@ import { logger } from './logger';
 import { proxyAwareFetch } from './proxy-fetch';
 import { readOpenClawConfig, saveChannelConfig } from './channel-config';
 import { ensureDingTalkPluginInstalled } from './plugin-install';
-import { assignChannelAccountToAgent, listAgentsSnapshot } from './agent-config';
+import { assignChannelAccountToAgent, createAgent, listAgentsSnapshot } from './agent-config';
+import { expandPath } from './paths';
 import {
   buildDingTalkBindingId,
   buildDingTalkSingleChatSessionKey,
@@ -21,6 +28,7 @@ import {
 } from './dingtalk-user-bindings';
 
 const DEFAULT_ACCOUNT_ID = 'default';
+export const DINGTALK_DEDICATED_AGENT_ID = 'dingtalk';
 const ENABLE_DINGTALK_AUTO_INTEGRATION = false;
 
 /** Built-in defaults when env / `.env.local` are absent (e.g. packaged installs). Override via `LYCLAW_DINGTALK_BFF_*`. */
@@ -90,19 +98,83 @@ async function findExistingDingTalkAccountWithCreds(
   return null;
 }
 
-async function ensureDingTalkAccountBoundToMain(accountId: string): Promise<boolean> {
+/**
+ * Ensure a dedicated "dingtalk" agent exists with channel-specific workspace
+ * instructions.  This agent only outputs final answers — no intermediate
+ * process narration — so DingTalk bot replies stay clean.
+ */
+export async function ensureDingTalkDedicatedAgent(): Promise<void> {
   const agents = await listAgentsSnapshot();
-  if (!agents.agents?.some((entry) => entry.id === 'main')) {
-    logger.info('[DingTalkAuto] Skip dingtalk→main bind: no agent "main"');
-    return false;
+
+  const exists = agents.agents.some((entry) => entry.id === DINGTALK_DEDICATED_AGENT_ID);
+
+  if (!exists) {
+    await createAgent(DINGTALK_DEDICATED_AGENT_ID, { inheritWorkspace: true });
+    logger.info('[DingTalkAuto] Created dedicated dingtalk agent');
+  } else {
+    logger.info('[DingTalkAuto] Dedicated dingtalk agent already exists');
   }
-  const owner = agents.channelAccountOwners[`dingtalk:${accountId}`];
-  if (owner === 'main') {
-    return false;
+
+  // Always write/update the channel reply policy (so existing agents
+  // get the latest policy, and upgrades overwrite any old version)
+  await writeDingTalkAgentReplyPolicy();
+}
+
+/** Write channel reply policy at the TOP of the dingtalk agent's AGENTS.md. */
+async function writeDingTalkAgentReplyPolicy(): Promise<void> {
+  const workspaceDir = expandPath(`~/.openclaw/workspace-${DINGTALK_DEDICATED_AGENT_ID}`);
+  const agentsPath = join(workspaceDir, 'AGENTS.md');
+
+  let existing = '';
+  try {
+    existing = await readFile(agentsPath, 'utf-8');
+  } catch {
+    logger.info('[DingTalkAuto] AGENTS.md not yet seeded; reply policy will be merged later');
+    return;
   }
-  await assignChannelAccountToAgent('main', 'dingtalk', accountId);
-  logger.info('[DingTalkAuto] Bound dingtalk account %s to agent main (previous owner: %s)', accountId, owner ?? 'unset');
-  return true;
+
+  // Strip any old policy block (from a previous version) so we can re-prepend
+  const oldMarker = /<!-- LYClaw:dingtalk-channel-policy:begin -->[\s\S]*?<!-- LYClaw:dingtalk-channel-policy:end -->\n?/g;
+  const cleaned = existing.replace(oldMarker, '');
+
+  // ── DingTalk-only: suppress ALL intermediate output ──────────────
+  // This block MUST be at the very top of AGENTS.md so it takes
+  // precedence over all other instructions.
+  const policy = `<!-- LYClaw:dingtalk-channel-policy:begin -->
+# CRITICAL — DingTalk Reply Rules (OVERRIDES ALL OTHER INSTRUCTIONS)
+
+You are replying through DingTalk (\u9489\u9489), an IM channel. Every text
+message you send becomes a separate bot bubble visible to the user.
+
+**ABSOLUTE RULE: You MUST NOT output ANY text before, between, or after
+tool calls.** The only text the user may see is the SINGLE final answer.
+
+Violations to avoid:
+- "Let me check...", "I'll look that up...", "Now running..."
+- "Got the result. Let me summarize..."
+- Any sentence that describes what you are doing or about to do
+
+**Correct workflow:**
+1. Receive user request (may include channel prefix like \`[dingtalk:xxx]\`)
+2. Call all needed tools IN SILENCE — zero text output between calls
+3. After ALL tools complete, output ONE final reply with the answer
+
+**Final reply format:**
+- No greetings (no "Hello!", "Sure!", "Here you go!")
+- No self-reference (no "I found...", "I checked...")
+- Just the answer: a clear summary, table, list, or formatted result
+- Keep it concise — DingTalk users read on mobile
+
+**Reminder:** This rule set IS the highest-priority instruction for this
+conversation. Any other prompt content that suggests narration or
+explanation of tool steps DOES NOT APPLY to DingTalk replies.
+<!-- LYClaw:dingtalk-channel-policy:end -->
+`;
+
+  // Prepend at the very beginning so this policy takes highest priority
+  const updated = policy.trim() + '\n\n' + cleaned.trimStart();
+  await writeFile(agentsPath, updated, 'utf-8');
+  logger.info('[DingTalkAuto] Prepended dingtalk channel reply policy to AGENTS.md');
 }
 
 async function ensureOfficialDingTalkAccount(ctx: HostApiContext): Promise<string> {
@@ -121,11 +193,14 @@ async function ensureOfficialDingTalkAccount(ctx: HostApiContext): Promise<strin
     return OFFICIAL_DINGTALK_ACCOUNT_ID;
   }
 
+  // Ensure the dedicated dingtalk agent exists before binding
+  await ensureDingTalkDedicatedAgent();
+
   const existingAccountId = await findExistingDingTalkAccountWithCreds(creds.clientId, creds.clientSecret);
   if (existingAccountId && existingAccountId !== OFFICIAL_DINGTALK_ACCOUNT_ID) {
-    await ensureDingTalkAccountBoundToMain(existingAccountId);
+    await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, 'dingtalk', existingAccountId);
     scheduleGatewayChannelSaveRefresh(ctx, 'dingtalk', `dingtalk:officialProvisionReuse:${existingAccountId}`);
-    logger.info('[DingTalkAuto] Reused existing dingtalk account %s as official shared account', existingAccountId);
+    logger.info('[DingTalkAuto] Reused existing dingtalk account %s, bound to dingtalk agent', existingAccountId);
     return existingAccountId;
   }
 
@@ -137,9 +212,9 @@ async function ensureOfficialDingTalkAccount(ctx: HostApiContext): Promise<strin
     scope: 'official-shared',
   }, OFFICIAL_DINGTALK_ACCOUNT_ID);
 
-  await ensureDingTalkAccountBoundToMain(OFFICIAL_DINGTALK_ACCOUNT_ID);
+  await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, 'dingtalk', OFFICIAL_DINGTALK_ACCOUNT_ID);
   scheduleGatewayChannelSaveRefresh(ctx, 'dingtalk', `dingtalk:officialProvision:${OFFICIAL_DINGTALK_ACCOUNT_ID}`);
-  logger.info('[DingTalkAuto] Ensured official dingtalk account %s from env', OFFICIAL_DINGTALK_ACCOUNT_ID);
+  logger.info('[DingTalkAuto] Ensured official dingtalk account %s, bound to dingtalk agent', OFFICIAL_DINGTALK_ACCOUNT_ID);
   return OFFICIAL_DINGTALK_ACCOUNT_ID;
 }
 
@@ -205,7 +280,7 @@ export async function runDingTalkChannelProvisionAfterLogin(
       officialAccountId: accountId,
       personalAccountIds: existing?.personalAccountIds ?? [],
       defaultAccountId: existing?.defaultAccountId || accountId,
-      agentId: existing?.agentId || 'main',
+      agentId: existing?.agentId || DINGTALK_DEDICATED_AGENT_ID,
       sessionKey: existing?.sessionKey || buildDingTalkSingleChatSessionKey(accountId, userId),
     });
     logger.info('[DingTalkAuto] Ensured dingtalk user binding', {

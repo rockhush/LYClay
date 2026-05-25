@@ -18,6 +18,7 @@
     "search": "Search skills",
     "searchMarketplace": "Search marketplace...",
     "searchButton": "Search",
+    "loadingMine": "Loading your skills...",
     "actions": {
         "enableVisible": "Enable All",
         "disableVisible": "Disable All",

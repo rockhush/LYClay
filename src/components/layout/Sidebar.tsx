@@ -45,6 +45,7 @@ import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { hostApiFetch } from '@/lib/host-api';
+import { flushUiStateSync } from '@/lib/ui-state-persistence';
 import { toUserMessage } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -175,7 +176,7 @@ export function Sidebar() {
   const sessionStreamingStates = useChatStore((s) => s.sessionStreamingStates);
   const switchSession = useChatStore((s) => s.switchSession);
   const newSession = useChatStore((s) => s.newSession);
-  const bindCurrentSessionWorkspace = useChatStore((s) => s.bindCurrentSessionWorkspace);
+  const clearSessionWorkspaceBindings = useChatStore((s) => s.clearSessionWorkspaceBindings);
   const deleteSession = useChatStore((s) => s.deleteSession);
   const renameSession = useChatStore((s) => s.renameSession);
   const loadSessions = useChatStore((s) => s.loadSessions);
@@ -213,8 +214,6 @@ export function Sidebar() {
 
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const temporaryWorkspaces = useWorkspacesStore((s) => s.temporaryWorkspaces);
-  const currentWorkspaceId = useWorkspacesStore((s) => s.currentWorkspaceId);
-  const setCurrentWorkspace = useWorkspacesStore((s) => s.setCurrentWorkspace);
   const removeTemporaryWorkspace = useWorkspacesStore((s) => s.removeTemporaryWorkspace);
   const dingtalkUser = useDingTalkAuthStore((s) => s.user);
   const dingtalkLoading = useDingTalkAuthStore((s) => s.loading);
@@ -266,6 +265,8 @@ export function Sidebar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isPendingNewSession depends on currentSessionKey/messages/sessionLastActivity which are all listed below
   }, [allWorkspaces, sessions, sessionWorkspaceIds, workspaceIdsKnown, sessionLastActivity, sessionLabels, currentSessionKey, messages.length]);
 
+  const activeWorkspaceId = sessionWorkspaceIds[currentSessionKey] ?? null;
+
   const isSessionListedUnderWorkspace = (sessionKey: string) => {
     const wid = sessionWorkspaceIds[sessionKey];
     return Boolean(wid && workspaceIdsKnown.has(wid));
@@ -291,25 +292,6 @@ export function Sidebar() {
       else next.add(workspaceId);
       return next;
     });
-  };
-
-  const selectWorkspace = (workspaceId: string) => {
-    setCurrentWorkspace(workspaceId);
-    bindCurrentSessionWorkspace(workspaceId);
-
-    // 切换到对应 Agent 的主会话
-    const agentsStore = useAgentsStore.getState();
-    const agent = agentsStore.agents.find(a => a.id === workspaceId);
-    if (agent) {
-      const targetSessionKey = agent.mainSessionKey || `agent:${agent.id}:main`;
-      
-      if (currentSessionKey !== targetSessionKey) {
-        if (blockSessionSwitchIfFirstResponsePreparing()) return;
-        switchSession(targetSessionKey);
-      }
-
-      navigate('/');
-    }
   };
 
   useEffect(() => {
@@ -414,6 +396,7 @@ export function Sidebar() {
 
   const { t } = useTranslation(['common', 'chat', 'settings']);
   const [sessionToDelete, setSessionToDelete] = useState<{ key: string; label: string } | null>(null);
+  const [workspaceToDelete, setWorkspaceToDelete] = useState<{ id: string; label: string } | null>(null);
   const [sessionToRename, setSessionToRename] = useState<{ key: string; label: string } | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
@@ -675,6 +658,7 @@ export function Sidebar() {
   ];
 
   return (
+    <>
     <aside
       data-testid="sidebar"
       className={cn(
@@ -794,28 +778,18 @@ export function Sidebar() {
               {!workspacesCollapsed && (
                 <div className="space-y-0.5 mt-1">
                   {allWorkspaces
-                    .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
+                    .slice()
+                    .sort((a, b) => b.createdAt - a.createdAt)
                     .map((workspace) => {
                       const displayName = workspace.name;
-                      const isSelected = currentWorkspaceId === workspace.id;
                       const sessionCount = sessionsByWorkspaceId[workspace.id]?.length ?? 0;
                       const chatsExpanded =
                         sessionCount > 0 && !workspaceChatsCollapsedIds.has(workspace.id);
+                      const isActiveWorkspace = activeWorkspaceId === workspace.id;
 
                       const handleWorkspaceBodyClick = () => {
-                        const wid = workspace.id;
-                        const alreadySelected = currentWorkspaceId === wid;
-                        selectWorkspace(wid);
                         if (sessionCount === 0) return;
-                        if (alreadySelected) {
-                          toggleWorkspaceChatsCollapsed(wid);
-                        } else {
-                          setWorkspaceChatsCollapsedIds((prev) => {
-                            const next = new Set(prev);
-                            next.delete(wid);
-                            return next;
-                          });
-                        }
+                        toggleWorkspaceChatsCollapsed(workspace.id);
                       };
 
                       return (
@@ -825,7 +799,7 @@ export function Sidebar() {
                             className={cn(
                               'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors flex items-center gap-1 cursor-pointer group',
                               'hover:bg-white/60 dark:hover:bg-white/10',
-                              isSelected
+                              isActiveWorkspace
                                 ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground'
                                 : 'text-foreground/75',
                             )}
@@ -860,7 +834,7 @@ export function Sidebar() {
                               ) : (
                                 <span className="inline-flex h-3 w-3 shrink-0" aria-hidden />
                               )}
-                              {isSelected ? (
+                              {chatsExpanded ? (
                                 <FolderOpen className="h-3.5 w-3.5 shrink-0" />
                               ) : (
                                 <Folder className="h-3.5 w-3.5 shrink-0" />
@@ -881,10 +855,16 @@ export function Sidebar() {
                               </button>
                               <button
                                 type="button"
+                                data-testid={`sidebar-workspace-remove-${workspace.id}`}
                                 className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
-                                onClick={(e) => {
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
                                   e.stopPropagation();
-                                  removeTemporaryWorkspace(workspace.id);
+                                }}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setWorkspaceToDelete({ id: workspace.id, label: displayName });
                                 }}
                                 title="移除工作空间"
                               >
@@ -1054,14 +1034,16 @@ export function Sidebar() {
           </Button>
         )}
       </div>
+    </aside>
 
       <ConfirmDialog
         open={!!sessionToDelete}
         title={t('common:actions.confirm')}
-        message={t('common:sidebar.deleteSessionConfirm', { label: sessionToDelete?.label })}
+        message={t('common:sidebar.deleteSessionConfirm', { label: sessionToDelete?.label ?? '' })}
         confirmLabel={t('common:actions.delete')}
         cancelLabel={t('common:actions.cancel')}
         variant="destructive"
+        testId="sidebar-session-delete-confirm"
         onConfirm={async () => {
           if (!sessionToDelete) return;
           await deleteSession(sessionToDelete.key);
@@ -1069,6 +1051,27 @@ export function Sidebar() {
           setSessionToDelete(null);
         }}
         onCancel={() => setSessionToDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={!!workspaceToDelete}
+        title={t('common:actions.confirm')}
+        message={t('common:sidebar.deleteWorkspaceConfirm', { label: workspaceToDelete?.label ?? '' })}
+        confirmLabel={t('common:actions.delete')}
+        cancelLabel={t('common:actions.cancel')}
+        variant="destructive"
+        testId="sidebar-workspace-delete-confirm"
+        onConfirm={() => {
+          if (!workspaceToDelete) return;
+          const workspaceId = workspaceToDelete.id;
+          removeTemporaryWorkspace(workspaceId);
+          clearSessionWorkspaceBindings(workspaceId);
+          setWorkspaceToDelete(null);
+          void flushUiStateSync().catch((error) => {
+            console.warn('[sidebar] Failed to persist workspace removal:', error);
+          });
+        }}
+        onCancel={() => setWorkspaceToDelete(null)}
       />
 
       {sessionToRename && (
@@ -1127,6 +1130,6 @@ export function Sidebar() {
           </div>
         </ModalOverlay>
       )}
-    </aside>
+    </>
   );
 }

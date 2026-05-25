@@ -6,7 +6,7 @@
  * All file I/O uses async fs/promises to avoid blocking the main thread.
  */
 import { readFile, writeFile, access, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { constants } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -291,6 +291,42 @@ export async function ensureBuiltinSkillsInstalled(): Promise<void> {
             logger.info(`Installed built-in skill: ${slug} -> ${targetDir}`);
         } catch (error) {
             logger.warn(`Failed to install built-in skill ${slug}:`, error);
+        }
+    }
+
+    // Scan resources/builtin-skills/ for custom built-in skills bundled with the app.
+    // Any subdirectory containing a SKILL.md is auto-installed to ~/.openclaw/skills/<slug>/.
+    const customBuiltinSkillsDir = join(getResourcesDir(), 'builtin-skills');
+    if (existsSync(customBuiltinSkillsDir)) {
+        let entries: import('fs').Dirent[];
+        try {
+            entries = readdirSync(customBuiltinSkillsDir, { withFileTypes: true });
+        } catch {
+            entries = [];
+        }
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            const slug = entry.name;
+            const sourceDir = join(customBuiltinSkillsDir, slug);
+            const targetDir = join(skillsRoot, slug);
+            const targetManifest = join(targetDir, 'SKILL.md');
+
+            if (existsSync(targetManifest)) {
+                continue; // already installed
+            }
+
+            if (!existsSync(join(sourceDir, 'SKILL.md'))) {
+                logger.warn(`Custom built-in skill missing SKILL.md, skipping: ${sourceDir}`);
+                continue;
+            }
+
+            try {
+                await mkdir(targetDir, { recursive: true });
+                await cpAsyncSafe(sourceDir, targetDir);
+                logger.info(`Installed custom built-in skill: ${slug} -> ${targetDir}`);
+            } catch (error) {
+                logger.warn(`Failed to install custom built-in skill ${slug}:`, error);
+            }
         }
     }
 }

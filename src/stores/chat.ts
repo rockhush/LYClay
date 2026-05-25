@@ -1768,6 +1768,17 @@ function clearSessionEntryFromMap<T extends Record<string, unknown>>(entries: T,
   return Object.fromEntries(Object.entries(entries).filter(([key]) => key !== sessionKey)) as T;
 }
 
+/** Keep chat input workspace picker aligned with the selected session's binding. */
+function syncWorkspacePickerToSession(
+  sessionWorkspaceIds: Record<string, string>,
+  sessionKey: string,
+): void {
+  const boundWorkspaceId = sessionWorkspaceIds[sessionKey];
+  if (boundWorkspaceId) {
+    useWorkspacesStore.getState().setCurrentWorkspace(boundWorkspaceId);
+  }
+}
+
 function buildSessionSwitchPatch(
   state: Pick<
     ChatState,
@@ -2446,6 +2457,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
+  clearSessionWorkspaceBindings: (workspaceId: string) => {
+    set((s) => ({
+      sessionWorkspaceIds: Object.fromEntries(
+        Object.entries(s.sessionWorkspaceIds).filter(([, wid]) => wid !== workspaceId),
+      ),
+    }));
+  },
+
   // ── Load sessions via sessions.list ──
   loadSessions: async (force = false) => {
     const now = Date.now();
@@ -2641,6 +2660,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const nextState = sessionStreamingStates[key];
     const hasActiveStream = nextState?.activeRunId || nextState?.sending;
     set((s) => buildSessionSwitchPatch(s, key));
+    syncWorkspacePickerToSession(get().sessionWorkspaceIds, key);
     if (!hasActiveStream) {
       get().loadHistory();
     }
@@ -2726,6 +2746,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         };
       });
       if (next) {
+        syncWorkspacePickerToSession(get().sessionWorkspaceIds, next.key);
         const nextState = get().sessionStreamingStates[next.key];
         // Skip loadHistory if there's an active stream to preserve streaming state
         if (!nextState?.activeRunId && !nextState?.sending) {
@@ -3361,6 +3382,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     if (targetSessionKey !== get().currentSessionKey) {
       set((s) => buildSessionSwitchPatch(s, targetSessionKey));
+      syncWorkspacePickerToSession(get().sessionWorkspaceIds, targetSessionKey);
       await get().loadHistory(true);
     }
 

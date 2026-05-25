@@ -31,6 +31,10 @@ import {
   ensureWeComPluginInstalled,
 } from '../../utils/plugin-install';
 import {
+  ensureDingTalkDedicatedAgent,
+  DINGTALK_DEDICATED_AGENT_ID,
+} from '../../utils/dingtalk-auto-provision';
+import {
   computeChannelRuntimeStatus,
   pickChannelRuntimeStatus,
   type ChannelConnectionStatus,
@@ -1458,11 +1462,19 @@ export async function handleChannelRoutes(
       const existingValues = await getChannelFormValues(body.channelType, body.accountId);
       if (isSameConfigValues(existingValues, body.config)) {
         await ensureScopedChannelBinding(body.channelType, body.accountId);
+        if (storedChannelType === 'dingtalk') {
+          await ensureDingTalkDedicatedAgent();
+          await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, storedChannelType, body.accountId || 'default');
+        }
         sendJson(res, 200, { success: true, noChange: true });
         return true;
       }
       await saveChannelConfig(body.channelType, body.config, body.accountId);
       await ensureScopedChannelBinding(body.channelType, body.accountId);
+      if (storedChannelType === 'dingtalk') {
+        await ensureDingTalkDedicatedAgent();
+        await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, storedChannelType, body.accountId || 'default');
+      }
       scheduleGatewayChannelSaveRefresh(ctx, storedChannelType, `channel:saveConfig:${storedChannelType}`);
       sendJson(res, 200, { success: true });
     } catch (error) {

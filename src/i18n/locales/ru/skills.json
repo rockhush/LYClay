@@ -18,6 +18,7 @@
     "search": "Поиск навыков",
     "searchMarketplace": "Поиск на маркетплейсе...",
     "searchButton": "Поиск",
+    "loadingMine": "Загрузка ваших навыков...",
     "actions": {
         "enableVisible": "Включить все",
         "disableVisible": "Выключить все",

@@ -13,6 +13,7 @@
         "models": "模型",
         "workspaces": "工作空间",
         "deleteSessionConfirm": "确定要删除对话 \"{{label}}\" 吗？",
+        "deleteWorkspaceConfirm": "确定要删除工作空间 \"{{label}}\" 吗？",
         "renameSession": "重命名对话",
         "renameSessionTitle": "编辑对话标题",
         "renameSessionDescription": "为该对话设置一个便于识别的名称，重启应用后仍会保留。",

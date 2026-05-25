@@ -13,6 +13,7 @@
         "models": "Models",
         "workspaces": "Workspaces",
         "deleteSessionConfirm": "Are you sure you want to delete session \"{{label}}\"?",
+        "deleteWorkspaceConfirm": "Are you sure you want to delete workspace \"{{label}}\"?",
         "renameSession": "Rename session",
         "renameSessionTitle": "Edit conversation title",
         "renameSessionDescription": "Pick a name that's easy to recognize. The new title is kept across app restarts.",

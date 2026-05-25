@@ -37,7 +37,8 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSkillsStore } from '@/stores/skills';
 import { useGatewayStore } from '@/stores/gateway';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { LoadingSpinner, CenteredLoader } from '@/components/common/LoadingSpinner';
+import { useMinLoading } from '@/hooks/use-min-loading';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
@@ -47,6 +48,7 @@ import type { Skill, MarketplaceSkill } from '@/types/skill';
 import {
   buildMarketplaceLookupMaps,
   findMarketplaceSkillMatch,
+  getMarketplaceSkillKey,
   formatSkillVersionLabel,
   isPlaceholderSkillDescription,
   resolveSkillDisplayName,
@@ -757,6 +759,8 @@ export function Skills() {
     'self-improving-agent',
     'healthcheck',
     'tavily-search',
+    'dws',
+    'lingyi-baishitong',
   ]);
   
   const filteredSkills = safeSkills.filter((skill) => {
@@ -1035,7 +1039,8 @@ export function Skills() {
     }
   }, [uninstallSkill, searchResults, safeSkills, setSkills, setSearchResults, t]);
 
-  const showInitialLoading = loading && safeSkills.length === 0;
+  const showInitialLoading = loading && activeTab === 'mine';
+  const showMineLoading = useMinLoading(showInitialLoading);
 
   return (
     <div
@@ -1368,28 +1373,8 @@ export function Skills() {
           )}
 
           {activeTab === 'mine' ? (
-            showInitialLoading ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {Array.from({ length: 6 }).map((_, index) => (
-                  <div
-                    key={`skill-skeleton-${index}`}
-                    className="rounded-2xl border border-black/[0.06] dark:border-white/10 bg-white/70 dark:bg-white/[0.04] p-4 animate-pulse"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="h-7 w-7 rounded-lg bg-black/[0.06] dark:bg-white/10" />
-                      <div className="flex-1 space-y-2">
-                        <div className="h-4 w-2/5 rounded bg-black/[0.06] dark:bg-white/10" />
-                        <div className="h-3 w-16 rounded bg-black/[0.05] dark:bg-white/10" />
-                      </div>
-                      <div className="h-5 w-9 rounded-full bg-black/[0.06] dark:bg-white/10" />
-                    </div>
-                    <div className="mt-3 space-y-2">
-                      <div className="h-3 w-full rounded bg-black/[0.05] dark:bg-white/10" />
-                      <div className="h-3 w-4/5 rounded bg-black/[0.05] dark:bg-white/10" />
-                    </div>
-                  </div>
-                ))}
-              </div>
+            showMineLoading ? (
+              <CenteredLoader message={t('loadingMine')} testId="skills-mine-loading" />
             ) : filteredSkills.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Puzzle className="h-10 w-10 mb-4 opacity-50" />
@@ -1423,20 +1408,18 @@ export function Skills() {
               )}
 
               {searching && (
-                <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-                  <LoadingSpinner size="lg" />
-                  <p className="mt-4 text-sm">{t('marketplace.searching')}</p>
-                </div>
+                <CenteredLoader message={t('marketplace.searching')} testId="skills-market-loading" />
               )}
 
               {!searching && visibleMarketplaceSkills.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {visibleMarketplaceSkills.map((skill) => {
                     const isInstalled = isMarketplaceSkillInstalled(skill);
+                    const marketplaceKey = getMarketplaceSkillKey(skill);
                     const isInstallLoading = !!installing[skill.slug];
                     return (
                       <MarketplaceSkillCard
-                        key={skill.slug}
+                        key={marketplaceKey}
                         skill={skill}
                         isInstalled={isInstalled}
                         isLoading={isInstallLoading}

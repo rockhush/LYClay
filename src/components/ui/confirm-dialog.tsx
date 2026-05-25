@@ -14,6 +14,7 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'default' | 'destructive';
+  testId?: string;
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
   onError?: (error: unknown) => void;
@@ -26,6 +27,7 @@ export function ConfirmDialog({
   confirmLabel = 'OK',
   cancelLabel = 'Cancel',
   variant = 'default',
+  testId,
   onConfirm,
   onCancel,
   onError,
@@ -77,6 +79,7 @@ export function ConfirmDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
+      data-testid={testId}
       onKeyDown={handleKeyDown}
     >
       <div

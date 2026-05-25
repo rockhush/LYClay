@@ -30,6 +30,14 @@ export function formatSkillVersionLabel(
   return `v${version!.trim()}`;
 }
 
+/** React list key for marketplace cards; prefers stable API id over install slug. */
+export function getMarketplaceSkillKey(skill: Pick<MarketplaceSkill, 'id' | 'slug'>): string {
+  if (skill.id != null && String(skill.id).trim()) {
+    return String(skill.id);
+  }
+  return skill.slug;
+}
+
 export function buildMarketplaceLookupMaps(marketplaceSkills: MarketplaceSkill[]): {
   bySlug: Map<string, MarketplaceSkill>;
   byName: Map<string, MarketplaceSkill>;

@@ -25,15 +25,24 @@ export function WorkspacePicker({ disabled = false, onWorkspaceChange }: Workspa
   const addTemporaryWorkspace = useWorkspacesStore((s) => s.addTemporaryWorkspace);
 
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
+  const sessionWorkspaceIds = useChatStore((s) => s.sessionWorkspaceIds);
   const bindCurrentSessionWorkspace = useChatStore((s) => s.bindCurrentSessionWorkspace);
 
   const allWorkspaces = [...temporaryWorkspaces, ...workspaces];
-  const currentWorkspace = allWorkspaces.find(w => w.id === currentWorkspaceId);
+  const boundWorkspaceId = sessionWorkspaceIds[currentSessionKey] ?? null;
+  const effectiveWorkspaceId = boundWorkspaceId ?? currentWorkspaceId;
+  const currentWorkspace = allWorkspaces.find(w => w.id === effectiveWorkspaceId);
 
   // 移除自动绑定的useEffect，只在会话内主动选择工作空间时才绑定
   // useEffect(() => {
   //   bindCurrentSessionWorkspace(currentWorkspaceId ?? null);
   // }, [currentWorkspaceId, currentSessionKey, bindCurrentSessionWorkspace]);
+
+  useEffect(() => {
+    if (boundWorkspaceId && boundWorkspaceId !== currentWorkspaceId) {
+      setCurrentWorkspace(boundWorkspaceId);
+    }
+  }, [boundWorkspaceId, currentWorkspaceId, setCurrentWorkspace]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -123,7 +132,7 @@ export function WorkspacePicker({ disabled = false, onWorkspaceChange }: Workspa
               .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
               .map((workspace) => {
                 const displayName = workspace.name;
-                const isSelected = currentWorkspaceId === workspace.id;
+                const isSelected = effectiveWorkspaceId === workspace.id;
                 return (
                   <button
                     key={workspace.id}
