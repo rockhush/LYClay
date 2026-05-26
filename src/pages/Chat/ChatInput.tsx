@@ -1009,12 +1009,11 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                 size="icon"
                 data-testid="chat-composer-send"
                 className={cn(
-                  'shrink-0 h-8 w-8 rounded-full transition-colors',
+                  'shrink-0 h-8 w-8 rounded-full border-0 shadow-none transition-colors',
                   sending || canSend
-                    ? 'bg-[#FF922B] text-white hover:bg-[#FF6A00] dark:bg-white/10 dark:text-foreground dark:hover:bg-white/20'
-                    : 'bg-[#FF922B]/15 text-[#FF922B]/60 hover:bg-[#FF922B]/15 dark:bg-white/5 dark:text-muted-foreground/60',
+                    ? 'bg-[#FF922B] text-white hover:bg-[#FF6A00] hover:text-white focus-visible:ring-[#FF922B]/40 dark:bg-white/10 dark:text-white dark:hover:bg-white/20 dark:hover:text-white'
+                    : 'bg-[#FF922B]/15 text-[#FF922B]/60 hover:bg-[#FF922B]/15 hover:text-[#FF922B]/60 dark:bg-white/5 dark:text-muted-foreground/60 dark:hover:bg-white/5 dark:hover:text-muted-foreground/60',
                 )}
-                variant="ghost"
                 title={sending ? t('composer.stop') : t('composer.send')}
               >
                 {sending ? (

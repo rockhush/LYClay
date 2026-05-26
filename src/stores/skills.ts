@@ -313,18 +313,8 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         }
       }
 
-      // 仅当 renderer 端能拿到 fs 模块时才做存在性探测；任何形式的失败
-      // （context isolation 关闭 require、沙箱、权限）都返回 null（"未知"），
-      // 由调用方按"未知则保留"处理，避免再因环境差异误杀整列技能。
-      const tryExistsSync = (p: string | undefined): boolean | null => {
-        if (!p) return null;
-        try {
-          const fs = require('fs');
-          return Boolean(fs.existsSync(p));
-        } catch {
-          return null;
-        }
-      };
+      // Renderer 无法安全访问 Node fs；路径存在性由 main 的 clawhub list 负责。
+      const tryExistsSync = (_p: string | undefined): boolean | null => null;
 
       // Map gateway skills info
       if (gatewayData.skills) {
@@ -356,31 +346,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
               }
             }
 
-            // 获取版本号：优先使用 Gateway 返回的版本号，否则尝试从 package.json 读取
-            let version = s.version || 'unknown';
-            if (version === 'unknown' || !version) {
-              try {
-                const fs = require('fs');
-                const path = require('path');
-                if (resolvedBaseDir) {
-                  const pkgPath = path.join(resolvedBaseDir, 'package.json');
-                  if (fs.existsSync(pkgPath)) {
-                    const pkgContent = fs.readFileSync(pkgPath, 'utf-8');
-                    const pkg = JSON.parse(pkgContent);
-                    if (pkg.version) {
-                      version = pkg.version;
-                    }
-                  }
-                }
-              } catch (err) {
-                // 忽略读取错误
-                console.log(`Failed to read package.json for skill ${s.skillKey}:`, err);
-              }
-            }
-            // 如果还是未知，保留 unknown，UI 展示「未知」
-            if (version === 'unknown' || !version) {
-              version = 'unknown';
-            }
+            const version = s.version || 'unknown';
 
             return {
               id: s.skillKey,

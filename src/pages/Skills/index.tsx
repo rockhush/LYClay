@@ -674,7 +674,6 @@ export function Skills() {
     installSkill,
     uninstallSkill,
     setSearchResults,
-    setSkills,
     searching,
     searchError,
     installing,
@@ -697,7 +696,6 @@ export function Skills() {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
-  const previousTabRef = useRef<'mine' | 'market'>(activeTab);
 
   // Close the "新增技能" dropdown on outside click
   useEffect(() => {
@@ -717,13 +715,6 @@ export function Skills() {
   useEffect(() => {
     void fetchSkills();
   }, [fetchSkills]);
-
-  useEffect(() => {
-    if (previousTabRef.current === 'market' && activeTab === 'mine') {
-      void fetchSkills();
-    }
-    previousTabRef.current = activeTab;
-  }, [activeTab, fetchSkills]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -1027,21 +1018,16 @@ export function Skills() {
       const currentScroll = listRef.current?.scrollTop || 0;
       
       await uninstallSkill(slug);
+      await fetchSkills();
       
       // 本地更新搜索结果，标记技能为未安装
       const updatedSearchResults = searchResults.map(skill => {
-        if (skill.slug === slug) {
+        if (skill.slug === slug || String(skill.id) === slug) {
           return { ...skill, __installed: false };
         }
         return skill;
       });
       setSearchResults(updatedSearchResults);
-      
-      // 从 safeSkills 中移除已卸载的技能
-      const updatedSkills = safeSkills.filter(s => 
-        !(s.id === slug || s.slug === slug || s.name === slug || s.baseDir?.includes(slug))
-      );
-      setSkills(updatedSkills);
       
       // 关闭技能详情弹窗
       setSelectedSkill(null);
@@ -1057,9 +1043,9 @@ export function Skills() {
     } catch (err) {
       toast.error(t('toast.failedUninstall') + ': ' + String(err));
     }
-  }, [uninstallSkill, searchResults, safeSkills, setSkills, setSearchResults, t]);
+  }, [uninstallSkill, fetchSkills, searchResults, setSearchResults, t]);
 
-  const showInitialLoading = loading && activeTab === 'mine';
+  const showInitialLoading = loading && activeTab === 'mine' && safeSkills.length === 0;
   const showMineLoading = useMinLoading(showInitialLoading);
 
   return (
