@@ -13,6 +13,7 @@ import {
   isPlaceholderSkillDescription,
   isSkillPresentOnDisk,
   mergeSkillWithMarketplaceMetadata,
+  normalizeBaseDirKey,
   normalizeSkillLookupKey,
   shouldIncludeInMySkills,
   dedupeInstalledSkills,
@@ -87,8 +88,22 @@ function applyClawHubMetadata(existing: Skill, cs: ClawHubListResult): void {
   if (!existing.source && cs.source) {
     existing.source = cs.source;
   }
-  if (cs.name?.trim() && (!existing.name || existing.name === existing.slug || existing.name === existing.id)) {
-    existing.name = cs.name.trim();
+
+  const sharesBaseDir = Boolean(
+    cs.baseDir
+    && existing.baseDir
+    && normalizeBaseDirKey(cs.baseDir) === normalizeBaseDirKey(existing.baseDir),
+  );
+
+  if (cs.name?.trim()) {
+    if (
+      sharesBaseDir
+      || !existing.name
+      || existing.name === existing.slug
+      || existing.name === existing.id
+    ) {
+      existing.name = cs.name.trim();
+    }
   }
   if (cs.description?.trim() && isPlaceholderSkillDescription(existing.description)) {
     existing.description = cs.description.trim();
@@ -96,8 +111,13 @@ function applyClawHubMetadata(existing: Skill, cs: ClawHubListResult): void {
   if (cs.author?.trim() && !existing.author) {
     existing.author = cs.author.trim();
   }
-  if (cs.version && cs.version.toLowerCase() !== 'unknown' && (!existing.version || existing.version.toLowerCase() === 'unknown')) {
-    existing.version = cs.version;
+  if (cs.version?.trim()) {
+    const clawhubVersion = cs.version.trim().toLowerCase() === 'unknown' ? 'unknown' : cs.version.trim();
+    if (sharesBaseDir || !existing.version || existing.version.toLowerCase() === 'unknown') {
+      existing.version = clawhubVersion;
+    }
+  } else if (sharesBaseDir && !existing.isBundled && !existing.isCore) {
+    existing.version = 'unknown';
   }
 }
 

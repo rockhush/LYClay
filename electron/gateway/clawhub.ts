@@ -12,6 +12,7 @@ import {
     readCompanyMarketplaceSidecarSync,
     resolveCompanyMarketplacePackageSlug,
 } from '../utils/company-marketplace-installs';
+import { resolveLocalUploadSkillMetadata } from '../utils/company-skill-package';
 
 export interface ClawHubSearchParams {
     query: string;
@@ -540,8 +541,9 @@ export class ClawHubService {
                     const manifest = this.parseSkillManifest(skillManifestPath);
                     const sidecar = readCompanyMarketplaceSidecarSync(dirPath);
                     const slug = manifest.slug || entry.name;
-                    const name = sidecar?.name || manifest.name || entry.name;
-                    const version = sidecar?.version || manifest.version || 'unknown';
+                    const localMetadata = resolveLocalUploadSkillMetadata(manifest, entry.name);
+                    const name = sidecar?.name || localMetadata.name;
+                    const version = sidecar?.version || localMetadata.version;
 
                     results.push({
                         slug,

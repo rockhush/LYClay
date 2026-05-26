@@ -5,6 +5,7 @@ import * as path from 'path';
 import {
   parseSkillManifestFields,
   parseZipBasenameFromContentDisposition,
+  resolveLocalUploadSkillMetadata,
   resolvePackageDirName,
   resolvePackageDirNameFromManifest,
 } from '../../electron/utils/company-skill-package';
@@ -30,6 +31,25 @@ description: test
   it('parses zip filename from content-disposition', () => {
     expect(parseZipBasenameFromContentDisposition('attachment; filename="dws.zip"')).toBe('dws.zip');
     expect(parseZipBasenameFromContentDisposition("attachment; filename*=UTF-8''dws.zip")).toBe('dws.zip');
+  });
+
+  it('resolves local upload metadata from manifest with directory fallback', () => {
+    const manifest = parseSkillManifestFields(`---
+name: 智能助手
+version: 1.2.3
+---`);
+    expect(resolveLocalUploadSkillMetadata(manifest, 'test')).toEqual({
+      name: '智能助手',
+      version: '1.2.3',
+    });
+
+    const manifestWithoutName = parseSkillManifestFields(`---
+description: test
+---`);
+    expect(resolveLocalUploadSkillMetadata(manifestWithoutName, 'test')).toEqual({
+      name: 'test',
+      version: 'unknown',
+    });
   });
 
   it('resolves package dir from nested archive layout', async () => {

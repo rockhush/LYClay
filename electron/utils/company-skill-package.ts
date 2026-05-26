@@ -4,6 +4,7 @@ import * as path from 'path';
 export interface SkillManifestFields {
   name?: string;
   slug?: string;
+  version?: string;
 }
 
 export function parseSkillManifestFields(raw: string): SkillManifestFields {
@@ -25,7 +26,17 @@ export function parseSkillManifestFields(raw: string): SkillManifestFields {
   return {
     name: readScalar('name'),
     slug: readScalar('slug'),
+    version: readScalar('version'),
   };
+}
+
+export function resolveLocalUploadSkillMetadata(
+  manifest: SkillManifestFields,
+  packageDirName: string,
+): { name: string; version: string } {
+  const name = manifest.name?.trim() || packageDirName;
+  const version = manifest.version?.trim() || 'unknown';
+  return { name, version };
 }
 
 export async function findSkillManifestPath(rootDir: string, maxDepth = 4): Promise<string | null> {
