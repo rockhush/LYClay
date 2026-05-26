@@ -1,5 +1,6 @@
 export const LY_MINIMAX_PROVIDER_ID = 'ly-minimax' as const;
 export const LEGACY_LY_MINIMAX_PROVIDER_ID = 'lyclaw-model' as const;
+// export const LY_GLM_PROVIDER_ID = 'ly-glm' as const;
 
 export const PROVIDER_TYPES = [
   LY_MINIMAX_PROVIDER_ID,
@@ -15,6 +16,7 @@ export const PROVIDER_TYPES = [
   'minimax-portal',
   'minimax-portal-cn',
   'ly-mimo',
+  // 'ly-glm',
   'modelstudio',
   'ollama',
   'custom',
@@ -26,7 +28,7 @@ export const BUILTIN_PROVIDER_TYPES = [
   'openai',
   'google',
   'openrouter',
-  'ark', 
+  'ark',
   'deepseek',
   'moonshot',
   'moonshot-global',
@@ -34,6 +36,7 @@ export const BUILTIN_PROVIDER_TYPES = [
   'minimax-portal',
   'minimax-portal-cn',
   'ly-mimo',
+  // 'ly-glm',
   'modelstudio',
   'ollama',
 ] as const;

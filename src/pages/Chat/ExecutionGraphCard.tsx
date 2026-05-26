@@ -10,6 +10,8 @@ interface ExecutionGraphCardProps {
   active: boolean;
   /** Hide the trailing "Thinking ..." indicator even when active. */
   suppressThinking?: boolean;
+  /** When true, filter out 'thinking' kind steps (MIMO model). */
+  isMimo?: boolean;
   /**
    * When provided, the card becomes fully controlled: the parent owns the
    * expand state (e.g. to persist across remounts) and toggling goes through
@@ -162,6 +164,7 @@ export function ExecutionGraphCard({
   steps,
   active,
   suppressThinking = false,
+  isMimo = false,
   expanded: controlledExpanded,
   onExpandedChange,
 }: ExecutionGraphCardProps) {
@@ -244,11 +247,10 @@ export function ExecutionGraphCard({
           </div>
         </div>
 
-        {steps.map((step) => {
+        {steps.filter((step) => !isMimo || step.kind !== 'thinking').map((step) => {
           const alignedIndentOffset = (
             step.kind === 'tool'
             || step.kind === 'message'
-            || step.kind === 'thinking'
           ) ? TOOL_ROW_EXTRA_INDENT_PX : 0;
           const rowMarginLeft = (Math.max(step.depth - 1, 0) * 24) + alignedIndentOffset;
           return (
@@ -274,13 +276,11 @@ export function ExecutionGraphCard({
                       'flex h-6 w-6 items-center justify-center text-muted-foreground',
                     )}
                   >
-                    {step.kind === 'thinking'
-                      ? <MessageSquare className="h-3.5 w-3.5" />
-                      : step.kind === 'tool'
-                        ? <Wrench className="h-3.5 w-3.5" />
-                        : step.kind === 'message'
-                          ? <MessageSquare className="h-3.5 w-3.5" />
-                          : <GraphStatusIcon status={step.status} />}
+                    {step.kind === 'tool'
+                      ? <Wrench className="h-3.5 w-3.5" />
+                      : step.kind === 'message'
+                        ? <MessageSquare className="h-3.5 w-3.5" />
+                        : <GraphStatusIcon status={step.status} />}
                   </div>
                 </div>
               </div>

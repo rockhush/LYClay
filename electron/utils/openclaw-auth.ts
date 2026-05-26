@@ -808,7 +808,7 @@ function extractFallbackModelIds(provider: string, fallbackModels: string[]): st
 }
 
 /** Keys that LYClaw/registry may attach but OpenClaw models.providers schema rejects. */
-const UNSUPPORTED_OPENCLAW_MODEL_KEYS = ['params'] as const;
+const UNSUPPORTED_OPENCLAW_MODEL_KEYS = [] as const;
 
 function stripUnsupportedOpenClawModelKeys(
   model: Record<string, unknown>,
@@ -862,6 +862,7 @@ function upsertOpenClawProviderEntry(
     name: id,
     ...(options.modelOverrides?.[id] ?? {}),
   }));
+  console.log('[upsertOpenClawProviderEntry] runtimeModels for', provider, ':', JSON.stringify(runtimeModels));
 
   const nextProvider: Record<string, unknown> = {
     ...existingProvider,
@@ -1418,9 +1419,23 @@ export async function batchSyncConfigFields(token: string): Promise<void> {
     }
     modified = ensureOpenClawSessionDefaults(config) || modified;
 
+    // ── Diagnostics defaults ────────────────────────────────────────
+    // Increase stuck session abort threshold to 15 minutes for long-running tasks
+    const STUCK_SESSION_ABORT_MS = 900_000; // 15 minutes
+    const diagnostics = (
+      config.diagnostics && typeof config.diagnostics === 'object'
+        ? { ...(config.diagnostics as Record<string, unknown>) }
+        : {}
+    ) as Record<string, unknown>;
+    if (diagnostics.stuckSessionAbortMs === undefined) {
+      diagnostics.stuckSessionAbortMs = STUCK_SESSION_ABORT_MS;
+      config.diagnostics = diagnostics;
+      modified = true;
+    }
+
     if (modified) {
       await writeOpenClawJson(config);
-      console.log('Synced gateway token, browser config, and session defaults to openclaw.json');
+      console.log('Synced gateway token, browser config, session defaults, and diagnostics to openclaw.json');
     }
   });
 }
@@ -1643,23 +1658,6 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
           if (!Array.isArray(modelsList)) {
             continue;
           }
-          let providerModelsModified = false;
-          const sanitizedModels = modelsList.map((model) => {
-            if (!model || typeof model !== 'object' || Array.isArray(model)) {
-              return model;
-            }
-            const modelRecord = model as Record<string, unknown>;
-            if (!('params' in modelRecord)) {
-              return model;
-            }
-            console.log(`[sanitize] Removing unsupported key "models.providers.${providerKey}.models[].params" from openclaw.json`);
-            providerModelsModified = true;
-            return stripUnsupportedOpenClawModelKeys(modelRecord);
-          });
-          if (providerModelsModified) {
-            (providerEntry as Record<string, unknown>).models = sanitizedModels;
-            modified = true;
-          }
         }
       }
     }
@@ -1760,6 +1758,17 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
     if (await sanitizeLegacyMcpMetaFromOpenClawConfig(config)) {
       modified = true;
       console.log('[sanitize] Moved legacy MCP import flag out of openclaw.json');
+    }
+
+    // ── diagnostics defaults ──────────────────────────────────────
+    // Increase stuck session abort threshold to 15 minutes for long-running tasks
+    const STUCK_SESSION_ABORT_MS = 900_000; // 15 minutes
+    const diagnostics = (config.diagnostics as Record<string, unknown> | undefined) || {};
+    if (diagnostics.stuckSessionAbortMs === undefined) {
+      diagnostics.stuckSessionAbortMs = STUCK_SESSION_ABORT_MS;
+      config.diagnostics = diagnostics;
+      modified = true;
+      console.log('[sanitize] Set diagnostics.stuckSessionAbortMs=900000 (15 minutes)');
     }
 
     // ── plugins.entries.feishu cleanup ──────────────────────────────

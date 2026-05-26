@@ -1,4 +1,9 @@
-import { clearHistoryPoll, setLastChatEventAt } from './helpers';
+import {
+  clearHistoryPoll,
+  forgetAbortedChatRun,
+  isAbortedChatRun,
+  setLastChatEventAt,
+} from './helpers';
 import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
 import { handleRuntimeEventState } from './runtime-event-handlers';
 
@@ -30,6 +35,14 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
         }
       }
 
+      if (runId && isAbortedChatRun(runId)) {
+        if (resolvedState === 'aborted' || resolvedState === 'final' || resolvedState === 'error') {
+          forgetAbortedChatRun(runId);
+        } else {
+          return;
+        }
+      }
+
       // Only pause the history poll when we receive actual streaming data.
       // The gateway sends "agent" events with { phase, startedAt } that carry
       // no message — these must NOT kill the poll, since the poll is our only
@@ -41,7 +54,7 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
         // Adopt run started from another client (e.g. console at 127.0.0.1:18789):
         // show loading/streaming in the app when this session has an active run.
         const { sending } = get();
-        if (!sending && runId) {
+        if (!sending && runId && !isAbortedChatRun(runId)) {
           set({ sending: true, activeRunId: runId, error: null });
         }
       }

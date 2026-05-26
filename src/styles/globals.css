@@ -174,6 +174,55 @@
   background: hsl(var(--muted));
 }
 
+/* Ensure proper text wrapping for all prose elements */
+.prose {
+  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.prose a {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+.prose code {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.prose pre {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.prose p {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.prose ul,
+.prose ol {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.prose table {
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.prose blockquote {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
 /* Typing indicator animation */
 @keyframes bounce {
 

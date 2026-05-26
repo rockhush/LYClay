@@ -7,12 +7,11 @@
         "greeting": "こんにちは、{{name}}さん～",
         "greetingFallback": "こんにちは～",
         "canHelpPrefix": "できること",
-        "askQuestions": "メール対応",
-        "askQuestionsDesc": "タスク指向の依頼に対応します",
-        "creativeTasks": "連続実行",
-        "creativeTasksDesc": "複数ステップの作業を継続して進めます",
-        "brainstorming": "定期実行",
-        "multiThread": "マルチスレッド処理"
+        "knowledgeQa": "知識Q&A",
+        "groupSummary": "グループ要約",
+        "pptGeneration": "PPT生成",
+        "smartTranslation": "スマート翻訳",
+        "skillNotInstalled": "スキル「{{name}}」が見つかりません。先にスキル広場でインストールしてください。"
     },
     "noLogs": "（ログはまだありません）",
     "toolbar": {

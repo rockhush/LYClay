@@ -13,6 +13,12 @@ import {
     resolveCompanyMarketplacePackageSlug,
 } from '../utils/company-marketplace-installs';
 import { resolveLocalUploadSkillMetadata } from '../utils/company-skill-package';
+import {
+  hasPreservedSkillDirectory,
+  preserveSkillDirectoryOnUninstall,
+  restorePreservedSkillDirectory,
+} from '../utils/skill-workspace-preserve';
+import { purgeCompanySkillForFreshInstall } from '../utils/company-skill-update';
 
 export interface ClawHubSearchParams {
     query: string;
@@ -29,9 +35,18 @@ export interface ClawHubInstallParams {
 export interface ClawHubInstallResult {
     slug?: string;
     baseDir?: string;
+    name?: string;
+    version?: string;
+    author?: string;
+    description?: string;
+    marketplaceId?: number | string;
 }
 
 export interface ClawHubUninstallParams {
+    slug: string;
+}
+
+export interface ClawHubUpdateParams {
     slug: string;
 }
 
@@ -404,6 +419,20 @@ export class ClawHubService {
         if (this.marketplaceProvider) {
             return this.marketplaceProvider.install(params);
         }
+
+        let slug = params.slug.trim();
+        const mappedSlug = await resolveCompanyMarketplacePackageSlug(slug);
+        if (mappedSlug) {
+            slug = mappedSlug;
+        }
+        const skillDir = path.join(this.workDir, 'skills', slug);
+        if (hasPreservedSkillDirectory(slug)) {
+            const restored = await restorePreservedSkillDirectory(slug, skillDir);
+            if (restored) {
+                return { slug, baseDir: skillDir };
+            }
+        }
+
         const args = ['install', params.slug];
 
         if (params.version) {
@@ -418,6 +447,25 @@ export class ClawHubService {
     }
 
     /**
+     * Update a company marketplace skill: purge on-disk install, then reinstall latest.
+     */
+    async update(params: ClawHubUpdateParams): Promise<ClawHubInstallResult | void> {
+        const installKey = params.slug.trim();
+        console.log('[ClawHub] Updating skill (purge + fresh download):', installKey);
+        await purgeCompanySkillForFreshInstall(installKey);
+        if (this.marketplaceProvider) {
+            return this.marketplaceProvider.install({ slug: installKey, force: true });
+        }
+        const mappedSlug = await resolveCompanyMarketplacePackageSlug(installKey);
+        const packageSlug = mappedSlug || installKey;
+        const skillDir = path.join(this.workDir, 'skills', packageSlug);
+        if (fs.existsSync(skillDir)) {
+            await fs.promises.rm(skillDir, { recursive: true, force: true });
+        }
+        return this.install({ slug: installKey, force: true });
+    }
+
+    /**
      * Uninstall a skill
      */
     async uninstall(params: ClawHubUninstallParams): Promise<void> {
@@ -429,17 +477,16 @@ export class ClawHubService {
             slug = mappedSlug;
         }
 
-        // 1. Find the actual skill directory (handles nested directories)
+        // 1. Preserve skill directory (keeps bound workspace folders + user data)
         const skillDir = this.resolveSkillDir(slug);
         if (skillDir && fs.existsSync(skillDir)) {
-            console.log(`Deleting skill directory: ${skillDir}`);
-            await fsPromises.rm(skillDir, { recursive: true, force: true });
+            console.log(`Preserving skill directory on uninstall: ${skillDir}`);
+            await preserveSkillDirectoryOnUninstall(skillDir, slug);
         } else {
-            // Fallback: try the default path
             const defaultDir = path.join(this.workDir, 'skills', slug);
             if (fs.existsSync(defaultDir)) {
-                console.log(`Deleting skill directory (fallback): ${defaultDir}`);
-                await fsPromises.rm(defaultDir, { recursive: true, force: true });
+                console.log(`Preserving skill directory on uninstall (fallback): ${defaultDir}`);
+                await preserveSkillDirectoryOnUninstall(defaultDir, slug);
             }
         }
 

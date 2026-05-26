@@ -7,12 +7,11 @@
         "greeting": "你好，{{name}}～",
         "greetingFallback": "你好～",
         "canHelpPrefix": "我可以",
-        "askQuestions": "邮件处理",
-        "askQuestionsDesc": "处理面向任务的请求",
-        "creativeTasks": "持续运行",
-        "creativeTasksDesc": "持续推进多步骤工作",
-        "brainstorming": "定时任务",
-        "multiThread": "多线程工作"
+        "knowledgeQa": "知识问答",
+        "groupSummary": "群消息总结",
+        "pptGeneration": "PPT生成",
+        "smartTranslation": "智能翻译",
+        "skillNotInstalled": "未找到已安装的技能「{{name}}」，已填入默认提示，请先在技能广场安装该技能"
     },
     "noLogs": "（暂无日志）",
     "toolbar": {

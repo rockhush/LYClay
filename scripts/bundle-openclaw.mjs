@@ -440,24 +440,46 @@ function patchBundledOpenClawAnthropicTransport(outputDir) {
   const filePath = path.join(distDir, fileName);
   let source = fs.readFileSync(filePath, 'utf8');
 
-  const target = 'const params = {\n\t\tmodel: model.id,\n\t\tmessages: ensureNonEmptyAnthropicMessages(convertAnthropicMessages(context.messages, model, isOAuthToken, { allowReasoningContentReplay: supportsReasoningContentReplay(model) })),\n\t\tmax_tokens: maxTokens,\n\t\tstream: true\n\t};';
-  const replacement = 'const params = {\n\t\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\n\t\tmodel: model.id,\n\t\tmessages: ensureNonEmptyAnthropicMessages(convertAnthropicMessages(context.messages, model, isOAuthToken, { allowReasoningContentReplay: supportsReasoningContentReplay(model) })),\n\t\tmax_tokens: maxTokens,\n\t\tstream: true\n\t};';
-  const systemTarget = 'else if (context.systemPrompt) params.system = [{\n\t\ttype: "text",\n\t\ttext: sanitizeTransportPayloadText(context.systemPrompt)\n\t}];';
-  const systemReplacement = 'else if (context.systemPrompt) params.system = [{\n\t\ttype: "text",\n\t\ttext: (model.provider === \'ly-mimo\' ? \'请用中文进行思考和回复。\\n\\n\' : \'\') + sanitizeTransportPayloadText(context.systemPrompt)\n\t}];';
-  const oauthSystemTarget = 'if (isOAuthToken) params.system = [{\n\t\ttype: "text",\n\t\ttext: "You are Claude Code, Anthropic\'s official CLI for Claude."\n\t}, ...context.systemPrompt ? [{\n\t\ttype: "text",\n\t\ttext: sanitizeTransportPayloadText(context.systemPrompt)\n\t}] : []];';
-  const oauthSystemReplacement = 'if (isOAuthToken) params.system = [{\n\t\ttype: "text",\n\t\ttext: "You are Claude Code, Anthropic\'s official CLI for Claude."\n\t}, ...context.systemPrompt ? [{\n\t\ttype: "text",\n\t\ttext: (model.provider === \'ly-mimo\' ? \'请用中文进行思考和回复。\\n\\n\' : \'\') + sanitizeTransportPayloadText(context.systemPrompt)\n\t}] : []];';
+  // Check if already patched
+  if (source.includes('ly-mimo') && source.includes('请用中文进行思考和回复，不要输出英文思考内容')) {
+    return true;
+  }
 
-  if (source.includes(replacement) && source.includes(systemReplacement) && source.includes(oauthSystemReplacement)) return true;
-  if (!source.includes(target)) return false;
-  if (!source.includes(systemTarget)) return false;
-  if (!source.includes(oauthSystemTarget)) return false;
+  let patched = false;
+  const chineseInstruction = '请用中文进行思考和回复，不要输出英文思考内容。\\n\\n';
 
-  source = source.replace(target, replacement);
-  source = source.replace(systemTarget, systemReplacement);
-  source = source.replace(oauthSystemTarget, oauthSystemReplacement);
-  fs.writeFileSync(filePath, source, 'utf8');
-  echo`   🩹 Patched Anthropic transport for ly-mimo: model params + Chinese language instruction`;
-  return true;
+  // Patch 1: Add model.params spread (use regex for flexibility)
+  const paramsRegex = /const params = \{\s*\n?\s*model: model\.id,/;
+  if (paramsRegex.test(source)) {
+    source = source.replace(paramsRegex,
+      'const params = {\\n\\t\\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\\n\\t\\tmodel: model.id,');
+    patched = true;
+  }
+
+  // Patch 2: Add Chinese instruction for system prompt (non-OAuth path)
+  const systemRegex = /else if \(context\.systemPrompt\) params\.system = \[\{\s*\n\s*type: "text",\s*\n\s*text: sanitizeTransportPayloadText\(context\.systemPrompt\)\s*\n\s*\}\];/;
+  if (systemRegex.test(source)) {
+    source = source.replace(systemRegex,
+      `else if (context.systemPrompt) params.system = [{\\n\\t\\ttype: "text",\\n\\t\\ttext: (model.provider === 'ly-mimo' ? '${chineseInstruction}' : '') + sanitizeTransportPayloadText(context.systemPrompt)\\n\\t}];`);
+    patched = true;
+  }
+
+  // Patch 3: Add Chinese instruction for system prompt (OAuth path)
+  const oauthRegex = /if \(isOAuthToken\) params\.system = \[\{\s*\n\s*type: "text",\s*\n\s*text: "You are Claude Code, Anthropic's official CLI for Claude."\s*\n\s*\},\s*\.\.\.context\.systemPrompt \? \[\{\s*\n\s*type: "text",\s*\n\s*text: sanitizeTransportPayloadText\(context\.systemPrompt\)\s*\n\s*\}\] : \[\]\];/;
+  if (oauthRegex.test(source)) {
+    source = source.replace(oauthRegex,
+      `if (isOAuthToken) params.system = [{\\n\\t\\ttype: "text",\\n\\t\\ttext: "You are Claude Code, Anthropic's official CLI for Claude."\\n\\t}, ...context.systemPrompt ? [{\\n\\t\\ttype: "text",\\n\\t\\ttext: (model.provider === 'ly-mimo' ? '${chineseInstruction}' : '') + sanitizeTransportPayloadText(context.systemPrompt)\\n\\t}] : []];`);
+    patched = true;
+  }
+
+  if (patched) {
+    fs.writeFileSync(filePath, source, 'utf8');
+    echo`   🩹 Patched Anthropic transport for ly-mimo: model params + Chinese language instruction`;
+    return true;
+  }
+
+  echo`   ⚠️ Could not find target patterns for ly-mimo patch`;
+  return false;
 }
 
 function patchBundledExtensionPackageJsons(extensionsRoot) {
@@ -481,10 +503,47 @@ function patchBundledExtensionPackageJsons(extensionsRoot) {
   return patchedCount;
 }
 
+function patchBundledOpenClawOpenAITransport(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return false;
+
+  const transportFiles = fs.readdirSync(distDir).filter((name) => /^openai-transport-stream-.*\.js$/.test(name));
+  if (transportFiles.length === 0) return false;
+
+  const filePath = path.join(distDir, transportFiles[0]);
+  let source = fs.readFileSync(filePath, 'utf8');
+
+  // Check if already patched
+  if (source.includes('model.params && typeof model.params === "object" && !Array.isArray(model.params)')) {
+    return true;
+  }
+
+  let patched = false;
+
+  // Patch completions transport: spread model.params into request params
+  // Pattern: const params = {\n\t\tmodel: model.id,
+  const completionsParamsRegex = /const params = \{\s*\n?\s*model: model\.id,/;
+  if (completionsParamsRegex.test(source)) {
+    source = source.replace(completionsParamsRegex,
+      'const params = {\\n\\t\\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\\n\\t\\tmodel: model.id,');
+    patched = true;
+  }
+
+  if (patched) {
+    fs.writeFileSync(filePath, source, 'utf8');
+    echo`   🩹 Patched OpenAI transport to spread model.params for request parameters`;
+    return true;
+  }
+
+  echo`   ⚠️ Could not find target patterns for OpenAI transport patch`;
+  return false;
+}
+
 if (!patchBundledOpenClawAnthropicTransport(OUTPUT)) {
   echo`❌ Failed to patch Anthropic transport for model params`;
   process.exit(1);
 }
+patchBundledOpenClawOpenAITransport(OUTPUT);
 patchBundledExtensionPackageJsons(extensionsDir);
 
 // 6. Clean up the bundle to reduce package size

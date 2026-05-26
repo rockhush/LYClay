@@ -418,7 +418,7 @@ function MessageBubble({
   return (
     <div
       className={cn(
-        'relative rounded-2xl',
+        'relative rounded-2xl overflow-hidden max-w-full',
         isUser ? 'px-4 py-3' : 'px-0 py-0.5',
         !isUser && 'w-full',
         isUser
@@ -427,9 +427,9 @@ function MessageBubble({
       )}
     >
       {isUser ? (
-        <p className="whitespace-pre-wrap break-words break-all text-sm">{text}</p>
+        <p className="whitespace-pre-wrap break-words overflow-wrap-anywhere text-sm max-w-full">{text}</p>
       ) : (
-        <div className="prose prose-sm dark:prose-invert max-w-none break-words break-all">
+        <div className="prose prose-sm dark:prose-invert max-w-none overflow-wrap-anywhere">
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
             rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, output: 'html' }]]}
@@ -439,13 +439,13 @@ function MessageBubble({
                 const isInline = !match && !className;
                 if (isInline) {
                   return (
-                    <code className="bg-background/50 px-1.5 py-0.5 rounded text-sm font-mono break-words break-all" {...props}>
+                    <code className="bg-background/50 px-1.5 py-0.5 rounded text-sm font-mono overflow-wrap-anywhere max-w-full" {...props}>
                       {children}
                     </code>
                   );
                 }
                 return (
-                  <pre className="bg-background/50 rounded-lg p-4 whitespace-pre-wrap break-all overflow-x-auto">
+                  <pre className="bg-background/50 rounded-lg p-4 whitespace-pre-wrap overflow-x-auto overflow-wrap-anywhere max-w-full">
                     <code className={cn('text-sm font-mono', className)} {...props}>
                       {children}
                     </code>
@@ -457,6 +457,9 @@ function MessageBubble({
                   <MessageLink href={href}>{children}</MessageLink>
                 );
               },
+              p: ({ children }) => (
+                <p className="max-w-full">{children}</p>
+              ),
             }}
             urlTransform={transformMessageUrl}
           >
@@ -480,7 +483,7 @@ function MessageLink({ href, children }: { href?: string; children: ReactNode })
   }, [href]);
 
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-words break-all" onClick={handleClick}>
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline overflow-wrap-anywhere" onClick={handleClick}>
       {children}
     </a>
   );

@@ -77,7 +77,7 @@ function normalizeRegistry(raw: unknown): CompanyMarketplaceInstallRegistry {
   return { byMarketplaceId };
 }
 
-async function fetchCompanyMarketplaceSkills(): Promise<CompanyMarketplaceApiSkill[]> {
+export async function fetchCompanyMarketplaceSkills(): Promise<CompanyMarketplaceApiSkill[]> {
   const response = await fetch(`${COMPANY_API_BASE}/list/`, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' },

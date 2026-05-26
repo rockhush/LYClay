@@ -223,7 +223,7 @@ export class GatewayManager extends EventEmitter {
   private static readonly WARMUP_NEAR_COMPLETION_WAIT_MS = 3_000;
   private static readonly WARMUP_NEAR_COMPLETION_AFTER_MS = 40_000;
   private static readonly WARMUP_CLEANUP_DELAY_MS = 5_000;
-  private static readonly CHAT_WARMUP_ENABLED = process.env.LYCLAW_ENABLE_CHAT_WARMUP !== '0';
+  private static readonly CHAT_WARMUP_ENABLED = process.env.LYCLAW_ENABLE_CHAT_WARMUP === '1';
 
   constructor(config?: Partial<ReconnectConfig>) {
     super();
@@ -849,7 +849,8 @@ export class GatewayManager extends EventEmitter {
    */
   private warmupGateway(): void {
     if (!GatewayManager.CHAT_WARMUP_ENABLED) {
-      this.setStatus({ warmupStatus: 'idle' });
+      // Disable warmup - set status directly to 'ready' so frontend skips all warmup checks
+      this.setStatus({ warmupStatus: 'ready' });
       logger.info('[perf:first-session] gateway.warmup.skipped', {
         reason: 'chat_warmup_disabled_by_env',
         envValue: process.env.LYCLAW_ENABLE_CHAT_WARMUP ?? null,

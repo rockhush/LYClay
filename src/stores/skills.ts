@@ -179,6 +179,13 @@ interface CompanyInstallEntry {
   description?: string;
 }
 
+export interface SkillUpdateInfo {
+  hasUpdate: boolean;
+  latestVersion?: string;
+  skillName?: string;
+  error?: string;
+}
+
 interface SkillsState {
   skills: Skill[];
   searchResults: MarketplaceSkill[];
@@ -188,13 +195,20 @@ interface SkillsState {
   searching: boolean;
   searchError: string | null;
   installing: Record<string, boolean>; // slug -> boolean
+  checkingUpdates: boolean;
+  skillUpdates: Record<string, SkillUpdateInfo>;
   error: string | null;
 
   // Actions
   fetchSkills: () => Promise<void>;
   searchSkills: (query: string, category?: string, sort?: string) => Promise<void>;
   installSkill: (slug: string, version?: string) => Promise<string | undefined>;
+  updateSkill: (slug: string, latestVersion?: string) => Promise<string | undefined>;
   uninstallSkill: (slug: string) => Promise<void>;
+  checkInstalledSkillUpdates: (
+    installedSkills: Array<{ skill_id: number | string; current_version: string; skill_name?: string }>,
+  ) => Promise<Record<string, SkillUpdateInfo>>;
+  clearSkillUpdates: () => void;
   enableSkill: (skillId: string) => Promise<void>;
   disableSkill: (skillId: string) => Promise<void>;
   setSkills: (skills: Skill[]) => void;
@@ -219,6 +233,8 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   searching: false,
   searchError: null,
   installing: {},
+  checkingUpdates: false,
+  skillUpdates: {},
   error: null,
 
   clearError: () => {
@@ -611,6 +627,56 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       if (!result.success) {
         throw new Error(result.error || 'Uninstall failed');
       }
+
+      set((state) => {
+        const nextInstallMap = { ...state.companyInstallMap };
+        const nextInstallEntries = { ...state.companyInstallEntries };
+        const nextSkillUpdates = { ...state.skillUpdates };
+        const removeIds = new Set<string>();
+        let packageSlug: string | undefined;
+
+        if (/^\d+$/.test(slug)) {
+          removeIds.add(slug);
+          packageSlug = nextInstallMap[slug];
+          delete nextInstallMap[slug];
+          delete nextInstallEntries[slug];
+          delete nextSkillUpdates[slug];
+        } else {
+          packageSlug = slug;
+          for (const [marketplaceId, mappedSlug] of Object.entries(nextInstallMap)) {
+            if (mappedSlug === slug || marketplaceId === slug) {
+              removeIds.add(marketplaceId);
+              delete nextInstallMap[marketplaceId];
+              delete nextInstallEntries[marketplaceId];
+              delete nextSkillUpdates[marketplaceId];
+            }
+          }
+        }
+
+        const slugsToRemove = new Set(
+          [slug, packageSlug].filter((value): value is string => Boolean(value?.trim())),
+        );
+        const nextSkills = state.skills.filter((skill) => {
+          if (skill.slug && slugsToRemove.has(skill.slug)) return false;
+          if (slugsToRemove.has(skill.id)) return false;
+          return true;
+        });
+        const nextSearchResults = state.searchResults.map((skill) => {
+          const marketplaceId = skill.id != null ? String(skill.id) : '';
+          if (removeIds.has(marketplaceId) || skill.slug === slug || String(skill.id) === slug) {
+            return { ...skill, __installed: false };
+          }
+          return skill;
+        });
+
+        return {
+          skills: nextSkills,
+          searchResults: nextSearchResults,
+          companyInstallMap: nextInstallMap,
+          companyInstallEntries: nextInstallEntries,
+          skillUpdates: nextSkillUpdates,
+        };
+      });
     } catch (error) {
       console.error('Uninstall error:', error);
       throw error;
@@ -622,6 +688,188 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       });
     }
   },
+
+  updateSkill: async (slug: string, latestVersion?: string) => {
+    set((state) => ({ installing: { ...state.installing, [slug]: true } }));
+    try {
+      const result = await hostApiFetch<{
+        success: boolean;
+        error?: string;
+        slug?: string;
+        baseDir?: string;
+        source?: string;
+        version?: string;
+        name?: string;
+        author?: string;
+        description?: string;
+        marketplaceId?: number | string;
+      }>('/api/clawhub/update', {
+        method: 'POST',
+        body: JSON.stringify({ slug }),
+      });
+      if (!result.success) {
+        throw new Error(result.error || 'Update failed');
+      }
+
+      const packageSlug = result.slug?.trim()
+        || result.baseDir?.split(/[/\\]/).filter(Boolean).pop()
+        || slug;
+      const marketplaceSkill = get().searchResults.find((s) => s.slug === slug || String(s.id) === slug);
+      const marketplaceId = result.marketplaceId != null
+        ? String(result.marketplaceId)
+        : marketplaceSkill?.id != null
+          ? String(marketplaceSkill.id)
+          : (/^\d+$/.test(slug) ? slug : undefined);
+      const resolvedName = result.name?.trim() || marketplaceSkill?.name || packageSlug;
+      const resolvedVersion = latestVersion?.trim()
+        || result.version?.trim()
+        || marketplaceSkill?.version
+        || 'unknown';
+      const resolvedDescription = result.description?.trim() || marketplaceSkill?.description || '';
+      const resolvedAuthor = result.author?.trim() || marketplaceSkill?.author;
+      const refreshedMarketplaceSkill: MarketplaceSkill | undefined = marketplaceSkill
+        ? {
+            ...marketplaceSkill,
+            name: resolvedName,
+            version: resolvedVersion,
+            description: resolvedDescription || marketplaceSkill.description,
+            author: resolvedAuthor ?? marketplaceSkill.author,
+          }
+        : undefined;
+
+      const newSkill: Skill = mergeSkillWithMarketplaceMetadata({
+        id: packageSlug,
+        slug: packageSlug,
+        name: resolvedName,
+        description: resolvedDescription,
+        enabled: true,
+        icon: '📦',
+        version: resolvedVersion,
+        author: resolvedAuthor,
+        config: {},
+        isCore: false,
+        isBundled: false,
+        source: result.source || 'openclaw-managed',
+        baseDir: result.baseDir,
+        downloads: marketplaceSkill?.downloads,
+      }, refreshedMarketplaceSkill);
+
+      set((state) => {
+        const existingIndex = state.skills.findIndex((s) => s.id === packageSlug || s.slug === packageSlug);
+        const nextInstallMap = { ...state.companyInstallMap };
+        const nextInstallEntries = { ...state.companyInstallEntries };
+        const nextSkillUpdates = { ...state.skillUpdates };
+        if (marketplaceId) {
+          nextInstallMap[marketplaceId] = packageSlug;
+          nextInstallEntries[marketplaceId] = {
+            packageSlug,
+            name: resolvedName,
+            version: resolvedVersion,
+            author: resolvedAuthor,
+            description: resolvedDescription,
+          };
+          delete nextSkillUpdates[marketplaceId];
+        }
+
+        const nextSkills = existingIndex >= 0
+          ? state.skills.map((skill, index) => (index === existingIndex ? { ...skill, ...newSkill } : skill))
+          : [...state.skills, newSkill];
+
+        const matchesMarketplaceKey = (skill: MarketplaceSkill) => (
+          skill.slug === slug
+          || String(skill.id) === slug
+          || (marketplaceId != null && String(skill.id) === marketplaceId)
+        );
+        const nextSearchResults = state.searchResults.map((skill) => {
+          if (!matchesMarketplaceKey(skill)) return skill;
+          return {
+            ...skill,
+            name: resolvedName,
+            version: resolvedVersion,
+            description: resolvedDescription || skill.description,
+            author: resolvedAuthor ?? skill.author,
+          };
+        });
+
+        return {
+          skills: nextSkills,
+          searchResults: nextSearchResults,
+          companyInstallMap: nextInstallMap,
+          companyInstallEntries: nextInstallEntries,
+          skillUpdates: nextSkillUpdates,
+        };
+      });
+
+      return packageSlug;
+    } catch (error) {
+      console.error('Update error:', error);
+      throw error;
+    } finally {
+      set((state) => {
+        const newInstalling = { ...state.installing };
+        delete newInstalling[slug];
+        return { installing: newInstalling };
+      });
+    }
+  },
+
+  checkInstalledSkillUpdates: async (installedSkills) => {
+    set({ checkingUpdates: true });
+    try {
+      console.log('[Skills Store] check-updates request:', installedSkills);
+      const result = await hostApiFetch<{
+        success: boolean;
+        error?: string;
+        results?: Array<{
+          skill_id: number;
+          skill_name?: string;
+          current_version: string;
+          has_update: boolean;
+          latest_version?: string;
+          error?: string;
+        }>;
+      }>('/api/clawhub/check-updates', {
+        method: 'POST',
+        body: JSON.stringify({ skills: installedSkills }),
+      });
+      if (!result.success) {
+        throw new Error(result.error || 'Check updates failed');
+      }
+      console.log('[Skills Store] check-updates response:', result.results);
+      for (const item of result.results || []) {
+        const label = item.skill_name?.trim() || `skill_id=${item.skill_id}`;
+        if (item.error) {
+          console.log(`[Skills Store] // ${label}: 检测失败 — ${item.error}`);
+        } else if (item.has_update) {
+          console.log(
+            `[Skills Store] // ${label}: 当前 v${item.current_version} → 最新 v${item.latest_version ?? '?'}（有更新）`,
+          );
+        } else {
+          console.log(`[Skills Store] // ${label}: 当前 v${item.current_version}（已是最新）`);
+        }
+      }
+
+      const skillUpdates: Record<string, SkillUpdateInfo> = {};
+      for (const item of result.results || []) {
+        const key = String(item.skill_id);
+        skillUpdates[key] = {
+          hasUpdate: Boolean(item.has_update),
+          latestVersion: item.latest_version,
+          skillName: item.skill_name,
+          error: item.error,
+        };
+      }
+      set({ skillUpdates });
+      return skillUpdates;
+    } catch (error) {
+      console.error('Check updates error:', error);
+      throw error;
+    } finally {
+      set({ checkingUpdates: false });
+    }
+  },
+
+  clearSkillUpdates: () => set({ skillUpdates: {} }),
 
   enableSkill: async (skillId) => {
     const { updateSkill, skills } = get();

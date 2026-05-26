@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
 import { locateSkillContentDir, parseSkillManifestFields, resolveLocalUploadSkillMetadata } from './company-skill-package';
+import { restorePreservedSkillDirectory } from './skill-workspace-preserve';
 
 const execFileAsync = promisify(execFile);
 
@@ -52,8 +53,23 @@ export async function installLocalSkillFromExtractedContent(params: {
   skillsDir: string;
 }): Promise<{ skillName: string; skillVersion: string; skillDir: string }> {
   const packageDirName = resolveLocalUploadPackageDirName(params.fileName);
-  const contentDir = await locateSkillContentDir(params.extractDir);
   const skillDir = path.join(params.skillsDir, packageDirName);
+
+  if (await restorePreservedSkillDirectory(packageDirName, skillDir)) {
+    const manifestPath = path.join(skillDir, 'SKILL.md');
+    const manifestRaw = await fs.promises.readFile(manifestPath, 'utf8');
+    const metadata = resolveLocalUploadSkillMetadata(
+      parseSkillManifestFields(manifestRaw),
+      packageDirName,
+    );
+    return {
+      skillName: metadata.name,
+      skillVersion: metadata.version,
+      skillDir,
+    };
+  }
+
+  const contentDir = await locateSkillContentDir(params.extractDir);
 
   await fs.promises.mkdir(params.skillsDir, { recursive: true });
   await fs.promises.rm(skillDir, { recursive: true, force: true });

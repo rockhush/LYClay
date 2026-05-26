@@ -10,6 +10,7 @@ import {
   isSkillPresentOnDisk,
   isUnknownSkillVersion,
   getMarketplaceSkillKey,
+  isMarketplaceSkillInstalledOnDisk,
   companyInstallEntriesToMarketplaceSkills,
   mergeSkillWithMarketplaceMetadata,
   normalizeSkillLookupKey,
@@ -316,5 +317,43 @@ describe('skill metadata helpers', () => {
     ).toBe(true);
 
     expect(isSkillPresentOnDisk({ isBundled: true, name: 'pdf' }, [])).toBe(true);
+  });
+
+  it('treats company marketplace skills as uninstalled when registry entry is gone', () => {
+    const marketplaceSkill: MarketplaceSkill = {
+      id: 377,
+      slug: '377',
+      name: '前端设计工具',
+      description: 'demo',
+      version: '1.0.0',
+    };
+    const lingeringGatewaySkill: Skill = {
+      id: 'frontend-design',
+      slug: 'frontend-design',
+      name: '前端设计工具',
+      description: 'still in gateway config',
+      enabled: false,
+      version: '1.0.0',
+      isCore: false,
+      isBundled: false,
+    };
+
+    expect(
+      isMarketplaceSkillInstalledOnDisk(marketplaceSkill, [lingeringGatewaySkill], {
+        '377': 'frontend-design',
+      }),
+    ).toBe(true);
+
+    expect(
+      isMarketplaceSkillInstalledOnDisk(marketplaceSkill, [lingeringGatewaySkill], {}),
+    ).toBe(false);
+
+    expect(
+      isMarketplaceSkillInstalledOnDisk(
+        { ...marketplaceSkill, __installed: false },
+        [lingeringGatewaySkill],
+        { '377': 'frontend-design' },
+      ),
+    ).toBe(false);
   });
 });

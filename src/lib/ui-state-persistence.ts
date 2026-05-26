@@ -115,17 +115,49 @@ function hasLocalChatPersist(): boolean {
     || CUSTOM_LABEL_KEYS.some((key) => window.localStorage.getItem(key) != null);
 }
 
-function mergeUiState(disk: LyclawUiState | null, local: LyclawUiState): LyclawUiState {
-  const workspaces = hasLocalWorkspacePersist()
-    ? local.workspaces
-    : (disk?.workspaces ?? local.workspaces);
+export function isNonEmptyWorkspaceState(workspaces: LyclawUiState['workspaces']): boolean {
+  return workspaces.temporaryWorkspaces.length > 0
+    || workspaces.currentWorkspaceId != null
+    || (typeof workspaces.currentWorkspacePath === 'string' && workspaces.currentWorkspacePath.trim() !== '');
+}
 
-  const chat = hasLocalChatPersist()
+export function isNonEmptyChatState(chat: LyclawUiState['chat']): boolean {
+  return Object.keys(chat.sessionWorkspaceIds).length > 0
+    || Object.keys(chat.customSessionLabels).length > 0;
+}
+
+/** Pure merge used on startup; exported for unit tests. */
+export function mergeHydratedUiState(
+  disk: LyclawUiState | null,
+  local: LyclawUiState,
+  options?: {
+    preferLocalWorkspaces?: boolean;
+    preferLocalChat?: boolean;
+  },
+): LyclawUiState {
+  const preferLocalWorkspaces = options?.preferLocalWorkspaces
+    ?? isNonEmptyWorkspaceState(local.workspaces);
+  const preferLocalChat = options?.preferLocalChat
+    ?? isNonEmptyChatState(local.chat);
+
+  const workspaces = preferLocalWorkspaces
+    ? local.workspaces
+    : (disk && isNonEmptyWorkspaceState(disk.workspaces)
+        ? disk.workspaces
+        : local.workspaces);
+
+  const chat = preferLocalChat
     ? local.chat
     : disk
       ? {
-          sessionWorkspaceIds: { ...disk.chat.sessionWorkspaceIds, ...local.chat.sessionWorkspaceIds },
-          customSessionLabels: { ...disk.chat.customSessionLabels, ...local.chat.customSessionLabels },
+          sessionWorkspaceIds: {
+            ...disk.chat.sessionWorkspaceIds,
+            ...local.chat.sessionWorkspaceIds,
+          },
+          customSessionLabels: {
+            ...disk.chat.customSessionLabels,
+            ...local.chat.customSessionLabels,
+          },
         }
       : local.chat;
 
@@ -135,6 +167,15 @@ function mergeUiState(disk: LyclawUiState | null, local: LyclawUiState): LyclawU
     workspaces,
     chat,
   };
+}
+
+function mergeUiState(disk: LyclawUiState | null, local: LyclawUiState): LyclawUiState {
+  // After reinstall, zustand persist writes an empty LYClaw-workspaces key before
+  // disk hydration finishes. Treat empty local snapshots as "missing" so we keep
+  // ~/.openclaw/lyclaw-ui-state.json as the source of truth.
+  const preferLocalWorkspaces = hasLocalWorkspacePersist() && isNonEmptyWorkspaceState(local.workspaces);
+  const preferLocalChat = hasLocalChatPersist() && isNonEmptyChatState(local.chat);
+  return mergeHydratedUiState(disk, local, { preferLocalWorkspaces, preferLocalChat });
 }
 
 function applyUiStateToStores(state: LyclawUiState): void {

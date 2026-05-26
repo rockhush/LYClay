@@ -102,6 +102,7 @@ function reportUsageFromFinalAssistant(message: RawMessage | undefined, runId: s
     }
   }
 }
+import { isAbortedChatRun } from './helpers';
 import {
   buildComplexTaskExecutionRequest,
   clearPendingComplexTaskPlan,
@@ -125,6 +126,10 @@ export function handleRuntimeEventState(
         runId,
         hasMessage: Boolean(event.message),
       });
+      if (runId && isAbortedChatRun(runId) && resolvedState !== 'aborted' && resolvedState !== 'final' && resolvedState !== 'error') {
+        return;
+      }
+
       // 如果没有 activeRunId，说明没有正在运行的任务，忽略除 started 之外的所有事件
       const { activeRunId } = get();
       if (!activeRunId && resolvedState !== 'started') {
@@ -142,6 +147,7 @@ export function handleRuntimeEventState(
           break;
         }
         case 'delta': {
+          if (runId && isAbortedChatRun(runId)) break;
           // If we're receiving new deltas, the Gateway has recovered from any
           // prior error — cancel the error finalization timer and clear the
           // stale error banner so the user sees the live stream again.
@@ -373,6 +379,24 @@ export function handleRuntimeEventState(
         }
         case 'error': {
           const errorMsg = String(event.errorMessage || 'An error occurred');
+
+          // 忽略 abort 相关的错误消息，因为这是用户主动终止会话的结果
+          const isAbortError = errorMsg.toLowerCase().includes('abort') || errorMsg === 'This operation was aborted';
+          if (isAbortError) {
+            // 静默处理 abort，不显示错误提示
+            set({
+              sending: false,
+              activeRunId: null,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
+              error: null,
+            });
+            break;
+          }
+
           const wasSending = get().sending;
 
           // Snapshot the current streaming message into messages[] so partial

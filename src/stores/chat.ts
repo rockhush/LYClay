@@ -83,6 +83,26 @@ function toMs(ts: number): number {
 // poll chat.history to surface intermediate tool-call turns.
 let _historyPollTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Runs the user explicitly stopped — ignore late gateway deltas after abort clears activeRunId.
+const _abortedChatRunIds = new Set<string>();
+
+function markAbortedChatRun(runId: string): void {
+  const id = runId.trim();
+  if (id) _abortedChatRunIds.add(id);
+}
+
+function isAbortedChatRun(runId: string): boolean {
+  return _abortedChatRunIds.has(runId.trim());
+}
+
+function forgetAbortedChatRun(runId: string): void {
+  _abortedChatRunIds.delete(runId.trim());
+}
+
+function clearAbortedChatRuns(): void {
+  _abortedChatRunIds.clear();
+}
+
 // Timer for delayed error finalization. When the Gateway reports a mid-stream
 // error (e.g. "terminated"), it may retry internally and recover. We wait
 // before committing the error to give the recovery path a chance.
@@ -281,6 +301,23 @@ function withThinkingDirective(message: string, mode: ReasoningMode): string {
   return `/think ${toThinkingLevel(mode)} ${message}`;
 }
 
+// Strip legacy mimo directive from message text for display
+function maybeStripMimoDirective(text: string): string {
+  const directiveMarker = '[系统指令]';
+  const directiveStart = text.lastIndexOf(directiveMarker);
+
+  if (directiveStart < 0) {
+    return text;
+  }
+
+  const endMarkers = ['必须使用中文输出内容。', '必须全程使用中文。'];
+  if (endMarkers.some((marker) => text.indexOf(marker, directiveStart) >= 0)) {
+    return text.slice(0, directiveStart).trimEnd();
+  }
+
+  return text;
+}
+
 const COMPLEX_TASK_EXECUTION_GUIDE = [
   '',
   '[LYClaw execution guide for complex build/edit tasks]',
@@ -402,34 +439,35 @@ function normalizeComplexTaskControlUserMessages(messages: RawMessage[]): RawMes
     }
 
     const text = getMessageText(message.content);
-    const isPlanningControl = text.includes(COMPLEX_TASK_PLAN_MARKER);
-    const isExecutionControl = text.includes(COMPLEX_TASK_EXECUTION_MARKER);
-    if (!isPlanningControl && !isExecutionControl) {
-      const comparable = normalizeComparableUserText(message.content);
-      if (comparable) seenUserTexts.add(comparable);
-      visibleMessages.push(message);
-      continue;
-    }
 
-    const original = extractOriginalMessageFromComplexTaskPrompt(text);
-    const comparable = normalizeComparableUserText(original);
+    // Strip mimo directive for comparison and display (applies to ALL user messages)
+    const displayText = maybeStripMimoDirective(text);
+    const comparable = normalizeComparableUserText(displayText);
+
+    const isPlanningControl = displayText.includes(COMPLEX_TASK_PLAN_MARKER);
+    const isExecutionControl = displayText.includes(COMPLEX_TASK_EXECUTION_MARKER);
+
+    // Skip duplicate execution control messages (complex task feature)
     if (isExecutionControl && comparable && seenUserTexts.has(comparable)) {
       continue;
     }
+
     if (comparable) seenUserTexts.add(comparable);
+
+    // Show stripped version to user, but keep original for history
     visibleMessages.push({
       ...message,
-      content: original,
+      content: displayText,
     });
   }
 
   return visibleMessages;
 }
 
-function abortGatewayRun(sessionKey: string, reason: string): void {
+function abortGatewayRun(sessionKey: string): void {
   void useGatewayStore.getState().rpc(
     'chat.abort',
-    { sessionKey, reason },
+    { sessionKey },
     8_000,
   ).catch((error) => {
     console.warn('[chat] Failed to abort stuck run:', error);
@@ -820,6 +858,7 @@ function stripGatewayUserMetadata(text: string): string {
 
 function normalizeComparableUserText(content: unknown): string {
   let text = stripGatewayUserMetadata(getMessageText(content));
+  text = maybeStripMimoDirective(text); // Strip mimo directive before comparison
   text = text.replace(/\/think\s+(off|medium|high)\s+/i, '');
   return text.replace(/\s+/g, ' ').trim();
 }
@@ -3378,6 +3417,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const trimmed = text.trim();
     if (!trimmed && (!attachments || attachments.length === 0)) return;
 
+    clearAbortedChatRuns();
+
     const targetSessionKey = resolveMainSessionKeyForAgent(targetAgentId) ?? get().currentSessionKey;
 
     if (targetSessionKey !== get().currentSessionKey) {
@@ -3472,6 +3513,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         lastUserMessageAt: nowMs,
         isFirstMessageEver: _isFirstMessageEver, // Store flag in state for UI access
         runAborted: false,
+        activeRunId: null,
         sessions: ensureSessionEntry(s.sessions, currentSessionKey),
         sessionLabels: shouldSetLabel
           ? { ...s.sessionLabels, [currentSessionKey]: truncated }
@@ -3539,7 +3581,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             `stale-${state.activeRunId || Date.now()}`,
           );
           clearHistoryPoll();
-          abortGatewayRun(currentSessionKey, 'streaming_stale_timeout');
+          abortGatewayRun(currentSessionKey);
           _pendingComplexTaskPlans.delete(currentSessionKey);
           set((s) => ({
             messages: streamSnapshot.length > 0 ? [...s.messages, ...streamSnapshot] : s.messages,
@@ -3565,7 +3607,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         if (idleMs >= PENDING_FINAL_HARD_TIMEOUT_MS) {
           clearHistoryPoll();
-          abortGatewayRun(currentSessionKey, 'pending_final_timeout');
+          abortGatewayRun(currentSessionKey);
           _pendingComplexTaskPlans.delete(currentSessionKey);
           set({
             error: i18n.t('chat:errors.modelResponseTimeoutLong'),
@@ -3584,7 +3626,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return;
       }
       clearHistoryPoll();
-      abortGatewayRun(currentSessionKey, 'first_delta_timeout');
+      abortGatewayRun(currentSessionKey);
       _pendingComplexTaskPlans.delete(currentSessionKey);
       set({
         error: i18n.t('chat:errors.modelResponseTimeout'),
@@ -3717,7 +3759,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   abortRun: async () => {
     clearHistoryPoll();
     clearErrorRecoveryTimer();
-    const { currentSessionKey, messages } = get();
+    const { currentSessionKey, messages, activeRunId } = get();
+    if (activeRunId) {
+      markAbortedChatRun(activeRunId);
+    }
     if (_interruptedSendSession?.sessionKey === currentSessionKey) {
       _interruptedSendSession = null;
     }
@@ -3749,10 +3794,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       await useGatewayStore.getState().rpc(
         'chat.abort',
-        { sessionKey: currentSessionKey },
+        {
+          sessionKey: currentSessionKey,
+          ...(activeRunId ? { runId: activeRunId } : {}),
+        },
       );
     } catch (err) {
-      set({ error: String(err) });
+      // 忽略 abort 错误，因为用户主动终止会话时 RPC 可能被中止
+      const errStr = String(err);
+      if (!errStr.includes('aborted') && !errStr.includes('abort')) {
+        set({ error: errStr });
+      }
     }
   },
 
@@ -3786,6 +3838,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }
 
+    if (runId && isAbortedChatRun(runId)) {
+      if (resolvedState === 'aborted' || resolvedState === 'final' || resolvedState === 'error') {
+        forgetAbortedChatRun(runId);
+      } else {
+        return;
+      }
+    }
+
+    const { runAborted, sending: isSending } = get();
+    if (runAborted && !isSending && (resolvedState === 'delta' || resolvedState === 'started')) {
+      return;
+    }
+
     markChatRunRuntimeEvent({
       state: resolvedState,
       runId,
@@ -3811,22 +3876,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
       clearHistoryPoll();
       // Adopt run started from another client (e.g. console at 127.0.0.1:18789):
       // show loading/streaming in the app when this session has an active run.
-      const { sending, activeRunId: storedRunId } = get();
-      if (!sending && shouldAdoptStreamingRun(eventSessionKey, runId, storedRunId)) {
-        set({ sending: true, activeRunId: runId, error: null });
+      const { sending, activeRunId: storedRunId, runAborted } = get();
+      if (
+        !sending
+        && !runAborted
+        && runId
+        && !isAbortedChatRun(runId)
+        && shouldAdoptStreamingRun(eventSessionKey, runId, storedRunId)
+      ) {
+        set({ sending: true, activeRunId: runId, error: null, runAborted: false });
       }
     }
 
     switch (resolvedState) {
       case 'started': {
         // Run just started (e.g. from console); show loading immediately.
-        const { sending: currentSending, activeRunId: storedRunId } = get();
-        if (!currentSending && shouldAdoptStreamingRun(eventSessionKey, runId, storedRunId)) {
-          set({ sending: true, activeRunId: runId, error: null });
+        const { sending: currentSending, activeRunId: storedRunId, runAborted } = get();
+        if (
+          !currentSending
+          && !runAborted
+          && runId
+          && !isAbortedChatRun(runId)
+          && shouldAdoptStreamingRun(eventSessionKey, runId, storedRunId)
+        ) {
+          set({ sending: true, activeRunId: runId, error: null, runAborted: false });
         }
         break;
       }
       case 'delta': {
+        if (get().runAborted || (runId && isAbortedChatRun(runId))) break;
         // Clear any stale error (including RPC timeout) when new data arrives.
         if (_errorRecoveryTimer) {
           clearErrorRecoveryTimer();
@@ -4073,12 +4151,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case 'aborted': {
         clearHistoryPoll();
         clearErrorRecoveryTimer();
+        if (runId) forgetAbortedChatRun(runId);
         const lastUser = getLastRealUserSnapshot(get().messages);
         const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
         set((s) => ({
           ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
           sending: false,
           activeRunId: null,
+          runAborted: false,
           streamingText: '',
           streamingMessage: null,
           streamingTools: [],
@@ -4092,7 +4172,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // Unknown or empty state — if we're currently sending and receive an event
         // with a message, attempt to process it as streaming data. This handles
         // edge cases where the Gateway sends events without a state field.
-        const { sending } = get();
+        const { sending, runAborted } = get();
+        if (runAborted || (runId && isAbortedChatRun(runId))) break;
         if (sending && event.message && typeof event.message === 'object') {
           console.warn(`[handleChatEvent] Unknown event state "${resolvedState}", treating message as streaming delta. Event keys:`, Object.keys(event));
           const updates = collectToolUpdates(event.message, 'delta');

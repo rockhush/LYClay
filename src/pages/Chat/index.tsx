@@ -4,11 +4,12 @@
  * via gateway:rpc IPC. Session selector, thinking toggle, and refresh
  * are in the toolbar; messages render with markdown + streaming.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Loader2, Sparkles } from 'lucide-react';
 import chatDoubleIcon from '@/assets/chat-double.svg';
 import { useChatStore, type RawMessage } from '@/stores/chat';
 import { useGatewayStore } from '@/stores/gateway';
+import { useProviderStore } from '@/stores/providers';
 import { useAgentsStore } from '@/stores/agents';
 import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
 import { hostApiFetch } from '@/lib/host-api';
@@ -25,6 +26,13 @@ import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
 import { useMinLoading } from '@/hooks/use-min-loading';
 import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
 import { getChatWaitingMode, isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
+import { useSkillsStore } from '@/stores/skills';
+import { toast } from 'sonner';
+import {
+  WELCOME_QUICK_ACTIONS,
+  buildQuickActionComposerText,
+  findSkillForQuickAction,
+} from './welcome-quick-actions';
 
 type GraphStepCacheEntry = {
   steps: ReturnType<typeof deriveTaskSteps>;
@@ -45,6 +53,8 @@ type UserRunCard = {
   steps: TaskStep[];
   messageStepTexts: string[];
   streamingReplyText: string | null;
+  /** Whether to filter out 'thinking' kind steps in the ExecutionGraphCard. */
+  isMimo: boolean;
   /**
    * Whether the trailing "Thinking..." indicator should be hidden for this
    * card. True only when the run's live stream is currently rendered AS a
@@ -169,6 +179,8 @@ export function Chat() {
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const agents = useAgentsStore((s) => s.agents);
   const runAborted = useChatStore((s) => s.runAborted);
+  const defaultAccountId = useProviderStore((s) => s.defaultAccountId);
+  const isMimo = defaultAccountId === 'ly-mimo';
   const subagentCompletionInfos = useMemo(
     () => messages.map((message) => parseSubagentCompletionInfo(message)),
     [messages],
@@ -583,6 +595,7 @@ export function Chat() {
           messageStepTexts: [],
           streamingReplyText: null,
           suppressThinking: false,
+          isMimo,
         }];
       }
       const cached = graphStepCache[runKey];
@@ -605,6 +618,7 @@ export function Chat() {
         messageStepTexts: getPrimaryMessageStepTexts(cleanedSteps),
         streamingReplyText: null,
         suppressThinking: false,
+        isMimo,
       }];
     }
 
@@ -667,6 +681,7 @@ export function Chat() {
         messageStepTexts: getPrimaryMessageStepTexts(steps),
         streamingReplyText,
         suppressThinking,
+        isMimo,
       }];
     });
 
@@ -684,6 +699,7 @@ export function Chat() {
     hasRunningStreamToolStatus,
     hasStreamImages,
     hasStreamText,
+    isMimo,
     messages,
     pendingFinal,
     runAborted,
@@ -1101,6 +1117,7 @@ export function Chat() {
                                 steps={card.steps}
                                 active={card.active}
                                 suppressThinking={card.suppressThinking}
+                                isMimo={card.isMimo}
                                 expanded={expanded}
                                 onExpandedChange={(next) =>
                                   setGraphExpandedOverrides((prev) => ({ ...prev, [runKey]: next }))
@@ -1224,20 +1241,30 @@ export function Chat() {
 function WelcomeScreen() {
   const { t } = useTranslation('chat');
   const dingtalkUser = useDingTalkAuthStore((s) => s.user);
+  const setPrefilledInput = useChatStore((s) => s.setPrefilledInput);
+  const skills = useSkillsStore((s) => s.skills);
+  const skillsLoading = useSkillsStore((s) => s.loading);
+  const fetchSkills = useSkillsStore((s) => s.fetchSkills);
   const displayName = dingtalkUser?.name || dingtalkUser?.nickname || '';
   const greetingText = displayName
     ? t('welcome.greeting', { name: displayName })
     : t('welcome.greetingFallback', { defaultValue: '你好～' });
 
-  const quickActions = [
-    { key: 'askQuestions', label: t('welcome.askQuestions') },
-    { key: 'creativeTasks', label: t('welcome.creativeTasks') },
-    { key: 'brainstorming', label: t('welcome.brainstorming') },
-    {
-      key: 'multiThread',
-      label: t('welcome.multiThread', { defaultValue: '多线程工作' }),
-    },
-  ];
+  useEffect(() => {
+    if (skills.length === 0 && !skillsLoading) {
+      void fetchSkills();
+    }
+  }, [skills.length, skillsLoading, fetchSkills]);
+
+  const handleQuickAction = useCallback((action: typeof WELCOME_QUICK_ACTIONS[number]) => {
+    const skill = findSkillForQuickAction(skills, action.skillNames);
+    const fallbackName = action.skillNames[0];
+    const text = buildQuickActionComposerText(skill, fallbackName, action.defaultPrompt);
+    setPrefilledInput(text);
+    if (!skill) {
+      toast.message(t('welcome.skillNotInstalled', { name: fallbackName }));
+    }
+  }, [skills, setPrefilledInput, t]);
 
   return (
     <div
@@ -1268,12 +1295,15 @@ function WelcomeScreen() {
         <span className="text-[13px] text-foreground/55 mr-1">
           {t('welcome.canHelpPrefix', { defaultValue: '我可以' })}
         </span>
-        {quickActions.map(({ key, label }) => (
+        {WELCOME_QUICK_ACTIONS.map((action) => (
           <button
-            key={key}
+            key={action.key}
+            type="button"
+            data-testid={`chat-welcome-action-${action.key}`}
+            onClick={() => handleQuickAction(action)}
             className="px-3.5 py-1 rounded-full text-[13px] text-[#FF922B] bg-[#FF922B]/10 hover:bg-[#FF922B]/15 dark:bg-white/5 dark:text-foreground/80 dark:hover:bg-white/10 transition-colors"
           >
-            {label}
+            {t(action.labelKey)}
           </button>
         ))}
       </div>

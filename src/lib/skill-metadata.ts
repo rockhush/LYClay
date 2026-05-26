@@ -30,6 +30,46 @@ export function formatSkillVersionLabel(
   return `v${version!.trim()}`;
 }
 
+export function isCompanyMarketplaceId(id: string | number | undefined): boolean {
+  if (id == null) return false;
+  return /^\d+$/.test(String(id).trim());
+}
+
+/**
+ * Whether a marketplace card should show as installed (技能广场 tab).
+ * Company marketplace skills require a registry entry + on-disk folder match.
+ */
+export function isMarketplaceSkillInstalledOnDisk(
+  skill: MarketplaceSkill,
+  installedSkills: Skill[],
+  companyInstallMap: Record<string, string>,
+): boolean {
+  if (skill.__installed === false) return false;
+
+  const marketplaceId = skill.id != null ? String(skill.id).trim() : '';
+  if (isCompanyMarketplaceId(skill.id)) {
+    const packageSlug = marketplaceId ? companyInstallMap[marketplaceId] : undefined;
+    if (!packageSlug) return false;
+    return installedSkills.some((installed) => {
+      if (installed.pathMissing) return false;
+      if (installed.slug === packageSlug || installed.id === packageSlug) return true;
+      if (installed.baseDir) {
+        const folder = installed.baseDir.split(/[/\\]/).filter(Boolean).pop();
+        if (folder === packageSlug) return true;
+      }
+      return false;
+    });
+  }
+
+  return installedSkills.some((installed) => {
+    if (installed.pathMissing) return false;
+    return installed.slug === skill.slug
+      || installed.id === skill.slug
+      || installed.name === skill.name
+      || (!!skill.slug && !!installed.baseDir && installed.baseDir.includes(skill.slug));
+  });
+}
+
 /** React list key for marketplace cards; prefers stable API id over install slug. */
 export function getMarketplaceSkillKey(skill: Pick<MarketplaceSkill, 'id' | 'slug'>): string {
   if (skill.id != null && String(skill.id).trim()) {

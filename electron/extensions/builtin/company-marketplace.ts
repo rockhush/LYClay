@@ -21,6 +21,10 @@ import {
   resolvePackageDirName,
 } from '../../utils/company-skill-package';
 import {
+  hasPreservedSkillDirectory,
+  restorePreservedSkillDirectory,
+} from '../../utils/skill-workspace-preserve';
+import {
   rememberCompanyMarketplaceInstall,
   writeCompanyMarketplaceSidecar,
 } from '../../utils/company-marketplace-installs';
@@ -329,10 +333,40 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       const contentDir = await locateSkillContentDir(tempExtractDir);
       const skillDir = path.join(skillsRoot, packageDirName);
 
+      if (!params.force && hasPreservedSkillDirectory(packageDirName)) {
+        const restored = await restorePreservedSkillDirectory(packageDirName, skillDir);
+        if (restored) {
+          const installEntry = {
+            packageSlug: packageDirName,
+            name: targetSkill.name,
+            version: targetSkill.version,
+            author: targetSkill.author,
+            description: targetSkill.skill_detail,
+          };
+          await rememberCompanyMarketplaceInstall(skillId, installEntry);
+          await writeCompanyMarketplaceSidecar(skillDir, skillId, installEntry);
+          console.log('[CompanyMarketplace] Restored preserved skill directory:', packageDirName);
+          return {
+            slug: packageDirName,
+            baseDir: skillDir,
+            name: targetSkill.name,
+            version: targetSkill.version,
+            author: targetSkill.author,
+            description: targetSkill.skill_detail,
+            marketplaceId: skillId,
+          };
+        }
+      }
+
       if (fs.existsSync(skillDir)) {
+        console.log('[CompanyMarketplace] Removing existing skill directory before install:', skillDir);
         await fsPromises.rm(skillDir, { recursive: true, force: true });
       }
       await fsPromises.mkdir(path.dirname(skillDir), { recursive: true });
+
+      if (params.force) {
+        console.log('[CompanyMarketplace] Force install — installing from downloaded package:', packageDirName);
+      }
 
       if (contentDir === tempExtractDir) {
         await fsPromises.mkdir(skillDir, { recursive: true });
@@ -360,7 +394,15 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       await writeCompanyMarketplaceSidecar(skillDir, skillId, installEntry);
 
       console.log('[CompanyMarketplace] Skill installed successfully:', packageDirName);
-      return { slug: packageDirName, baseDir: skillDir };
+      return {
+        slug: packageDirName,
+        baseDir: skillDir,
+        name: targetSkill.name,
+        version: targetSkill.version,
+        author: targetSkill.author,
+        description: targetSkill.skill_detail,
+        marketplaceId: skillId,
+      };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       console.error('[CompanyMarketplace] Install error:', errorMsg);

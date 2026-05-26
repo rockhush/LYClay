@@ -5,6 +5,7 @@ import { getProviderDefinition } from '../../shared/providers/registry';
 import {
   LEGACY_LY_MINIMAX_PROVIDER_ID,
   LY_MINIMAX_PROVIDER_ID,
+  // LY_GLM_PROVIDER_ID,
   type ProviderAccount,
 } from '../../shared/providers/types';
 import { listConfiguredAgentIds } from '../../utils/agent-config';
@@ -21,19 +22,33 @@ import { deleteProviderAccount, getProviderAccount, saveProviderAccount } from '
 const LY_MINIMAX_LABEL = 'LY-MiniMax';
 const LY_MINIMAX_BASE_URL = 'http://10.64.22.11:8000/v1';
 const LY_MINIMAX_MODEL_ID = 'MiniMax-M2.7';
-const LY_MINIMAX_MAX_TOKENS = 98304;
+const LY_MINIMAX_MAX_TOKENS = 204800;
 const LY_MINIMAX_API_KEY = 'EMPTY';
 
 const LY_MIMO_PROVIDER_ID = 'ly-mimo';
 const LY_MIMO_LABEL = 'LY-Mimo';
 const LY_MIMO_BASE_URL = 'http://10.64.22.12:8000/v1';
 const LY_MIMO_MODEL_ID = 'MiMo-V2.5';
-const LY_MIMO_MAX_TOKENS = 49152;
+const LY_MIMO_MAX_TOKENS = 100000;
 const LY_MIMO_API_KEY = 'EMPTY';
 const LY_MIMO_MODEL_OPTIONS = {
   input: ['text', 'image'],
   maxTokens: LY_MIMO_MAX_TOKENS,
+  reasoning: false,
+  params: {
+    frequency_penalty: 0.5,
+    presence_penalty: 0.2,
+    chat_template_kwargs: {
+      enable_thinking: false,
+    },
+  },
 };
+
+// const LY_GLM_LABEL = 'LY-GLM';
+// const LY_GLM_BASE_URL = 'http://10.7.221.62:8000/v1';
+// const LY_GLM_MODEL_ID = 'GLM-5.1-FP8';
+// const LY_GLM_MAX_TOKENS = 167616;
+// const LY_GLM_API_KEY = 'EMPTY';
 
 function createLyMiniMaxAccount(existing?: ProviderAccount | null, legacy?: ProviderAccount | null): ProviderAccount {
   const now = new Date().toISOString();
@@ -69,7 +84,7 @@ function createLyMimoAccount(existing?: ProviderAccount | null): ProviderAccount
     label: LY_MIMO_LABEL,
     authMode: 'api_key',
     baseUrl: LY_MIMO_BASE_URL,
-    apiProtocol: 'anthropic-messages',
+    apiProtocol: 'openai-completions',
     headers: existing?.headers,
     model: LY_MIMO_MODEL_ID,
     fallbackModels: existing?.fallbackModels,
@@ -85,6 +100,31 @@ function createLyMimoAccount(existing?: ProviderAccount | null): ProviderAccount
     updatedAt: now,
   };
 }
+
+// function createLyGlmAccount(existing?: ProviderAccount | null): ProviderAccount {
+//   const now = new Date().toISOString();
+//   return {
+//     id: LY_GLM_PROVIDER_ID,
+//     vendorId: LY_GLM_PROVIDER_ID,
+//     label: LY_GLM_LABEL,
+//     authMode: 'api_key',
+//     baseUrl: LY_GLM_BASE_URL,
+//     apiProtocol: 'anthropic-messages',
+//     headers: existing?.headers,
+//     model: LY_GLM_MODEL_ID,
+//     fallbackModels: existing?.fallbackModels,
+//     fallbackAccountIds: existing?.fallbackAccountIds,
+//     enabled: true,
+//     isDefault: existing?.isDefault ?? false,
+//     metadata: {
+//       ...existing?.metadata,
+//       managedBy: 'lyclaw',
+//       readonly: true,
+//     },
+//     createdAt: existing?.createdAt || now,
+//     updatedAt: now,
+//   };
+// }
 
 function migrateModelRef(value: unknown): unknown {
   if (typeof value === 'string') {
@@ -219,8 +259,11 @@ async function syncManagedProviderToAgentModels(
 ): Promise<void> {
   const runtimeProviderKey = getOpenClawProviderKeyForType(account.vendorId, account.id);
   const modelEntry = { id: modelId, name: modelId, ...modelOptions };
+  const baseUrl = account.apiProtocol === 'openai-completions'
+    ? account.baseUrl?.replace(/\/$/, '')
+    : account.baseUrl?.replace(/\/v1$/, '/anthropic').replace(/\/anthropic$/, '/anthropic');
   await updateAgentModelProvider(runtimeProviderKey, {
-    baseUrl: account.baseUrl?.replace(/\/v1$/, '/anthropic').replace(/\/anthropic$/, '/anthropic'),
+    baseUrl,
     api: account.apiProtocol,
     models: [modelEntry],
     apiKey: 'EMPTY',
@@ -282,6 +325,26 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     },
   });
   await syncManagedProviderToAgentModels(lyMimoAccount, LY_MIMO_MODEL_ID, LY_MIMO_MODEL_OPTIONS);
+
+  // const lyGlmExisting = await providerService.getAccount(LY_GLM_PROVIDER_ID);
+  // const lyGlmAccount = createLyGlmAccount(lyGlmExisting);
+  // await saveProviderAccount(lyGlmAccount);
+  // if (LY_GLM_API_KEY) {
+  //   await storeApiKey(lyGlmAccount.id, LY_GLM_API_KEY);
+  // }
+
+  // const lyGlmRuntimeProviderKey = getOpenClawProviderKeyForType(lyGlmAccount.vendorId, lyGlmAccount.id);
+  // await syncProviderConfigToOpenClaw(lyGlmRuntimeProviderKey, LY_GLM_MODEL_ID, {
+  //   baseUrl: lyGlmAccount.baseUrl,
+  //   api: lyGlmAccount.apiProtocol,
+  //   apiKeyEnv: 'LY_GLM_API_KEY',
+  //   modelOverrides: {
+  //     [LY_GLM_MODEL_ID]: {
+  //       maxTokens: LY_GLM_MAX_TOKENS,
+  //     },
+  //   },
+  // });
+  // await syncManagedProviderToAgentModels(lyGlmAccount, LY_GLM_MODEL_ID, { maxTokens: LY_GLM_MAX_TOKENS });
 
   const modelRef = modelId.startsWith(`${runtimeProviderKey}/`) ? modelId : `${runtimeProviderKey}/${modelId}`;
   const changed = await ensureOpenClawDefaultModel(modelRef);

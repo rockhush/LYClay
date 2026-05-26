@@ -7,12 +7,11 @@
         "greeting": "Привет, {{name}}~",
         "greetingFallback": "Привет~",
         "canHelpPrefix": "Я могу",
-        "askQuestions": "Почта",
-        "askQuestionsDesc": "Работа над задачами",
-        "creativeTasks": "Непрерывный режим",
-        "creativeTasksDesc": "Выполнение многошаговых задач",
-        "brainstorming": "Планировщик",
-        "multiThread": "Многопоточная работа"
+        "knowledgeQa": "База знаний",
+        "groupSummary": "Сводка чата",
+        "pptGeneration": "Создание PPT",
+        "smartTranslation": "Перевод",
+        "skillNotInstalled": "Навык «{{name}}» не установлен. Сначала установите его в Skill Plaza."
     },
     "noLogs": "(Журналы ещё недоступны)",
     "toolbar": {

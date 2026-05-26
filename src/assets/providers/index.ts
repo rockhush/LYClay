@@ -26,6 +26,7 @@ export const providerIcons: Record<string, string> = {
     'minimax-portal': minimaxPortal,
     'minimax-portal-cn': minimaxPortal,
     'ly-mimo': lyModel,
+    // 'ly-glm': lyModel,
     'modelstudio': qwenPortal,
     ollama,
     custom,

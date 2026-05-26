@@ -51,8 +51,16 @@ function normalizeProviderBaseUrl(
 
   const normalized = baseUrl.trim().replace(/\/+$/, '');
 
-  if (config.type === 'minimax-portal' || config.type === 'minimax-portal-cn' || config.type === 'ly-minimax' || config.type === 'ly-mimo') {
+  if (config.type === 'minimax-portal' || config.type === 'minimax-portal-cn' || config.type === 'ly-minimax') {
     return normalized.replace(/\/v1$/, '').replace(/\/anthropic$/, '').replace(/\/$/, '') + '/anthropic';
+  }
+
+  if (config.type === 'ly-mimo') {
+    const protocol = apiProtocol || config.apiProtocol || 'openai-completions';
+    if (protocol === 'anthropic-messages') {
+      return normalized.replace(/\/v1$/, '').replace(/\/anthropic$/, '').replace(/\/$/, '') + '/anthropic';
+    }
+    return normalized;
   }
 
   if (isUnregisteredProviderType(config.type)) {
@@ -343,11 +351,7 @@ function buildModelOverridesFromRegistry(
   if (!model) {
     return undefined;
   }
-  const { params: _params, ...modelWithoutParams } = model;
-  if ('params' in model) {
-    return { [modelId]: modelWithoutParams };
-  }
-  return { [modelId]: model };
+  return { [modelId]: { ...model } };
 }
 
 async function syncCustomProviderAgentModel(
@@ -482,12 +486,11 @@ async function buildAgentModelProviderEntry(
   }
 
   const registryModel = meta?.models?.find((model) => model.id === modelId);
-  const { params: _params, ...registryModelWithoutParams } = registryModel ?? {};
 
   return {
     baseUrl,
     api,
-    models: [{ ...(registryModelWithoutParams ?? {}), id: modelId, name: registryModel?.name ?? modelId }],
+    models: [{ ...(registryModel ?? {}), id: modelId, name: registryModel?.name ?? modelId }],
     apiKey,
     authHeader,
   };

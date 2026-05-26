@@ -5,6 +5,7 @@ import type {
   ProviderTypeInfo,
 } from './types';
 import { LY_MINIMAX_PROVIDER_ID } from './types';
+// import { LY_GLM_PROVIDER_ID } from './types';
 
 export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
   {
@@ -32,8 +33,8 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
           id: 'MiniMax-M2.7',
           name: 'MiniMax M2.7',
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 256000,
-          maxTokens: 98304,
+          contextWindow: 204800,
+          maxTokens: 204800,
         },
       ],
     },
@@ -333,7 +334,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     supportsMultipleAccounts: true,
     providerConfig: {
       baseUrl: 'http://10.64.22.12:8000/v1',
-      api: 'anthropic-messages',
+      api: 'openai-completions',
       apiKeyEnv: 'LY_MIMO_API_KEY',
       models: [
         {
@@ -341,12 +342,54 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
           name: 'MiMo V2.5',
           input: ['text', 'image'],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 256000,
-          maxTokens: 49152,
+          contextWindow: 1048576,
+          maxTokens: 100000,
+          reasoning: false,
+          params: {
+            frequency_penalty: 0.5,
+            presence_penalty: 0.2,
+            chat_template_kwargs: {
+              enable_thinking: false,
+            },
+          },
         },
       ],
     },
   },
+  // {
+  //   id: LY_GLM_PROVIDER_ID,
+  //   name: 'LY-GLM',
+  //   icon: 'LY',
+  //   placeholder: 'sk-...',
+  //   model: 'GLM',
+  //   requiresApiKey: true,
+  //   defaultBaseUrl: 'http://10.7.221.62:8000/v1',
+  //   defaultModelId: 'GLM-5.1-FP8',
+  //   showBaseUrl: true,
+  //   showModelId: true,
+  //   showModelIdInDevModeOnly: true,
+  //   modelIdPlaceholder: 'GLM-5.1-FP8',
+  //   category: 'official',
+  //   envVar: 'LY_GLM_API_KEY',
+  //   supportedAuthModes: ['api_key'],
+  //   defaultAuthMode: 'api_key',
+  //   supportsMultipleAccounts: true,
+  //   providerConfig: {
+  //     baseUrl: 'http://10.7.221.62:8000/v1',
+  //     api: 'anthropic-messages',
+  //     apiKeyEnv: 'LY_GLM_API_KEY',
+  //     models: [
+  //       {
+  //         id: 'GLM-5.1-FP8',
+  //         name: 'GLM 5.1 FP8',
+  //         input: ['text', 'image'],
+  //         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  //         contextWindow: 167616,
+  //         maxTokens: 167616,
+  //       },
+  //     ],
+  //   },
+  // },
   {
     id: 'modelstudio',
     name: 'Model Studio',

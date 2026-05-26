@@ -7,12 +7,11 @@
         "greeting": "Hi {{name}}~",
         "greetingFallback": "Hi there~",
         "canHelpPrefix": "I can",
-        "askQuestions": "Email handling",
-        "askQuestionsDesc": "Work on task-oriented requests",
-        "creativeTasks": "Continuous run",
-        "creativeTasksDesc": "Keep running through multi-step work",
-        "brainstorming": "Cron tasks",
-        "multiThread": "Multi-thread work"
+        "knowledgeQa": "Knowledge Q&A",
+        "groupSummary": "Group summary",
+        "pptGeneration": "PPT generation",
+        "smartTranslation": "Smart translation",
+        "skillNotInstalled": "Skill \"{{name}}\" is not installed yet. Default prompt filled — install it from Skill Plaza first."
     },
     "noLogs": "(No logs available yet)",
     "toolbar": {

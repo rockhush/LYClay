@@ -21,6 +21,25 @@ function toMs(ts: number): number {
 // poll chat.history to surface intermediate tool-call turns.
 let _historyPollTimer: ReturnType<typeof setTimeout> | null = null;
 
+const _abortedChatRunIds = new Set<string>();
+
+export function markAbortedChatRun(runId: string): void {
+  const id = runId.trim();
+  if (id) _abortedChatRunIds.add(id);
+}
+
+export function isAbortedChatRun(runId: string): boolean {
+  return _abortedChatRunIds.has(runId.trim());
+}
+
+export function forgetAbortedChatRun(runId: string): void {
+  _abortedChatRunIds.delete(runId.trim());
+}
+
+export function clearAbortedChatRuns(): void {
+  _abortedChatRunIds.clear();
+}
+
 // Timer for delayed error finalization. When the Gateway reports a mid-stream
 // error (e.g. "terminated"), it may retry internally and recover. We wait
 // before committing the error to give the recovery path a chance.

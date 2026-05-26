@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { getAllSkillConfigs, setSkillEnabled, updateSkillConfig } from '../../utils/skill-config';
 import { loadCompanyMarketplaceInstallState } from '../../utils/company-marketplace-installs';
+import {
+  checkCompanySkillUpdate,
+  checkInstalledCompanySkillUpdates,
+  logSkillCheckUpdateResultsSummary,
+} from '../../utils/company-skill-update';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -94,6 +99,11 @@ export async function handleSkillRoutes(
         slug: installedSlug || installed?.slug,
         baseDir: installResult?.baseDir || installed?.baseDir,
         source: installed?.source,
+        name: installResult?.name,
+        version: installResult?.version || installed?.version,
+        author: installResult?.author,
+        description: installResult?.description,
+        marketplaceId: installResult?.marketplaceId,
       });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
@@ -111,6 +121,55 @@ export async function handleSkillRoutes(
         ),
         entries: registry.byMarketplaceId,
         byPackageSlug,
+      });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/clawhub/check-updates' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{
+        skills?: Array<{ skill_id: number | string; current_version: string; skill_name?: string }>;
+      }>(req);
+      const requested = Array.isArray(body.skills) ? body.skills : null;
+      console.log('[Skills API] check-updates requested:', requested?.length ?? 'registry-fallback', 'skill(s)');
+      const results = requested != null
+        ? await Promise.all(
+            requested.map((skill) => checkCompanySkillUpdate(
+              skill.skill_id,
+              skill.current_version,
+              { skillName: skill.skill_name },
+            )),
+          )
+        : await checkInstalledCompanySkillUpdates();
+      logSkillCheckUpdateResultsSummary(results);
+      sendJson(res, 200, { success: true, results });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/clawhub/update' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{ slug?: string }>(req);
+      const installKey = typeof body.slug === 'string' ? body.slug.trim() : '';
+      if (!installKey) {
+        sendJson(res, 400, { success: false, error: 'slug is required' });
+        return true;
+      }
+      const installResult = await ctx.clawHubService.update({ slug: installKey });
+      sendJson(res, 200, {
+        success: true,
+        slug: installResult?.slug,
+        baseDir: installResult?.baseDir,
+        name: installResult?.name,
+        version: installResult?.version,
+        author: installResult?.author,
+        description: installResult?.description,
+        marketplaceId: installResult?.marketplaceId ?? installKey,
       });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });

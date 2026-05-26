@@ -14,9 +14,11 @@ import {
   markChatRunRpcStarted,
 } from './chat-run-perf';
 import {
+  clearAbortedChatRuns,
   clearErrorRecoveryTimer,
   clearHistoryPoll,
   getLastChatEventAt,
+  markAbortedChatRun,
   setHistoryPollTimer,
   setLastChatEventAt,
   upsertImageCacheEntry,
@@ -86,11 +88,20 @@ function getEffectiveReasoningMode(message: string, selectedMode: ReasoningMode,
   return selectedMode;
 }
 
+// Mimo model detection and directive
+function isMimoModel(): boolean {
+  const agentsState = useAgentsStore.getState();
+  const mainAgent = agentsState.agents.find((a) => a.id === 'main');
+  const modelRef = mainAgent?.modelRef ?? mainAgent?.overrideModelRef ?? agentsState.defaultModelRef;
+  return modelRef != null && modelRef.startsWith('ly-mimo/');
+}
+
 function withThinkingDirective(message: string, mode: ReasoningMode): string {
   if (isSlashCommand(message)) {
     return message;
   }
-  return `/think ${toThinkingLevel(mode)} ${message}`;
+  const isMimo = isMimoModel();
+  return `/think ${isMimo ? 'off' : toThinkingLevel(mode)} ${message}`;
 }
 
 const COMPLEX_TASK_EXECUTION_GUIDE = [
@@ -207,11 +218,11 @@ function markPendingComplexTaskPlanningRun(sessionKey: string, runId: string): v
   });
 }
 
-function abortGatewayRun(sessionKey: string, reason: string): void {
+function abortGatewayRun(sessionKey: string): void {
   void invokeIpc(
     'gateway:rpc',
     'chat.abort',
-    { sessionKey, reason },
+    { sessionKey },
     8_000,
   ).catch((error) => {
     console.warn('[chat] Failed to abort stuck run:', error);
@@ -281,6 +292,8 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
     ) => {
       const trimmed = text.trim();
       if (!trimmed && (!attachments || attachments.length === 0)) return;
+
+      clearAbortedChatRuns();
 
       const targetSessionKey = resolveMainSessionKeyForAgent(targetAgentId) ?? get().currentSessionKey;
       if (targetSessionKey !== get().currentSessionKey) {
@@ -431,7 +444,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           return;
         }
         clearHistoryPoll();
-        abortGatewayRun(currentSessionKey, 'first_delta_timeout');
+        abortGatewayRun(currentSessionKey);
         clearPendingComplexTaskPlan(currentSessionKey);
         set({
           error: i18n.t('chat:errors.modelResponseTimeoutLong'),
@@ -571,29 +584,32 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       clearHistoryPoll();
       clearErrorRecoveryTimer();
       const { currentSessionKey, activeRunId } = get();
-      
-      // 立即重置所有状态，确保UI立即响应
-      set({ 
-        sending: false, 
+      if (activeRunId) {
+        markAbortedChatRun(activeRunId);
+      }
+
+      set({
+        sending: false,
         aborting: false,
         activeRunId: null,
-        streamingText: '', 
-        streamingMessage: null, 
-        pendingFinal: false, 
-        lastUserMessageAt: null, 
+        streamingText: '',
+        streamingMessage: null,
+        pendingFinal: false,
+        lastUserMessageAt: null,
         pendingToolImages: [],
         streamingTools: [],
         error: null,
       });
 
-      // 异步发送 abort 请求给 Gateway（不等待响应，避免阻塞）
-      if (currentSessionKey && activeRunId) {
+      if (currentSessionKey) {
         invokeIpc(
           'gateway:rpc',
           'chat.abort',
-          { sessionKey: currentSessionKey },
+          {
+            sessionKey: currentSessionKey,
+            ...(activeRunId ? { runId: activeRunId } : {}),
+          },
         ).catch((err) => {
-          // 忽略错误，因为我们已经重置了状态
           console.warn('[abortRun] Failed to abort run:', err);
         });
       }
