@@ -66,12 +66,17 @@ async function fetchLatestRelease() {
   return new Promise((resolve, reject) => {
     const protocol = DWS_CLI_API_URL.startsWith('https:') ? https : http;
 
-    protocol.get(DWS_CLI_API_URL, {
-      headers: {
-        'User-Agent': 'ClawX-Builder',
-        'Accept': 'application/vnd.github.v3+json',
-      },
-    }, (response) => {
+    const headers = {
+      'User-Agent': 'ClawX-Builder',
+      'Accept': 'application/vnd.github.v3+json',
+    };
+
+    // ✅ 关键：加 token
+    if (process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+    }
+
+    protocol.get(DWS_CLI_API_URL, { headers }, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
         fetchLatestRelease().then(resolve).catch(reject);
         return;
