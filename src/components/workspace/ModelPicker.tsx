@@ -27,6 +27,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const setDefaultAccount = useProviderStore((s) => s.setDefaultAccount);
   const isDefaultAccountSwitching = useProviderStore((s) => s.isDefaultAccountSwitching);
   const pendingDefaultAccountId = useProviderStore((s) => s.pendingDefaultAccountId);
+  const fetchAgents = useAgentsStore((s) => s.fetchAgents);
 
   // Build provider list items
   const providerItems = useMemo(() => {
@@ -72,6 +73,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
     void (async () => {
       try {
         await setDefaultAccount(item.account.id);
+        await fetchAgents();
         toast.success(t('composer.modelSwitched', { name: item.vendor?.name || item.account.label }));
       } catch (error) {
         console.error('Failed to switch model:', error);
@@ -94,11 +96,11 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const currentItem = configuredProviders.find((item) => item.account.id === effectiveDefaultAccountId)
     ?? configuredProviders[0];
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
-  const currentLabel = currentAgent?.modelDisplay
-    || defaultModelRef?.split('/').pop()
-    || currentItem?.account.model
+  const currentLabel = currentItem?.account.model
     || currentItem?.vendor?.name
     || currentItem?.account.label
+    || currentAgent?.modelDisplay
+    || defaultModelRef?.split('/').pop()
     || t('composer.switchModel');
 
   return (
@@ -132,7 +134,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
           <div className="max-h-64 overflow-y-auto">
             {configuredProviders.map((item) => {
-              const isSelected = item.account.id === defaultAccountId;
+              const isSelected = item.account.id === effectiveDefaultAccountId;
               const vendorName = item.vendor?.name || item.account.label;
 
               return (
