@@ -20,6 +20,7 @@ import {
   ExternalLink,
   Trash2,
   Pencil,
+  FolderOutput,
   Cpu,
   Folder,
   FolderOpen,
@@ -43,6 +44,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { hostApiFetch } from '@/lib/host-api';
 import { flushUiStateSync } from '@/lib/ui-state-persistence';
@@ -177,6 +179,7 @@ export function Sidebar() {
   const switchSession = useChatStore((s) => s.switchSession);
   const newSession = useChatStore((s) => s.newSession);
   const clearSessionWorkspaceBindings = useChatStore((s) => s.clearSessionWorkspaceBindings);
+  const unbindSessionWorkspace = useChatStore((s) => s.unbindSessionWorkspace);
   const deleteSession = useChatStore((s) => s.deleteSession);
   const renameSession = useChatStore((s) => s.renameSession);
   const loadSessions = useChatStore((s) => s.loadSessions);
@@ -503,7 +506,8 @@ export function Sidebar() {
     [agents],
   );
 
-  const renderChatSessionRow = (s: ChatSession) => {
+  const renderChatSessionRow = (s: ChatSession, options?: { inWorkspace?: boolean }) => {
+    const inWorkspace = options?.inWorkspace === true;
     const agentId = getAgentIdFromSessionKey(s.key);
     const agentName = agentNameById[agentId] || agentId;
     const isCurrent = currentSessionKey === s.key;
@@ -519,6 +523,7 @@ export function Sidebar() {
     const statusTitle = isRunning
       ? t('chat:sidebar.statusRunning', { defaultValue: '问答进行中' })
       : t('chat:sidebar.statusCompleted', { defaultValue: '已完成' });
+    const sessionLabel = getSessionLabel(s.key, s.displayName, s.label);
     return (
       <div key={s.key} className="group relative flex items-center">
         <button
@@ -541,7 +546,8 @@ export function Sidebar() {
               : undefined
           }
           className={cn(
-            'w-full text-left rounded-lg px-2.5 py-1.5 text-[13px] transition-colors pr-12',
+            'w-full text-left rounded-lg py-1.5 text-[13px] transition-[padding,colors]',
+            inWorkspace ? 'pl-1.5 pr-1.5 group-hover:pr-[4.25rem]' : 'px-2.5 group-hover:pr-12',
             'hover:bg-white/60 dark:hover:bg-white/10',
             isSessionViewActive && currentSessionKey === s.key
               ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground'
@@ -549,7 +555,7 @@ export function Sidebar() {
             firstResponsePreparingLocksSwitch && s.key !== currentSessionKey && 'opacity-50 cursor-not-allowed',
           )}
         >
-          <div className="flex min-w-0 items-center gap-2">
+          <div className={cn('flex min-w-0 items-center', inWorkspace ? 'gap-1.5' : 'gap-2')}>
             <span
               className="flex h-3.5 w-3.5 shrink-0 items-center justify-center"
               title={statusTitle}
@@ -569,7 +575,18 @@ export function Sidebar() {
             <span className="shrink-0 rounded-full bg-black/[0.14] px-2 py-0.5 text-[10px] font-medium text-foreground/70 dark:bg-white/[0.12]">
               {agentName}
             </span>
-            <span className="truncate">{getSessionLabel(s.key, s.displayName, s.label)}</span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="min-w-0 flex-1 truncate text-left">{sessionLabel}</span>
+              </TooltipTrigger>
+              <TooltipContent
+                side="right"
+                align="center"
+                className="max-w-xs whitespace-normal break-words text-[13px]"
+              >
+                {sessionLabel}
+              </TooltipContent>
+            </Tooltip>
           </div>
         </button>
         <div
@@ -593,6 +610,22 @@ export function Sidebar() {
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
+          {inWorkspace ? (
+            <button
+              type="button"
+              aria-label={t('common:sidebar.removeFromWorkspace')}
+              title={t('common:sidebar.removeFromWorkspace')}
+              data-testid={`sidebar-session-remove-workspace-${s.key}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                unbindSessionWorkspace(s.key);
+                toast.success(t('common:sidebar.removeFromWorkspaceSuccess'));
+              }}
+              className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
+            >
+              <FolderOutput className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label={t('common:actions.delete')}
@@ -876,11 +909,13 @@ export function Sidebar() {
                           {sessionCount > 0 ? (
                             <div
                               data-testid={`sidebar-workspace-sessions-${workspace.id}`}
-                              className="ml-6 mt-1"
+                              className="mt-0.5 ml-1"
                             >
                               {chatsExpanded ? (
                                 <div className="space-y-0.5 overflow-y-auto overflow-x-hidden scrollbar-thin">
-                                  {sessionsByWorkspaceId[workspace.id]!.map(renderChatSessionRow)}
+                                  {sessionsByWorkspaceId[workspace.id]!.map((session) =>
+                                    renderChatSessionRow(session, { inWorkspace: true }),
+                                  )}
                                 </div>
                               ) : null}
                             </div>

@@ -140,6 +140,8 @@
         "requirements": "文件要求",
         "requirement1": "文件夹或者.zip需要包含SKILL.md文件",
         "requirement2": "SKILL.md 文件需包含 YAML 格式的技能名称和描述",
+        "requirement3": "禁止包含可执行文件（.exe、.sh、.dll 等）",
+        "requirement4": "ZIP 包不得包含路径穿越或符号链接",
         "cancel": "取消",
         "upload": "上传",
         "uploading": "上传中...",
@@ -148,6 +150,26 @@
         "failed": "上传失败",
         "failedDesc": "无法完成上传，请重试",
         "invalidFileType": "无效的文件类型",
-        "zipOnly": "仅支持 ZIP 格式的文件"
+        "zipOnly": "仅支持 ZIP 格式的文件",
+        "securityBlocked": "安全检查未通过",
+        "securityBlockedDesc": "该技能包因安全问题被拦截。",
+        "securityWarning": "安全提醒",
+        "securityCategories": {
+            "path-traversal": "路径穿越攻击",
+            "file-type": "被禁止的文件类型",
+            "zip-bomb": "ZIP 炸弹检测",
+            "symlink": "检测到符号链接",
+            "file-size": "文件过大",
+            "file-count": "文件数量过多",
+            "total-size": "压缩包过大",
+            "nesting-depth": "嵌套层级过深",
+            "manifest": "SKILL.md 格式无效",
+            "dangerous-command": "检测到危险命令",
+            "hidden-dir": "隐藏目录",
+            "scan-error": "扫描异常",
+            "suspicious-url": "可疑链接",
+            "impersonation": "技能名仿冒",
+            "homoglyph": "混淆字符检测"
+        }
     }
 }

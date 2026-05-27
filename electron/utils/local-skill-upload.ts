@@ -4,6 +4,11 @@ import * as path from 'path';
 import { promisify } from 'util';
 import { locateSkillContentDir, parseSkillManifestFields, resolveLocalUploadSkillMetadata } from './company-skill-package';
 import { restorePreservedSkillDirectory } from './skill-workspace-preserve';
+import {
+  readZipEntries,
+  validateZipStructure,
+  validateExtractedSkill,
+} from './skill-validator';
 
 const execFileAsync = promisify(execFile);
 
@@ -71,6 +76,12 @@ export async function installLocalSkillFromExtractedContent(params: {
 
   const contentDir = await locateSkillContentDir(params.extractDir);
 
+  // ── P0 SECURITY: Post-extraction validation on actual content dir ──
+  const postValidationResult = validateExtractedSkill(contentDir);
+  if (!postValidationResult.allowed) {
+    throw new Error(postValidationResult.blockReason || 'Content security check failed');
+  }
+
   await fs.promises.mkdir(params.skillsDir, { recursive: true });
   await fs.promises.rm(skillDir, { recursive: true, force: true });
   await fs.promises.cp(contentDir, skillDir, { recursive: true, force: true });
@@ -102,7 +113,26 @@ export async function installLocalSkillZip(params: {
 
   try {
     await fs.promises.writeFile(tempZipPath, params.buffer);
+
+    // ── P0 SECURITY: Pre-extraction validation ──────────────────────
+    let entries;
+    try {
+      entries = readZipEntries(tempZipPath);
+    } catch (zipReadError) {
+      throw new Error('ZIP 文件读取失败，文件可能已损坏或不是有效的格式');
+    }
+
+    if (entries.length === 0) {
+      throw new Error('ZIP 文件为空，请检查文件是否正确');
+    }
+
+    const preValidationResult = validateZipStructure(entries, tempZipPath);
+    if (!preValidationResult.allowed) {
+      throw new Error(preValidationResult.blockReason || 'Security check failed');
+    }
+
     await extractZipToDir(tempZipPath, tempExtractDir);
+
     return await installLocalSkillFromExtractedContent({
       extractDir: tempExtractDir,
       fileName: params.fileName,

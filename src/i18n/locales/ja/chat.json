@@ -71,7 +71,7 @@
     },
     "firstMessage": {
         "preparingTitle": "実行を準備中...",
-        "preparingDescriptionWarmup": "ゲートウェイがバックグラウンドでモデルをウォームアップしています。準備ができ次第、このスレッドに返答が表示されます。",
+        "preparingDescriptionWarmup": "Agent が引き継ぎ、作業状態に入っています。",
         "preparingDescription": "Agent が引き継ぎ、作業状態に入っています。",
         "progressLabel": "最初の応答を準備中 {{progress}}%",
         "progressTitle": "最初の応答を準備中 {{progress}}%",

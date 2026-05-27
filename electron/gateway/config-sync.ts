@@ -494,6 +494,7 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
     OPENCLAW_NO_RESPAWN: '1',
     OPENCLAW_DISABLE_BONJOUR: '1',
     OPENCLAW_DISABLE_MODEL_PRICING: '1',
+    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: '1',
     // OPENCLAW_OFFLINE_MODE: '1',
     // OPENCLAW_NETWORK_TIMEOUT: '1',
     LITELLM_DISABLE_COST_TRACKING: 'true',

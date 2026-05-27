@@ -39,7 +39,8 @@ import {
 import { createSignalQuitHandler } from './signal-quit';
 import { acquireProcessInstanceFileLock } from './process-instance-lock';
 import { getSetting } from '../utils/store';
-import { ensureBuiltinSkillsInstalled, ensurePreinstalledSkillsInstalled } from '../utils/skill-config';
+import { ensurePreinstalledSkillsConfig } from '../utils/skill-config';
+import { migrateHomedirBuiltinSkills } from '../utils/skill-homedir-migration';
 import { ensureDwsEnvironmentInitialized } from '../utils/dws-env-setup';
 import { ensureDwsCliInstalled } from '../utils/dws-cli-installer';
 import { migrateLegacyUserDataIfNeeded } from '../utils/user-data-migration';
@@ -428,21 +429,15 @@ async function initialize(): Promise<void> {
     });
   }
 
-  // Pre-deploy built-in skills (feishu-doc, feishu-drive, feishu-perm, feishu-wiki)
-  // to ~/.openclaw/skills/ so they are immediately available without manual install.
+  // Built-in skills live under openclaw/skills (bundled). Remove legacy copies from
+  // ~/.openclaw/skills and apply manifest auto-enable flags.
   if (!isE2EMode) {
-    void ensureBuiltinSkillsInstalled().catch((error) => {
-      logger.warn('Failed to install built-in skills:', error);
-    });
-  }
-
-  // Pre-deploy bundled third-party skills from resources/preinstalled-skills.
-  // This installs full skill directories (not only SKILL.md) in an idempotent,
-  // non-destructive way and never blocks startup.
-  if (!isE2EMode) {
-    void ensurePreinstalledSkillsInstalled().catch((error) => {
-      logger.warn('Failed to install preinstalled skills:', error);
-    });
+    void Promise.resolve()
+      .then(() => migrateHomedirBuiltinSkills())
+      .then(() => ensurePreinstalledSkillsConfig())
+      .catch((error) => {
+        logger.warn('Failed bundled skills migration/config:', error);
+      });
   }
 
   // Initialize DWS (DingTalk Workspace) environment on first launch.

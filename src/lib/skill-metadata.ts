@@ -17,17 +17,75 @@ export function isUnknownSkillVersion(version: string | undefined): boolean {
   return !trimmed || trimmed.toLowerCase() === 'unknown';
 }
 
+/** Default version label for bundled built-in skills when gateway reports unknown. */
+export const BUNDLED_SKILL_DEFAULT_VERSION = '1.0.0';
+
+/** Slugs/names treated as LYClaw built-in (aligned with skills store whitelist). */
+export const LYCLAW_BUILTIN_SKILL_KEYS = new Set([
+  'pdf',
+  'docx',
+  'docxt',
+  'pptx',
+  'xlsx',
+  'summarize',
+  'github',
+  'gh-issues',
+  'coding',
+  'coding-agent',
+  'taskflow',
+  'skill-creator',
+  'find-skills',
+  'session-logs',
+  'brave-web-search',
+  'self-improving-agent',
+  'healthcheck',
+  'tavily-search',
+  'dws',
+  'lingyi-baishitong',
+]);
+
+export function isLyclawBuiltinSkill(
+  skill: Pick<Skill, 'isBundled' | 'isCore' | 'id' | 'slug' | 'name'>,
+): boolean {
+  if (skill.isBundled || skill.isCore) return true;
+  const slug = skill.slug?.trim() || '';
+  const name = skill.name?.trim() || '';
+  const id = skill.id?.trim() || '';
+  return (
+    LYCLAW_BUILTIN_SKILL_KEYS.has(id)
+    || LYCLAW_BUILTIN_SKILL_KEYS.has(slug)
+    || LYCLAW_BUILTIN_SKILL_KEYS.has(name)
+  );
+}
+
+export function resolveSkillVersionForDisplay(
+  version: string | undefined,
+  options?: { treatAsBuiltin?: boolean },
+): string | undefined {
+  if (options?.treatAsBuiltin && isUnknownSkillVersion(version)) {
+    return BUNDLED_SKILL_DEFAULT_VERSION;
+  }
+  return version;
+}
+
 export function shouldIncludeInMySkills(skill: Pick<Skill, 'isCore' | 'isBundled' | 'pathMissing'>): boolean {
   if (skill.isCore || skill.isBundled) return true;
   return !skill.pathMissing;
 }
 
+export type FormatSkillVersionOptions = {
+  /** When true, unknown versions display as v1.0.0 (built-in tab only). */
+  treatAsBuiltin?: boolean;
+};
+
 export function formatSkillVersionLabel(
   version: string | undefined,
   unknownLabel = '未知',
+  options?: FormatSkillVersionOptions,
 ): string {
-  if (isUnknownSkillVersion(version)) return unknownLabel;
-  return `v${version!.trim()}`;
+  const resolved = resolveSkillVersionForDisplay(version, options);
+  if (isUnknownSkillVersion(resolved)) return unknownLabel;
+  return `v${resolved!.trim()}`;
 }
 
 export function isCompanyMarketplaceId(id: string | number | undefined): boolean {

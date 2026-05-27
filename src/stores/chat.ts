@@ -2496,6 +2496,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
+  unbindSessionWorkspace: (sessionKey: string) => {
+    set((s) => {
+      if (!s.sessionWorkspaceIds[sessionKey]) return s;
+      const next = { ...s.sessionWorkspaceIds };
+      delete next[sessionKey];
+      return { sessionWorkspaceIds: next };
+    });
+  },
+
   clearSessionWorkspaceBindings: (workspaceId: string) => {
     set((s) => ({
       sessionWorkspaceIds: Object.fromEntries(

@@ -5,6 +5,7 @@ import { getProviderDefinition } from '../../shared/providers/registry';
 import {
   LEGACY_LY_MINIMAX_PROVIDER_ID,
   LY_MINIMAX_PROVIDER_ID,
+  LY_DEEPSEEK_PROVIDER_ID,
   // LY_GLM_PROVIDER_ID,
   type ProviderAccount,
 } from '../../shared/providers/types';
@@ -16,7 +17,7 @@ import { syncProviderConfigToOpenClaw, updateAgentModelProvider } from '../../ut
 import { getOpenClawConfigDir } from '../../utils/paths';
 import { getOpenClawProviderKeyForType } from '../../utils/provider-keys';
 import { getProviderService } from './provider-service';
-import { getDefaultProvider, setDefaultProvider, storeApiKey } from '../../utils/secure-storage';
+import { storeApiKey } from '../../utils/secure-storage';
 import { deleteProviderAccount, getProviderAccount, saveProviderAccount } from './provider-store';
 
 const LY_MINIMAX_LABEL = 'LY-MiniMax';
@@ -43,6 +44,12 @@ const LY_MIMO_MODEL_OPTIONS = {
     },
   },
 };
+
+const LY_DEEPSEEK_LABEL = 'LY-DeepSeek';
+const LY_DEEPSEEK_BASE_URL = 'http://10.7.221.62:8000/v1';
+const LY_DEEPSEEK_MODEL_ID = 'deepseek-v4-flash';
+const LY_DEEPSEEK_MAX_TOKENS = 100000;
+const LY_DEEPSEEK_API_KEY = 'EMPTY';
 
 // const LY_GLM_LABEL = 'LY-GLM';
 // const LY_GLM_BASE_URL = 'http://10.7.221.62:8000/v1';
@@ -95,6 +102,30 @@ function createLyMimoAccount(existing?: ProviderAccount | null): ProviderAccount
       ...existing?.metadata,
       managedBy: 'lyclaw',
       readonly: true,
+    },
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function createLyDeepSeekAccount(existing?: ProviderAccount | null): ProviderAccount {
+  const now = new Date().toISOString();
+  return {
+    id: LY_DEEPSEEK_PROVIDER_ID,
+    vendorId: LY_DEEPSEEK_PROVIDER_ID,
+    label: LY_DEEPSEEK_LABEL,
+    authMode: 'api_key',
+    baseUrl: existing?.baseUrl || LY_DEEPSEEK_BASE_URL,
+    apiProtocol: 'openai-completions',
+    headers: existing?.headers,
+    model: LY_DEEPSEEK_MODEL_ID,
+    fallbackModels: existing?.fallbackModels,
+    fallbackAccountIds: existing?.fallbackAccountIds,
+    enabled: true,
+    isDefault: existing?.isDefault ?? false,
+    metadata: {
+      ...existing?.metadata,
+      managedBy: 'lyclaw',
     },
     createdAt: existing?.createdAt || now,
     updatedAt: now,
@@ -225,18 +256,15 @@ async function migrateLegacyProviderAccount(): Promise<ProviderAccount | null> {
   return legacy;
 }
 
-function hasModelRef(value: unknown): value is string {
-  return typeof value === 'string' && value.includes('/') && value.trim().length > 2;
-}
-
 async function ensureOpenClawDefaultModel(modelRef: string): Promise<boolean> {
   return withConfigLock(async () => {
     const config = await readOpenClawConfig();
     const agents = (config.agents && typeof config.agents === 'object' ? config.agents : {}) as Record<string, unknown>;
     const defaults = (agents.defaults && typeof agents.defaults === 'object' ? agents.defaults : {}) as Record<string, unknown>;
     const model = (defaults.model && typeof defaults.model === 'object' ? defaults.model : {}) as Record<string, unknown>;
+    const primary = typeof model.primary === 'string' ? model.primary : '';
 
-    if (hasModelRef(model.primary)) {
+    if (primary && !primary.startsWith(`${LY_MINIMAX_PROVIDER_ID}/`) && primary !== LY_MINIMAX_MODEL_ID) {
       return false;
     }
 
@@ -298,11 +326,6 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     return;
   }
 
-  const defaultProviderId = await getDefaultProvider();
-  if (!defaultProviderId || defaultProviderId === LEGACY_LY_MINIMAX_PROVIDER_ID) {
-    await setDefaultProvider(account.id);
-  }
-
   await syncProviderConfigToOpenClaw(runtimeProviderKey, modelId, {
     baseUrl: account.baseUrl,
     api: account.apiProtocol,
@@ -326,6 +349,29 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
   });
   await syncManagedProviderToAgentModels(lyMimoAccount, LY_MIMO_MODEL_ID, LY_MIMO_MODEL_OPTIONS);
 
+  const lyDeepSeekExisting = await providerService.getAccount(LY_DEEPSEEK_PROVIDER_ID);
+  const lyDeepSeekAccount = createLyDeepSeekAccount(lyDeepSeekExisting);
+  await saveProviderAccount(lyDeepSeekAccount);
+  if (LY_DEEPSEEK_API_KEY) {
+    await storeApiKey(lyDeepSeekAccount.id, LY_DEEPSEEK_API_KEY);
+  }
+
+  const defaultProviderId = await providerService.getDefaultAccountId();
+  if (!defaultProviderId || defaultProviderId === LEGACY_LY_MINIMAX_PROVIDER_ID || defaultProviderId === account.id) {
+    await providerService.setDefaultAccount(lyDeepSeekAccount.id);
+  }
+
+  const lyDeepSeekRuntimeProviderKey = getOpenClawProviderKeyForType(lyDeepSeekAccount.vendorId, lyDeepSeekAccount.id);
+  await syncProviderConfigToOpenClaw(lyDeepSeekRuntimeProviderKey, LY_DEEPSEEK_MODEL_ID, {
+    baseUrl: lyDeepSeekAccount.baseUrl || LY_DEEPSEEK_BASE_URL,
+    api: lyDeepSeekAccount.apiProtocol,
+    apiKeyEnv: 'LY_DEEPSEEK_API_KEY',
+    modelOverrides: {
+      'deepseek-v4-flash': { maxTokens: LY_DEEPSEEK_MAX_TOKENS },
+    },
+  });
+  await syncManagedProviderToAgentModels(lyDeepSeekAccount, LY_DEEPSEEK_MODEL_ID, { maxTokens: LY_DEEPSEEK_MAX_TOKENS });
+
   // const lyGlmExisting = await providerService.getAccount(LY_GLM_PROVIDER_ID);
   // const lyGlmAccount = createLyGlmAccount(lyGlmExisting);
   // await saveProviderAccount(lyGlmAccount);
@@ -346,10 +392,12 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
   // });
   // await syncManagedProviderToAgentModels(lyGlmAccount, LY_GLM_MODEL_ID, { maxTokens: LY_GLM_MAX_TOKENS });
 
-  const modelRef = modelId.startsWith(`${runtimeProviderKey}/`) ? modelId : `${runtimeProviderKey}/${modelId}`;
-  const changed = await ensureOpenClawDefaultModel(modelRef);
+  const defaultModelRef = LY_DEEPSEEK_MODEL_ID.startsWith(`${lyDeepSeekRuntimeProviderKey}/`)
+    ? LY_DEEPSEEK_MODEL_ID
+    : `${lyDeepSeekRuntimeProviderKey}/${LY_DEEPSEEK_MODEL_ID}`;
+  const changed = await ensureOpenClawDefaultModel(defaultModelRef);
   if (changed) {
-    logger.info(`Configured default agent model to ${modelRef}`);
+    logger.info(`Configured default agent model to ${defaultModelRef}`);
     gatewayManager?.debouncedReload(undefined);
   }
 }

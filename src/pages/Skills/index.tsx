@@ -53,6 +53,7 @@ import {
   getMarketplaceSkillKey,
   isMarketplaceSkillInstalledOnDisk,
   formatSkillVersionLabel,
+  isLyclawBuiltinSkill,
   isPlaceholderSkillDescription,
   resolveSkillDisplayName,
 } from '@/lib/skill-metadata';
@@ -250,6 +251,7 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle,
   const displayVersion = formatSkillVersionLabel(
     skill.version,
     t('card.versionUnknown', { defaultValue: '未知' }),
+    { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
   const useInitialBadge = !skill.icon || ['⌛', '📦', '🔧'].includes(skill.icon);
   const sourceLabel = resolveSkillSourceLabel(skill, t);
@@ -479,6 +481,7 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
   const versionLabel = formatSkillVersionLabel(
     marketplaceMatch?.version || skill.version,
     t('card.versionUnknown', { defaultValue: '未知' }),
+    { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
   const description = isPlaceholderSkillDescription(skill.description)
     ? (marketplaceMatch?.description?.trim() || skill.description || '—')
@@ -747,11 +750,17 @@ export function Skills() {
   }, [addMenuOpen]);
 
   const isGatewayRunning = gatewayStatus.state === 'running';
+  const isGatewayReady = isGatewayRunning && gatewayStatus.gatewayReady === true;
   const [showGatewayWarning, setShowGatewayWarning] = useState(false);
 
   useEffect(() => {
     void fetchSkills();
   }, [fetchSkills]);
+
+  useEffect(() => {
+    if (!isGatewayReady) return;
+    void fetchSkills();
+  }, [isGatewayReady, fetchSkills]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -770,30 +779,6 @@ export function Skills() {
   // 调试：输出所有技能信息
   // console.log('[Skills] All skills:', safeSkills.map(s => ({ id: s.id, name: s.name, slug: s.slug, isBundled: s.isBundled })));
   
-  // 视为内置的技能名称列表
-  const builtinSkillNames = new Set([
-    'pdf',
-    'docx',
-    'docxt',
-    'pptx',
-    'xlsx',
-    'summarize',
-    'github',
-    'gh-issues',
-    'coding',
-    'coding-agent',
-    'taskflow',
-    'skill-creator',
-    'find-skills',
-    'session-logs',
-    'brave-web-search',
-    'self-improving-agent',
-    'healthcheck',
-    'tavily-search',
-    'dws',
-    'lingyi-baishitong',
-  ]);
-  
   const filteredSkills = safeSkills.filter((skill) => {
     const q = searchQuery.toLowerCase().trim();
     const matchesSearch =
@@ -805,12 +790,7 @@ export function Skills() {
       (skill.author || '').toLowerCase().includes(q);
 
     let matchesSource = true;
-    // 判断是否为内置技能（包括白名单中的技能）
-    const isBuiltin = 
-      skill.isBundled || 
-      builtinSkillNames.has(skill.id) || 
-      builtinSkillNames.has(skill.name) ||
-      builtinSkillNames.has(skill.slug);
+    const isBuiltin = isLyclawBuiltinSkill(skill);
     if (selectedSource === 'built-in') {
       matchesSource = isBuiltin;
     } else if (selectedSource === 'marketplace') {
@@ -828,18 +808,8 @@ export function Skills() {
 
   const sourceStats = {
     all: safeSkills.length,
-    builtIn: safeSkills.filter(s => 
-      s.isBundled || 
-      builtinSkillNames.has(s.id) || 
-      builtinSkillNames.has(s.name) ||
-      builtinSkillNames.has(s.slug)
-    ).length,
-    marketplace: safeSkills.filter(s => 
-      !s.isBundled && 
-      !builtinSkillNames.has(s.id) && 
-      !builtinSkillNames.has(s.name) &&
-      !builtinSkillNames.has(s.slug)
-    ).length,
+    builtIn: safeSkills.filter((s) => isLyclawBuiltinSkill(s)).length,
+    marketplace: safeSkills.filter((s) => !isLyclawBuiltinSkill(s)).length,
   };
 
   // Build lookup tables so installed skills can borrow author / download

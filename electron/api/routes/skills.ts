@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import { listBundledSkillsFromPackage } from '../../utils/bundled-skills-scan';
 import { getAllSkillConfigs, setSkillEnabled, updateSkillConfig } from '../../utils/skill-config';
 import { loadCompanyMarketplaceInstallState } from '../../utils/company-marketplace-installs';
 import {
@@ -17,6 +18,15 @@ export async function handleSkillRoutes(
 ): Promise<boolean> {
   if (url.pathname === '/api/skills/configs' && req.method === 'GET') {
     sendJson(res, 200, await getAllSkillConfigs());
+    return true;
+  }
+
+  if (url.pathname === '/api/skills/bundled' && req.method === 'GET') {
+    try {
+      sendJson(res, 200, { success: true, skills: listBundledSkillsFromPackage() });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error), skills: [] });
+    }
     return true;
   }
 

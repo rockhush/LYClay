@@ -18,35 +18,13 @@ import {
   shouldIncludeInMySkills,
   dedupeInstalledSkills,
   companyInstallEntriesToMarketplaceSkills,
+  LYCLAW_BUILTIN_SKILL_KEYS,
 } from '@/lib/skill-metadata';
 import { useGatewayStore } from './gateway';
 import type { Skill, MarketplaceSkill } from '../types/skill';
 
-/**
- * 内置技能白名单 - 只保留这些技能
- */
-const ALLOWED_BUILTIN_SKILLS = new Set([
-  'pdf',
-  'docx',
-  'docxt',
-  'pptx',
-  'xlsx',
-  'summarize',
-  'github',
-  'gh-issues',
-  'coding',
-  'coding-agent',
-  'taskflow',
-  'skill-creator',
-  'find-skills',
-  'session-logs',
-  'brave-web-search',
-  'self-improving-agent',
-  'healthcheck',
-  'tavily-search',
-  'dws',
-  'lingyi-baishitong',
-]);
+/** 内置技能白名单 - 只保留这些技能 */
+const ALLOWED_BUILTIN_SKILLS = LYCLAW_BUILTIN_SKILL_KEYS;
 
 const SKILLS_GATEWAY_RPC_TIMEOUT_MS = 8_000;
 
@@ -69,6 +47,21 @@ type GatewaySkillStatus = {
 
 type GatewaySkillsStatusResult = {
   skills?: GatewaySkillStatus[];
+};
+
+type BundledSkillBootstrap = {
+  skillKey: string;
+  slug: string;
+  name: string;
+  description: string;
+  version: string;
+  author?: string;
+  emoji?: string;
+  bundled: true;
+  disabled: false;
+  source: 'openclaw-bundled';
+  baseDir: string;
+  filePath: string;
 };
 
 type ClawHubListResult = {
@@ -147,6 +140,56 @@ function resolveDirectSkillConfig(
     if (normalized) return normalized;
   }
   return undefined;
+}
+
+function mapBundledBootstrapToSkill(
+  bootstrap: BundledSkillBootstrap,
+  configLookup: ReturnType<typeof buildSkillConfigLookup>,
+): Skill {
+  const directConfig = resolveDirectSkillConfig(
+    [bootstrap.skillKey, bootstrap.slug, bootstrap.name],
+    configLookup,
+  ) || {};
+  return {
+    id: bootstrap.skillKey,
+    slug: bootstrap.slug,
+    name: bootstrap.name || bootstrap.skillKey,
+    description: bootstrap.description || '',
+    enabled: typeof directConfig.enabled === 'boolean' ? directConfig.enabled : true,
+    icon: bootstrap.emoji || '📦',
+    version: bootstrap.version || 'unknown',
+    author: bootstrap.author,
+    config: directConfig,
+    isCore: false,
+    isBundled: true,
+    source: bootstrap.source,
+    baseDir: bootstrap.baseDir,
+    filePath: bootstrap.filePath,
+    pathMissing: false,
+  };
+}
+
+function mergeMissingBundledBootstrap(
+  combinedSkills: Skill[],
+  bundledBootstrap: BundledSkillBootstrap[],
+  configLookup: ReturnType<typeof buildSkillConfigLookup>,
+): Skill[] {
+  if (bundledBootstrap.length === 0) return combinedSkills;
+  const next = [...combinedSkills];
+  for (const bootstrap of bundledBootstrap) {
+    if (!ALLOWED_BUILTIN_SKILLS.has(bootstrap.skillKey) && !ALLOWED_BUILTIN_SKILLS.has(bootstrap.slug)) {
+      continue;
+    }
+    const exists = next.some(
+      (skill) => skill.id === bootstrap.skillKey
+        || skill.slug === bootstrap.slug
+        || (skill.isBundled && normalizeSkillLookupKey(skill.id) === normalizeSkillLookupKey(bootstrap.skillKey)),
+    );
+    if (!exists) {
+      next.push(mapBundledBootstrapToSkill(bootstrap, configLookup));
+    }
+  }
+  return next;
 }
 
 function mapErrorCodeToSkillErrorKey(
@@ -268,12 +311,24 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         installs?: Record<string, string>;
         entries?: Record<string, CompanyInstallEntry>;
       }>('/api/clawhub/company-install-map');
-      const [gatewaySettled, clawhubSettled, configSettled, marketplaceSettled, companyInstallMapSettled] = await Promise.allSettled([
+      const bundledBootstrapPromise = hostApiFetch<{
+        success: boolean;
+        skills?: BundledSkillBootstrap[];
+      }>('/api/skills/bundled');
+      const [
+        gatewaySettled,
+        clawhubSettled,
+        configSettled,
+        marketplaceSettled,
+        companyInstallMapSettled,
+        bundledBootstrapSettled,
+      ] = await Promise.allSettled([
         gatewayDataPromise,
         clawhubResultPromise,
         configResultPromise,
         marketplaceResultPromise,
         companyInstallMapPromise,
+        bundledBootstrapPromise,
       ]);
 
       const gatewayData: GatewaySkillsStatusResult = gatewaySettled.status === 'fulfilled'
@@ -300,6 +355,14 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       }
       if (companyInstallMapSettled.status === 'rejected') {
         console.warn('[Skills Store] /api/clawhub/company-install-map failed (non-fatal):', companyInstallMapSettled.reason);
+      }
+      if (bundledBootstrapSettled.status === 'rejected') {
+        console.warn('[Skills Store] /api/skills/bundled failed (non-fatal):', bundledBootstrapSettled.reason);
+      }
+
+      let bundledBootstrap: BundledSkillBootstrap[] = [];
+      if (bundledBootstrapSettled.status === 'fulfilled' && bundledBootstrapSettled.value.success) {
+        bundledBootstrap = bundledBootstrapSettled.value.skills ?? [];
       }
 
       let companyInstallMap = get().companyInstallMap;
@@ -352,8 +415,8 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       // Renderer 无法安全访问 Node fs；路径存在性由 main 的 clawhub list 负责。
       const tryExistsSync = (_p: string | undefined): boolean | null => null;
 
-      // Map gateway skills info
-      if (gatewayData.skills) {
+      // Map gateway skills info (authoritative when Gateway is ready)
+      if (gatewayData.skills && gatewayData.skills.length > 0) {
         combinedSkills = gatewayData.skills
           .filter((s: GatewaySkillStatus) => {
             // 内置技能仍然只保留白名单内的项
@@ -405,10 +468,14 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
               pathMissing,
             };
           });
+      } else if (bundledBootstrap.length > 0) {
+        combinedSkills = bundledBootstrap.map((bootstrap) => mapBundledBootstrapToSkill(bootstrap, configLookup));
+        console.log('[Skills Store] Using bundled package scan while Gateway skills.status unavailable, count:', combinedSkills.length);
       } else if (currentSkills.length > 0) {
-        // ... if gateway down ...
         combinedSkills = [...currentSkills];
       }
+
+      combinedSkills = mergeMissingBundledBootstrap(combinedSkills, bundledBootstrap, configLookup);
 
       // Merge with ClawHub results
       if (clawhubResult.success && clawhubResult.results) {
@@ -936,3 +1003,20 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   // 本地更新搜索结果，用于安装/卸载后的即时状态更新
   setSearchResults: (results) => set({ searchResults: results }),
 }));
+
+/** Refetch skills once Gateway becomes ready (cold-start bundled bootstrap → full status). */
+let gatewayReadySkillsRefetchHooked = false;
+function ensureGatewayReadySkillsRefetch(): void {
+  if (gatewayReadySkillsRefetchHooked) return;
+  gatewayReadySkillsRefetchHooked = true;
+  let wasReady = useGatewayStore.getState().status.gatewayReady === true
+    && useGatewayStore.getState().status.state === 'running';
+  useGatewayStore.subscribe((state) => {
+    const isReady = state.status.state === 'running' && state.status.gatewayReady === true;
+    if (isReady && !wasReady) {
+      void useSkillsStore.getState().fetchSkills();
+    }
+    wasReady = isReady;
+  });
+}
+ensureGatewayReadySkillsRefetch();

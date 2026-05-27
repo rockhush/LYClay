@@ -8,6 +8,155 @@ import { invokeIpc } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
+interface Finding {
+  level: string;
+  category: string;
+  message: string;
+}
+
+/** Extract filename from a finding message like '"setup.exe"' */
+function extractFile(f: Finding): string | null {
+  const m = f.message.match(/"([^"]+)"/);
+  return m ? m[1] : null;
+}
+
+/** Extract forbidden extension from message like '(extension .exe)' */
+function extractExt(f: Finding): string {
+  const m = f.message.match(/\(extension ([^)]+)\)/);
+  return m ? m[1] : '';
+}
+
+/** Translate an English security finding message to a concise Chinese label */
+function translateMessage(f: Finding): string {
+  const file = extractFile(f);
+  const ext = extractExt(f);
+
+  switch (f.category) {
+    case 'file-type': {
+      // "Blocked executable file: "setup.exe" (extension .exe)"
+      if (file) return ext ? `${file}（${ext} 危险文件）` : `${file}（危险文件类型）`;
+      return f.message;
+    }
+    case 'path-traversal': {
+      // "Path traversal detected in ZIP entry: "../../etc/passwd""
+      if (file) return `${file}（路径逃逸攻击）`;
+      return '检测到路径穿越攻击';
+    }
+    case 'zip-bomb': {
+      // "High compression ratio (500:1) for "payload.dat" — possible ZIP bomb"
+      if (file) return `${file}（疑似 ZIP 炸弹）`;
+      return '检测到 ZIP 炸弹（压缩比异常）';
+    }
+    case 'symlink': {
+      // "Symlink entry detected: "link" -> "/etc/passwd""
+      if (file) return `${file}（含符号链接）`;
+      return '包含符号链接';
+    }
+    case 'file-size': {
+      // "File too large: "data.bin" is 120 MB (max 50 MB)"
+      if (file) return `${file}（文件过大）`;
+      return '文件大小超出限制';
+    }
+    case 'file-count':
+      return '文件数量超出上限（最多 500 个）';
+    case 'total-size':
+      return '压缩包解压后总大小超出上限（最多 200 MB）';
+    case 'nesting-depth': {
+      // "Excessive nesting depth (15) in: "a/b/c/.../f""
+      if (file) return `${file}（目录嵌套过深）`;
+      return '目录嵌套层级过深（最多 10 层）';
+    }
+    case 'manifest': {
+      // Translate common manifest error patterns
+      const msg = f.message;
+      if (msg.includes('missing YAML frontmatter')) return '缺少 YAML frontmatter（必须以 --- 开头）';
+      if (msg.includes('missing required field: "name"')) return 'SKILL.md 缺少必填字段：name（技能名称）';
+      if (msg.includes('missing required field: "description"')) return 'SKILL.md 缺少必填字段：description（技能描述）';
+      if (msg.includes('phishing indicators')) return 'SKILL.md 描述中包含钓鱼风险关键词';
+      if (msg.includes('reserved/impersonation keyword')) {
+        // Extract the keyword: "Skill name "X" uses a reserved..."
+        const kwMatch = msg.match(/keyword:\s*"([^"]+)"/);
+        if (kwMatch) return `技能名使用了保留关键词："${kwMatch[1]}"`;
+        return '技能名包含敏感/仿冒关键词';
+      }
+      if (msg.includes('SKILL.md is empty')) return 'SKILL.md 内容为空';
+      if (msg.includes('not found')) return '未找到 SKILL.md 文件';
+      if (msg.includes('Cannot read')) return '无法读取 SKILL.md 文件';
+      // Fallback: just show the category
+      if (file) return `${file}（格式不合法）`;
+      return 'SKILL.md 格式不合法';
+    }
+    case 'dangerous-command': {
+      // "Potentially dangerous command in "setup.md": Shell fork bomb pattern"
+      if (file) return `${file}（含危险命令）`;
+      return '检测到危险命令';
+    }
+    case 'hidden-dir': {
+      // "Hidden directory detected: ".evil""
+      if (file) return `${file}（隐藏目录）`;
+      return '包含可疑隐藏目录';
+    }
+    case 'suspicious-url': {
+      // "Suspicious URL in "SKILL.md": Non-HTTPS URL (insecure) — http://..."
+      if (file) return `${file}（含可疑链接）`;
+      return '检测到可疑链接';
+    }
+    case 'impersonation': {
+      // "Name is very similar to official skill "pdf" (typo-squatting)"
+      // "Name starts with "pdf" — possible impersonation"
+      // "Name matches official skill "pdf" (case-insensitive)"
+      const msg = f.message;
+      const kwMatch = msg.match(/official skill "([^"]+)"/);
+      if (kwMatch) return `技能名仿冒官方技能："${kwMatch[1]}"`;
+      return '技能名疑似仿冒';
+    }
+    case 'homoglyph': {
+      // "Invisible/special characters in file name "...""
+      // "Potential homoglyph characters in directory name "...""
+      if (file) return `${file}（含混淆字符）`;
+      return '检测到混淆/不可见字符';
+    }
+    case 'scan-error':
+      return '文件扫描异常';
+    default: {
+      if (file) return file;
+      return f.message;
+    }
+  }
+}
+
+/** Format a security finding as a concise, fully-Chinese one-liner */
+function formatFinding(f: Finding): string {
+  const icon = f.level === 'error' ? '❌' : '⚠️';
+  const label = translateMessage(f);
+  return `${icon} ${label}`;
+}
+
+interface UploadResult {
+  success: boolean;
+  skillName?: string;
+  error?: string;
+  errorCode?: string;
+  securityBlocked?: boolean;
+  validationResult?: {
+    riskLevel: string;
+    findings: Array<{ level: string; category: string; message: string }>;
+    summary: { errors: number; warnings: number };
+    stage: string;
+  };
+}
+
+/** Translate backend error codes to user-friendly Chinese messages */
+function translateErrorCode(errorCode: string, fallback: string): string {
+  const map: Record<string, string> = {
+    ZIP_EMPTY: 'ZIP 文件为空，请检查文件是否正确',
+    ZIP_READ_FAILED: 'ZIP 文件读取失败，文件可能已损坏或不是有效的格式',
+    SECURITY_BLOCKED: '安全检查未通过',
+    CONTENT_BLOCKED: '技能内容安全检查未通过',
+  };
+  return map[errorCode] || fallback;
+}
+
 interface UploadSkillDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -82,17 +231,52 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
         reader.readAsDataURL(selectedFile);
       });
 
-      const result = await invokeIpc('skill:uploadZip', {
+      const result = await invokeIpc<UploadResult>('skill:uploadZip', {
         fileName: selectedFile.name,
         base64Data,
+        autoInstall: true,
       });
 
       if (result.success) {
         toast.success(t('upload.successDesc', { name: result.skillName || selectedFile.name }));
 
+        // If there were warnings, show them with Chinese-friendly format
+        if (result.validationResult && result.validationResult.summary.warnings > 0) {
+          const warnings = result.validationResult.findings.filter(f => f.level === 'warning');
+          const warningLines = warnings.slice(0, 2).map(f => formatFinding(f)).join('\n');
+          toast.warning(
+            `${t('upload.securityWarning', 'Security warnings found')}\n${warningLines}`,
+            { duration: 6000 },
+          );
+        }
+
         setSelectedFile(null);
         onOpenChange(false);
         onUploadComplete?.();
+      } else if (result.securityBlocked) {
+        // Security violation — show detailed reason in Chinese
+        const findings = result.validationResult?.findings;
+        if (findings && findings.length > 0) {
+          const errorFindings = findings.filter(f => f.level === 'error');
+          const warningFindings = findings.filter(f => f.level === 'warning');
+          const lines: string[] = [];
+          if (errorFindings.length > 0) {
+            lines.push(...errorFindings.slice(0, 3).map(f => formatFinding(f)));
+          }
+          if (warningFindings.length > 0) {
+            lines.push(...warningFindings.slice(0, 1).map(f => formatFinding(f)));
+          }
+          toast.error(
+            `${t('upload.securityBlocked')}\n${lines.join('\n')}`,
+            { duration: 8000 },
+          );
+        } else {
+          // No detailed findings — show translated error by code
+          const msg = result.errorCode
+            ? translateErrorCode(result.errorCode, result.error || t('upload.failed'))
+            : result.error || t('upload.failed');
+          toast.error(msg);
+        }
       } else {
         throw new Error(result.error || t('upload.failed'));
       }
@@ -226,6 +410,14 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
               <li className="flex gap-2">
                 <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-[#FF922B]" />
                 <span>{t('upload.requirement2')}</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-[#DC2626]" />
+                <span>{t('upload.requirement3')}</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-[#DC2626]" />
+                <span>{t('upload.requirement4')}</span>
               </li>
             </ul>
           </div>

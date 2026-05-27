@@ -1,7 +1,7 @@
 ; ClawX Custom NSIS Installer/Uninstaller Script
 ;
-; Install: enables long paths, adds resources\cli to user PATH for openclaw CLI.
-; Uninstall: removes the PATH entry and optionally deletes user data.
+; Install: adds resources\cli to user PATH for openclaw CLI.
+; Uninstall: removes the user PATH entry and optionally deletes user data.
 
 !ifndef nsProcess::FindProcess
   !include "nsProcess.nsh"
@@ -223,16 +223,16 @@
   _ci_stale_cleaned:
   DetailPrint "Core files extracted. Finalizing user integration..."
 
-  ; Admin-only system changes such as HKLM long-path configuration and Defender
+  ; User PATH is updated below so the CLI is available to the current user.
+  ; Other admin-only system changes such as HKLM long-path configuration and Defender
   ; exclusions are intentionally not attempted by default.
 
-  ; Use PowerShell to update the current user's PATH via HKCU only.
-  ; This avoids NSIS string-buffer limits and preserves long PATH values.
+  ; Use PowerShell to update the user PATH so the CLI is available to the current user.
   DetailPrint "Updating user PATH for the OpenClaw CLI..."
   InitPluginsDir
   ClearErrors
   File "/oname=$PLUGINSDIR\update-user-path.ps1" "${PROJECT_DIR}\resources\cli\win32\update-user-path.ps1"
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-user-path.ps1" -Action add -CliDir "$INSTDIR\resources\cli"'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-user-path.ps1" -Action add -CliDir "$INSTDIR\resources\cli" -Scope User'
   Pop $0
   Pop $1
   StrCmp $0 "error" 0 +2
@@ -248,11 +248,11 @@
 !macroend
 
 !macro customUnInstall
-  ; Remove resources\cli from user PATH via PowerShell so long PATH values are handled safely
+  ; Remove resources\cli from user PATH so current-user CLI registration is cleaned up
   InitPluginsDir
   ClearErrors
   File "/oname=$PLUGINSDIR\update-user-path.ps1" "${PROJECT_DIR}\resources\cli\win32\update-user-path.ps1"
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-user-path.ps1" -Action remove -CliDir "$INSTDIR\resources\cli"'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-user-path.ps1" -Action remove -CliDir "$INSTDIR\resources\cli" -Scope User'
   Pop $0
   Pop $1
   StrCmp $0 "error" 0 +2
@@ -324,28 +324,5 @@
         "Some data directories could not be removed (files may be in use):$\r$\n$R3$\r$\n$\r$\nPlease delete them manually after restarting your computer."
     _cu_cleanupOk:
 
-    ; --- For per-machine (all users) installs, enumerate all user profiles ---
-    StrCpy $R0 0
-
-  _cu_enumLoop:
-    EnumRegKey $R1 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" $R0
-    StrCmp $R1 "" _cu_enumDone
-
-    ReadRegStr $R2 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$R1" "ProfileImagePath"
-    StrCmp $R2 "" _cu_enumNext
-
-    ; ExpandEnvStrings requires distinct src and dest registers
-    ExpandEnvStrings $R3 $R2
-    StrCmp $R3 $PROFILE _cu_enumNext
-
-    ; NOTE: .openclaw directory is intentionally preserved for all users
-    RMDir /r "$R3\AppData\Local\clawx"
-    RMDir /r "$R3\AppData\Roaming\clawx"
-
-  _cu_enumNext:
-    IntOp $R0 $R0 + 1
-    Goto _cu_enumLoop
-
-  _cu_enumDone:
   _cu_skipRemove:
 !macroend

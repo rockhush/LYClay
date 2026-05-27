@@ -6,6 +6,7 @@ import {
   dedupeInstalledSkills,
   findExistingInstalledSkill,
   formatSkillVersionLabel,
+  isLyclawBuiltinSkill,
   isPlaceholderSkillDescription,
   isSkillPresentOnDisk,
   isUnknownSkillVersion,
@@ -215,7 +216,7 @@ describe('skill metadata helpers', () => {
     expect(enriched[0]?.version).toBe('1.0.0');
   });
 
-  it('formats unknown versions for display without defaulting to 1.0.0', () => {
+  it('formats unknown versions as 未知 for marketplace skills', () => {
     expect(formatSkillVersionLabel(undefined)).toBe('未知');
     expect(formatSkillVersionLabel('unknown')).toBe('未知');
     expect(formatSkillVersionLabel('')).toBe('未知');
@@ -223,6 +224,20 @@ describe('skill metadata helpers', () => {
     expect(formatSkillVersionLabel('2.3.4', 'Unknown')).toBe('v2.3.4');
     expect(isUnknownSkillVersion('unknown')).toBe(true);
     expect(isUnknownSkillVersion('1.0.0')).toBe(false);
+  });
+
+  it('formats unknown built-in versions as v1.0.0', () => {
+    const builtin = {
+      id: 'summarize',
+      slug: 'summarize',
+      name: 'summarize',
+      isBundled: true,
+    } as const;
+    expect(isLyclawBuiltinSkill(builtin)).toBe(true);
+    expect(formatSkillVersionLabel('unknown', '未知', { treatAsBuiltin: true })).toBe('v1.0.0');
+    expect(formatSkillVersionLabel(undefined, '未知', { treatAsBuiltin: true })).toBe('v1.0.0');
+    expect(formatSkillVersionLabel('unknown', '未知', { treatAsBuiltin: false })).toBe('未知');
+    expect(formatSkillVersionLabel('2.0.0', '未知', { treatAsBuiltin: true })).toBe('v2.0.0');
   });
 
   it('excludes path-missing user skills from my skills list', () => {

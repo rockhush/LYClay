@@ -368,13 +368,8 @@ export function Chat() {
   const [runtimeActivity, setRuntimeActivity] = useState<RuntimeActivity | null>(null);
   const [activityClock, setActivityClock] = useState(0);
 
-  const showFirstResponseProgress = isFirstResponsePreparing({
-    gatewayStatus,
-    sending,
-    streamingMessage: streamingMessage as RawMessage | string | null,
-    streamingText,
-    streamingTools,
-  });
+  const showFirstResponseProgress = false;
+
   const chatWaitingMode = getChatWaitingMode({
     gatewayStatus,
     sending,
@@ -382,22 +377,6 @@ export function Chat() {
     streamingText,
     streamingTools,
   });
-
-  // Bar fill only (same curve as post-login warmup) 鈥?no seconds in copy.
-  const [firstResponseBarSeconds, setFirstResponseBarSeconds] = useState(0);
-  useEffect(() => {
-    if (!showFirstResponseProgress) return;
-    setFirstResponseBarSeconds(0);
-    const id = window.setInterval(() => {
-      setFirstResponseBarSeconds((s) => s + 1);
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [showFirstResponseProgress]);
-
-  const firstResponseProgress = estimateGatewayWarmupProgress(
-    gatewayStatus,
-    firstResponseBarSeconds,
-  );
 
   const isEmpty = messages.length === 0
     && !sending
@@ -1018,6 +997,8 @@ export function Chat() {
     }
   }, [userRunCards, messages, currentSessionKey]);
 
+  const isDefaultAccountSwitching = useProviderStore((s) => s.isDefaultAccountSwitching);
+
   const chatInputElement = (
     <ChatInput
       onSend={sendMessage}
@@ -1189,7 +1170,7 @@ export function Chat() {
                   )}
 
                   {/* Typing indicator when sending but no stream content yet */}
-                  {sending && !showFirstResponseProgress && !pendingFinal && !hasAnyStreamContent && !hasActiveExecutionGraph && (
+                  {sending && !pendingFinal && !hasAnyStreamContent && !hasActiveExecutionGraph && (
                     <TypingIndicator summary={activitySummary} mode={chatWaitingMode} />
                   )}
                 </>
@@ -1230,6 +1211,21 @@ export function Chat() {
           className="absolute inset-0 z-50 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-xl pointer-events-auto"
         >
           <LoaderBadge />
+        </div>
+      )}
+
+      {isDefaultAccountSwitching && (
+        <div
+          data-testid="chat-model-switch-overlay"
+          className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-background/30 backdrop-blur-[2px] pointer-events-auto"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <LoaderBadge />
+          <p className="mt-4 text-sm text-muted-foreground">
+            {t('composer.modelSwitching', { defaultValue: '正在切换模型，请稍候…' })}
+          </p>
         </div>
       )}
     </div>
@@ -1326,14 +1322,9 @@ function FirstResponsePreparing({
   const title = t('firstMessage.preparingTitle', {
     defaultValue: '正在准备执行...',
   });
-  const description = warmupStatus === 'warming'
-    ? t('firstMessage.preparingDescriptionWarmup', {
-      defaultValue:
-        '网关正在后台预热模型，请稍等',
-    })
-    : t('firstMessage.preparingDescription', {
-      defaultValue: 'Agent 正在接手并进入工作状态。',
-    });
+  const description = t('firstMessage.preparingDescription', {
+    defaultValue: 'Agent 正在接手并进入工作状态。',
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -1377,9 +1368,11 @@ function FirstResponsePreparing({
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">
           {title}
         </h2>
-        <p className="mt-4 text-base text-muted-foreground">
-          {description}
-        </p>
+        {description && (
+          <p className="mt-4 text-base text-muted-foreground">
+            {description}
+          </p>
+        )}
         <div className="mx-auto mt-9 h-2 w-48 overflow-hidden rounded-full bg-[#e8dfd0] dark:bg-white/10">
           <div
             className="h-full rounded-full bg-blue-500 transition-all duration-700 ease-out"

@@ -1,5 +1,6 @@
 export const LY_MINIMAX_PROVIDER_ID = 'ly-minimax' as const;
 export const LEGACY_LY_MINIMAX_PROVIDER_ID = 'lyclaw-model' as const;
+export const LY_DEEPSEEK_PROVIDER_ID = 'ly-deepseek' as const;
 // export const LY_GLM_PROVIDER_ID = 'ly-glm' as const;
 
 export const PROVIDER_TYPES = [
@@ -16,6 +17,7 @@ export const PROVIDER_TYPES = [
   'minimax-portal',
   'minimax-portal-cn',
   'ly-mimo',
+  LY_DEEPSEEK_PROVIDER_ID,
   // 'ly-glm',
   'modelstudio',
   'ollama',
@@ -36,6 +38,7 @@ export const BUILTIN_PROVIDER_TYPES = [
   'minimax-portal',
   'minimax-portal-cn',
   'ly-mimo',
+  LY_DEEPSEEK_PROVIDER_ID,
   // 'ly-glm',
   'modelstudio',
   'ollama',

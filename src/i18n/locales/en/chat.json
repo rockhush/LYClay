@@ -62,6 +62,7 @@
         "switchModel": "Switch Model",
         "modelPickerTitle": "Select AI Provider",
         "modelSwitched": "Switched to {{name}}",
+        "modelSwitching": "Switching model, please wait…",
         "modelSwitchFailed": "Failed to switch model: {{error}}",
         "defaultModel": "Default Model",
         "modelSwitchNote": "Switching model will restart gateway",

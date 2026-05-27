@@ -20,6 +20,8 @@
         "renameSessionPlaceholder": "Введите новое название чата",
         "renameSessionEmpty": "Название чата не может быть пустым",
         "renameSessionFailed": "Не удалось переименовать сессию",
+        "removeFromWorkspace": "Убрать из рабочего пространства",
+        "removeFromWorkspaceSuccess": "Убрано из рабочего пространства",
         "openClawPage": "Страница OpenClaw",
         "updateAvailable": " (Доступно обновление)"
     },

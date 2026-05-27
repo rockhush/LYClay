@@ -132,6 +132,8 @@ export interface ChatState {
   setPrefilledInput: (text: string | null) => void;
   /** Associate the active chat session with a workspace id (or clear). */
   bindCurrentSessionWorkspace: (workspaceId: string | null) => void;
+  /** Unlink a session from its workspace (session remains in history buckets). */
+  unbindSessionWorkspace: (sessionKey: string) => void;
   /** Remove all session bindings pointing at the given workspace id. */
   clearSessionWorkspaceBindings: (workspaceId: string) => void;
   deleteSession: (key: string) => Promise<void>;

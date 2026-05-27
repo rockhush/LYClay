@@ -4,17 +4,32 @@ param(
   [string]$Action,
 
   [Parameter(Mandatory = $true)]
-  [string]$CliDir
+  [string]$CliDir,
+
+  [ValidateSet('User', 'Machine')]
+  [string]$Scope = 'Machine'
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Get-UserPathRegistryValue {
-  $raw = [Environment]::GetEnvironmentVariable('Path', 'User')
+function Get-PathRegistryValue {
+  param([ValidateSet('User', 'Machine')][string]$Scope)
+
+  $raw = [Environment]::GetEnvironmentVariable('Path', $Scope)
   $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
 
   try {
-    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+    $registryPath = if ($Scope -eq 'Machine') {
+      'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+    } else {
+      'Environment'
+    }
+    $baseKey = if ($Scope -eq 'Machine') {
+      [Microsoft.Win32.Registry]::LocalMachine
+    } else {
+      [Microsoft.Win32.Registry]::CurrentUser
+    }
+    $key = $baseKey.OpenSubKey($registryPath, $false)
     if ($null -ne $key) {
       try {
         $stored = $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
@@ -52,7 +67,7 @@ function Normalize-PathEntry {
   return $Value.Trim().Trim('"').TrimEnd('\').ToLowerInvariant()
 }
 
-$pathMeta = Get-UserPathRegistryValue
+$pathMeta = Get-PathRegistryValue -Scope $Scope
 $current = $pathMeta.Raw
 $entries = @()
 if (-not [string]::IsNullOrWhiteSpace($current)) {
@@ -99,9 +114,19 @@ if ($isLikelyCorruptedWrite) {
 
 $newPath = if ($nextEntries.Count -eq 0) { $null } else { $nextEntries -join ';' }
 try {
-  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+  $registryPath = if ($Scope -eq 'Machine') {
+    'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+  } else {
+    'Environment'
+  }
+  $baseKey = if ($Scope -eq 'Machine') {
+    [Microsoft.Win32.Registry]::LocalMachine
+  } else {
+    [Microsoft.Win32.Registry]::CurrentUser
+  }
+  $key = $baseKey.OpenSubKey($registryPath, $true)
   if ($null -eq $key) {
-    throw 'Unable to open HKCU\Environment for write.'
+    throw "Unable to open $Scope environment registry key for write."
   }
 
   if ([string]::IsNullOrWhiteSpace($newPath)) {
@@ -116,7 +141,7 @@ try {
   }
   $key.Close()
 } catch {
-  throw "Failed to write HKCU\\Environment\\Path: $($_.Exception.Message)"
+  throw "Failed to write $Scope environment Path: $($_.Exception.Message)"
 }
 
 try {

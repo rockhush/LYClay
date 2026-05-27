@@ -4,7 +4,7 @@ import type {
   ProviderType,
   ProviderTypeInfo,
 } from './types';
-import { LY_MINIMAX_PROVIDER_ID } from './types';
+import { LY_MINIMAX_PROVIDER_ID, LY_DEEPSEEK_PROVIDER_ID } from './types';
 // import { LY_GLM_PROVIDER_ID } from './types';
 
 export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
@@ -352,6 +352,41 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
               enable_thinking: false,
             },
           },
+        },
+      ],
+    },
+  },
+  {
+    id: LY_DEEPSEEK_PROVIDER_ID,
+    name: 'LY-DeepSeek',
+    icon: 'LY',
+    placeholder: 'sk-...',
+    model: 'DeepSeek',
+    requiresApiKey: true,
+    defaultBaseUrl: 'http://10.7.221.62:8000/v1',
+    defaultModelId: 'deepseek-v4-flash',
+    showBaseUrl: true,
+    showModelId: true,
+    showModelIdInDevModeOnly: true,
+    modelIdPlaceholder: 'deepseek-v4-flash',
+    category: 'official',
+    envVar: 'LY_DEEPSEEK_API_KEY',
+    supportedAuthModes: ['api_key'],
+    defaultAuthMode: 'api_key',
+    supportsMultipleAccounts: true,
+    providerConfig: {
+      baseUrl: 'http://10.7.221.62:8000/v1',
+      api: 'openai-completions',
+      apiKeyEnv: 'LY_DEEPSEEK_API_KEY',
+      models: [
+        {
+          id: 'deepseek-v4-flash',
+          name: 'DeepSeek V4 Flash',
+          input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 100000,
+          maxTokens: 100000,
+          reasoning: true,
         },
       ],
     },

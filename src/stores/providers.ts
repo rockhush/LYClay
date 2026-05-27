@@ -14,6 +14,7 @@ import { hostApiFetch } from '@/lib/host-api';
 import {
   fetchProviderSnapshot,
 } from '@/lib/provider-accounts';
+import { waitForGatewayReady } from '@/lib/wait-for-gateway-ready';
 
 // Re-export types for consumers that imported from here
 export type {
@@ -29,6 +30,9 @@ interface ProviderState {
   accounts: ProviderAccount[];
   vendors: ProviderVendorInfo[];
   defaultAccountId: string | null;
+  /** True while switching default model (waiting for Gateway restart). */
+  isDefaultAccountSwitching: boolean;
+  pendingDefaultAccountId: string | null;
   loading: boolean;
   error: string | null;
 
@@ -74,6 +78,8 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
   accounts: [],
   vendors: [],
   defaultAccountId: null,
+  isDefaultAccountSwitching: false,
+  pendingDefaultAccountId: null,
   loading: false,
   error: null,
 
@@ -308,20 +314,35 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
   },
 
   setDefaultAccount: async (accountId) => {
+    const previousAccountId = get().defaultAccountId;
+    set({
+      isDefaultAccountSwitching: true,
+      pendingDefaultAccountId: accountId,
+      defaultAccountId: accountId,
+    });
     try {
-      const result = await hostApiFetch<{ success: boolean; error?: string }>('/api/provider-accounts/default', {
-        method: 'PUT',
-        body: JSON.stringify({ accountId }),
-      });
+      const result = await hostApiFetch<{ success: boolean; error?: string; noChange?: boolean }>(
+        '/api/provider-accounts/default',
+        {
+          method: 'PUT',
+          body: JSON.stringify({ accountId }),
+        },
+      );
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to set default provider account');
       }
 
-      set({ defaultAccountId: accountId });
+      if (!result.noChange) {
+        await waitForGatewayReady({ timeoutMs: 90_000, settleMs: 500 });
+      }
+      await get().refreshProviderSnapshot();
     } catch (error) {
+      set({ defaultAccountId: previousAccountId });
       console.error('Failed to set default account:', error);
       throw error;
+    } finally {
+      set({ isDefaultAccountSwitching: false, pendingDefaultAccountId: null });
     }
   },
   

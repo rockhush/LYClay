@@ -313,6 +313,14 @@ describe('deriveTaskSteps', () => {
     )).toBe('Here is the summary.');
   });
 
+  it('strips long skill process prefixes without regex stack overflow', () => {
+    const line = '检测 browser 工具 LYClaw browser 功能检测';
+    const processBlock = Array.from({ length: 120 }, () => line).join(' ');
+    const reply = `${processBlock} 最终答案在这里。`;
+    expect(() => stripProcessMessagePrefix(reply, [processBlock])).not.toThrow();
+    expect(stripProcessMessagePrefix(reply, [processBlock])).toBe('最终答案在这里。');
+  });
+
   it('builds a branch for spawned subagents', () => {
     const messages: RawMessage[] = [
       {

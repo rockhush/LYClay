@@ -90,7 +90,7 @@ fs.mkdirSync(OUTPUT, { recursive: true });
 
 // 3. Copy openclaw package itself to OUTPUT root
 echo`   Copying openclaw package...`;
-fs.cpSync(openclawReal, OUTPUT, {
+fs.cpSync(normWin(openclawReal), normWin(OUTPUT), {
   recursive: true,
   dereference: true,
   filter: shouldCopyOpenClawPackageEntry,
@@ -452,7 +452,7 @@ function patchBundledOpenClawAnthropicTransport(outputDir) {
   const paramsRegex = /const params = \{\s*\n?\s*model: model\.id,/;
   if (paramsRegex.test(source)) {
     source = source.replace(paramsRegex,
-      'const params = {\\n\\t\\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\\n\\t\\tmodel: model.id,');
+      'const params = {\n\t\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\n\t\tmodel: model.id,');
     patched = true;
   }
 
@@ -460,7 +460,10 @@ function patchBundledOpenClawAnthropicTransport(outputDir) {
   const systemRegex = /else if \(context\.systemPrompt\) params\.system = \[\{\s*\n\s*type: "text",\s*\n\s*text: sanitizeTransportPayloadText\(context\.systemPrompt\)\s*\n\s*\}\];/;
   if (systemRegex.test(source)) {
     source = source.replace(systemRegex,
-      `else if (context.systemPrompt) params.system = [{\\n\\t\\ttype: "text",\\n\\t\\ttext: (model.provider === 'ly-mimo' ? '${chineseInstruction}' : '') + sanitizeTransportPayloadText(context.systemPrompt)\\n\\t}];`);
+      `else if (context.systemPrompt) params.system = [{
+		type: "text",
+		text: (model.provider === 'ly-mimo' ? '${chineseInstruction}' : '') + sanitizeTransportPayloadText(context.systemPrompt)
+	}];`);
     patched = true;
   }
 
@@ -468,7 +471,13 @@ function patchBundledOpenClawAnthropicTransport(outputDir) {
   const oauthRegex = /if \(isOAuthToken\) params\.system = \[\{\s*\n\s*type: "text",\s*\n\s*text: "You are Claude Code, Anthropic's official CLI for Claude."\s*\n\s*\},\s*\.\.\.context\.systemPrompt \? \[\{\s*\n\s*type: "text",\s*\n\s*text: sanitizeTransportPayloadText\(context\.systemPrompt\)\s*\n\s*\}\] : \[\]\];/;
   if (oauthRegex.test(source)) {
     source = source.replace(oauthRegex,
-      `if (isOAuthToken) params.system = [{\\n\\t\\ttype: "text",\\n\\t\\ttext: "You are Claude Code, Anthropic's official CLI for Claude."\\n\\t}, ...context.systemPrompt ? [{\\n\\t\\ttype: "text",\\n\\t\\ttext: (model.provider === 'ly-mimo' ? '${chineseInstruction}' : '') + sanitizeTransportPayloadText(context.systemPrompt)\\n\\t}] : []];`);
+      `if (isOAuthToken) params.system = [{
+		type: "text",
+		text: "You are Claude Code, Anthropic's official CLI for Claude."
+	}, ...context.systemPrompt ? [{
+		type: "text",
+		text: (model.provider === 'ly-mimo' ? '${chineseInstruction}' : '') + sanitizeTransportPayloadText(context.systemPrompt)
+	}] : []];`);
     patched = true;
   }
 
@@ -525,7 +534,7 @@ function patchBundledOpenClawOpenAITransport(outputDir) {
   const completionsParamsRegex = /const params = \{\s*\n?\s*model: model\.id,/;
   if (completionsParamsRegex.test(source)) {
     source = source.replace(completionsParamsRegex,
-      'const params = {\\n\\t\\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\\n\\t\\tmodel: model.id,');
+      'const params = {\n\t\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\n\t\tmodel: model.id,');
     patched = true;
   }
 
@@ -1159,4 +1168,11 @@ echo`   dist/entry.js: ${distExists ? '✓' : '✗'}`;
 if (!entryExists || !distExists) {
   echo`❌ Bundle verification failed!`;
   process.exit(1);
+}
+
+// 9. Merge LYClaw custom + preinstalled skills into openclaw/skills (openclaw package slugs win on conflict)
+try {
+  await $`node ${path.join(ROOT, 'scripts', 'merge-bundled-skills.mjs')} --openclaw-dir=${OUTPUT}`;
+} catch (error) {
+  echo`⚠️  merge-bundled-skills failed (non-fatal): ${error?.message || error}`;
 }

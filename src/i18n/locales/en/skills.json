@@ -139,6 +139,8 @@
         "requirements": "File Requirements",
         "requirement1": "Folder or .zip must contain SKILL.md file",
         "requirement2": "SKILL.md file must contain skill name and description in YAML format",
+        "requirement3": "No executable files (.exe, .sh, .dll, etc.) are allowed",
+        "requirement4": "ZIP must not contain path traversal or symlinks",
         "cancel": "Cancel",
         "upload": "Upload",
         "uploading": "Uploading...",
@@ -147,6 +149,26 @@
         "failed": "Upload Failed",
         "failedDesc": "Unable to complete upload, please try again",
         "invalidFileType": "Invalid file type",
-        "zipOnly": "Only ZIP files are supported"
+        "zipOnly": "Only ZIP files are supported",
+        "securityBlocked": "Security Check Failed",
+        "securityBlockedDesc": "The skill package has been blocked due to security concerns.",
+        "securityWarning": "Security Advisory",
+        "securityCategories": {
+            "path-traversal": "Path traversal attempt",
+            "file-type": "Blocked file type",
+            "zip-bomb": "ZIP bomb detection",
+            "symlink": "Symlink detected",
+            "file-size": "File too large",
+            "file-count": "Too many files",
+            "total-size": "Archive too large",
+            "nesting-depth": "Excessive nesting",
+            "manifest": "Invalid SKILL.md",
+            "dangerous-command": "Dangerous command detected",
+            "hidden-dir": "Hidden directory",
+            "scan-error": "Scan error",
+            "suspicious-url": "Suspicious URL",
+            "impersonation": "Skill impersonation",
+            "homoglyph": "Homoglyph detection"
+        }
     }
 }

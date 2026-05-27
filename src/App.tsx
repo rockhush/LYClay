@@ -33,13 +33,9 @@ import { useChatStore } from './stores/chat';
 import { applyGatewayTransportPreference } from './lib/api-client';
 import { rendererExtensionRegistry } from './extensions/registry';
 import { loadExternalRendererExtensions } from './extensions/_ext-bridge.generated';
-import { hostApiFetch, getDingTalkChannelAutoFromEnv, sendDingTalkWorkspaceWelcome } from './lib/host-api';
+import { hostApiFetch, sendDingTalkWorkspaceWelcome } from './lib/host-api';
 import { flushUsageReports } from './lib/usage-reporter';
 import { estimateGatewayWarmupProgress } from './lib/gateway-warmup-progress';
-import {
-  isOpenClawDingTalkChannelRuntimeReady,
-  type ChannelsStatusRpcPayload,
-} from './lib/dingtalk-channels-runtime';
 import { hydrateUiStateFromDisk } from './lib/ui-state-persistence';
 
 /**
@@ -119,7 +115,6 @@ function App() {
   const setupComplete = useSettingsStore((state) => state.setupComplete);
   const initGateway = useGatewayStore((state) => state.init);
   const gatewayStatus = useGatewayStore((state) => state.status);
-  const gatewayInitialized = useGatewayStore((state) => state.isInitialized);
   const initProviders = useProviderStore((state) => state.init);
   const initDingTalkAuth = useDingTalkAuthStore((state) => state.init);
   const dingtalkUser = useDingTalkAuthStore((state) => state.user);
@@ -127,8 +122,6 @@ function App() {
   const [postLoginWarmupDone, setPostLoginWarmupDone] = useState(false);
   const [postLoginWarmupSeconds, setPostLoginWarmupSeconds] = useState(0);
   const postLoginBootstrapRef = useRef<string | null>(null);
-  const [autoDingTalkChannelFromEnv, setAutoDingTalkChannelFromEnv] = useState<boolean | null>(null);
-  const [dingTalkChannelRuntimeReady, setDingTalkChannelRuntimeReady] = useState(false);
 
   useEffect(() => {
     initSettings();
@@ -214,63 +207,8 @@ function App() {
     if (!dingtalkUser) {
       setPostLoginWarmupDone(false);
       postLoginBootstrapRef.current = null;
-      setAutoDingTalkChannelFromEnv(null);
-      setDingTalkChannelRuntimeReady(false);
     }
   }, [dingtalkUser]);
-
-  useEffect(() => {
-    if (!requireDingTalkLogin || !dingtalkUser) return;
-    let cancelled = false;
-    void getDingTalkChannelAutoFromEnv()
-      .then((r) => {
-        if (!cancelled) setAutoDingTalkChannelFromEnv(!!r.active);
-      })
-      .catch(() => {
-        if (!cancelled) setAutoDingTalkChannelFromEnv(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [requireDingTalkLogin, dingtalkUser]);
-
-  useEffect(() => {
-    if (!requireDingTalkLogin || !dingtalkUser || postLoginWarmupDone) return;
-    if (autoDingTalkChannelFromEnv !== true) {
-      setDingTalkChannelRuntimeReady(false);
-      return;
-    }
-    if (gatewayStatus.state !== 'running' || !gatewayStatus.gatewayReady) return;
-
-    let cancelled = false;
-    const poll = async () => {
-      if (cancelled) return;
-      try {
-        const data = await useGatewayStore.getState().rpc<ChannelsStatusRpcPayload>('channels.status', {
-          probe: false,
-        });
-        if (!cancelled && isOpenClawDingTalkChannelRuntimeReady(data)) {
-          setDingTalkChannelRuntimeReady(true);
-        }
-      } catch {
-        /* Gateway may still be restarting; retry on interval */
-      }
-    };
-
-    void poll();
-    const id = window.setInterval(() => void poll(), 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [
-    requireDingTalkLogin,
-    dingtalkUser,
-    postLoginWarmupDone,
-    autoDingTalkChannelFromEnv,
-    gatewayStatus.state,
-    gatewayStatus.gatewayReady,
-  ]);
 
   useEffect(() => {
     if (!requireDingTalkLogin || !dingtalkUser || postLoginWarmupDone) return;
@@ -288,30 +226,14 @@ function App() {
   useEffect(() => {
     if (!requireDingTalkLogin || !dingtalkUser || postLoginWarmupDone) return;
 
-    const warmupStatus = gatewayStatus.warmupStatus;
-    const gatewayUnavailable = gatewayInitialized && (gatewayStatus.state === 'error' || gatewayStatus.state === 'stopped');
     const gatewayReady = gatewayStatus.state === 'running' && gatewayStatus.gatewayReady === true;
-    const warmupComplete = warmupStatus === 'ready' || warmupStatus === 'failed';
-    const warmupWaitSatisfied = warmupComplete || postLoginWarmupSeconds >= 60;
-    const needDingTalkRuntime = autoDingTalkChannelFromEnv === true;
-    const dingTalkRuntimeOk = !needDingTalkRuntime || dingTalkChannelRuntimeReady || postLoginWarmupSeconds >= 12;
-    const shouldProceed = (gatewayUnavailable || (gatewayReady && warmupWaitSatisfied)) && dingTalkRuntimeOk;
 
-    if (!shouldProceed) return;
-
-    const dtSeg = !needDingTalkRuntime
-      ? 'na'
-      : dingTalkChannelRuntimeReady
-        ? 'ok'
-        : postLoginWarmupSeconds >= 12
-          ? 'force'
-          : 'wait';
+    if (!gatewayReady) return;
 
     const bootstrapKey = [
       dingtalkUser.userId || dingtalkUser.unionId || dingtalkUser.name || 'user',
       gatewayStatus.state,
       gatewayStatus.gatewayReady ? 'ready' : 'not-ready',
-      dtSeg,
     ].join('|');
     if (postLoginBootstrapRef.current === bootstrapKey) return;
     postLoginBootstrapRef.current = bootstrapKey;
@@ -337,13 +259,8 @@ function App() {
     requireDingTalkLogin,
     dingtalkUser,
     postLoginWarmupDone,
-    gatewayInitialized,
     gatewayStatus.state,
     gatewayStatus.gatewayReady,
-    gatewayStatus.warmupStatus,
-    postLoginWarmupSeconds,
-    autoDingTalkChannelFromEnv,
-    dingTalkChannelRuntimeReady,
   ]);
 
   useEffect(() => {

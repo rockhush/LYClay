@@ -179,6 +179,7 @@ export class GatewayManager extends EventEmitter {
   /** Set by scheduleReconnect() before calling start() to signal auto-reconnect. */
   private isAutoReconnectStart = false;
   private gatewayReadyFallbackTimer: NodeJS.Timeout | null = null;
+  private skipWarmupAfterRestart = false;
   private isWarmedUp = false;
   private hasWarmupFailed = false;
   private warmupTimer: NodeJS.Timeout | null = null;
@@ -585,9 +586,11 @@ export class GatewayManager extends EventEmitter {
     logger.info(`[gateway-refresh] mode=restart requested pidBefore=${pidBefore ?? 'n/a'}`);
     this.restartInFlight = (async () => {
       await this.stop();
+      this.skipWarmupAfterRestart = true;
       try {
         await this.start();
       } catch (err) {
+        this.skipWarmupAfterRestart = false;
         // stop() set shouldReconnect=false. Restore it so the gateway
         // can self-heal via scheduleReconnect() instead of dying permanently.
         logger.warn('Gateway restart: start() failed after stop(), enabling auto-reconnect recovery', err);
@@ -854,6 +857,18 @@ export class GatewayManager extends EventEmitter {
       logger.info('[perf:first-session] gateway.warmup.skipped', {
         reason: 'chat_warmup_disabled_by_env',
         envValue: process.env.LYCLAW_ENABLE_CHAT_WARMUP ?? null,
+      });
+      return;
+    }
+
+    if (this.skipWarmupAfterRestart) {
+      this.skipWarmupAfterRestart = false;
+      this.isWarmedUp = true;
+      this.hasWarmupFailed = false;
+      this.clearWarmupTimer();
+      this.setStatus({ warmupStatus: 'ready' });
+      logger.info('[perf:first-session] gateway.warmup.skipped', {
+        reason: 'gateway_restarted',
       });
       return;
     }

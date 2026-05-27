@@ -191,7 +191,8 @@ function ensureWindowsCliOnPath(): Promise<'updated' | 'already-present'> {
 
     const cliDir = dirname(cliWrapper);
     const helperPath = join(cliDir, 'update-user-path.ps1');
-    // Non-admin HKCU PATH helper; do not add elevation or RunAs fallback here.
+    // Installer normally writes machine PATH; this packaged-app fallback uses
+    // the same helper and degrades to a warning if the process is not elevated.
     if (!existsSync(helperPath)) {
       reject(new Error(`PATH helper not found at ${helperPath}`));
       return;
@@ -291,7 +292,7 @@ export async function autoInstallCliIfNeeded(
     try {
       const result = await ensureWindowsCliOnPath();
       if (result === 'updated') {
-        logger.info('Added Windows CLI directory to user PATH.');
+        logger.info('Added Windows CLI directory to machine PATH.');
       }
     } catch (error) {
       logger.warn('Failed to ensure Windows CLI is on PATH:', error);

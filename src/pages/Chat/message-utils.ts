@@ -125,16 +125,59 @@ function splitProgressiveParts(parts: string[]): string[] {
   return segments;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Max chars per process segment when stripping prefixes (avoids pathological skill dumps). */
+const MAX_PREFIX_SEGMENT_CHARS = 16_000;
+
+function isAsciiWhitespace(char: string): boolean {
+  return /[\t\n\r\f\v ]/.test(char);
+}
+
+/**
+ * Match `segment` at the start of `text`, allowing flexible ASCII whitespace
+ * between tokens. Linear-time scan — avoids RegExp stack overflow on long
+ * skill/browser status narration.
+ */
+function consumeLeadingFlexibleWhitespace(text: string, segment: string): number {
+  let textIdx = 0;
+  let segIdx = 0;
+  const segLen = segment.length;
+
+  while (textIdx < text.length && isAsciiWhitespace(text[textIdx]!)) {
+    textIdx += 1;
+  }
+
+  while (segIdx < segLen) {
+    const segChar = segment[segIdx]!;
+    if (isAsciiWhitespace(segChar)) {
+      while (segIdx < segLen && isAsciiWhitespace(segment[segIdx]!)) {
+        segIdx += 1;
+      }
+      if (textIdx >= text.length) break;
+      if (!isAsciiWhitespace(text[textIdx]!)) return 0;
+      while (textIdx < text.length && isAsciiWhitespace(text[textIdx]!)) {
+        textIdx += 1;
+      }
+      continue;
+    }
+    if (textIdx >= text.length) return 0;
+    if (text[textIdx] !== segChar) return 0;
+    textIdx += 1;
+    segIdx += 1;
+  }
+
+  while (textIdx < text.length && isAsciiWhitespace(text[textIdx]!)) {
+    textIdx += 1;
+  }
+  return textIdx;
 }
 
 function consumeLeadingSegment(text: string, segment: string): number {
-  const tokens = segment.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return 0;
-  const pattern = new RegExp(`^\\s*${tokens.map(escapeRegExp).join('\\s+')}\\s*`, 'u');
-  const match = text.match(pattern);
-  return match ? match[0].length : 0;
+  const normalizedSegment = normalizeProgressiveText(segment);
+  if (!normalizedSegment) return 0;
+  const capped = normalizedSegment.length > MAX_PREFIX_SEGMENT_CHARS
+    ? normalizedSegment.slice(0, MAX_PREFIX_SEGMENT_CHARS)
+    : normalizedSegment;
+  return consumeLeadingFlexibleWhitespace(text, capped);
 }
 
 /**
@@ -259,10 +302,15 @@ export function stripProcessMessagePrefix(text: string, processSegments: string[
   for (const segment of processSegments) {
     const normalizedSegment = normalizeProgressiveText(segment);
     if (!normalizedSegment) continue;
-    const consumed = consumeLeadingSegment(remaining, normalizedSegment);
-    if (consumed === 0) break;
-    remaining = remaining.slice(consumed);
-    strippedAny = true;
+    try {
+      const consumed = consumeLeadingSegment(remaining, normalizedSegment);
+      if (consumed === 0) break;
+      remaining = remaining.slice(consumed);
+      strippedAny = true;
+    } catch {
+      // Defensive: never crash the chat UI on malformed/huge process text.
+      break;
+    }
   }
 
   const trimmed = remaining.trimStart();

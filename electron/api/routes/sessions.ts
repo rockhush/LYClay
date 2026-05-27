@@ -222,7 +222,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function toPublicSessionListItem(session: Record<string, unknown>): Record<string, unknown> {
+function toPublicSessionListItem(session: Record<string, unknown>, defaultModel?: string): Record<string, unknown> {
   const key = session.key ?? session.sessionKey;
   const firstUserMessagePreview = session.firstUserMessagePreview;
 
@@ -232,7 +232,7 @@ function toPublicSessionListItem(session: Record<string, unknown>): Record<strin
     firstUserMessagePreview,
     displayName: session.displayName,
     thinkingLevel: session.thinkingLevel,
-    model: session.model,
+    model: session.model ?? defaultModel,
     updatedAt: session.updatedAt,
   };
 }
@@ -304,7 +304,8 @@ export async function handleSessionRoutes(
           logger.info(`[sessions:list-local] Extracted previews for ${sessions.length} sessions in ${Date.now() - previewStart}ms`);
         }
         
-        const publicSessions = sessions.map(toPublicSessionListItem).filter((session) => session.key);
+        const defaultSessionModel = 'deepseek-v4-flash';
+        const publicSessions = sessions.map((session) => toPublicSessionListItem(session, defaultSessionModel)).filter((session) => session.key);
         logger.info(`[sessions:list-local] Returning ${publicSessions.length} sessions`);
         sendJson(res, 200, { success: true, sessions: publicSessions });
       } catch (error) {

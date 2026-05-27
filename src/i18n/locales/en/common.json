@@ -20,6 +20,8 @@
         "renameSessionPlaceholder": "Enter a new conversation name",
         "renameSessionEmpty": "Conversation name cannot be empty",
         "renameSessionFailed": "Failed to rename session",
+        "removeFromWorkspace": "Remove from workspace",
+        "removeFromWorkspaceSuccess": "Removed from workspace",
         "openClawPage": "OpenClaw Page",
         "updateAvailable": " (Upgrade available)"
     },
