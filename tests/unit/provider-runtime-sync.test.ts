@@ -268,37 +268,6 @@ describe('provider-runtime-sync refresh strategy', () => {
     );
   });
 
-  it('syncs LY-Mimo provider config to runtime using its own runtime key', async () => {
-    const lyMimoProvider = createProvider({
-      id: 'ly-mimo',
-      type: 'ly-mimo' as ProviderConfig['type'],
-      name: 'LY-Mimo',
-      model: 'MiMo-V2.5',
-      baseUrl: 'http://10.64.22.12:8000/v1',
-    });
-
-    mocks.getProviderConfig.mockReturnValue({
-      api: 'anthropic-messages',
-      baseUrl: 'http://10.64.22.12:8000/v1',
-      apiKeyEnv: 'LY_MIMO_API_KEY',
-    });
-    mocks.getProviderSecret.mockResolvedValue({ type: 'api_key', apiKey: 'sk-mimo' });
-
-    const gateway = createGateway('running');
-    await syncSavedProviderToRuntime(lyMimoProvider, undefined, gateway as GatewayManager);
-
-    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
-      'ly-mimo',
-      'MiMo-V2.5',
-      expect.objectContaining({
-        baseUrl: 'http://10.64.22.12:8000/anthropic',
-        api: 'anthropic-messages',
-        apiKeyEnv: 'LY_MIMO_API_KEY',
-      }),
-    );
-    expect(gateway.debouncedReload).toHaveBeenCalledTimes(1);
-  });
-
   it('syncs Ollama provider config to runtime without adding model prefix', async () => {
     const ollamaProvider = createProvider({
       id: 'ollamafd',

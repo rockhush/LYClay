@@ -24,7 +24,7 @@ const GOOGLE_OAUTH_RUNTIME_PROVIDER = 'google-gemini-cli';
 const GOOGLE_OAUTH_DEFAULT_MODEL_REF = `${GOOGLE_OAUTH_RUNTIME_PROVIDER}/gemini-3-pro-preview`;
 const OPENAI_OAUTH_RUNTIME_PROVIDER = 'openai-codex';
 const OPENAI_OAUTH_DEFAULT_MODEL_REF = `${OPENAI_OAUTH_RUNTIME_PROVIDER}/gpt-5.4`;
-const LY_MANAGED_PROVIDER_TYPES = new Set(['ly-minimax', 'ly-mimo']);
+const LY_MANAGED_PROVIDER_TYPES = new Set(['ly-minimax']);
 
 /**
  * Provider types that are not in the built-in provider registry (no `providerConfig.api`).
@@ -53,14 +53,6 @@ function normalizeProviderBaseUrl(
 
   if (config.type === 'minimax-portal' || config.type === 'minimax-portal-cn' || config.type === 'ly-minimax') {
     return normalized.replace(/\/v1$/, '').replace(/\/anthropic$/, '').replace(/\/$/, '') + '/anthropic';
-  }
-
-  if (config.type === 'ly-mimo') {
-    const protocol = apiProtocol || config.apiProtocol || 'openai-completions';
-    if (protocol === 'anthropic-messages') {
-      return normalized.replace(/\/v1$/, '').replace(/\/anthropic$/, '').replace(/\/$/, '') + '/anthropic';
-    }
-    return normalized;
   }
 
   if (isUnregisteredProviderType(config.type)) {
@@ -481,7 +473,7 @@ async function buildAgentModelProviderEntry(
       authHeader = true;
       apiKey = 'minimax-oauth';
     }
-  } else if (config.type === 'ly-minimax' || config.type === 'ly-mimo') {
+  } else if (config.type === 'ly-minimax') {
     apiKey = (await getApiKey(config.id)) || undefined;
   }
 

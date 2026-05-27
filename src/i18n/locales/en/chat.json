@@ -92,6 +92,9 @@
     },
     "errors": {
         "modelResponseTimeout": "About 90 seconds passed with no assistant reply. The model may still be working in the background, or the provider may be slow, unavailable, rate-limited, or misconfigured. Check Settings → AI Providers, then try again.",
-        "modelResponseTimeoutLong": "Several minutes passed with no assistant reply. The provider may be unavailable, rate-limited, or still warming up. Check Settings → AI Providers, then try again."
+        "modelResponseTimeoutLong": "Several minutes passed with no assistant reply. The provider may be unavailable, rate-limited, or still warming up. Check Settings → AI Providers, then try again.",
+        "contextTooLarge": "This conversation is too large. Automatic compression still exceeds the current model limit. Use stronger compression, switch to a larger-context model, or start a new chat.",
+        "currentMessageTooLarge": "This message is too long for the current model's safe context budget. Split the input or provide the content as a file/attachment.",
+        "contextCompressionFailedRecentOnly": "Context compression failed. Only recent conversation turns were kept for this request; earlier history was not included."
     }
 }

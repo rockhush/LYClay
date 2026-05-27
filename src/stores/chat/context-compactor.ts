@@ -24,14 +24,39 @@ const MIN_ROUNDS_BETWEEN_COMPRESSION = 5;
 /** Track when last compression happened per session */
 const lastCompressionRound = new Map<string, number>();
 
-const SUMMARY_PROMPT_TEMPLATE = `请将以下对话历史压缩为一段简洁的摘要，保留关键信息。
+const SUMMARY_PROMPT_TEMPLATE = `请将以下对话历史压缩为结构化摘要，保留后续继续对话和执行任务所需的关键信息。
 
 【压缩要求】
-- 长度控制在 200-400 字
-- 保留所有重要的用户需求、偏好、已完成的工作结论
-- 保留正在进行的任务状态和进度
-- 使用简洁的中文表述
-- 不要添加"以下是摘要"等开场白，直接输出摘要内容
+- 不要编造未出现的信息
+- 保留用户目标、已确认需求、当前任务状态、关键文件/函数/配置名、重要错误和命令结果
+- 删除闲聊、重复确认、无效中间过程
+- 如果旧信息与新消息冲突，以新消息为准
+- 摘要尽量控制在约 {summaryTokens} tokens 内
+- 使用简洁中文 Markdown，直接输出摘要内容
+
+【建议结构】
+## 用户目标
+- ...
+
+## 已确认需求
+- ...
+
+## 当前任务状态
+- 已完成：...
+- 未完成：...
+- 阻塞：...
+
+## 关键项目事实
+- ...
+
+## 关键文件和位置
+- ...
+
+## 重要错误和命令结果
+- ...
+
+## 用户偏好
+- ...
 
 【对话历史】
 {history}
@@ -45,6 +70,10 @@ export interface CompactorOptions {
   minMessageCount?: number;
   /** Target tokens to keep after compression */
   keepRecentTokens?: number;
+  /** Target tokens for generated summary */
+  summaryTokens?: number;
+  /** Hard input limit after compression */
+  hardLimitTokens?: number;
   /** Minimum rounds between compressions */
   minRoundsBetweenCompression?: number;
 }
@@ -148,8 +177,9 @@ export async function compressHistory(
   options: CompactorOptions,
 ): Promise<CompressionResult | null> {
   const {
-    threshold,
     keepRecentTokens = KEEP_RECENT_TOKENS,
+    summaryTokens = 4000,
+    hardLimitTokens,
   } = options;
 
   if (!checkNeedsCompression(messages, sessionKey, options)) {
@@ -167,7 +197,9 @@ export async function compressHistory(
 
   // Build history text for summarization
   const historyText = toCompress.map(formatMessageForSummary).join('\n\n');
-  const summaryPrompt = SUMMARY_PROMPT_TEMPLATE.replace('{history}', historyText);
+  const summaryPrompt = SUMMARY_PROMPT_TEMPLATE
+    .replace('{summaryTokens}', String(summaryTokens))
+    .replace('{history}', historyText);
 
   // Estimate tokens for the summary prompt
   const promptTokens = Math.ceil(summaryPrompt.length * 0.4);
@@ -175,7 +207,7 @@ export async function compressHistory(
 
   // Check if we have enough headroom for the summary request
   // Reserve some tokens for the response
-  if (currentTokens + promptTokens > threshold * 1.3) {
+  if (hardLimitTokens && currentTokens + promptTokens > hardLimitTokens) {
     console.warn('[context-compactor] not enough headroom for summarization, falling back to truncation');
     return createSimpleTruncationByTokens(messages, keepRecentTokens);
   }
@@ -230,7 +262,7 @@ function createSimpleTruncationByTokens(messages: RawMessage[], keepTokens: numb
     compressedMessages: keepRecent,
     summaryMessage: {
       role: 'system',
-      content: `[上文已压缩，${toCompress.length} 条消息已省略。]`,
+      content: `[上下文压缩失败。系统仅保留最近对话，较早的 ${toCompress.length} 条消息未进入本次请求。]`,
       timestamp: Date.now() / 1000,
       id: crypto.randomUUID(),
     },

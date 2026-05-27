@@ -16,7 +16,7 @@ import { logger } from './logger';
 import { proxyAwareFetch } from './proxy-fetch';
 import { readOpenClawConfig, saveChannelConfig } from './channel-config';
 import { ensureDingTalkPluginInstalled } from './plugin-install';
-import { assignChannelAccountToAgent, createAgent, listAgentsSnapshot } from './agent-config';
+import { assignChannelAccountToAgent, createAgent, deduplicateAgentEntries, listAgentsSnapshot } from './agent-config';
 import { expandPath } from './paths';
 import {
   buildDingTalkBindingId,
@@ -106,9 +106,15 @@ async function findExistingDingTalkAccountWithCreds(
 export async function ensureDingTalkDedicatedAgent(): Promise<void> {
   const agents = await listAgentsSnapshot();
 
-  const exists = agents.agents.some((entry) => entry.id === DINGTALK_DEDICATED_AGENT_ID);
+  const dingtalkEntries = agents.agents.filter((entry) => entry.id === DINGTALK_DEDICATED_AGENT_ID);
 
-  if (!exists) {
+  if (dingtalkEntries.length > 1) {
+    logger.warn('[DingTalkAuto] Found duplicate dingtalk agent entries in config, cleaning up', {
+      count: dingtalkEntries.length,
+    });
+    // Directly clean the persisted config of duplicate entries
+    await deduplicateAgentEntries();
+  } else if (dingtalkEntries.length === 0) {
     await createAgent(DINGTALK_DEDICATED_AGENT_ID, { inheritWorkspace: true });
     logger.info('[DingTalkAuto] Created dedicated dingtalk agent');
   } else {

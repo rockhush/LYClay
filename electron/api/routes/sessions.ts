@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { listAgentsSnapshot } from '../../utils/agent-config';
 import { getOpenClawConfigDir } from '../../utils/paths';
 import { logger } from '../../utils/logger';
 import type { HostApiContext } from '../context';
@@ -304,7 +305,10 @@ export async function handleSessionRoutes(
           logger.info(`[sessions:list-local] Extracted previews for ${sessions.length} sessions in ${Date.now() - previewStart}ms`);
         }
         
-        const defaultSessionModel = 'deepseek-v4-flash';
+        const agentsSnapshot = await listAgentsSnapshot();
+        const defaultSessionModel = agentsSnapshot.agents.find((agent) => agent.id === agentId)?.modelDisplay
+          || agentsSnapshot.defaultModelRef
+          || undefined;
         const publicSessions = sessions.map((session) => toPublicSessionListItem(session, defaultSessionModel)).filter((session) => session.key);
         logger.info(`[sessions:list-local] Returning ${publicSessions.length} sessions`);
         sendJson(res, 200, { success: true, sessions: publicSessions });

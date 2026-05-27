@@ -197,7 +197,19 @@ function normalizeAgentsConfig(config: AgentConfigDocument): {
     ))
     : [];
 
-  if (rawEntries.length === 0) {
+  // Deduplicate: only keep the first occurrence of each agent id.
+  const seenIds = new Set<string>();
+  const dedupedEntries = rawEntries.filter((entry) => {
+    const normalizedId = entry.id.trim().toLowerCase();
+    if (seenIds.has(normalizedId)) {
+      logger.warn('Removed duplicate agent entry from config', { agentId: entry.id });
+      return false;
+    }
+    seenIds.add(normalizedId);
+    return true;
+  });
+
+  if (dedupedEntries.length === 0) {
     const main = createImplicitMainEntry(config);
     return {
       agentsConfig,
@@ -207,10 +219,10 @@ function normalizeAgentsConfig(config: AgentConfigDocument): {
     };
   }
 
-  const defaultEntry = rawEntries.find((entry) => entry.default) ?? rawEntries[0];
+  const defaultEntry = dedupedEntries.find((entry) => entry.default) ?? dedupedEntries[0];
   return {
     agentsConfig,
-    entries: rawEntries.map((entry) => ({ ...entry })),
+    entries: dedupedEntries.map((entry) => ({ ...entry })),
     defaultAgentId: defaultEntry.id,
     syntheticMain: false,
   };
@@ -775,6 +787,22 @@ export async function assignChannelAccountToAgent(
   });
 }
 
+/**
+ * Check whether a channel+accountId already has an agent binding.
+ * Returns the agentId if bound, or null if no binding exists.
+ */
+export async function getChannelAccountBindingOwner(
+  channelType: string,
+  accountId?: string,
+): Promise<string | null> {
+  const config = await readOpenClawConfig();
+  const { channelToAgent, accountToAgent } = getChannelBindingMap(config.bindings);
+  if (accountId) {
+    return accountToAgent.get(`${channelType}:${accountId}`) ?? null;
+  }
+  return channelToAgent.get(channelType) ?? null;
+}
+
 export async function clearChannelBinding(channelType: string, accountId?: string): Promise<AgentsSnapshot> {
   return withConfigLock(async () => {
     const config = await readOpenClawConfig() as AgentConfigDocument;
@@ -798,5 +826,24 @@ export async function clearAllBindingsForChannel(channelType: string): Promise<v
     config.bindings = nextBindings.length > 0 ? nextBindings : undefined;
     await writeOpenClawConfig(config);
     logger.info('Cleared all bindings for channel', { channelType });
+  });
+}
+
+/**
+ * Remove duplicate agent entries from the persisted config.
+ * This is a self-healing measure for cases where the config accumulates
+ * duplicate entries with the same agent id.
+ */
+export async function deduplicateAgentEntries(): Promise<void> {
+  return withConfigLock(async () => {
+    const config = await readOpenClawConfig() as AgentConfigDocument;
+    const { entries, agentsConfig } = normalizeAgentsConfig(config);
+    // normalizeAgentsConfig already deduplicates — write back the clean list.
+    config.agents = {
+      ...agentsConfig,
+      list: entries,
+    };
+    await writeOpenClawConfig(config);
+    logger.info('Deduplicated agent entries in config', { count: entries.length });
   });
 }

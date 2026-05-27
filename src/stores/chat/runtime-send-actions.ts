@@ -1,8 +1,7 @@
 import i18n from '@/i18n';
 import { invokeIpc } from '@/lib/api-client';
 import { useAgentsStore } from '@/stores/agents';
-import { useSettingsStore } from '@/stores/settings';
-import { compressHistory, resetCompactorSession } from './context-compactor';
+import { resetCompactorSession } from './context-compactor';
 import {
   beginFirstSessionPerf,
   markFirstSessionRpcCompleted,
@@ -19,11 +18,11 @@ import {
   clearHistoryPoll,
   getLastChatEventAt,
   markAbortedChatRun,
-  setHistoryPollTimer,
   setLastChatEventAt,
   upsertImageCacheEntry,
 } from './helpers';
 import type { ChatSession, RawMessage, ReasoningMode } from './types';
+import { prepareContextBeforeSend } from './context-send-guard';
 import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
 
 function normalizeAgentId(value: string | undefined | null): string {
@@ -246,7 +245,7 @@ async function patchSessionThinkingLevel(sessionKey: string, mode: ReasoningMode
 }
 
 function applySessionThinkingLevelInBackground(
-  sessionKey: string,
+  _sessionKey: string,
   mode: ReasoningMode,
   set: ChatSet,
   get: ChatGet,
@@ -328,7 +327,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
 
       const currentSessionKey = targetSessionKey;
       const reasoningMode = get().reasoningMode;
-      applySessionThinkingLevelInBackground(currentSessionKey, reasoningMode, set);
+      applySessionThinkingLevelInBackground(currentSessionKey, reasoningMode, set, get);
       const attachmentCount = attachments?.length ?? 0;
       const originalRuntimeMessage = trimmed || (attachmentCount > 0 ? 'Process the attached file(s).' : '');
       const isInternalStagedExecution = trimmed.includes(COMPLEX_TASK_EXECUTION_MARKER);
@@ -353,25 +352,6 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         });
       }
 
-      // ========== Context Compression ==========
-      const { contextCompressionEnabled, contextCompressionThreshold } = useSettingsStore.getState();
-      if (contextCompressionEnabled && !isInternalStagedExecution) {
-        const currentMessages = get().messages;
-        if (currentMessages.length >= 10) {
-          const compression = await compressHistory(
-            currentMessages,
-            currentSessionKey,
-            (method, params, timeoutMs) => invokeIpc('gateway:rpc', method, params, timeoutMs),
-            { threshold: contextCompressionThreshold },
-          );
-          if (compression) {
-            set({ messages: [compression.summaryMessage, ...compression.compressedMessages] });
-            console.log('[context-compactor] compressed', compression.originalCount, 'messages');
-          }
-        }
-      }
-      // ==========================================
-
       // Add user message optimistically (with local file metadata for UI display)
       const nowMs = Date.now();
       const userMsg: RawMessage = {
@@ -388,6 +368,25 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           source: 'user-upload',
         })),
       };
+
+      const contextGuard = await prepareContextBeforeSend({
+        sessionKey: currentSessionKey,
+        messages: get().messages,
+        pendingUserMessage: userMsg,
+        runtimeMessage,
+        workspaceContext: '',
+        isInternalStagedExecution,
+        invokeCompactorRpc: (method, params, timeoutMs) => invokeIpc('gateway:rpc', method, params, timeoutMs),
+      });
+
+      if (contextGuard.error) {
+        set({ error: contextGuard.errorMessage ?? String(contextGuard.error), sending: false });
+        return;
+      }
+
+      if (contextGuard.compressed) {
+        set({ messages: contextGuard.messages });
+      }
       set((s) => ({
         messages: isInternalStagedExecution ? s.messages : [...s.messages, userMsg],
         sending: true,
@@ -512,7 +511,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
               message: withThinkingDirective(runtimeMessage, reasoningMode),
               deliver: false,
               idempotencyKey,
-              media: attachments.map((a) => ({
+              media: attachments!.map((a) => ({
                 filePath: a.stagedPath,
                 mimeType: a.mimeType,
                 fileName: a.fileName,

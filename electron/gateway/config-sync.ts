@@ -36,7 +36,7 @@ import {
   hasNpmCliRuntime,
 } from '../utils/bundled-node';
 import { copyPluginFromNodeModules, fixupPluginManifest, cpSyncSafe } from '../utils/plugin-install';
-import { assignChannelAccountToAgent } from '../utils/agent-config';
+import { assignChannelAccountToAgent, getChannelAccountBindingOwner } from '../utils/agent-config';
 import { ensureDingTalkDedicatedAgent, DINGTALK_DEDICATED_AGENT_ID } from '../utils/dingtalk-auto-provision';
 import { stripSystemdSupervisorEnv } from './config-sync-env';
 
@@ -342,7 +342,10 @@ export async function syncGatewayConfigBeforeLaunch(
         const channelAccounts = listConfiguredChannelAccountsFromConfig(rawCfg);
         const dingtalkAccounts = channelAccounts['dingtalk']?.accountIds ?? ['default'];
         for (const accountId of dingtalkAccounts) {
-          await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, 'dingtalk', accountId);
+          const existingOwner = await getChannelAccountBindingOwner('dingtalk', accountId);
+          if (!existingOwner) {
+            await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, 'dingtalk', accountId);
+          }
         }
         logger.info('[GatewaySync] Ensured dingtalk agent + channel bindings');
       } catch (err) {

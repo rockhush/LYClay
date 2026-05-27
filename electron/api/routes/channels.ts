@@ -21,6 +21,7 @@ import {
   assignChannelAccountToAgent,
   clearAllBindingsForChannel,
   clearChannelBinding,
+  getChannelAccountBindingOwner,
   listAgentsSnapshot,
   listAgentsSnapshotFromConfig,
 } from '../../utils/agent-config';
@@ -350,6 +351,22 @@ async function readChannelBindingOwner(channelType: string, accountId?: string):
   }
 
   return null;
+}
+
+/**
+ * For DingTalk channels, ensure the channel account is bound to the dedicated
+ * dingtalk agent on first setup, but never override an existing user-chosen binding.
+ */
+async function ensureDingTalkBindingIfUnset(
+  channelType: string,
+  accountId?: string,
+): Promise<void> {
+  if (channelType !== 'dingtalk') return;
+  const resolvedAccountId = accountId || 'default';
+  const existingBinding = await getChannelAccountBindingOwner('dingtalk', resolvedAccountId);
+  if (existingBinding) return; // User already chose an agent — respect their choice
+  await ensureDingTalkDedicatedAgent();
+  await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, 'dingtalk', resolvedAccountId);
 }
 
 interface GatewayChannelStatusPayload {
@@ -1462,19 +1479,13 @@ export async function handleChannelRoutes(
       const existingValues = await getChannelFormValues(body.channelType, body.accountId);
       if (isSameConfigValues(existingValues, body.config)) {
         await ensureScopedChannelBinding(body.channelType, body.accountId);
-        if (storedChannelType === 'dingtalk') {
-          await ensureDingTalkDedicatedAgent();
-          await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, storedChannelType, body.accountId || 'default');
-        }
+        await ensureDingTalkBindingIfUnset(storedChannelType, body.accountId);
         sendJson(res, 200, { success: true, noChange: true });
         return true;
       }
       await saveChannelConfig(body.channelType, body.config, body.accountId);
       await ensureScopedChannelBinding(body.channelType, body.accountId);
-      if (storedChannelType === 'dingtalk') {
-        await ensureDingTalkDedicatedAgent();
-        await assignChannelAccountToAgent(DINGTALK_DEDICATED_AGENT_ID, storedChannelType, body.accountId || 'default');
-      }
+      await ensureDingTalkBindingIfUnset(storedChannelType, body.accountId);
       scheduleGatewayChannelSaveRefresh(ctx, storedChannelType, `channel:saveConfig:${storedChannelType}`);
       sendJson(res, 200, { success: true });
     } catch (error) {

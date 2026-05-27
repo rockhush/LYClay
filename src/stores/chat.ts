@@ -40,6 +40,7 @@ import {
   markChatRunTranscriptProgress,
   markChatRunVisibleProgress,
 } from './chat/chat-run-perf';
+import { prepareContextBeforeSend } from './chat/context-send-guard';
 
 export type {
   AttachedFileMeta,
@@ -3499,6 +3500,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         filePath: a.stagedPath,
       })),
     };
+
+    const contextGuard = await prepareContextBeforeSend({
+      sessionKey: currentSessionKey,
+      messages: get().messages,
+      pendingUserMessage: userMsg,
+      runtimeMessage,
+      workspaceContext,
+      isInternalStagedExecution,
+      invokeCompactorRpc: (method, params, timeoutMs) => useGatewayStore.getState().rpc(method, params as Record<string, unknown>, timeoutMs),
+    });
+
+    if (contextGuard.error) {
+      set({ error: contextGuard.errorMessage ?? String(contextGuard.error), sending: false });
+      return;
+    }
+
+    if (contextGuard.compressed) {
+      set({ messages: contextGuard.messages });
+    }
+
     const isFirstMessage = !get().messages.some((m) => m.role === 'user');
     const truncated = trimmed.length > 50 ? `${trimmed.slice(0, 50)}…` : trimmed;
     const shouldSetLabel = !isInternalStagedExecution

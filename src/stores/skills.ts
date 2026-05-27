@@ -255,7 +255,7 @@ interface SkillsState {
   enableSkill: (skillId: string) => Promise<void>;
   disableSkill: (skillId: string) => Promise<void>;
   setSkills: (skills: Skill[]) => void;
-  updateSkill: (skillId: string, updates: Partial<Skill>) => void;
+  patchSkill: (skillId: string, updates: Partial<Skill>) => void;
 }
 
 let _errorTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -939,7 +939,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   clearSkillUpdates: () => set({ skillUpdates: {} }),
 
   enableSkill: async (skillId) => {
-    const { updateSkill, skills } = get();
+    const { patchSkill, skills } = get();
     const skill = skills.find((item) => item.id === skillId);
 
     try {
@@ -955,7 +955,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       if (!result.success) {
         throw new Error(result.error || 'Failed to enable skill');
       }
-      updateSkill(skillId, { enabled: true });
+      patchSkill(skillId, { enabled: true });
     } catch (error) {
       console.error('Failed to enable skill:', error);
       throw error;
@@ -963,7 +963,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   },
 
   disableSkill: async (skillId) => {
-    const { updateSkill, skills } = get();
+    const { patchSkill, skills } = get();
 
     const skill = skills.find((s) => s.id === skillId);
     if (skill?.isCore) {
@@ -983,7 +983,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       if (!result.success) {
         throw new Error(result.error || 'Failed to disable skill');
       }
-      updateSkill(skillId, { enabled: false });
+      patchSkill(skillId, { enabled: false });
     } catch (error) {
       console.error('Failed to disable skill:', error);
       throw error;
@@ -992,7 +992,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
 
   setSkills: (skills) => set({ skills }),
 
-  updateSkill: (skillId, updates) => {
+  patchSkill: (skillId, updates) => {
     set((state) => ({
       skills: state.skills.map((skill) =>
         skill.id === skillId ? { ...skill, ...updates } : skill

@@ -28,11 +28,16 @@ export function migrateLegacyUserDataIfNeeded(): void {
   }
 
   const roamingRoot = app.getPath('appData');
-  const localRoot = app.getPath('localAppData');
+
+  // localAppData is Windows-only; macOS/Linux don't have a separate local app data directory
+  const localCandidates: string[] =
+    process.platform === 'win32'
+      ? LEGACY_LOCAL_DIR_NAMES.map((name) => join((app.getPath as (name: string) => string)('localAppData'), name))
+      : [];
 
   const candidates = [
     ...LEGACY_ROAMING_DIR_NAMES.map((name) => join(roamingRoot, name)),
-    ...LEGACY_LOCAL_DIR_NAMES.map((name) => join(localRoot, name)),
+    ...localCandidates,
   ];
 
   for (const legacyPath of candidates) {

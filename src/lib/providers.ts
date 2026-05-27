@@ -8,7 +8,7 @@
 
 export const LY_MINIMAX_PROVIDER_ID = 'ly-minimax' as const;
 export const LY_DEEPSEEK_PROVIDER_ID = 'ly-deepseek' as const;
-export const LY_MIMO_PROVIDER_ID = 'ly-mimo' as const;
+export const LY_QWEN_PROVIDER_ID = 'ly-qwen' as const;
 export const LEGACY_LY_MINIMAX_PROVIDER_ID = 'lyclaw-model' as const;
 
 export const PROVIDER_TYPES = [
@@ -24,8 +24,8 @@ export const PROVIDER_TYPES = [
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
-  'ly-mimo',
-  'ly-deepseek',
+  LY_DEEPSEEK_PROVIDER_ID,
+  LY_QWEN_PROVIDER_ID,
   'modelstudio',
   'ollama',
   'custom',
@@ -45,8 +45,8 @@ export const BUILTIN_PROVIDER_TYPES = [
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
-  'ly-mimo',
   LY_DEEPSEEK_PROVIDER_ID,
+  LY_QWEN_PROVIDER_ID,
   'modelstudio',
   'ollama',
 ] as const;
@@ -201,7 +201,6 @@ export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
   },
   { id: 'openrouter', name: 'OpenRouter', icon: '🌐', placeholder: 'sk-or-v1-...', model: 'Multi-Model', requiresApiKey: true, showModelId: true, modelIdPlaceholder: 'openai/gpt-5.4', defaultModelId: 'openai/gpt-5.4', docsUrl: 'https://openrouter.ai/models' },
   { id: 'minimax-portal-cn', name: 'MiniMax (CN)', icon: '☁️', placeholder: 'sk-...', model: 'MiniMax', requiresApiKey: false, isOAuth: true, supportsApiKey: true, defaultModelId: 'MiniMax-M2.7', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'MiniMax-M2.7', apiKeyUrl: 'https://platform.minimaxi.com/' },
-  { id: 'ly-mimo', name: 'LY-Mimo', icon: '☁️', placeholder: 'sk-...', model: 'MiMo', requiresApiKey: true, defaultBaseUrl: 'http://10.64.22.12:8000/v1', showBaseUrl: true, defaultModelId: 'MiMo-V2.5', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'MiMo-V2.5', docsUrl: 'https://platform.minimaxi.com/', hidden: true },
   { id: 'moonshot', name: 'Moonshot (CN)', icon: '🌙', placeholder: 'sk-...', model: 'Kimi', requiresApiKey: true, defaultBaseUrl: 'https://api.moonshot.cn/v1', defaultModelId: 'kimi-k2.6', docsUrl: 'https://platform.moonshot.cn/' },
   { id: 'moonshot-global', name: 'Moonshot (Global)', icon: '🌙', placeholder: 'sk-...', model: 'Kimi', requiresApiKey: true, defaultBaseUrl: 'https://api.moonshot.ai/v1', defaultModelId: 'kimi-k2.6', docsUrl: 'https://platform.moonshot.ai/' },
   { id: 'siliconflow', name: 'SiliconFlow (CN)', icon: '🌊', placeholder: 'sk-...', model: 'Multi-Model', requiresApiKey: true, defaultBaseUrl: 'https://api.siliconflow.cn/v1', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'deepseek-ai/DeepSeek-V3', defaultModelId: 'deepseek-ai/DeepSeek-V3', docsUrl: 'https://docs.siliconflow.cn/cn/userguide/introduction' },
@@ -223,6 +222,21 @@ export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
     showModelId: true,
     showModelIdInDevModeOnly: true,
     modelIdPlaceholder: 'deepseek-v4-flash',
+    hidden: true,
+  },
+  {
+    id: LY_QWEN_PROVIDER_ID,
+    name: 'LY-Qwen',
+    icon: 'LY',
+    placeholder: '',
+    model: 'Qwen',
+    requiresApiKey: false,
+    defaultBaseUrl: 'http://10.64.22.12:8000/v1',
+    defaultModelId: 'qwen3.5-397b',
+    showBaseUrl: true,
+    showModelId: true,
+    showModelIdInDevModeOnly: true,
+    modelIdPlaceholder: 'qwen3.5-397b',
     hidden: true,
   },
   {

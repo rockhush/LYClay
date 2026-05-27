@@ -4,10 +4,11 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useProviderStore } from '@/stores/providers';
 import { useChatStore } from '@/stores/chat';
+import { useAgentsStore } from '@/stores/agents';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { buildProviderListItems, type ProviderListItem } from '@/lib/provider-accounts';
-import { LY_MINIMAX_PROVIDER_ID, LY_DEEPSEEK_PROVIDER_ID, LY_MIMO_PROVIDER_ID } from '@/lib/providers';
+import { LY_MINIMAX_PROVIDER_ID, LY_DEEPSEEK_PROVIDER_ID } from '@/lib/providers';
 
 interface ModelPickerProps {
   disabled?: boolean;
@@ -20,6 +21,9 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
   const { accounts, statuses, vendors, defaultAccountId } = useProviderStore();
   const isStreaming = useChatStore((s) => !s.runAborted && (s.activeRunId !== null || s.sending));
+  const currentAgentId = useChatStore((s) => s.currentAgentId);
+  const agents = useAgentsStore((s) => s.agents);
+  const defaultModelRef = useAgentsStore((s) => s.defaultModelRef);
   const setDefaultAccount = useProviderStore((s) => s.setDefaultAccount);
   const isDefaultAccountSwitching = useProviderStore((s) => s.isDefaultAccountSwitching);
   const pendingDefaultAccountId = useProviderStore((s) => s.pendingDefaultAccountId);
@@ -33,7 +37,6 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const configuredProviders = useMemo(() => {
     return providerItems.filter(item => {
       if (item.account.vendorId === LY_MINIMAX_PROVIDER_ID) return true;
-      if (item.account.vendorId === LY_MIMO_PROVIDER_ID) return true;
       if (item.account.vendorId === LY_DEEPSEEK_PROVIDER_ID) return true;
       // Check if provider has configured credentials
       if (!item.status) return false;
@@ -90,9 +93,13 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   // Current selected provider/model label
   const currentItem = configuredProviders.find((item) => item.account.id === effectiveDefaultAccountId)
     ?? configuredProviders[0];
-  const currentLabel = currentItem
-    ? currentItem.account.model || currentItem.vendor?.name || currentItem.account.label
-    : t('composer.switchModel');
+  const currentAgent = agents.find((agent) => agent.id === currentAgentId);
+  const currentLabel = currentAgent?.modelDisplay
+    || defaultModelRef?.split('/').pop()
+    || currentItem?.account.model
+    || currentItem?.vendor?.name
+    || currentItem?.account.label
+    || t('composer.switchModel');
 
   return (
     <div ref={pickerRef} className="relative shrink-0">

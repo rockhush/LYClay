@@ -22,6 +22,7 @@ import { getProviderService } from '../../services/providers/provider-service';
 import { providerAccountToConfig } from '../../services/providers/provider-store';
 import type { ProviderAccount } from '../../shared/providers/types';
 import { logger } from '../../utils/logger';
+import { resolveModelContextWindow } from '../../utils/model-context';
 
 const legacyProviderRoutesWarned = new Set<string>();
 
@@ -49,6 +50,19 @@ export async function handleProviderRoutes(
       `[provider-migration] Legacy HTTP route "${route}" is deprecated. Prefer /api/provider-accounts endpoints.`,
     );
   };
+
+  if (url.pathname === '/api/model-context' && req.method === 'GET') {
+    const modelRef = url.searchParams.get('modelRef');
+    try {
+      sendJson(res, 200, {
+        modelRef,
+        contextWindow: await resolveModelContextWindow(modelRef),
+      });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
 
   if (url.pathname === '/api/provider-vendors' && req.method === 'GET') {
     sendJson(res, 200, await providerService.listVendors());

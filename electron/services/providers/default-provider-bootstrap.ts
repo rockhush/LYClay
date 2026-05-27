@@ -6,6 +6,7 @@ import {
   LEGACY_LY_MINIMAX_PROVIDER_ID,
   LY_MINIMAX_PROVIDER_ID,
   LY_DEEPSEEK_PROVIDER_ID,
+  LY_QWEN_PROVIDER_ID,
   // LY_GLM_PROVIDER_ID,
   type ProviderAccount,
 } from '../../shared/providers/types';
@@ -13,43 +14,34 @@ import { listConfiguredAgentIds } from '../../utils/agent-config';
 import { readOpenClawConfig, writeOpenClawConfig } from '../../utils/channel-config';
 import { withConfigLock } from '../../utils/config-mutex';
 import { logger } from '../../utils/logger';
-import { syncProviderConfigToOpenClaw, updateAgentModelProvider } from '../../utils/openclaw-auth';
+import { removeProviderFromOpenClaw, syncProviderConfigToOpenClaw, updateAgentModelProvider } from '../../utils/openclaw-auth';
 import { getOpenClawConfigDir } from '../../utils/paths';
 import { getOpenClawProviderKeyForType } from '../../utils/provider-keys';
 import { getProviderService } from './provider-service';
-import { storeApiKey } from '../../utils/secure-storage';
+import { deleteProvider, storeApiKey } from '../../utils/secure-storage';
 import { deleteProviderAccount, getProviderAccount, saveProviderAccount } from './provider-store';
 
 const LY_MINIMAX_LABEL = 'LY-MiniMax';
 const LY_MINIMAX_BASE_URL = 'http://10.64.22.11:8000/v1';
 const LY_MINIMAX_MODEL_ID = 'MiniMax-M2.7';
-const LY_MINIMAX_MAX_TOKENS = 204800;
+const LY_MINIMAX_CONTEXT_WINDOW = 204800;
+const LY_MINIMAX_MAX_TOKENS = 60000;
 const LY_MINIMAX_API_KEY = 'EMPTY';
 
 const LY_MIMO_PROVIDER_ID = 'ly-mimo';
-const LY_MIMO_LABEL = 'LY-Mimo';
-const LY_MIMO_BASE_URL = 'http://10.64.22.12:8000/v1';
-const LY_MIMO_MODEL_ID = 'MiMo-V2.5';
-const LY_MIMO_MAX_TOKENS = 100000;
-const LY_MIMO_API_KEY = 'EMPTY';
-const LY_MIMO_MODEL_OPTIONS = {
-  input: ['text', 'image'],
-  maxTokens: LY_MIMO_MAX_TOKENS,
-  reasoning: false,
-  params: {
-    frequency_penalty: 0.5,
-    presence_penalty: 0.2,
-    chat_template_kwargs: {
-      enable_thinking: false,
-    },
-  },
-};
-
 const LY_DEEPSEEK_LABEL = 'LY-DeepSeek';
 const LY_DEEPSEEK_BASE_URL = 'http://10.7.221.62:8000/v1';
 const LY_DEEPSEEK_MODEL_ID = 'deepseek-v4-flash';
-const LY_DEEPSEEK_MAX_TOKENS = 100000;
+const LY_DEEPSEEK_CONTEXT_WINDOW = 130000;
+const LY_DEEPSEEK_MAX_TOKENS = 60000;
 const LY_DEEPSEEK_API_KEY = 'EMPTY';
+
+const LY_QWEN_LABEL = 'LY-Qwen';
+const LY_QWEN_BASE_URL = 'http://10.64.22.12:8000/v1';
+const LY_QWEN_MODEL_ID = 'qwen3.5-397b';
+const LY_QWEN_CONTEXT_WINDOW = 130000;
+const LY_QWEN_MAX_TOKENS = 81920;
+const LY_QWEN_API_KEY = 'EMPTY';
 
 // const LY_GLM_LABEL = 'LY-GLM';
 // const LY_GLM_BASE_URL = 'http://10.7.221.62:8000/v1';
@@ -83,31 +75,6 @@ function createLyMiniMaxAccount(existing?: ProviderAccount | null, legacy?: Prov
   };
 }
 
-function createLyMimoAccount(existing?: ProviderAccount | null): ProviderAccount {
-  const now = new Date().toISOString();
-  return {
-    id: LY_MIMO_PROVIDER_ID,
-    vendorId: LY_MIMO_PROVIDER_ID,
-    label: LY_MIMO_LABEL,
-    authMode: 'api_key',
-    baseUrl: LY_MIMO_BASE_URL,
-    apiProtocol: 'openai-completions',
-    headers: existing?.headers,
-    model: LY_MIMO_MODEL_ID,
-    fallbackModels: existing?.fallbackModels,
-    fallbackAccountIds: existing?.fallbackAccountIds,
-    enabled: true,
-    isDefault: existing?.isDefault ?? false,
-    metadata: {
-      ...existing?.metadata,
-      managedBy: 'lyclaw',
-      readonly: true,
-    },
-    createdAt: existing?.createdAt || now,
-    updatedAt: now,
-  };
-}
-
 function createLyDeepSeekAccount(existing?: ProviderAccount | null): ProviderAccount {
   const now = new Date().toISOString();
   return {
@@ -119,6 +86,30 @@ function createLyDeepSeekAccount(existing?: ProviderAccount | null): ProviderAcc
     apiProtocol: 'openai-completions',
     headers: existing?.headers,
     model: LY_DEEPSEEK_MODEL_ID,
+    fallbackModels: existing?.fallbackModels,
+    fallbackAccountIds: existing?.fallbackAccountIds,
+    enabled: true,
+    isDefault: existing?.isDefault ?? false,
+    metadata: {
+      ...existing?.metadata,
+      managedBy: 'lyclaw',
+    },
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function createLyQwenAccount(existing?: ProviderAccount | null): ProviderAccount {
+  const now = new Date().toISOString();
+  return {
+    id: LY_QWEN_PROVIDER_ID,
+    vendorId: LY_QWEN_PROVIDER_ID,
+    label: LY_QWEN_LABEL,
+    authMode: 'api_key',
+    baseUrl: existing?.baseUrl || LY_QWEN_BASE_URL,
+    apiProtocol: 'openai-completions',
+    headers: existing?.headers,
+    model: existing?.model || LY_QWEN_MODEL_ID,
     fallbackModels: existing?.fallbackModels,
     fallbackAccountIds: existing?.fallbackAccountIds,
     enabled: true,
@@ -242,6 +233,11 @@ async function migrateAgentModelsJsonProviderId(): Promise<void> {
   }
 }
 
+async function removeRetiredLyMimoProvider(): Promise<void> {
+  await deleteProvider(LY_MIMO_PROVIDER_ID);
+  await removeProviderFromOpenClaw(LY_MIMO_PROVIDER_ID);
+}
+
 async function migrateLegacyProviderAccount(): Promise<ProviderAccount | null> {
   const legacy = await getProviderAccount(LEGACY_LY_MINIMAX_PROVIDER_ID);
   if (!legacy) {
@@ -303,19 +299,13 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
   const legacyLyMiniMax = await migrateLegacyProviderAccount();
   await migrateOpenClawConfigProviderId();
   await migrateAgentModelsJsonProviderId();
+  await removeRetiredLyMimoProvider();
 
   const existing = await providerService.getAccount(LY_MINIMAX_PROVIDER_ID);
   const account = createLyMiniMaxAccount(existing, legacyLyMiniMax);
   await saveProviderAccount(account);
   if (LY_MINIMAX_API_KEY) {
     await storeApiKey(account.id, LY_MINIMAX_API_KEY);
-  }
-
-  const lyMimoExisting = await providerService.getAccount(LY_MIMO_PROVIDER_ID);
-  const lyMimoAccount = createLyMimoAccount(lyMimoExisting);
-  await saveProviderAccount(lyMimoAccount);
-  if (LY_MIMO_API_KEY) {
-    await storeApiKey(lyMimoAccount.id, LY_MIMO_API_KEY);
   }
 
   const definition = getProviderDefinition(LY_MINIMAX_PROVIDER_ID);
@@ -332,22 +322,17 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     apiKeyEnv: 'LY_MINIMAX_API_KEY',
     modelOverrides: {
       [LY_MINIMAX_MODEL_ID]: {
+        input: ['text'],
+        contextWindow: LY_MINIMAX_CONTEXT_WINDOW,
         maxTokens: LY_MINIMAX_MAX_TOKENS,
       },
     },
   });
-  await syncManagedProviderToAgentModels(account, LY_MINIMAX_MODEL_ID, { maxTokens: LY_MINIMAX_MAX_TOKENS });
-
-  const lyMimoRuntimeProviderKey = getOpenClawProviderKeyForType(lyMimoAccount.vendorId, lyMimoAccount.id);
-  await syncProviderConfigToOpenClaw(lyMimoRuntimeProviderKey, LY_MIMO_MODEL_ID, {
-    baseUrl: lyMimoAccount.baseUrl,
-    api: lyMimoAccount.apiProtocol,
-    apiKeyEnv: 'LY_MIMO_API_KEY',
-    modelOverrides: {
-      [LY_MIMO_MODEL_ID]: LY_MIMO_MODEL_OPTIONS,
-    },
+  await syncManagedProviderToAgentModels(account, LY_MINIMAX_MODEL_ID, {
+    input: ['text'],
+    contextWindow: LY_MINIMAX_CONTEXT_WINDOW,
+    maxTokens: LY_MINIMAX_MAX_TOKENS,
   });
-  await syncManagedProviderToAgentModels(lyMimoAccount, LY_MIMO_MODEL_ID, LY_MIMO_MODEL_OPTIONS);
 
   const lyDeepSeekExisting = await providerService.getAccount(LY_DEEPSEEK_PROVIDER_ID);
   const lyDeepSeekAccount = createLyDeepSeekAccount(lyDeepSeekExisting);
@@ -367,10 +352,49 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     api: lyDeepSeekAccount.apiProtocol,
     apiKeyEnv: 'LY_DEEPSEEK_API_KEY',
     modelOverrides: {
-      'deepseek-v4-flash': { maxTokens: LY_DEEPSEEK_MAX_TOKENS },
+      'deepseek-v4-flash': {
+        input: ['text'],
+        contextWindow: LY_DEEPSEEK_CONTEXT_WINDOW,
+        maxTokens: LY_DEEPSEEK_MAX_TOKENS,
+        reasoning: true,
+      },
     },
   });
-  await syncManagedProviderToAgentModels(lyDeepSeekAccount, LY_DEEPSEEK_MODEL_ID, { maxTokens: LY_DEEPSEEK_MAX_TOKENS });
+  await syncManagedProviderToAgentModels(lyDeepSeekAccount, LY_DEEPSEEK_MODEL_ID, {
+    input: ['text'],
+    contextWindow: LY_DEEPSEEK_CONTEXT_WINDOW,
+    maxTokens: LY_DEEPSEEK_MAX_TOKENS,
+    reasoning: true,
+  });
+
+  const lyQwenExisting = await providerService.getAccount(LY_QWEN_PROVIDER_ID);
+  const lyQwenAccount = createLyQwenAccount(lyQwenExisting);
+  await saveProviderAccount(lyQwenAccount);
+  if (LY_QWEN_API_KEY) {
+    await storeApiKey(lyQwenAccount.id, LY_QWEN_API_KEY);
+  }
+  if (LY_QWEN_MODEL_ID) {
+    const lyQwenRuntimeProviderKey = getOpenClawProviderKeyForType(lyQwenAccount.vendorId, lyQwenAccount.id);
+    await syncProviderConfigToOpenClaw(lyQwenRuntimeProviderKey, LY_QWEN_MODEL_ID, {
+      baseUrl: lyQwenAccount.baseUrl || LY_QWEN_BASE_URL,
+      api: lyQwenAccount.apiProtocol,
+      apiKeyEnv: 'LY_QWEN_API_KEY',
+      modelOverrides: {
+        [LY_QWEN_MODEL_ID]: {
+          reasoning: true,
+          input: ['text', 'image'],
+          contextWindow: LY_QWEN_CONTEXT_WINDOW,
+          maxTokens: LY_QWEN_MAX_TOKENS,
+        },
+      },
+    });
+    await syncManagedProviderToAgentModels(lyQwenAccount, LY_QWEN_MODEL_ID, {
+      reasoning: true,
+      input: ['text', 'image'],
+      contextWindow: LY_QWEN_CONTEXT_WINDOW,
+      maxTokens: LY_QWEN_MAX_TOKENS,
+    });
+  }
 
   // const lyGlmExisting = await providerService.getAccount(LY_GLM_PROVIDER_ID);
   // const lyGlmAccount = createLyGlmAccount(lyGlmExisting);

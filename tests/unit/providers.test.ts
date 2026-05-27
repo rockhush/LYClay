@@ -59,7 +59,7 @@ describe('provider metadata', () => {
 
   it('keeps builtin provider sources in sync', () => {
     expect(BUILTIN_PROVIDER_TYPES).toEqual(
-      expect.arrayContaining(['ly-minimax', 'anthropic', 'openai', 'google', 'openrouter', 'ark', 'moonshot', 'siliconflow', 'minimax-portal', 'minimax-portal-cn', 'ly-mimo', 'modelstudio', 'ollama'])
+      expect.arrayContaining(['ly-minimax', 'anthropic', 'openai', 'google', 'openrouter', 'ark', 'moonshot', 'siliconflow', 'minimax-portal', 'minimax-portal-cn', 'modelstudio', 'ollama'])
     );
   });
 
@@ -126,35 +126,30 @@ describe('provider metadata', () => {
     const google = PROVIDER_TYPE_INFO.find((provider) => provider.id === 'google');
     const minimax = PROVIDER_TYPE_INFO.find((provider) => provider.id === 'minimax-portal');
     const minimaxCn = PROVIDER_TYPE_INFO.find((provider) => provider.id === 'minimax-portal-cn');
-    const lyMimo = PROVIDER_TYPE_INFO.find((provider) => provider.id === 'ly-mimo');
     const qwen = PROVIDER_TYPE_INFO.find((provider) => provider.id === 'modelstudio');
 
     expect(openai).toMatchObject({ showModelId: true, showModelIdInDevModeOnly: true, defaultModelId: 'gpt-5.4' });
     expect(google).toMatchObject({ showModelId: true, showModelIdInDevModeOnly: true, defaultModelId: 'gemini-3-pro-preview' });
     expect(minimax).toMatchObject({ showModelId: true, showModelIdInDevModeOnly: true, defaultModelId: 'MiniMax-M2.7' });
     expect(minimaxCn).toMatchObject({ showModelId: true, showModelIdInDevModeOnly: true, defaultModelId: 'MiniMax-M2.7' });
-    expect(lyMimo).toMatchObject({ requiresApiKey: true, defaultBaseUrl: 'http://10.64.22.12:8000/v1', showModelId: true, showModelIdInDevModeOnly: true, defaultModelId: 'MiMo-V2.5', showBaseUrl: true });
     expect(qwen).toMatchObject({ showModelId: true, showModelIdInDevModeOnly: true, defaultModelId: 'qwen3.5-plus' });
 
     expect(shouldShowProviderModelId(openai, false)).toBe(false);
     expect(shouldShowProviderModelId(google, false)).toBe(false);
     expect(shouldShowProviderModelId(minimax, false)).toBe(false);
     expect(shouldShowProviderModelId(minimaxCn, false)).toBe(false);
-    expect(shouldShowProviderModelId(lyMimo, false)).toBe(false);
     expect(shouldShowProviderModelId(qwen, false)).toBe(false);
 
     expect(shouldShowProviderModelId(openai, true)).toBe(true);
     expect(shouldShowProviderModelId(google, true)).toBe(true);
     expect(shouldShowProviderModelId(minimax, true)).toBe(true);
     expect(shouldShowProviderModelId(minimaxCn, true)).toBe(true);
-    expect(shouldShowProviderModelId(lyMimo, true)).toBe(true);
     expect(shouldShowProviderModelId(qwen, true)).toBe(true);
 
     expect(resolveProviderModelForSave(openai, '   ', true)).toBe('gpt-5.4');
     expect(resolveProviderModelForSave(google, '   ', true)).toBe('gemini-3-pro-preview');
     expect(resolveProviderModelForSave(minimax, '   ', true)).toBe('MiniMax-M2.7');
     expect(resolveProviderModelForSave(minimaxCn, '   ', true)).toBe('MiniMax-M2.7');
-    expect(resolveProviderModelForSave(lyMimo, '   ', true)).toBe('MiMo-V2.5');
     expect(resolveProviderModelForSave(qwen, '   ', true)).toBe('qwen3.5-plus');
   });
 
