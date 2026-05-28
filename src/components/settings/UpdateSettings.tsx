@@ -22,7 +22,11 @@ function getFileName(filePath: string): string {
   return parts[parts.length - 1] || filePath;
 }
 
-export function UpdateSettings() {
+interface UpdateSettingsProps {
+  onAfterCheckUpdate?: () => void | Promise<void>;
+}
+
+export function UpdateSettings({ onAfterCheckUpdate }: UpdateSettingsProps) {
   const { t } = useTranslation('settings');
   const {
     status,
@@ -66,7 +70,8 @@ export function UpdateSettings() {
   const handleCheckForUpdates = useCallback(async () => {
     clearError();
     await checkForUpdates();
-  }, [checkForUpdates, clearError]);
+    await onAfterCheckUpdate?.();
+  }, [checkForUpdates, clearError, onAfterCheckUpdate]);
 
   const renderStatusIcon = () => {
     switch (status) {

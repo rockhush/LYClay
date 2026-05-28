@@ -39,29 +39,6 @@ export function resolveLocalUploadSkillMetadata(
   return { name, version };
 }
 
-/** Read `version` from SKILL.md / skill.md frontmatter in a skill directory. */
-export function readSkillManifestVersionFromDir(skillDir: string): string | undefined {
-  for (const fileName of ['SKILL.md', 'skill.md']) {
-    const manifestPath = path.join(skillDir, fileName);
-    if (!fs.existsSync(manifestPath)) continue;
-    try {
-      const raw = fs.readFileSync(manifestPath, 'utf8');
-      const version = parseSkillManifestFields(raw).version?.trim();
-      if (version) return version;
-    } catch {
-      // try next candidate
-    }
-  }
-  return undefined;
-}
-
-export function normalizeSkillMdVersionForUpdateCheck(version: string | undefined): string {
-  const trimmed = version?.trim();
-  if (!trimmed) return '';
-  if (trimmed.toLowerCase() === 'unknown' || trimmed === '未知') return '';
-  return trimmed;
-}
-
 export async function findSkillManifestPath(rootDir: string, maxDepth = 4): Promise<string | null> {
   const queue: Array<{ dir: string; depth: number }> = [{ dir: rootDir, depth: 0 }];
 

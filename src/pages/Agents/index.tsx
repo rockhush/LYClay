@@ -714,6 +714,7 @@ function AgentModelModal({
   const [modelIdInput, setModelIdInput] = useState('');
   const [savingModel, setSavingModel] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const initialFormRef = useRef({ providerKey: '', modelId: '' });
 
   const runtimeProviderOptions = useMemo<RuntimeProviderOption[]>(() => {
     const vendorMap = new Map<string, ProviderVendorInfo>(providerVendors.map((vendor) => [vendor.id, vendor]));
@@ -752,21 +753,26 @@ function AgentModelModal({
 
   useEffect(() => {
     const override = splitModelRef(agent.overrideModelRef);
+    let providerKey = '';
+    let modelId = '';
+
     if (override) {
-      setSelectedRuntimeProviderKey(override.providerKey);
-      setModelIdInput(override.modelId);
-      return;
+      providerKey = override.providerKey;
+      modelId = override.modelId;
+    } else {
+      const effective = splitModelRef(agent.modelRef || defaultModelRef);
+      if (effective) {
+        providerKey = effective.providerKey;
+        modelId = effective.modelId;
+      } else {
+        providerKey = runtimeProviderOptions[0]?.runtimeProviderKey || '';
+        modelId = runtimeProviderOptions[0]?.configuredModelId || '';
+      }
     }
 
-    const effective = splitModelRef(agent.modelRef || defaultModelRef);
-    if (effective) {
-      setSelectedRuntimeProviderKey(effective.providerKey);
-      setModelIdInput(effective.modelId);
-      return;
-    }
-
-    setSelectedRuntimeProviderKey(runtimeProviderOptions[0]?.runtimeProviderKey || '');
-    setModelIdInput('');
+    initialFormRef.current = { providerKey, modelId };
+    setSelectedRuntimeProviderKey(providerKey);
+    setModelIdInput(modelId);
   }, [agent.modelRef, agent.overrideModelRef, defaultModelRef, runtimeProviderOptions]);
 
   const selectedProvider = runtimeProviderOptions.find((option) => option.runtimeProviderKey === selectedRuntimeProviderKey) || null;
@@ -776,11 +782,12 @@ function AgentModelModal({
     : '';
   const normalizedDefaultModelRef = (defaultModelRef || '').trim();
   const isUsingDefaultModelInForm = Boolean(normalizedDefaultModelRef) && nextModelRef === normalizedDefaultModelRef;
-  const currentOverrideModelRef = (agent.overrideModelRef || '').trim();
   const desiredOverrideModelRef = nextModelRef && nextModelRef !== normalizedDefaultModelRef
     ? nextModelRef
     : null;
-  const modelChanged = (desiredOverrideModelRef || '') !== currentOverrideModelRef;
+  const modelChanged =
+    selectedRuntimeProviderKey !== initialFormRef.current.providerKey
+    || trimmedModelId !== initialFormRef.current.modelId;
 
   const handleRequestClose = () => {
     if (savingModel || modelChanged) {
@@ -923,6 +930,7 @@ function AgentModelModal({
       </Card>
       <ConfirmDialog
         open={showCloseConfirm}
+        zIndexClass="z-[70]"
         title={t('settingsDialog.unsavedChangesTitle')}
         message={t('settingsDialog.unsavedChangesMessage')}
         confirmLabel={t('settingsDialog.closeWithoutSaving')}

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFile, rm } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { EventEmitter } from 'events';
 import { join } from 'path';
 import { PassThrough } from 'stream';
@@ -47,6 +47,9 @@ describe('DWS auth helper', () => {
     vi.resetAllMocks();
     vi.resetModules();
     await rm(testHome, { recursive: true, force: true });
+    const dwsDir = join(testHome, '.dws');
+    await mkdir(dwsDir, { recursive: true });
+    await writeFile(join(dwsDir, process.platform === 'win32' ? 'dws.exe' : 'dws'), '');
     execFileMock.mockImplementation((_file, _args, _options, callback) => {
       callback(null, '{"success":true}', '');
     });

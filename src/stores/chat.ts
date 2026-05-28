@@ -41,6 +41,7 @@ import {
   markChatRunVisibleProgress,
 } from './chat/chat-run-perf';
 import { prepareContextBeforeSend } from './chat/context-send-guard';
+import { mergeDiscoveredSessionActivity } from '@/lib/session-sidebar-order';
 
 export type {
   AttachedFileMeta,
@@ -2561,10 +2562,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   ...state.sessionLabels,
                   ...discoveredLabels,
                 },
-                sessionLastActivity: {
-                  ...state.sessionLastActivity,
-                  ...discoveredActivity,
-                },
+                sessionLastActivity: mergeDiscoveredSessionActivity(
+                  state.sessionLastActivity,
+                  discoveredActivity,
+                ),
               }));
               
               console.log(`[Sessions] ✅ Loaded ${mergedLocal.length} sessions from LOCAL in ${(performance.now() - now).toFixed(2)}ms, activity records: ${Object.keys(discoveredActivity).length}`);
@@ -2658,10 +2659,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...state.sessionLabels,
               ...discoveredLabels,
             },
-            sessionLastActivity: {
-              ...state.sessionLastActivity,
-              ...discoveredActivity,
-            },
+            sessionLastActivity: mergeDiscoveredSessionActivity(
+              state.sessionLastActivity,
+              discoveredActivity,
+            ),
           }));
 
           if (currentSessionKey !== nextSessionKey) {
@@ -2711,9 +2712,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!hasActiveStream) {
       get().loadHistory();
     }
-    window.setTimeout(() => {
-      void get().loadSessions(true);
-    }, 0);
   },
 
   // ── Delete session ──
@@ -3104,25 +3102,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       set({ messages: finalMessages, thinkingLevel });
 
-      // Extract first user message text as a session label for display in the toolbar.
       const firstUserMsg = finalMessages.find((m) => m.role === 'user');
+      const lastMsg = finalMessages[finalMessages.length - 1];
+      let discoveredLabel: string | undefined;
       if (firstUserMsg) {
         const rawText = getMessageText(firstUserMsg.content);
         const labelText = stripGatewayUserMetadata(rawText).trim();
         if (labelText) {
-          const truncated = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
-          set((s) => ({
-            sessionLabels: { ...s.sessionLabels, [currentSessionKey]: truncated },
-          }));
+          discoveredLabel = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
         }
       }
-
-      // Record last activity time from the last message in history
-      const lastMsg = finalMessages[finalMessages.length - 1];
-      if (lastMsg?.timestamp) {
-        const lastAt = toMs(lastMsg.timestamp);
+      const discoveredActivity = lastMsg?.timestamp ? toMs(lastMsg.timestamp) : undefined;
+      if (discoveredLabel || discoveredActivity) {
         set((s) => ({
-          sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: lastAt },
+          ...(discoveredLabel && !s.sessionLabels[currentSessionKey]
+            ? { sessionLabels: { ...s.sessionLabels, [currentSessionKey]: discoveredLabel } }
+            : {}),
+          ...(discoveredActivity && !s.sessionLastActivity[currentSessionKey]
+            ? { sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: discoveredActivity } }
+            : {}),
         }));
       }
 

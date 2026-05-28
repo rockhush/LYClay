@@ -1,19 +1,18 @@
 /**
  * download-dws-cli.mjs
- * 
- * Downloads DWS CLI binaries for all platforms during build time.
- * This ensures the binaries are bundled with the app, avoiding runtime downloads.
- * 
+ *
+ * Downloads DWS CLI binaries during build time.
+ *
  * Usage:
- *   node scripts/download-dws-cli.mjs              # Download for current platform
- *   node scripts/download-dws-cli.mjs --all        # Download for all platforms
- *   node scripts/download-dws-cli.mjs --platform=win  # Download for Windows only
+ *   node scripts/download-dws-cli.mjs                 # Download for current platform/arch
+ *   node scripts/download-dws-cli.mjs --all           # Download for all platforms
+ *   node scripts/download-dws-cli.mjs --platform=mac  # Download both mac architectures
  */
 
-import { $, fs, path } from 'zx';
-import https from 'https';
-import http from 'http';
-import { createWriteStream } from 'fs';
+import { createWriteStream } from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
+import { fs, path } from 'zx';
 
 const DWS_CLI_REPO = 'DingTalk-Real-AI/dingtalk-workspace-cli';
 const DWS_CLI_API_URL = `https://api.github.com/repos/${DWS_CLI_REPO}/releases/latest`;
@@ -40,24 +39,32 @@ async function downloadFile(url, dest) {
 
     protocol.get(url, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
+        file.close();
+        void fs.rm(dest, { force: true }).catch(() => {});
         downloadFile(response.headers.location, dest).then(resolve).catch(reject);
         return;
       }
 
       if (response.statusCode !== 200) {
-        reject(new Error(`Failed to download: ${response.statusCode}`));
+        file.close();
+        void fs.rm(dest, { force: true }).catch(() => {});
+        reject(new Error(`Failed to download ${url}: HTTP ${response.statusCode}`));
         return;
       }
 
       response.pipe(file);
-
       file.on('finish', () => {
-        file.close();
-        resolve();
+        file.close(resolve);
       });
-    }).on('error', (err) => {
-      fs.rm(dest, { force: true }).catch(() => {});
-      reject(err);
+      file.on('error', (error) => {
+        file.close();
+        void fs.rm(dest, { force: true }).catch(() => {});
+        reject(error);
+      });
+    }).on('error', (error) => {
+      file.close();
+      void fs.rm(dest, { force: true }).catch(() => {});
+      reject(error);
     });
   });
 }
@@ -79,13 +86,14 @@ async function fetchLatestRelease() {
       }
 
       if (response.statusCode !== 200) {
-        reject(new Error(`GitHub API returned ${response.statusCode}`));
+        reject(new Error(`GitHub API returned HTTP ${response.statusCode}`));
         return;
       }
 
       let data = '';
-      response.on('data', (chunk) => { data += chunk; });
-
+      response.on('data', (chunk) => {
+        data += chunk;
+      });
       response.on('end', () => {
         try {
           resolve(JSON.parse(data));
@@ -100,61 +108,60 @@ async function fetchLatestRelease() {
 async function downloadDwsCli(platform, arch) {
   const assetName = ASSETS[platform]?.[arch];
   if (!assetName) {
-    console.warn(`⚠️  No asset for ${platform}/${arch}`);
-    return;
+    throw new Error(`No DWS CLI asset configured for ${platform}/${arch}`);
   }
 
   const release = await fetchLatestRelease();
-  const asset = release.assets.find((a) => a.name === assetName);
-
+  const asset = release.assets.find((item) => item.name === assetName);
   if (!asset) {
-    console.warn(`⚠️  Asset ${assetName} not found in release ${release.tag_name}`);
-    return;
+    throw new Error(`Asset ${assetName} not found in release ${release.tag_name}`);
   }
 
   const outputDir = path.resolve('resources/bin', platform === 'mac' ? 'darwin' : platform);
   await fs.mkdir(outputDir, { recursive: true });
 
   const outputPath = path.join(outputDir, assetName);
-
-  console.log(`📦 Downloading ${assetName} -> ${outputPath}`);
+  console.log(`[DWS] Downloading ${assetName} -> ${outputPath}`);
   await downloadFile(asset.browser_download_url, outputPath);
-  console.log(`✅ Downloaded ${assetName} (${(asset.size / 1024 / 1024).toFixed(2)} MB)`);
+  console.log(`[DWS] Downloaded ${assetName} (${(asset.size / 1024 / 1024).toFixed(2)} MB)`);
 }
 
-// Parse arguments
 const args = process.argv.slice(2);
 const isAll = args.includes('--all');
-const platformArg = args.find((a) => a.startsWith('--platform='))?.split('=')[1];
+const platformArg = args.find((arg) => arg.startsWith('--platform='))?.split('=')[1];
 
-const targetPlatform = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
+const targetPlatform = process.platform === 'win32'
+  ? 'win'
+  : process.platform === 'darwin'
+    ? 'mac'
+    : 'linux';
 const targetArch = process.arch === 'arm64' ? 'arm64' : 'x64';
 
 async function main() {
-  console.log('🚀 DWS CLI Pre-Download Script\n');
+  console.log('[DWS] Pre-download started');
 
   if (isAll) {
-    console.log('📥 Downloading DWS CLI for all platforms...\n');
     for (const [platform, archs] of Object.entries(ASSETS)) {
       for (const arch of Object.keys(archs)) {
         await downloadDwsCli(platform, arch);
       }
     }
   } else if (platformArg) {
-    console.log(`📥 Downloading DWS CLI for ${platformArg}...\n`);
     const archs = Object.keys(ASSETS[platformArg] || {});
+    if (archs.length === 0) {
+      throw new Error(`Unknown DWS platform: ${platformArg}`);
+    }
     for (const arch of archs) {
       await downloadDwsCli(platformArg, arch);
     }
   } else {
-    console.log(`📥 Downloading DWS CLI for current platform (${targetPlatform}/${targetArch})...\n`);
     await downloadDwsCli(targetPlatform, targetArch);
   }
 
-  console.log('\n✅ DWS CLI download complete!');
+  console.log('[DWS] Pre-download complete');
 }
 
 main().catch((error) => {
-  console.error('❌ Failed to download DWS CLI:', error);
+  console.error('[DWS] Failed to download DWS CLI:', error);
   process.exit(1);
 });

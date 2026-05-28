@@ -288,6 +288,15 @@ export async function listLogFiles(): Promise<Array<{ name: string; path: string
   }
 }
 
+/** Flush pending log lines to disk (for UI refresh immediately after an action). */
+export async function flushLogs(): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  await flushBuffer();
+}
+
 /**
  * Logger namespace export
  */
@@ -303,4 +312,5 @@ export const logger = {
   getRecentLogs,
   readLogFile,
   listLogFiles,
+  flushLogs,
 };

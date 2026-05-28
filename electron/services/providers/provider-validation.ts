@@ -188,6 +188,19 @@ function classifyProbeResponse(
   if (status === 400 && !classified.authFailure) {
     return { valid: true, status };
   }
+  // 403 on a probe endpoint (e.g. /chat/completions with a fake model name)
+  // may be caused by the probe request format rather than an invalid API key.
+  // Treat it as a non-auth validation failure so the caller can decide whether to allow bypass.
+  if (status === 403) {
+    const obj = data as { error?: { message?: string } } | null;
+    const serverMsg = obj?.error?.message || '';
+    const detail = serverMsg ? `: ${serverMsg}` : '';
+    return {
+      valid: false,
+      error: `API returned 403 Forbidden${detail}. The API key may be invalid, or the endpoint may not support this validation probe.`,
+      status: 403,
+    };
+  }
   return { ...classified, status };
 }
 
@@ -196,6 +209,7 @@ async function validateOpenAiCompatibleKey(
   apiKey: string,
   apiProtocol: 'openai-completions' | 'openai-responses',
   baseUrl?: string,
+  modelId?: string,
 ): Promise<ValidationResult> {
   const trimmedBaseUrl = baseUrl?.trim();
   if (!trimmedBaseUrl) {
@@ -210,10 +224,11 @@ async function validateOpenAiCompatibleKey(
     console.log(
       `[LYClaw-validate] ${providerType} /models returned ${modelsResult.status}, falling back to ${apiProtocol} probe`,
     );
+    const probeModel = modelId?.trim() || 'validation-probe';
     if (apiProtocol === 'openai-responses') {
-      return await performResponsesProbe(providerType, probeUrl, headers);
+      return await performResponsesProbe(providerType, probeUrl, headers, probeModel);
     }
-    return await performChatCompletionsProbe(providerType, probeUrl, headers);
+    return await performChatCompletionsProbe(providerType, probeUrl, headers, probeModel);
   }
 
   return modelsResult;
@@ -223,6 +238,7 @@ async function performResponsesProbe(
   providerLabel: string,
   url: string,
   headers: Record<string, string>,
+  modelId?: string,
 ): Promise<ValidationResult> {
   try {
     logValidationRequest(providerLabel, 'POST', url, headers);
@@ -230,7 +246,7 @@ async function performResponsesProbe(
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'validation-probe',
+        model: modelId || 'validation-probe',
         input: 'hi',
       }),
     });
@@ -249,6 +265,7 @@ async function performChatCompletionsProbe(
   providerLabel: string,
   url: string,
   headers: Record<string, string>,
+  modelId?: string,
 ): Promise<ValidationResult> {
   try {
     logValidationRequest(providerLabel, 'POST', url, headers);
@@ -256,7 +273,7 @@ async function performChatCompletionsProbe(
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'validation-probe',
+        model: modelId || 'validation-probe',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1,
       }),
@@ -276,6 +293,7 @@ async function performAnthropicMessagesProbe(
   providerLabel: string,
   url: string,
   headers: Record<string, string>,
+  modelId?: string,
 ): Promise<ValidationResult> {
   try {
     logValidationRequest(providerLabel, 'POST', url, headers);
@@ -283,7 +301,7 @@ async function performAnthropicMessagesProbe(
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'validation-probe',
+        model: modelId || 'validation-probe',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1,
       }),
@@ -313,6 +331,7 @@ async function validateAnthropicHeaderKey(
   providerType: string,
   apiKey: string,
   baseUrl?: string,
+  modelId?: string,
 ): Promise<ValidationResult> {
   const rawBase = normalizeBaseUrl(baseUrl || 'https://api.anthropic.com/v1');
   const base = rawBase.endsWith('/v1') ? rawBase : `${rawBase}/v1`;
@@ -335,7 +354,8 @@ async function validateAnthropicHeaderKey(
       `[LYClaw-validate] ${providerType} /models returned error, falling back to /messages probe`,
     );
     const messagesUrl = `${base}/messages`;
-    return await performAnthropicMessagesProbe(providerType, messagesUrl, headers);
+    const probeModel = modelId?.trim() || 'validation-probe';
+    return await performAnthropicMessagesProbe(providerType, messagesUrl, headers, probeModel);
   }
 
   return modelsResult;
@@ -353,10 +373,11 @@ async function validateOpenRouterKey(
 export async function validateApiKeyWithProvider(
   providerType: string,
   apiKey: string,
-  options?: { baseUrl?: string; apiProtocol?: string },
+  options?: { baseUrl?: string; apiProtocol?: string; modelId?: string },
 ): Promise<ValidationResult> {
   const profile = getValidationProfile(providerType, options);
   const resolvedBaseUrl = options?.baseUrl || getProviderConfig(providerType)?.baseUrl;
+  const modelId = options?.modelId;
 
   if (profile === 'none') {
     return { valid: true };
@@ -375,6 +396,7 @@ export async function validateApiKeyWithProvider(
           trimmedKey,
           'openai-completions',
           resolvedBaseUrl,
+          modelId,
         );
       case 'openai-responses':
         return await validateOpenAiCompatibleKey(
@@ -382,11 +404,12 @@ export async function validateApiKeyWithProvider(
           trimmedKey,
           'openai-responses',
           resolvedBaseUrl,
+          modelId,
         );
       case 'google-query-key':
         return await validateGoogleQueryKey(providerType, trimmedKey, resolvedBaseUrl);
       case 'anthropic-header':
-        return await validateAnthropicHeaderKey(providerType, trimmedKey, resolvedBaseUrl);
+        return await validateAnthropicHeaderKey(providerType, trimmedKey, resolvedBaseUrl, modelId);
       case 'openrouter':
         return await validateOpenRouterKey(providerType, trimmedKey);
       default:

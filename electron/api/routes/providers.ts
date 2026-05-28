@@ -203,13 +203,14 @@ export async function handleProviderRoutes(
   if (url.pathname === '/api/providers/validate' && req.method === 'POST') {
     logLegacyProviderRoute('POST /api/providers/validate');
     try {
-      const body = await parseJsonBody<{ providerId: string; apiKey: string; options?: { baseUrl?: string; apiProtocol?: string } }>(req);
+      const body = await parseJsonBody<{ providerId: string; apiKey: string; options?: { baseUrl?: string; apiProtocol?: string; modelId?: string } }>(req);
       const provider = await providerService.getLegacyProvider(body.providerId);
       const providerType = provider?.type || body.providerId;
       const registryBaseUrl = getProviderConfig(providerType)?.baseUrl;
       const resolvedBaseUrl = body.options?.baseUrl || provider?.baseUrl || registryBaseUrl;
       const resolvedProtocol = body.options?.apiProtocol || provider?.apiProtocol;
-      sendJson(res, 200, await validateApiKeyWithProvider(providerType, body.apiKey, { baseUrl: resolvedBaseUrl, apiProtocol: resolvedProtocol }));
+      const modelId = body.options?.modelId;
+      sendJson(res, 200, await validateApiKeyWithProvider(providerType, body.apiKey, { baseUrl: resolvedBaseUrl, apiProtocol: resolvedProtocol, modelId }));
     } catch (error) {
       sendJson(res, 500, { valid: false, error: String(error) });
     }

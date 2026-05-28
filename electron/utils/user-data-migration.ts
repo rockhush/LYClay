@@ -6,6 +6,15 @@ import { join } from 'path';
 import { app } from 'electron';
 import { logger } from './logger';
 
+function getElectronPath(name: Parameters<typeof app.getPath>[0]): string | null {
+  try {
+    return app.getPath(name);
+  } catch (error) {
+    logger.warn(`[user-data-migration] Failed to get Electron path "${name}"`, error);
+    return null;
+  }
+}
+
 function dirHasContent(path: string): boolean {
   if (!existsSync(path)) return false;
   try {
@@ -22,17 +31,22 @@ export function migrateLegacyUserDataIfNeeded(): void {
   if (process.env.CLAWX_E2E === '1') return;
   if (process.env.CLAWX_USER_DATA_DIR?.trim()) return;
 
-  const currentUserData = app.getPath('userData');
+  const currentUserData = getElectronPath('userData');
+  if (!currentUserData) return;
   if (dirHasContent(currentUserData)) {
     return;
   }
 
-  const roamingRoot = app.getPath('appData');
+  const roamingRoot = getElectronPath('appData');
+  if (!roamingRoot) return;
+  const localAppDataRoot = process.platform === 'win32'
+    ? getElectronPath('localAppData' as Parameters<typeof app.getPath>[0]) || process.env.LOCALAPPDATA || null
+    : null;
 
   // localAppData is Windows-only; macOS/Linux don't have a separate local app data directory
   const localCandidates: string[] =
-    process.platform === 'win32'
-      ? LEGACY_LOCAL_DIR_NAMES.map((name) => join((app.getPath as (name: string) => string)('localAppData'), name))
+    localAppDataRoot
+      ? LEGACY_LOCAL_DIR_NAMES.map((name) => join(localAppDataRoot, name))
       : [];
 
   const candidates = [

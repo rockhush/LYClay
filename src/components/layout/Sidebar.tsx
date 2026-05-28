@@ -53,6 +53,10 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import i18n from '@/i18n';
 import { isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
+import {
+  buildStableSessionOrder,
+  resolveSessionActivityMs,
+} from '@/lib/session-sidebar-order';
 import logoSvg from '@/assets/1.png';
 
 /** While Chat shows first-response preparing, block switching sessions (sidebar + workspace). */
@@ -241,39 +245,55 @@ export function Sidebar() {
     if (messages.length > 0) return false;
     if (sessionLastActivity[sessionKey]) return false;
     if (sessionLabels[sessionKey]) return false;
+    if (customSessionLabels[sessionKey]) return false;
+
+    const session = sessions.find((item) => item.key === sessionKey);
+    if (session?.label?.trim()) return false;
+    if (session?.firstUserMessagePreview?.trim()) return false;
+    if (session?.displayName?.trim() && session.displayName !== sessionKey) return false;
+    if (typeof session?.updatedAt === 'number' && session.updatedAt > 0) return false;
     return true;
   };
+
+  const isSessionListedUnderWorkspace = (sessionKey: string) => {
+    const wid = sessionWorkspaceIds[sessionKey];
+    return Boolean(wid && workspaceIdsKnown.has(wid));
+  };
+
+  const stableSessionOrderRef = useRef<string[]>([]);
+
+  const orderedSidebarSessions = useMemo(() => {
+    const eligible = sessions.filter((session) => !isPendingNewSession(session.key));
+    const nextOrder = buildStableSessionOrder(
+      eligible,
+      sessionLastActivity,
+      stableSessionOrderRef.current,
+    );
+    stableSessionOrderRef.current = nextOrder;
+    const sessionByKey = new Map(eligible.map((session) => [session.key, session]));
+    return nextOrder
+      .map((key) => sessionByKey.get(key))
+      .filter((session): session is ChatSession => session != null);
+    // sessionLastActivity is read only when seeding/appending newcomers; omitting it
+    // from deps keeps existing rows pinned while browsing history.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isPendingNewSession deps listed below
+  }, [sessions, sessionLabels, customSessionLabels, currentSessionKey, messages.length]);
 
   const sessionsByWorkspaceId = useMemo(() => {
     const map: Record<string, ChatSession[]> = Object.fromEntries(
       allWorkspaces.map((workspace) => [workspace.id, [] as ChatSession[]]),
     );
-    for (const session of sessions) {
-      if (isPendingNewSession(session.key)) continue;
+    for (const session of orderedSidebarSessions) {
       const wid = sessionWorkspaceIds[session.key];
       if (wid && workspaceIdsKnown.has(wid)) {
         const list = map[wid];
         if (list) list.push(session);
       }
     }
-    for (const workspace of allWorkspaces) {
-      const list = map[workspace.id];
-      if (list) {
-        list.sort(
-          (a, b) => (sessionLastActivity[b.key] ?? 0) - (sessionLastActivity[a.key] ?? 0),
-        );
-      }
-    }
     return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- isPendingNewSession depends on currentSessionKey/messages/sessionLastActivity which are all listed below
-  }, [allWorkspaces, sessions, sessionWorkspaceIds, workspaceIdsKnown, sessionLastActivity, sessionLabels, currentSessionKey, messages.length]);
+  }, [allWorkspaces, orderedSidebarSessions, sessionWorkspaceIds, workspaceIdsKnown]);
 
   const activeWorkspaceId = sessionWorkspaceIds[currentSessionKey] ?? null;
-
-  const isSessionListedUnderWorkspace = (sessionKey: string) => {
-    const wid = sessionWorkspaceIds[sessionKey];
-    return Boolean(wid && workspaceIdsKnown.has(wid));
-  };
 
   // 工作空间区域折叠状态
   const [workspacesCollapsed, setWorkspacesCollapsed] = useState(false);
@@ -646,27 +666,33 @@ export function Sidebar() {
     );
   };
 
-  const sessionBuckets: Array<{ key: SessionBucketKey; label: string; sessions: typeof sessions }> = [
-    { key: 'today', label: t('chat:historyBuckets.today'), sessions: [] },
-    { key: 'yesterday', label: t('chat:historyBuckets.yesterday'), sessions: [] },
-    { key: 'withinWeek', label: t('chat:historyBuckets.withinWeek'), sessions: [] },
-    { key: 'withinTwoWeeks', label: t('chat:historyBuckets.withinTwoWeeks'), sessions: [] },
-    { key: 'withinMonth', label: t('chat:historyBuckets.withinMonth'), sessions: [] },
-    { key: 'older', label: t('chat:historyBuckets.older'), sessions: [] },
-  ];
-  const sessionBucketMap = Object.fromEntries(sessionBuckets.map((bucket) => [bucket.key, bucket])) as Record<
-    SessionBucketKey,
-    (typeof sessionBuckets)[number]
-  >;
+  const sessionBuckets = useMemo(() => {
+    const buckets: Array<{ key: SessionBucketKey; label: string; sessions: ChatSession[] }> = [
+      { key: 'today', label: t('chat:historyBuckets.today'), sessions: [] },
+      { key: 'yesterday', label: t('chat:historyBuckets.yesterday'), sessions: [] },
+      { key: 'withinWeek', label: t('chat:historyBuckets.withinWeek'), sessions: [] },
+      { key: 'withinTwoWeeks', label: t('chat:historyBuckets.withinTwoWeeks'), sessions: [] },
+      { key: 'withinMonth', label: t('chat:historyBuckets.withinMonth'), sessions: [] },
+      { key: 'older', label: t('chat:historyBuckets.older'), sessions: [] },
+    ];
+    const bucketMap = Object.fromEntries(buckets.map((bucket) => [bucket.key, bucket])) as Record<
+      SessionBucketKey,
+      (typeof buckets)[number]
+    >;
 
-  for (const session of [...sessions].sort((a, b) =>
-    (sessionLastActivity[b.key] ?? 0) - (sessionLastActivity[a.key] ?? 0)
-  )) {
-    if (isSessionListedUnderWorkspace(session.key)) continue;
-    if (isPendingNewSession(session.key)) continue;
-    const bucketKey = getSessionBucket(sessionLastActivity[session.key] ?? 0, nowMs);
-    sessionBucketMap[bucketKey].sessions.push(session);
-  }
+    for (const session of orderedSidebarSessions) {
+      if (isSessionListedUnderWorkspace(session.key)) continue;
+      const bucketKey = getSessionBucket(resolveSessionActivityMs(session, sessionLastActivity), nowMs);
+      bucketMap[bucketKey].sessions.push(session);
+    }
+
+    return buckets;
+  }, [
+    orderedSidebarSessions,
+    sessionLastActivity,
+    nowMs,
+    t,
+  ]);
 
   const hiddenRoutes = rendererExtensionRegistry.getHiddenRoutes();
   const extraNavItems = rendererExtensionRegistry.getExtraNavItems();
@@ -930,7 +956,7 @@ export function Sidebar() {
           )}
 
           {/* Session list — below workspaces */}
-          {sessions.some((s) => !isSessionListedUnderWorkspace(s.key) && !isPendingNewSession(s.key)) && (
+          {orderedSidebarSessions.some((s) => !isSessionListedUnderWorkspace(s.key)) && (
             <div className="space-y-0.5">
               {sessionBuckets.map((bucket) => (
                 bucket.sessions.length > 0 ? (

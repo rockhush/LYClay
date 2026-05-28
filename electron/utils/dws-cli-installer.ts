@@ -211,35 +211,42 @@ function addToPath(): void {
     } else if (process.platform === 'darwin' || process.platform === 'linux') {
       // macOS/Linux: Add to shell config
       const homeDir = process.env.HOME || '';
-      const shellConfigs = [
-        path.join(homeDir, '.zshrc'),
-        path.join(homeDir, '.bashrc'),
-        path.join(homeDir, '.bash_profile'),
-        path.join(homeDir, '.profile'),
-      ];
+      const shellConfigs = process.platform === 'darwin'
+        ? [
+            path.join(homeDir, '.zshrc'),
+            path.join(homeDir, '.zprofile'),
+            path.join(homeDir, '.bash_profile'),
+            path.join(homeDir, '.profile'),
+          ]
+        : [
+            path.join(homeDir, '.zshrc'),
+            path.join(homeDir, '.bashrc'),
+            path.join(homeDir, '.bash_profile'),
+            path.join(homeDir, '.profile'),
+          ];
       
       const exportLine = `\n# DWS CLI\nexport PATH="$HOME/.dws:$PATH"\n`;
       
-      let added = false;
       for (const configFile of shellConfigs) {
-        if (fs.existsSync(configFile)) {
-          const content = fs.readFileSync(configFile, 'utf-8');
-          if (!content.includes('$HOME/.dws') && !content.includes(dwsDir)) {
-            logger.info(`[DwsCli] Adding to ${configFile}...`);
-            fs.appendFileSync(configFile, exportLine);
-            logger.info(`[DwsCli]  Added to ${path.basename(configFile)}`);
-            added = true;
+        if (!fs.existsSync(configFile)) {
+          const configName = path.basename(configFile);
+          const shouldCreate = process.platform === 'darwin'
+            ? configName === '.zshrc' || configName === '.zprofile'
+            : configName === '.profile';
+          if (!shouldCreate) {
+            continue;
           }
+          logger.info(`[DwsCli] Creating ${configFile}...`);
+          fs.writeFileSync(configFile, exportLine);
+          logger.info(`[DwsCli] Created ${path.basename(configFile)}`);
+          continue;
         }
-      }
-      
-      // If no config file found, create .profile
-      if (!added) {
-        const profilePath = path.join(homeDir, '.profile');
-        if (!fs.existsSync(profilePath)) {
-          logger.info(`[DwsCli] Creating ${profilePath}...`);
-          fs.writeFileSync(profilePath, exportLine);
-          logger.info(`[DwsCli]  Created .profile`);
+
+        const content = fs.readFileSync(configFile, 'utf-8');
+        if (!content.includes('$HOME/.dws') && !content.includes(dwsDir)) {
+          logger.info(`[DwsCli] Adding to ${configFile}...`);
+          fs.appendFileSync(configFile, exportLine);
+          logger.info(`[DwsCli] Added to ${path.basename(configFile)}`);
         }
       }
     }

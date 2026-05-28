@@ -72,6 +72,7 @@
       "change": "Change provider",
       "add": "Add Provider",
       "save": "Save",
+      "saveAnyway": "Save Anyway",
       "customDoc": "Documentation",
       "validate": "Validate"
     },
@@ -103,6 +104,7 @@
       "failedUpdate": "Failed to update provider",
       "invalidKey": "Invalid API key",
       "modelRequired": "Model ID is required",
+      "validationFailed": "Unable to verify API key",
       "minimaxConflict": "Cannot add both MiniMax (Global) and MiniMax (CN) providers.",
       "usageReportSent": "Usage report sent ({{count}} records uploaded)",
       "usageReportFailed": "Usage report failed; records kept locally for retry"

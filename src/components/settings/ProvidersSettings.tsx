@@ -394,7 +394,7 @@ interface ProviderCardProps {
   onSaveEdits: (payload: { newApiKey?: string; updates?: Partial<ProviderConfig> }) => Promise<void>;
   onValidateKey: (
     key: string,
-    options?: { baseUrl?: string; apiProtocol?: ProviderAccount['apiProtocol'] }
+    options?: { baseUrl?: string; apiProtocol?: ProviderAccount['apiProtocol']; modelId?: string }
   ) => Promise<{ valid: boolean; error?: string }>;
   devModeUnlocked: boolean;
 }
@@ -493,6 +493,7 @@ function ProviderCard({
         const result = await onValidateKey(normalizedNewKey, {
           baseUrl: baseUrl.trim() || undefined,
           apiProtocol: (account.vendorId === 'custom' || account.vendorId === 'ollama') ? apiProtocol : undefined,
+          modelId: modelId.trim() || undefined,
         });
         setValidating(false);
         if (!result.valid) {
@@ -989,7 +990,7 @@ interface AddProviderDialogProps {
   onValidateKey: (
     type: string,
     apiKey: string,
-    options?: { baseUrl?: string; apiProtocol?: ProviderAccount['apiProtocol'] }
+    options?: { baseUrl?: string; apiProtocol?: ProviderAccount['apiProtocol']; modelId?: string }
   ) => Promise<{ valid: boolean; error?: string }>;
   devModeUnlocked: boolean;
 }
@@ -1015,6 +1016,7 @@ function AddProviderDialog({
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationWarning, setValidationWarning] = useState<string | null>(null);
 
   // OAuth Flow State
   const [oauthFlowing, setOauthFlowing] = useState(false);
@@ -1242,6 +1244,7 @@ function AddProviderDialog({
 
     setSaving(true);
     setValidationError(null);
+    setValidationWarning(null);
 
     try {
       // Validate key first if the provider requires one and a key was entered
@@ -1256,42 +1259,70 @@ function AddProviderDialog({
         const result = await onValidateKey(selectedType, normalizedApiKey, {
           baseUrl: baseUrl.trim() || undefined,
           apiProtocol: (selectedType === 'custom' || selectedType === 'ollama') ? apiProtocol : undefined,
+          modelId: modelId.trim() || undefined,
         });
         if (!result.valid) {
+          // For custom providers, validation may fail due to probe format (e.g. fake model name).
+          // Show a warning instead of blocking, allowing the user to save anyway.
+          if (selectedType === 'custom') {
+            setValidationWarning(result.error || t('aiProviders.toast.validationFailed'));
+            setSaving(false);
+            return;
+          }
           setValidationError(result.error || t('aiProviders.toast.invalidKey'));
           setSaving(false);
           return;
         }
       }
 
-      const requiresModel = showModelIdField;
-      if (requiresModel && !modelId.trim()) {
-        setValidationError(t('aiProviders.toast.modelRequired'));
-        setSaving(false);
-        return;
-      }
-
-      await onAdd(
-        selectedType,
-        name || (typeInfo?.id === 'custom' ? t('aiProviders.custom') : typeInfo?.name) || selectedType,
-        normalizedApiKey,
-        {
-          baseUrl: baseUrl.trim() || undefined,
-          apiProtocol: (selectedType === 'custom' || selectedType === 'ollama') ? apiProtocol : undefined,
-          headers: userAgent.trim() ? { 'User-Agent': userAgent.trim() } : undefined,
-          model: resolveProviderModelForSave(typeInfo, modelId, devModeUnlocked),
-          authMode: useOAuthFlow ? (preferredOAuthMode || 'oauth_device') : selectedType === 'ollama'
-            ? 'local'
-            : (isOAuth && supportsApiKey && authMode === 'apikey')
-              ? 'api_key'
-              : vendorMap.get(selectedType)?.defaultAuthMode || 'api_key',
-        }
-      );
+      await doSave();
     } catch {
       // error already handled via toast in parent
     } finally {
       setSaving(false);
     }
+  };
+
+  // Save without validation (for custom providers where probe fails)
+  const handleForceSave = async () => {
+    if (!selectedType) return;
+    setSaving(true);
+    setValidationWarning(null);
+    try {
+      await doSave();
+    } catch {
+      // error already handled via toast in parent
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const doSave = async () => {
+    const hasOAuth = useOAuthFlow;
+    const requiresModel = showModelIdField;
+
+    if (requiresModel && !modelId.trim()) {
+      setValidationError(t('aiProviders.toast.modelRequired'));
+      return;
+    }
+
+    const normalizedApiKey = hasOAuth ? '' : normalizeProviderApiKeyInput(apiKey);
+    await onAdd(
+      selectedType!,
+      name || (typeInfo?.id === 'custom' ? t('aiProviders.custom') : typeInfo?.name) || selectedType!,
+      normalizedApiKey,
+      {
+        baseUrl: baseUrl.trim() || undefined,
+        apiProtocol: (selectedType === 'custom' || selectedType === 'ollama') ? apiProtocol : undefined,
+        headers: userAgent.trim() ? { 'User-Agent': userAgent.trim() } : undefined,
+        model: resolveProviderModelForSave(typeInfo, modelId, devModeUnlocked),
+        authMode: useOAuthFlow ? (preferredOAuthMode || 'oauth_device') : selectedType === 'ollama'
+          ? 'local'
+          : (isOAuth && supportsApiKey && authMode === 'apikey')
+            ? 'api_key'
+            : vendorMap.get(selectedType!)?.defaultAuthMode || 'api_key',
+      }
+    );
   };
 
   return (
@@ -1452,6 +1483,7 @@ function AddProviderDialog({
                         onChange={(e) => {
                           setApiKey(e.target.value);
                           setValidationError(null);
+                          setValidationWarning(null);
                         }}
                         className={inputClasses}
                       />
@@ -1465,6 +1497,22 @@ function AddProviderDialog({
                     </div>
                     {validationError && (
                       <p className="text-[13px] text-red-500 font-medium">{validationError}</p>
+                    )}
+                    {validationWarning && (
+                      <div className="flex items-center gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                        <p className="text-[13px] text-amber-700 dark:text-amber-300 flex-1">{validationWarning}</p>
+                        <Button
+                          data-testid="add-provider-force-save-button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-[12px] font-medium rounded-md border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 shrink-0"
+                          onClick={handleForceSave}
+                          disabled={saving}
+                        >
+                          {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                          {t('aiProviders.dialog.saveAnyway', 'Save Anyway')}
+                        </Button>
+                      </div>
                     )}
                     <p className="text-[12px] text-muted-foreground">
                       {t('aiProviders.dialog.apiKeyStored')}

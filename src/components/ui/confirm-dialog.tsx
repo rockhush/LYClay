@@ -15,6 +15,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   variant?: 'default' | 'destructive';
   testId?: string;
+  zIndexClass?: string;
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
   onError?: (error: unknown) => void;
@@ -28,6 +29,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'default',
   testId,
+  zIndexClass,
   onConfirm,
   onCancel,
   onError,
@@ -80,6 +82,7 @@ export function ConfirmDialog({
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
       data-testid={testId}
+      zIndexClass={zIndexClass}
       onKeyDown={handleKeyDown}
     >
       <div

@@ -14,13 +14,7 @@ export function isPlaceholderSkillDescription(description: string | undefined): 
 
 export function isUnknownSkillVersion(version: string | undefined): boolean {
   const trimmed = version?.trim();
-  return !trimmed || trimmed.toLowerCase() === 'unknown' || trimmed === '未知';
-}
-
-/** Version sent to check-update API: unknown/missing becomes empty string. */
-export function normalizeSkillVersionForUpdateCheck(version: string | undefined): string {
-  if (isUnknownSkillVersion(version)) return '';
-  return version!.trim();
+  return !trimmed || trimmed.toLowerCase() === 'unknown';
 }
 
 /** Default version label for bundled built-in skills when gateway reports unknown. */
@@ -126,38 +120,6 @@ export function isMarketplaceSkillInstalledOnDisk(
   }
 
   return installedSkills.some((installed) => {
-    if (installed.pathMissing) return false;
-    return installed.slug === skill.slug
-      || installed.id === skill.slug
-      || installed.name === skill.name
-      || (!!skill.slug && !!installed.baseDir && installed.baseDir.includes(skill.slug));
-  });
-}
-
-/** Resolve the on-disk installed skill record for a marketplace card. */
-export function findInstalledSkillForMarketplace(
-  skill: MarketplaceSkill,
-  installedSkills: Skill[],
-  companyInstallMap: Record<string, string>,
-): Skill | undefined {
-  if (skill.__installed === false) return undefined;
-
-  const marketplaceId = skill.id != null ? String(skill.id).trim() : '';
-  if (isCompanyMarketplaceId(skill.id)) {
-    const packageSlug = marketplaceId ? companyInstallMap[marketplaceId] : undefined;
-    if (!packageSlug) return undefined;
-    return installedSkills.find((installed) => {
-      if (installed.pathMissing) return false;
-      if (installed.slug === packageSlug || installed.id === packageSlug) return true;
-      if (installed.baseDir) {
-        const folder = installed.baseDir.split(/[/\\]/).filter(Boolean).pop();
-        if (folder === packageSlug) return true;
-      }
-      return false;
-    });
-  }
-
-  return installedSkills.find((installed) => {
     if (installed.pathMissing) return false;
     return installed.slug === skill.slug
       || installed.id === skill.slug
@@ -278,7 +240,16 @@ export function mergeSkillWithMarketplaceMetadata(
     next.description = marketplace.description.trim();
   }
 
-  // Installed skill version comes from local SKILL.md only; never overwrite from marketplace API.
+  const marketplaceVersion = marketplace.version?.trim();
+  if (marketplaceVersion && marketplaceVersion.toLowerCase() !== 'unknown' && !skill.isBundled) {
+    next.version = marketplaceVersion;
+  } else if (
+    marketplaceVersion &&
+    marketplaceVersion.toLowerCase() !== 'unknown' &&
+    (!skill.version || skill.version.toLowerCase() === 'unknown')
+  ) {
+    next.version = marketplaceVersion;
+  }
 
   if (marketplace.author?.trim() && !skill.author) {
     next.author = marketplace.author.trim();

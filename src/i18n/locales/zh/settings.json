@@ -72,6 +72,7 @@
       "change": "更换提供商",
       "add": "添加提供商",
       "save": "保存",
+      "saveAnyway": "仍然保存",
       "customDoc": "查看文档",
       "validate": "验证"
     },
@@ -103,6 +104,7 @@
       "failedUpdate": "更新提供商失败",
       "invalidKey": "无效的 API 密钥",
       "modelRequired": "需要模型 ID",
+      "validationFailed": "无法验证 API 密钥",
       "minimaxConflict": "不能同时添加 MiniMax 国际站和国内站的服务商。",
       "usageReportSent": "统计已发送（共上报 {{count}} 条记录）",
       "usageReportFailed": "统计上报失败，已保留在本地待重试"

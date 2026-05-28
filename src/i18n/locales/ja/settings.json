@@ -72,6 +72,7 @@
       "change": "プロバイダーを変更",
       "add": "プロバイダーを追加",
       "save": "保存",
+      "saveAnyway": "強制的に保存",
       "customDoc": "ドキュメント",
       "validate": "検証"
     },
@@ -103,6 +104,7 @@
       "failedUpdate": "プロバイダーの更新に失敗しました",
       "invalidKey": "無効な API キー",
       "modelRequired": "モデル ID が必要です",
+      "validationFailed": "API キーを検証できません",
       "minimaxConflict": "MiniMax (Global) と MiniMax (CN) は同時に追加できません。",
       "usageReportSent": "統計を送信しました（{{count}} 件アップロード）",
       "usageReportFailed": "統計送信に失敗しました。ローカルに保持して再試行します"

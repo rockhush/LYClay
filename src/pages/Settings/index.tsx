@@ -126,15 +126,19 @@ export function Settings() {
     timedOut?: boolean;
     error?: string;
   } | null>(null);
-  const handleShowLogs = async () => {
+  const refreshAppLogs = async () => {
     try {
-      const logs = await hostApiFetch<{ content: string }>('/api/logs?tailLines=100');
+      const logs = await hostApiFetch<{ content: string }>('/api/logs?tailLines=150');
       setLogContent(logs.content);
       setShowLogs(true);
     } catch {
       setLogContent('(Failed to load logs)');
       setShowLogs(true);
     }
+  };
+
+  const handleShowLogs = async () => {
+    await refreshAppLogs();
   };
 
   const handleOpenLogDir = async () => {
@@ -1035,7 +1039,7 @@ export function Settings() {
               {t('updates.title')}
             </h2>
             <div className="space-y-2.5">
-              <UpdateSettings />
+              <UpdateSettings onAfterCheckUpdate={refreshAppLogs} />
             </div>
           </div>
 

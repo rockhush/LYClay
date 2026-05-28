@@ -215,6 +215,60 @@ describe('Agents page status refresh', () => {
     expect(useDefaultButton).toBeDisabled();
   });
 
+  it('closes the model modal on cancel without prompting when the form was not edited', async () => {
+    agentsState.agents = [
+      {
+        id: 'dingtalk-bot',
+        name: 'dingtalk',
+        isDefault: false,
+        modelDisplay: 'deepseek-v4-flash',
+        modelRef: 'ly-deepseek/deepseek-v4-flash',
+        overrideModelRef: null,
+        inheritedModel: true,
+        workspace: '~/.openclaw/workspace-dingtalk',
+        agentDir: '~/.openclaw/agents/dingtalk-bot/agent',
+        mainSessionKey: 'agent:dingtalk-bot:main',
+        channelTypes: ['dingtalk'],
+      },
+    ];
+    agentsState.defaultModelRef = 'openrouter/anthropic/claude-opus-4.6';
+    providersState.accounts = [
+      {
+        id: 'ly-deepseek-default',
+        label: 'LY-DeepSeek',
+        vendorId: 'ly-deepseek',
+        authMode: 'api_key',
+        model: 'ly-deepseek/deepseek-v4-flash',
+        enabled: true,
+        createdAt: '2026-03-24T00:00:00.000Z',
+        updatedAt: '2026-03-24T00:00:00.000Z',
+      },
+    ];
+    providersState.statuses = [{ id: 'ly-deepseek-default', hasKey: true }];
+    providersState.vendors = [
+      { id: 'ly-deepseek', name: 'LY-DeepSeek', modelIdPlaceholder: 'deepseek-v4-flash' },
+    ];
+    providersState.defaultAccountId = 'ly-deepseek-default';
+
+    render(<Agents />);
+
+    await waitFor(() => {
+      expect(fetchAgentsMock).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByTitle('settings'));
+    fireEvent.click(screen.getByText('settingsDialog.modelLabel').closest('button') as HTMLButtonElement);
+
+    expect(await screen.findByLabelText('settingsDialog.modelIdLabel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'common:actions.cancel' }));
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText('settingsDialog.modelIdLabel')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('settingsDialog.unsavedChangesTitle')).not.toBeInTheDocument();
+  });
+
   it('keeps the last agent snapshot visible while a refresh is in flight', async () => {
     agentsState.agents = [
       {

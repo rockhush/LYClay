@@ -200,25 +200,38 @@ export class AppUpdater extends EventEmitter {
       let lastError: Error | null = null;
       let firstNotAvailableInfo: UpdateInfo | null = null;
 
+      logger.info('[Updater] ========== Update check started ==========');
+      logger.info(
+        `[Updater] Request params: ${JSON.stringify({
+          current_version: currentVersion,
+          os_candidates: osCandidates,
+          base_url: INTERNAL_UPDATE_URL,
+        })}`,
+      );
+
       for (const os of osCandidates) {
         const url = this.buildCheckUrl(currentVersion, os);
 
-        logger.info(`[Updater] Checking for updates: url=${url}, current_version=${currentVersion}, os=${os || '(empty)'}`);
+        logger.info(`[Updater] Request URL: ${url}`);
 
         try {
           const response = await fetch(url);
 
-          logger.info(`[Updater] Response status: ${response.status}, os=${os || '(empty)'}`);
+          logger.info(`[Updater] Response status (os=${os || '(empty)'}): HTTP ${response.status}`);
 
           if (!response.ok) {
             const responseText = await response.text().catch(() => 'No response body');
-            logger.error(`[Updater] HTTP error response body for os=${os || '(empty)'}: ${responseText}`);
+            logger.error(
+              `[Updater] Response body (os=${os || '(empty)'}): ${responseText}`,
+            );
             lastError = new Error(`HTTP error! status: ${response.status}`);
             continue;
           }
 
           const data = (await response.json()) as CheckUpdateResponse;
-          logger.info(`[Updater] Check update response for os=${os || '(empty)'}:`, data);
+          logger.info(
+            `[Updater] Response body (os=${os || '(empty)'}): ${JSON.stringify(data)}`,
+          );
 
           if (data.need_update && data.latest_version) {
             const updateInfo = {
@@ -227,6 +240,14 @@ export class AppUpdater extends EventEmitter {
               downloadUrl: data.download_url,
             } as unknown as UpdateInfo;
             this.resolvedUpdateOS = os;
+            logger.info(
+              `[Updater] Update check result: update available -> ${JSON.stringify({
+                success: true,
+                os,
+                latest_version: data.latest_version,
+                download_url: data.download_url,
+              })}`,
+            );
             this.updateStatus({ status: 'available', info: updateInfo });
             return updateInfo;
           }
@@ -238,18 +259,30 @@ export class AppUpdater extends EventEmitter {
           }
         } catch (error) {
           lastError = error as Error;
-          logger.error(`[Updater] Check attempt failed for os=${os || '(empty)'}:`, error);
+          logger.error(
+            `[Updater] Request failed (os=${os || '(empty)'}): ${(error as Error).message || String(error)}`,
+          );
         }
       }
 
       if (firstNotAvailableInfo) {
         this.resolvedUpdateOS = osCandidates[0] ?? this.getOS();
+        logger.info(
+          `[Updater] Update check result: already on latest -> ${JSON.stringify({
+            success: true,
+            latest_version: firstNotAvailableInfo.version,
+            resolved_os: this.resolvedUpdateOS,
+          })}`,
+        );
         this.updateStatus({ status: 'not-available', info: firstNotAvailableInfo });
         return null;
       }
 
       throw lastError ?? new Error('Check update failed');
     } catch (error) {
+      logger.error(
+        `[Updater] Update check result: failed -> ${(error as Error).message || String(error)}`,
+      );
       logger.error('[Updater] Check for updates failed:', error);
       // 检查是否为 JSON 解析错误（通常是断网或外网导致返回 HTML 页面）
       const errorMsg = (error as Error).message || String(error);
@@ -258,6 +291,8 @@ export class AppUpdater extends EventEmitter {
         : errorMsg;
       this.updateStatus({ status: 'error', error: friendlyError });
       throw error;
+    } finally {
+      logger.info('[Updater] ========== Update check finished ==========');
     }
   }
 
@@ -488,8 +523,10 @@ export function registerUpdateHandlers(
   ipcMain.handle('update:check', async () => {
     try {
       await updater.checkForUpdates();
+      await logger.flushLogs();
       return { success: true, status: updater.getStatus() };
     } catch (error) {
+      await logger.flushLogs();
       return { success: false, error: String(error), status: updater.getStatus() };
     }
   });

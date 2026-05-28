@@ -13,7 +13,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { exec, execSync } from 'child_process';
-import { app } from 'electron';
 import { logger } from './logger';
 
 const DWS_DIR = path.join(os.homedir(), '.dws');
@@ -126,19 +125,7 @@ export function getDwsConfigPath(): string {
  */
 export function getDwsCliPath(): string {
   const binName = process.platform === 'win32' ? 'dws.exe' : 'dws';
-
-  const userInstalledPath = path.join(DWS_DIR, binName);
-  if (fs.existsSync(userInstalledPath)) {
-    return userInstalledPath;
-  }
-
-  // Packaged fallback for older installs or failed extraction.
-  if (app?.isPackaged) {
-    return path.join(process.resourcesPath, 'dws', binName);
-  }
-  
-  // In development, DWS CLI is in ~/.dws
-  return userInstalledPath;
+  return path.join(DWS_DIR, binName);
 }
 
 /**

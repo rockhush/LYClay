@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { promisify } from 'util';
 import * as path from 'path';
 import { getDwsCliPath, getDwsDir } from './dws-env-setup';
+import { ensureDwsCliInstalled } from './dws-cli-installer';
 import { logger } from './logger';
 
 const execFileAsync = promisify(execFile);
@@ -206,9 +207,18 @@ function sanitizeDwsEnv(options?: { suppressBrowser?: boolean }): NodeJS.Process
  * DWS CLI DingTalk OAuth page; completing it creates DWS's own CLI login state.
  */
 export async function startDwsCliLoginSession(): Promise<DwsCliLoginSession> {
+  const installResult = await ensureDwsCliInstalled();
+  if (!installResult.success) {
+    throw new Error(`DWS CLI installation failed: ${installResult.error || 'unknown error'}`);
+  }
+
   await configureDwsCli(DEFAULT_DWS_CLIENT_ID, '');
 
   const dwsPath = getDwsCliPath();
+  if (!existsSync(dwsPath)) {
+    throw new Error(`DWS CLI binary not found after installation: ${dwsPath}`);
+  }
+
   const env = sanitizeDwsEnv({ suppressBrowser: true });
   let child: ChildProcessWithoutNullStreams | null = null;
   let settledUrl = false;

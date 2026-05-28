@@ -92,8 +92,6 @@
         "updatesFound": "更新可能なスキルが {{count}} 件あります",
         "noUpdatesFound": "すべてのインストール済みスキルは最新です",
         "noInstalledToCheck": "確認できるインストール済みスキルがありません",
-        "updatingSkills": "{{count}} 件のスキルを更新中...",
-        "batchUpdated": "{{count}} 件のスキルを更新しました",
         "failedCheckUpdates": "更新の確認に失敗しました",
         "failedUpdate": "更新に失敗しました",
         "openedEditor": "エディターで開きました",

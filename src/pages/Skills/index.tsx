@@ -28,6 +28,7 @@ import {
   Download,
   CheckCircle2,
   Ban,
+  ArrowUpCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -48,7 +49,6 @@ import type { Skill, MarketplaceSkill } from '@/types/skill';
 import {
   buildMarketplaceLookupMaps,
   companyInstallEntriesToMarketplaceSkills,
-  findInstalledSkillForMarketplace,
   findMarketplaceSkillMatch,
   getMarketplaceSkillKey,
   isMarketplaceSkillInstalledOnDisk,
@@ -479,7 +479,7 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
   const initial = getSkillInitial(displayName);
   const colorClass = getSkillColor(displayName);
   const versionLabel = formatSkillVersionLabel(
-    skill.version,
+    marketplaceMatch?.version || skill.version,
     t('card.versionUnknown', { defaultValue: '未知' }),
     { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
@@ -562,26 +562,28 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
 interface MarketplaceSkillCardProps {
   skill: MarketplaceSkill;
   isInstalled: boolean;
-  installedLocalVersion?: string;
   isLoading: boolean;
+  isUpdating: boolean;
   onInstall: () => void;
   onUninstall: () => void;
+  onUpdate?: () => void;
   t: TFunction<'skills'>;
 }
 
 function MarketplaceSkillCard({
   skill,
   isInstalled,
-  installedLocalVersion,
   isLoading,
+  isUpdating,
   onInstall,
   onUninstall,
+  onUpdate,
   t,
 }: MarketplaceSkillCardProps) {
   const initial = getSkillInitial(skill.name);
   const colorClass = getSkillColor(skill.name);
   const versionLabel = formatSkillVersionLabel(
-    isInstalled ? installedLocalVersion : skill.version,
+    skill.version,
     t('card.versionUnknown', { defaultValue: '未知' }),
   );
   const author =
@@ -618,6 +620,29 @@ function MarketplaceSkillCard({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {isInstalled && onUpdate && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUpdate();
+              }}
+              disabled={isLoading || isUpdating}
+              className={cn(
+                'h-8 w-8 rounded-lg transition-colors shadow-none',
+                'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
+              )}
+              title={t('actions.updateSkill', { defaultValue: '更新' })}
+            >
+              {isUpdating ? (
+                <LoadingSpinner size="sm" />
+              ) : (
+                <ArrowUpCircle className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          )}
           <Button
             type="button"
             size="icon"
@@ -627,14 +652,14 @@ function MarketplaceSkillCard({
               if (isInstalled) onUninstall();
               else onInstall();
             }}
-            disabled={isLoading}
+            disabled={isLoading || isUpdating}
             className={cn(
               'h-8 w-8 rounded-lg transition-colors shadow-none',
               'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
             )}
             title={isInstalled ? t('detail.uninstall') : t('actions.installSkill')}
           >
-            {isLoading ? (
+            {isLoading && !isUpdating ? (
               <LoadingSpinner size="sm" />
             ) : isInstalled ? (
               <Trash2 className="h-3.5 w-3.5" />
@@ -686,6 +711,7 @@ export function Skills() {
     searchResults,
     searchSkills,
     installSkill,
+    updateSkill,
     uninstallSkill,
     setSearchResults,
     searching,
@@ -693,7 +719,6 @@ export function Skills() {
     installing,
     companyInstallMap,
     companyInstallEntries,
-    marketplaceCatalogLoaded,
   } = useSkillsStore();
   const { t } = useTranslation('skills');
   const gatewayStatus = useGatewayStore((state) => state.status);
@@ -928,14 +953,12 @@ export function Skills() {
 
   useEffect(() => {
     if (activeTab !== 'market') return;
+    // 下拉框选择或排序变化时立即调用接口
+    // 服务器端规则：带-号是降序，不带是升序
     const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
-    const isDefaultView = !installQuery.trim() && !selectedType && sortBy === 'download_count' && sortOrder === 'desc';
-    if (isDefaultView && marketplaceCatalogLoaded && searchResults.length > 0) {
-      return;
-    }
     console.log('[Skills] Search triggered with params:', { query: installQuery.trim(), category: selectedType, sort });
     searchSkills(installQuery.trim(), selectedType, sort);
-  }, [activeTab, selectedType, sortBy, sortOrder, installQuery, searchSkills, marketplaceCatalogLoaded, searchResults.length]);
+  }, [activeTab, selectedType, sortBy, sortOrder, installQuery, searchSkills]);
 
   const handleSearch = useCallback(() => {
     // 服务器端规则：带-号是降序，不带是升序
@@ -984,6 +1007,35 @@ export function Skills() {
       }
     }
   }, [installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
+
+  const handleUpdate = useCallback(async (slug: string) => {
+    try {
+      const currentScroll = listRef.current?.scrollTop || 0;
+      const packageSlug = await updateSkill(slug);
+      await fetchSkills();
+
+      if (packageSlug) {
+        const installed = useSkillsStore.getState().skills.find(
+          (skill) => skill.slug === packageSlug || skill.id === packageSlug,
+        );
+        await enableSkill(installed?.id || packageSlug);
+      }
+
+      if (activeTab === 'market') {
+        const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+        await searchSkills(installQuery.trim(), selectedType, sort);
+      }
+
+      setTimeout(() => {
+        listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
+      }, 0);
+
+      toast.success(t('toast.updated', { defaultValue: '技能已更新' }));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      toast.error(t('toast.failedUpdate', { defaultValue: '更新失败' }) + ': ' + errorMessage);
+    }
+  }, [updateSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t]);
 
   const handleUninstall = useCallback(async (slug: string) => {
     try {
@@ -1387,9 +1439,6 @@ export function Skills() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {visibleMarketplaceSkills.map((skill) => {
                     const isInstalled = isMarketplaceSkillInstalled(skill);
-                    const installedMatch = isInstalled
-                      ? findInstalledSkillForMarketplace(skill, safeSkills, companyInstallMap)
-                      : undefined;
                     const marketplaceKey = getMarketplaceSkillKey(skill);
                     const actionKey = skill.slug;
                     const isBusy = !!installing[actionKey];
@@ -1398,10 +1447,11 @@ export function Skills() {
                         key={marketplaceKey}
                         skill={skill}
                         isInstalled={isInstalled}
-                        installedLocalVersion={installedMatch?.version}
                         isLoading={isBusy}
+                        isUpdating={isBusy}
                         onInstall={() => handleInstall(skill.slug)}
                         onUninstall={() => handleUninstall(skill.slug)}
+                        onUpdate={isInstalled ? () => void handleUpdate(skill.slug) : undefined}
                         t={t}
                       />
                     );
