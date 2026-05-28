@@ -66,6 +66,24 @@
         "modelSwitchFailed": "切换模型失败: {{error}}",
         "defaultModel": "默认模型",
         "modelSwitchNote": "切换模型将重启网关",
+        "modelCatalog": {
+            "featuresTitle": "可用功能",
+            "featureImageInput": "图片输入",
+            "featureReasoning": "推理模型",
+            "featureLongContext": "长上下文（{{context}}）",
+            "lyMinimax": {
+                "title": "MiniMax-M2.7",
+                "description": "领益内置 MiniMax 模型，适合日常对话与办公自动化任务。"
+            },
+            "lyQwen": {
+                "title": "qwen3.5-397b",
+                "description": "通义千问旗舰模型，支持长上下文与多模态图片输入。"
+            },
+            "lyDeepseek": {
+                "title": "deepseek-v4-flash",
+                "description": "DeepSeek 高速推理模型，适合复杂分析与代码任务。"
+            }
+        },
         "reasoning": {
             "title": "思考模式",
             "fast": "快速",

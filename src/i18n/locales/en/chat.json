@@ -66,6 +66,24 @@
         "modelSwitchFailed": "Failed to switch model: {{error}}",
         "defaultModel": "Default Model",
         "modelSwitchNote": "Switching model will restart gateway",
+        "modelCatalog": {
+            "featuresTitle": "Available features",
+            "featureImageInput": "Image input",
+            "featureReasoning": "Reasoning model",
+            "featureLongContext": "Long context ({{context}})",
+            "lyMinimax": {
+                "title": "MiniMax-M2.7",
+                "description": "Built-in MiniMax model for everyday chat and office automation."
+            },
+            "lyQwen": {
+                "title": "qwen3.5-397b",
+                "description": "Flagship Qwen model with long context and multimodal image input."
+            },
+            "lyDeepseek": {
+                "title": "deepseek-v4-flash",
+                "description": "Fast DeepSeek reasoning model for analysis and coding tasks."
+            }
+        },
         "reasoning": {
             "title": "Reasoning Mode",
             "fast": "Fast",

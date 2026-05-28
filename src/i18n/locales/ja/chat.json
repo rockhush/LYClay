@@ -59,6 +59,24 @@
         "gatewayConnected": "接続済み",
         "gatewayStatus": "ゲートウェイ {{state}} | ポート: {{port}} {{pid}}",
         "retryFailedAttachments": "失敗した添付を再試行",
+        "modelCatalog": {
+            "featuresTitle": "利用可能な機能",
+            "featureImageInput": "画像入力",
+            "featureReasoning": "推論モデル",
+            "featureLongContext": "長コンテキスト（{{context}}）",
+            "lyMinimax": {
+                "title": "MiniMax-M2.7",
+                "description": "日常会話とオフィス自動化向けの内蔵 MiniMax モデル。"
+            },
+            "lyQwen": {
+                "title": "qwen3.5-397b",
+                "description": "長コンテキストと画像入力に対応する Qwen フラッグシップモデル。"
+            },
+            "lyDeepseek": {
+                "title": "deepseek-v4-flash",
+                "description": "分析やコーディング向けの高速 DeepSeek 推論モデル。"
+            }
+        },
         "reasoning": {
             "title": "思考モード",
             "fast": "高速",

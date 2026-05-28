@@ -997,12 +997,10 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
               </div>
             )}
 
-            {/* Right cluster: model + send */}
-            <div className="ml-auto flex items-center gap-1">
-              {/* Model Picker */}
-              <ModelPicker disabled={disabled || sending} />
+            <ModelPicker disabled={disabled || sending} />
 
-              {/* Send Button */}
+            {/* Right cluster: send */}
+            <div className="ml-auto flex items-center gap-1">
               <Button
                 onClick={sending ? handleStop : handleSend}
                 disabled={sending ? !canStop : !canSend}

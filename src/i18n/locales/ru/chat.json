@@ -59,6 +59,24 @@
         "gatewayConnected": "подключён",
         "gatewayStatus": "шлюз {{state}} | порт: {{port}} {{pid}}",
         "retryFailedAttachments": "Повторить неудавшиеся вложения",
+        "modelCatalog": {
+            "featuresTitle": "Доступные функции",
+            "featureImageInput": "Ввод изображений",
+            "featureReasoning": "Модель рассуждений",
+            "featureLongContext": "Длинный контекст ({{context}})",
+            "lyMinimax": {
+                "title": "MiniMax-M2.7",
+                "description": "Встроенная модель MiniMax для повседневного чата и офисной автоматизации."
+            },
+            "lyQwen": {
+                "title": "qwen3.5-397b",
+                "description": "Флагманская модель Qwen с длинным контекстом и поддержкой изображений."
+            },
+            "lyDeepseek": {
+                "title": "deepseek-v4-flash",
+                "description": "Быстрая модель DeepSeek для анализа и задач с кодом."
+            }
+        },
         "reasoning": {
             "title": "Режим рассуждений",
             "fast": "Быстро",

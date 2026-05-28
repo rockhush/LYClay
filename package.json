@@ -27,7 +27,7 @@
             ]
         }
     },
-    "description": "LYClaw - Graphical AI Assistant based on OpenClaw",
+    "description": "LYClaw - Graphical AI Assistant based on LYClaw",
     "main": "dist-electron/main/index.js",
     "author": "LYClaw Team",
     "license": "MIT",
