@@ -70,6 +70,7 @@ async function fetchLatestRelease() {
       headers: {
         'User-Agent': 'ClawX-Builder',
         'Accept': 'application/vnd.github.v3+json',
+        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
       },
     }, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
