@@ -32,41 +32,52 @@ const ASSETS = {
   },
 };
 
-async function downloadFile(url, dest) {
-  return new Promise((resolve, reject) => {
+async function downloadToTemp(url, tempDest) {
+  await new Promise((resolve, reject) => {
     const protocol = url.startsWith('https:') ? https : http;
-    const file = createWriteStream(dest);
 
     protocol.get(url, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
-        file.close();
-        void fs.rm(dest, { force: true }).catch(() => {});
-        downloadFile(response.headers.location, dest).then(resolve).catch(reject);
+        downloadToTemp(response.headers.location, tempDest).then(resolve).catch(reject);
         return;
       }
 
       if (response.statusCode !== 200) {
-        file.close();
-        void fs.rm(dest, { force: true }).catch(() => {});
         reject(new Error(`Failed to download ${url}: HTTP ${response.statusCode}`));
         return;
       }
 
+      const file = createWriteStream(tempDest);
       response.pipe(file);
       file.on('finish', () => {
         file.close(resolve);
       });
       file.on('error', (error) => {
         file.close();
-        void fs.rm(dest, { force: true }).catch(() => {});
+        void fs.rm(tempDest, { force: true }).catch(() => {});
         reject(error);
       });
     }).on('error', (error) => {
-      file.close();
-      void fs.rm(dest, { force: true }).catch(() => {});
+      void fs.rm(tempDest, { force: true }).catch(() => {});
       reject(error);
     });
   });
+}
+
+async function downloadFile(url, dest) {
+  const tempDest = `${dest}.tmp-${process.pid}-${Date.now()}`;
+
+  await fs.rm(tempDest, { force: true }).catch(() => {});
+  await downloadToTemp(url, tempDest);
+
+  const stat = await fs.stat(tempDest);
+  if (stat.size <= 0) {
+    await fs.rm(tempDest, { force: true }).catch(() => {});
+    throw new Error(`Downloaded file is empty: ${url}`);
+  }
+
+  await fs.rm(dest, { force: true }).catch(() => {});
+  await fs.rename(tempDest, dest);
 }
 
 async function fetchLatestRelease() {
