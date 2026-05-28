@@ -30,8 +30,10 @@ export function WorkspacePicker({ disabled = false, onWorkspaceChange }: Workspa
 
   const allWorkspaces = [...temporaryWorkspaces, ...workspaces];
   const boundWorkspaceId = sessionWorkspaceIds[currentSessionKey] ?? null;
-  const effectiveWorkspaceId = boundWorkspaceId ?? currentWorkspaceId;
-  const currentWorkspace = allWorkspaces.find(w => w.id === effectiveWorkspaceId);
+  const effectiveWorkspaceId = boundWorkspaceId;
+  const currentWorkspace = effectiveWorkspaceId
+    ? allWorkspaces.find((w) => w.id === effectiveWorkspaceId)
+    : undefined;
 
   // 移除自动绑定的useEffect，只在会话内主动选择工作空间时才绑定
   // useEffect(() => {
@@ -39,7 +41,7 @@ export function WorkspacePicker({ disabled = false, onWorkspaceChange }: Workspa
   // }, [currentWorkspaceId, currentSessionKey, bindCurrentSessionWorkspace]);
 
   useEffect(() => {
-    if (boundWorkspaceId && boundWorkspaceId !== currentWorkspaceId) {
+    if (boundWorkspaceId !== currentWorkspaceId) {
       setCurrentWorkspace(boundWorkspaceId);
     }
   }, [boundWorkspaceId, currentWorkspaceId, setCurrentWorkspace]);

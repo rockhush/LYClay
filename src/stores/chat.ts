@@ -1813,10 +1813,8 @@ function syncWorkspacePickerToSession(
   sessionWorkspaceIds: Record<string, string>,
   sessionKey: string,
 ): void {
-  const boundWorkspaceId = sessionWorkspaceIds[sessionKey];
-  if (boundWorkspaceId) {
-    useWorkspacesStore.getState().setCurrentWorkspace(boundWorkspaceId);
-  }
+  const boundWorkspaceId = sessionWorkspaceIds[sessionKey] ?? null;
+  useWorkspacesStore.getState().setCurrentWorkspace(boundWorkspaceId);
 }
 
 function buildSessionSwitchPatch(
