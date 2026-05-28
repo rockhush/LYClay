@@ -2729,9 +2729,31 @@ function registerSkillUploadHandlers(): void {
       };
     } catch (error) {
       logger.error('Skill upload error:', error);
+      const msg = error instanceof Error ? error.message : 'Upload failed';
+      const errorCode: string | undefined = (error as any).errorCode;
+      const rawValidation = (error as any).validationResult;
+
+      // If the error carries structured validation data, forward it
+      if (errorCode && rawValidation) {
+        const stage = rawValidation.stage || (errorCode === 'SECURITY_BLOCKED' ? 'pre-extraction' : 'post-extraction');
+        return {
+          success: false,
+          error: msg,
+          errorCode,
+          securityBlocked: true,
+          validationResult: {
+            riskLevel: rawValidation.riskLevel,
+            findings: rawValidation.findings,
+            summary: rawValidation.summary,
+            stage,
+          },
+        };
+      }
+
+      // Generic error (no structured validation data)
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Upload failed',
+        error: msg,
       };
     }
   });

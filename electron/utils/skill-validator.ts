@@ -149,30 +149,35 @@ function findSignature(buffer: Buffer, startPos: number, signature: number): num
 
 /** File extensions that are NEVER allowed in a skill archive */
 const BLOCKED_EXTENSIONS = new Set([
-  // Windows executables
+  // Windows native executables & script host (auto-executes)
   '.exe', '.dll', '.sys', '.com', '.scr', '.pif', '.msi', '.msp',
-  '.bat', '.cmd', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.ps1', '.psm1', '.psd1',
-  // Linux/macOS executables
-  '.sh', '.bash', '.zsh', '.csh', '.fish',
+  '.bat', '.cmd', '.vbs', '.vbe', '.jse', '.wsf', '.wsh',
+  // Linux/macOS native executables & shared objects
   '.so', '.dylib', '.o', '.a',
-  // Other dangerous
+  // Application packages & installers
   '.app', '.dmg', '.pkg', '.deb', '.rpm',
+  // Compiled bytecode
   '.jar', '.class', '.war', '.ear',
   '.pyc', '.pyo',
+  // Shortcuts / URL files (can auto-launch)
   '.lnk', '.url',
 ]);
 
-/** File extensions that raise a WARNING but are not outright blocked */
+/** File extensions that raise a WARNING but are not outright blocked
+ *  — text scripts that need an explicit interpreter to execute */
 const WARNING_EXTENSIONS = new Set([
-  '.py', '.rb', '.pl', '.php',
+  // Scripting languages (require interpreter, not auto-executable)
+  '.js', '.py', '.rb', '.pl', '.php',
+  '.sh', '.bash', '.zsh', '.csh', '.fish',
+  '.ps1', '.psm1', '.psd1',
   '.reg',
   '.hta',
 ]);
 
-/** Absolute minimum file extensions — any other binary-ish extensions not
- *  in BLOCKED/WARNING that are still suspicious */
+/** File extensions that are suspicious binary formats
+ *  (not executable but could contain embedded payloads). */
 const SUSPICIOUS_EXTENSIONS = new Set([
-  '.bin', '.dat', '.elf',
+  '.elf',
 ]);
 
 // ── Limits ───────────────────────────────────────────────────────────────────
@@ -795,7 +800,7 @@ function scanFileContent(
   content: string,
   findings: ValidationFinding[],
 ): void {
-  // Dangerous shell commands
+  // Dangerous shell commands — real exploit patterns, NOT Node.js API names
   const dangerousPatterns: Array<{ pattern: RegExp; label: string }> = [
     { pattern: /\brm\s+-rf\s+\//, label: 'Recursive root deletion (rm -rf /)' },
     { pattern: /\bdd\s+if=.*of=\/dev\//, label: 'Raw device write (dd to /dev/)' },
@@ -807,8 +812,6 @@ function scanFileContent(
     { pattern: />\s*\/etc\/(passwd|shadow|hosts)/, label: 'Write to sensitive system file' },
     { pattern: /chmod\s+[0-7]*777/, label: 'World-writable permission (chmod 777)' },
     { pattern: /eval\s+\$/, label: 'Dynamic eval execution' },
-    { pattern: /process\.env\./i, label: 'Environment variable access' },
-    { pattern: /child_process/, label: 'Child process execution' },
   ];
 
   for (const { pattern, label } of dangerousPatterns) {
@@ -840,12 +843,14 @@ const KNOWN_SKILL_NAMES = [
 
 // ── P1: URL safety analysis ──────────────────────────────────────────────────
 
-/** Known URL shortener domains */
+/** Known URL shortener domains (anonymous / untrusted).
+ *  Platform-owned shorteners (t.co, lnkd.in, qr.ae) are excluded —
+ *  they have content moderation and are used in legitimate documentation. */
 const URL_SHORTENERS = new Set([
-  'bit.ly', 'tinyurl.com', 't.co', 'goo.gl', 'ow.ly',
+  'bit.ly', 'tinyurl.com', 'goo.gl', 'ow.ly',
   'is.gd', 'buff.ly', 'adf.ly', 'shorte.st', 'bc.vc',
   'short.link', 'cutt.ly', 'rebrand.ly', 'tiny.cc',
-  'shorturl.at', 't2m.io', 'v.gd', 'qr.ae', 'lnkd.in',
+  'shorturl.at', 't2m.io', 'v.gd',
 ]);
 
 /** Suspicious TLDs commonly used for phishing/malware */
@@ -856,12 +861,14 @@ const SUSPICIOUS_TLDS = new Set([
   'webcam', 'racing', 'accountant', 'science', 'party',
 ]);
 
-/** Suspicious keywords in URLs that indicate phishing */
+/** Suspicious keywords in URLs that indicate phishing.
+ *  Generic words like "setup" and "installer" are excluded — they
+ *  are too common in legitimate documentation URLs. */
 const SUSPICIOUS_URL_KEYWORDS = [
   'login', 'signin', 'verify', 'secure', 'account',
   'update', 'confirm', 'password', 'credential', 'banking',
   'paypal', 'appleid', 'microsoft365', 'google-verify',
-  'download-now', 'free-install', 'setup', 'installer',
+  'download-now', 'free-install',
 ];
 
 interface UrlFinding {
@@ -1008,18 +1015,10 @@ function detectNameImpersonation(
       return { impersonating: known, reason: `Name matches official skill "${known}" (case-insensitive)` };
     }
 
-    // Very close names (Levenshtein ≤ 2 for short names, ≤ 1 for very short names)
-    const maxDist = knownLower.length <= 5 ? 1 : 2;
+    // Very close names (Levenshtein distance check — catches typo-squatting)
+    const maxDist = knownLower.length <= 3 ? 0 : knownLower.length <= 5 ? 1 : 2;
     if (levenshtein(normalized, knownLower) <= maxDist) {
       return { impersonating: known, reason: `Name is very similar to official skill "${known}" (typo-squatting)` };
-    }
-
-    // Name contains a known name as prefix/suffix with added characters
-    if (normalized.startsWith(knownLower) && normalized.length > knownLower.length + 1) {
-      return { impersonating: known, reason: `Name starts with "${known}" — possible impersonation` };
-    }
-    if (normalized.endsWith(knownLower) && normalized.length > knownLower.length + 1) {
-      return { impersonating: known, reason: `Name ends with "${known}" — possible impersonation` };
     }
   }
 

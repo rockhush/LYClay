@@ -541,10 +541,6 @@ export class ClawHubService {
                         const version = match[2];
                         const existing = cliResults.find(r => r.slug === slug);
                         if (existing) {
-                            // 版本号通常 CLI 更准（package.json 里的真实版本）
-                            if (existing.version === 'unknown' || !existing.version) {
-                                existing.version = version;
-                            }
                             if (!existing.baseDir) {
                                 existing.baseDir = this.resolveSkillDir(slug)
                                     || path.join(this.workDir, 'skills', slug);
@@ -590,7 +586,7 @@ export class ClawHubService {
                     const slug = manifest.slug || entry.name;
                     const localMetadata = resolveLocalUploadSkillMetadata(manifest, entry.name);
                     const name = sidecar?.name || localMetadata.name;
-                    const version = sidecar?.version || localMetadata.version;
+                    const version = localMetadata.version;
 
                     results.push({
                         slug,

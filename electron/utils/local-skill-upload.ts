@@ -79,7 +79,10 @@ export async function installLocalSkillFromExtractedContent(params: {
   // ── P0 SECURITY: Post-extraction validation on actual content dir ──
   const postValidationResult = validateExtractedSkill(contentDir);
   if (!postValidationResult.allowed) {
-    throw new Error(postValidationResult.blockReason || 'Content security check failed');
+    const err = new Error(postValidationResult.blockReason || 'Content security check failed');
+    (err as any).errorCode = 'CONTENT_BLOCKED';
+    (err as any).validationResult = postValidationResult;
+    throw err;
   }
 
   await fs.promises.mkdir(params.skillsDir, { recursive: true });
@@ -128,7 +131,10 @@ export async function installLocalSkillZip(params: {
 
     const preValidationResult = validateZipStructure(entries, tempZipPath);
     if (!preValidationResult.allowed) {
-      throw new Error(preValidationResult.blockReason || 'Security check failed');
+      const err = new Error(preValidationResult.blockReason || 'Security check failed');
+      (err as any).errorCode = 'SECURITY_BLOCKED';
+      (err as any).validationResult = preValidationResult;
+      throw err;
     }
 
     await extractZipToDir(tempZipPath, tempExtractDir);

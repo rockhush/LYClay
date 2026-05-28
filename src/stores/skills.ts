@@ -3,7 +3,7 @@
  * Manages skill/plugin state
  */
 import { create } from 'zustand';
-import { hostApiFetch } from '@/lib/host-api';
+import { getHostApiBase, hostApiFetch } from '@/lib/host-api';
 import { invokeIpc } from '@/lib/api-client';
 import { AppError, normalizeAppError } from '@/lib/error-model';
 import { reportSkillDownload } from '@/lib/usage-reporter';
@@ -106,7 +106,9 @@ function applyClawHubMetadata(existing: Skill, cs: ClawHubListResult): void {
   }
   if (cs.version?.trim()) {
     const clawhubVersion = cs.version.trim().toLowerCase() === 'unknown' ? 'unknown' : cs.version.trim();
-    if (sharesBaseDir || !existing.version || existing.version.toLowerCase() === 'unknown') {
+    if (!existing.isBundled && !existing.isCore) {
+      existing.version = clawhubVersion;
+    } else if (sharesBaseDir || !existing.version || existing.version.toLowerCase() === 'unknown') {
       existing.version = clawhubVersion;
     }
   } else if (sharesBaseDir && !existing.isBundled && !existing.isCore) {
@@ -240,17 +242,20 @@ interface SkillsState {
   installing: Record<string, boolean>; // slug -> boolean
   checkingUpdates: boolean;
   skillUpdates: Record<string, SkillUpdateInfo>;
+  marketplaceCatalogLoaded: boolean;
   error: string | null;
 
   // Actions
   fetchSkills: () => Promise<void>;
+  prefetchMarketplaceCatalog: () => Promise<void>;
   searchSkills: (query: string, category?: string, sort?: string) => Promise<void>;
   installSkill: (slug: string, version?: string) => Promise<string | undefined>;
   updateSkill: (slug: string, latestVersion?: string) => Promise<string | undefined>;
   uninstallSkill: (slug: string) => Promise<void>;
   checkInstalledSkillUpdates: (
-    installedSkills: Array<{ skill_id: number | string; current_version: string; skill_name?: string }>,
+    installedSkills: Array<{ skill_id: number | string }>,
   ) => Promise<Record<string, SkillUpdateInfo>>;
+  autoUpdateInstalledSkillsOnStartup: () => Promise<void>;
   clearSkillUpdates: () => void;
   enableSkill: (skillId: string) => Promise<void>;
   disableSkill: (skillId: string) => Promise<void>;
@@ -259,6 +264,9 @@ interface SkillsState {
 }
 
 let _errorTimeout: ReturnType<typeof setTimeout> | null = null;
+let startupSkillAutoUpdateDone = false;
+
+const DEFAULT_MARKETPLACE_SORT = '-download_count';
 
 function clearErrorTimeout(): void {
   if (_errorTimeout) {
@@ -278,6 +286,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   installing: {},
   checkingUpdates: false,
   skillUpdates: {},
+  marketplaceCatalogLoaded: false,
   error: null,
 
   clearError: () => {
@@ -445,7 +454,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
               }
             }
 
-            const version = s.version || 'unknown';
+            const version = s.bundled ? (s.version || 'unknown') : 'unknown';
 
             return {
               id: s.skillKey,
@@ -550,6 +559,9 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         companyInstallMap,
         companyInstallEntries,
         loading: false,
+        ...(marketplaceResults.length > 0 && get().searchResults.length === 0
+          ? { searchResults: marketplaceResults, marketplaceCatalogLoaded: true }
+          : {}),
       });
     } catch (error) {
       console.error('Failed to fetch skills:', error);
@@ -566,6 +578,17 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     }
   },
 
+  prefetchMarketplaceCatalog: async () => {
+    const { marketplaceCatalogLoaded, searchResults } = get();
+    if (marketplaceCatalogLoaded && searchResults.length > 0) {
+      return;
+    }
+    await get().searchSkills('', '', DEFAULT_MARKETPLACE_SORT);
+    if (get().searchResults.length > 0) {
+      set({ marketplaceCatalogLoaded: true });
+    }
+  },
+
   searchSkills: async (query: string, category = '', sort = '') => {
     set({ searching: true, searchError: null });
     try {
@@ -578,7 +601,11 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       if (result.success) {
         console.log('[Skills Store] Search results:', result.results);
         console.log('[Skills Store] First 5 results:', result.results?.slice(0, 5));
-        set({ searchResults: result.results || [] });
+        const isDefaultCatalog = !query.trim() && !category.trim() && sort === DEFAULT_MARKETPLACE_SORT;
+        set({
+          searchResults: result.results || [],
+          ...(isDefaultCatalog ? { marketplaceCatalogLoaded: true } : {}),
+        });
       } else {
         throw normalizeAppError(new Error(result.error || 'Search failed'), {
           module: 'skills',
@@ -625,7 +652,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         description: installedSkill?.description || '',
         enabled: true,
         icon: '📦',
-        version: version || installedSkill?.version || 'unknown',
+        version: 'unknown',
         author: installedSkill?.author,
         config: {},
         isCore: false,
@@ -811,7 +838,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         description: resolvedDescription,
         enabled: true,
         icon: '📦',
-        version: resolvedVersion,
+        version: 'unknown',
         author: resolvedAuthor,
         config: {},
         isCore: false,
@@ -883,37 +910,67 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   checkInstalledSkillUpdates: async (installedSkills) => {
     set({ checkingUpdates: true });
     try {
-      console.log('[Skills Store] check-updates request:', installedSkills);
-      const result = await hostApiFetch<{
+      const skillIds = installedSkills
+        .map((skill) => String(skill.skill_id).trim())
+        .filter(Boolean)
+        .join(',');
+      const checkUpdatesPath = `/api/clawhub/check-updates?skill_ids=${encodeURIComponent(skillIds)}`;
+      const checkUpdatesUrl = `${getHostApiBase()}${checkUpdatesPath}`;
+      const proxyResponse = await invokeIpc<{
+        ok?: boolean;
+        data?: { status?: number; ok?: boolean; json?: unknown };
+        error?: { message?: string } | string;
+      }>('hostapi:fetch', {
+        path: checkUpdatesPath,
+        method: 'GET',
+      });
+
+      if (!proxyResponse.ok) {
+        const message = typeof proxyResponse.error === 'string'
+          ? proxyResponse.error
+          : (proxyResponse.error?.message || 'Check updates failed');
+        throw new Error(message);
+      }
+
+      const status = proxyResponse.data?.status ?? 200;
+      const result = (proxyResponse.data?.json ?? {}) as {
         success: boolean;
         error?: string;
         results?: Array<{
           skill_id: number;
-          skill_name?: string;
-          current_version: string;
+          skill_name: string;
           has_update: boolean;
-          latest_version?: string;
+          latest_version: string;
+          current_version?: string;
+          upstream_url?: string;
+          upstream_status?: number;
           error?: string;
         }>;
-      }>('/api/clawhub/check-updates', {
-        method: 'POST',
-        body: JSON.stringify({ skills: installedSkills }),
-      });
+      };
+
+      const traceSkillId = 398; // 合同智能核验助手
+      const traceResult = result.results?.find((item) => item.skill_id === traceSkillId);
+      if (traceResult) {
+        const traceLabel = traceResult.skill_name?.trim() || `skill_id=${traceSkillId}`;
+        const upstreamUrl = traceResult.upstream_url || checkUpdatesUrl;
+        const upstreamStatus = traceResult.upstream_status ?? status;
+        console.log(`[检查更新] ${traceLabel} 请求:`, {
+          url: upstreamUrl,
+          method: 'GET',
+          params: {
+            skill_id: traceSkillId,
+            current_version: traceResult.current_version ?? '',
+          },
+        });
+        console.log(`[检查更新] ${traceLabel} 完整响应:`, {
+          url: upstreamUrl,
+          status: upstreamStatus,
+          body: traceResult,
+        });
+      }
+
       if (!result.success) {
         throw new Error(result.error || 'Check updates failed');
-      }
-      console.log('[Skills Store] check-updates response:', result.results);
-      for (const item of result.results || []) {
-        const label = item.skill_name?.trim() || `skill_id=${item.skill_id}`;
-        if (item.error) {
-          console.log(`[Skills Store] // ${label}: 检测失败 — ${item.error}`);
-        } else if (item.has_update) {
-          console.log(
-            `[Skills Store] // ${label}: 当前 v${item.current_version} → 最新 v${item.latest_version ?? '?'}（有更新）`,
-          );
-        } else {
-          console.log(`[Skills Store] // ${label}: 当前 v${item.current_version}（已是最新）`);
-        }
       }
 
       const skillUpdates: Record<string, SkillUpdateInfo> = {};
@@ -921,9 +978,8 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         const key = String(item.skill_id);
         skillUpdates[key] = {
           hasUpdate: Boolean(item.has_update),
-          latestVersion: item.latest_version,
-          skillName: item.skill_name,
-          error: item.error,
+          latestVersion: item.latest_version || undefined,
+          skillName: item.skill_name || undefined,
         };
       }
       set({ skillUpdates });
@@ -933,6 +989,71 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       throw error;
     } finally {
       set({ checkingUpdates: false });
+    }
+  },
+
+  autoUpdateInstalledSkillsOnStartup: async () => {
+    if (startupSkillAutoUpdateDone) return;
+    startupSkillAutoUpdateDone = true;
+
+    try {
+      await get().prefetchMarketplaceCatalog();
+
+      let companyInstallEntries = get().companyInstallEntries;
+      if (Object.keys(companyInstallEntries).length === 0) {
+        const mapResult = await hostApiFetch<{
+          success: boolean;
+          entries?: Record<string, CompanyInstallEntry>;
+          installs?: Record<string, string>;
+        }>('/api/clawhub/company-install-map');
+        if (mapResult.success) {
+          companyInstallEntries = mapResult.entries ?? {};
+          set({
+            companyInstallEntries,
+            companyInstallMap: mapResult.installs ?? {},
+          });
+        }
+      }
+
+      const payload = Object.keys(companyInstallEntries)
+        .map((marketplaceId) => ({ skill_id: Number(marketplaceId) }))
+        .filter((item) => Number.isFinite(item.skill_id));
+
+      if (payload.length === 0) return;
+
+      console.log('[Skills Store] Startup auto skill update: checking', payload.length, 'installed skills');
+
+      const updates = await get().checkInstalledSkillUpdates(payload);
+      const candidates = Object.entries(companyInstallEntries).filter(([marketplaceId]) =>
+        updates[marketplaceId]?.hasUpdate,
+      );
+
+      if (candidates.length === 0) {
+        console.log('[Skills Store] Startup auto skill update: all skills up to date');
+        return;
+      }
+
+      console.log('[Skills Store] Startup auto skill update: updating', candidates.length, 'skills sequentially');
+
+      for (const [marketplaceId, entry] of candidates) {
+        const latestVersion = updates[marketplaceId]?.latestVersion;
+        try {
+          const packageSlug = await get().updateSkill(marketplaceId, latestVersion);
+          if (packageSlug) {
+            const installed = get().skills.find(
+              (skill) => skill.slug === packageSlug || skill.id === packageSlug,
+            );
+            await get().enableSkill(installed?.id || packageSlug);
+          }
+          console.log(`[Skills Store] Startup auto skill update succeeded: ${entry.name || marketplaceId}`);
+        } catch (error) {
+          console.error(`[Skills Store] Startup auto skill update failed for ${entry.name || marketplaceId}:`, error);
+        }
+      }
+
+      await get().fetchSkills().catch(() => undefined);
+    } catch (error) {
+      console.error('[Skills Store] Startup auto skill update failed:', error);
     }
   },
 
@@ -1015,6 +1136,9 @@ function ensureGatewayReadySkillsRefetch(): void {
     const isReady = state.status.state === 'running' && state.status.gatewayReady === true;
     if (isReady && !wasReady) {
       void useSkillsStore.getState().fetchSkills();
+      void useSkillsStore.getState().prefetchMarketplaceCatalog().catch((error) => {
+        console.warn('[Skills Store] Prefetch marketplace catalog failed (non-fatal):', error);
+      });
     }
     wasReady = isReady;
   });

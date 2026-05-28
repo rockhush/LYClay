@@ -3,9 +3,10 @@ import { listBundledSkillsFromPackage } from '../../utils/bundled-skills-scan';
 import { getAllSkillConfigs, setSkillEnabled, updateSkillConfig } from '../../utils/skill-config';
 import { loadCompanyMarketplaceInstallState } from '../../utils/company-marketplace-installs';
 import {
-  checkCompanySkillUpdate,
+  checkCompanySkillUpdateForInstalled,
   checkInstalledCompanySkillUpdates,
   logSkillCheckUpdateResultsSummary,
+  toHostCheckUpdateResult,
 } from '../../utils/company-skill-update';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
@@ -138,24 +139,27 @@ export async function handleSkillRoutes(
     return true;
   }
 
-  if (url.pathname === '/api/clawhub/check-updates' && req.method === 'POST') {
+  if (url.pathname === '/api/clawhub/check-updates' && req.method === 'GET') {
     try {
-      const body = await parseJsonBody<{
-        skills?: Array<{ skill_id: number | string; current_version: string; skill_name?: string }>;
-      }>(req);
-      const requested = Array.isArray(body.skills) ? body.skills : null;
-      console.log('[Skills API] check-updates requested:', requested?.length ?? 'registry-fallback', 'skill(s)');
+      const skillIdsParam = url.searchParams.get('skill_ids');
+      const requested = skillIdsParam
+        ? skillIdsParam
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .map((skill_id) => ({ skill_id }))
+        : null;
       const results = requested != null
         ? await Promise.all(
-            requested.map((skill) => checkCompanySkillUpdate(
-              skill.skill_id,
-              skill.current_version,
-              { skillName: skill.skill_name },
-            )),
+            requested.map((skill) => checkCompanySkillUpdateForInstalled(skill.skill_id)),
           )
         : await checkInstalledCompanySkillUpdates();
+
       logSkillCheckUpdateResultsSummary(results);
-      sendJson(res, 200, { success: true, results });
+      sendJson(res, 200, {
+        success: true,
+        results: results.map(toHostCheckUpdateResult),
+      });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }

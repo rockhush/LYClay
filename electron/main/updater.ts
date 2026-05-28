@@ -158,7 +158,7 @@ export class AppUpdater extends EventEmitter {
   private getOS(): string {
     switch (process.platform) {
       case 'darwin':
-        return 'mac';
+        return 'macos';
       case 'linux':
         return 'linux';
       case 'win32':
@@ -170,7 +170,7 @@ export class AppUpdater extends EventEmitter {
   private getOSCandidates(): string[] {
     switch (process.platform) {
       case 'darwin':
-        return ['mac', 'macos', 'darwin', ''];
+        return ['macos'];
       case 'linux':
         return ['linux'];
       case 'win32':
@@ -320,7 +320,7 @@ export class AppUpdater extends EventEmitter {
       const path = require('path');
       const fs = require('fs').promises;
       const appDir = app.getPath('userData');
-      const ext = this.getOS() === 'windows' ? '.exe' : this.getOS() === 'mac' ? '.dmg' : '.tar.gz';
+      const ext = this.getOS() === 'windows' ? '.exe' : this.getOS() === 'macos' ? '.dmg' : '.tar.gz';
       const fileName = `update_${Date.now()}${ext}`;
       const filePath = path.join(appDir, fileName);
       
