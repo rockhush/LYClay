@@ -10,6 +10,7 @@ import {
   isPlaceholderSkillDescription,
   isSkillPresentOnDisk,
   isUnknownSkillVersion,
+  normalizeSkillVersionForUpdateCheck,
   getMarketplaceSkillKey,
   isMarketplaceSkillInstalledOnDisk,
   companyInstallEntriesToMarketplaceSkills,
@@ -75,7 +76,7 @@ describe('skill metadata helpers', () => {
     );
 
     expect(enriched.name).toBe('候选人简历画像匹配分析');
-    expect(enriched.version).toBe('1.0.1');
+    expect(enriched.version).toBe('unknown');
     expect(enriched.description).toBe('Plaza description');
   });
 
@@ -185,7 +186,7 @@ describe('skill metadata helpers', () => {
 
     expect(isPlaceholderSkillDescription(skill.description)).toBe(true);
     expect(merged.description).toBe('数据分析与可视化。查询数据库、生成报告...');
-    expect(merged.version).toBe('1.0.0');
+    expect(merged.version).toBe('unknown');
     expect(merged.author).toBe('Kim.Su');
     expect(merged.downloads).toBe(76);
   });
@@ -213,7 +214,7 @@ describe('skill metadata helpers', () => {
     const enriched = enrichSkillsWithMarketplaceMetadata(skills, marketplace);
     expect(enriched[0]?.name).toBe('测试-file');
     expect(enriched[0]?.description).toBe('测试技能描述');
-    expect(enriched[0]?.version).toBe('1.0.0');
+    expect(enriched[0]?.version).toBe('unknown');
   });
 
   it('formats unknown versions as 未知 for marketplace skills', () => {
@@ -224,6 +225,13 @@ describe('skill metadata helpers', () => {
     expect(formatSkillVersionLabel('2.3.4', 'Unknown')).toBe('v2.3.4');
     expect(isUnknownSkillVersion('unknown')).toBe(true);
     expect(isUnknownSkillVersion('1.0.0')).toBe(false);
+  });
+
+  it('normalizes unknown versions to empty string for update checks', () => {
+    expect(normalizeSkillVersionForUpdateCheck(undefined)).toBe('');
+    expect(normalizeSkillVersionForUpdateCheck('unknown')).toBe('');
+    expect(normalizeSkillVersionForUpdateCheck('未知')).toBe('');
+    expect(normalizeSkillVersionForUpdateCheck('1.0.2')).toBe('1.0.2');
   });
 
   it('formats unknown built-in versions as v1.0.0', () => {

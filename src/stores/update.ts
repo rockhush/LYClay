@@ -4,6 +4,7 @@
  */
 import { create } from 'zustand';
 import { useSettingsStore } from './settings';
+import { useSkillsStore } from './skills';
 import { invokeIpc } from '@/lib/api-client';
 
 export interface UpdateInfo {
@@ -188,6 +189,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       if (currentStatus === 'checking' || currentStatus === 'idle') {
         set({ status: 'error', error: 'Update check completed without a result. This usually means the app is running in dev mode.' });
       }
+
+      void useSkillsStore.getState().autoUpdateInstalledSkillsOnStartup().catch((error) => {
+        console.warn('[Update Store] Startup skill auto-update failed (non-fatal):', error);
+      });
     }
   },
 

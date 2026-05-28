@@ -33,7 +33,8 @@
         "downloads": "{{count}}",
         "downloadsLabel": "下载量",
         "authorFallback": "未知作者",
-        "versionUnknown": "未知"
+        "versionUnknown": "未知",
+        "updateAvailable": "可更新"
     },
     "noSkills": "未找到技能",
     "noSkillsSearch": "尝试不同的搜索词",
@@ -93,6 +94,8 @@
         "updatesFound": "发现 {{count}} 个技能可更新",
         "noUpdatesFound": "所有已安装技能均为最新版本",
         "noInstalledToCheck": "暂无已安装技能可检查",
+        "updatingSkills": "正在更新 {{count}} 个技能...",
+        "batchUpdated": "已成功更新 {{count}} 个技能",
         "failedCheckUpdates": "检查更新失败",
         "failedUpdate": "更新失败",
         "openedEditor": "已在编辑器中打开",

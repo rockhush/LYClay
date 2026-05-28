@@ -7,9 +7,22 @@ import {
   readCompanyMarketplaceInstallRegistry,
   resolveCompanyMarketplacePackageSlug,
 } from './company-marketplace-installs';
+import { readSkillManifestVersionFromDir, normalizeSkillMdVersionForUpdateCheck } from './company-skill-package';
 import { getPreservedSkillDirectory } from './skill-workspace-preserve';
 
 const COMPANY_API_BASE = 'http://portal.srv.lstech.com/aihome/api/skill';
+
+/** 设为 marketplace skill_id 时，仅打印该技能的检查更新入参/返回。 */
+const CHECK_UPDATE_DEBUG_SKILL_ID: number | null = 398; // 合同智能核验助手
+
+function logCheckUpdateTrace(
+  skillId: number | string,
+  phase: '入参' | '返回',
+  payload: Record<string, unknown>,
+): void {
+  if (CHECK_UPDATE_DEBUG_SKILL_ID == null || Number(skillId) !== CHECK_UPDATE_DEBUG_SKILL_ID) return;
+  console.log(`[检查更新] skill_id=${skillId} ${phase}:`, payload);
+}
 
 export interface SkillCheckUpdateResult {
   skill_id: number;
@@ -18,6 +31,71 @@ export interface SkillCheckUpdateResult {
   has_update: boolean;
   latest_version?: string;
   error?: string;
+  upstream_url?: string;
+  upstream_status?: number;
+}
+
+/** Public check-update payload returned to renderer. */
+export interface SkillCheckUpdatePublicResult {
+  skill_id: number;
+  skill_name: string;
+  has_update: boolean;
+  latest_version: string;
+}
+
+export function toPublicCheckUpdateResult(result: SkillCheckUpdateResult): SkillCheckUpdatePublicResult {
+  return {
+    skill_id: result.skill_id,
+    skill_name: result.skill_name?.trim() || '',
+    has_update: result.has_update,
+    latest_version: result.latest_version?.trim() || '',
+  };
+}
+
+export function toHostCheckUpdateResult(result: SkillCheckUpdateResult) {
+  return {
+    ...toPublicCheckUpdateResult(result),
+    current_version: result.current_version,
+    ...(result.upstream_url ? { upstream_url: result.upstream_url } : {}),
+    ...(result.upstream_status != null ? { upstream_status: result.upstream_status } : {}),
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
+type CompanyCheckUpdatePayload = {
+  has_update?: boolean;
+  latest_version?: string;
+  skill_name?: string;
+  skill_id?: number;
+};
+
+export function unwrapCompanyCheckUpdatePayload(raw: unknown): CompanyCheckUpdatePayload {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Invalid company API response');
+  }
+
+  const record = raw as CompanyCheckUpdatePayload & {
+    success?: boolean;
+    data?: CompanyCheckUpdatePayload;
+    message?: string;
+  };
+
+  if (record.data && typeof record.data === 'object') {
+    return record.data;
+  }
+
+  return record;
+}
+
+/** Compare local current_version with API latest_version; any mismatch means updatable. */
+export function resolveSkillHasUpdate(
+  currentVersion: string | undefined,
+  latestVersion: string | undefined,
+): boolean {
+  const current = normalizeSkillMdVersionForUpdateCheck(currentVersion);
+  const latest = normalizeSkillMdVersionForUpdateCheck(latestVersion);
+  if (!latest) return false;
+  return current !== latest;
 }
 
 async function removeDirectoryIfExists(targetDir: string): Promise<void> {
@@ -115,22 +193,64 @@ export function logSkillCheckUpdateResultsSummary(results: SkillCheckUpdateResul
   console.log('[CompanySkillUpdate] ====================================');
 }
 
+function resolveInstalledSkillMdVersion(packageSlug: string | undefined): string {
+  if (!packageSlug?.trim()) return '';
+  const skillDir = path.join(getOpenClawConfigDir(), 'skills', packageSlug.trim());
+  return normalizeSkillMdVersionForUpdateCheck(readSkillManifestVersionFromDir(skillDir));
+}
+
+export async function checkCompanySkillUpdateForInstalled(
+  skillId: number | string,
+  options?: { skillName?: string },
+): Promise<SkillCheckUpdateResult> {
+  const marketplaceId = String(skillId).trim();
+  const packageSlug = await resolveCompanyMarketplacePackageSlug(marketplaceId);
+  const registry = await readCompanyMarketplaceInstallRegistry();
+  const registryEntry = registry.byMarketplaceId[marketplaceId];
+  const resolvedSkillName = options?.skillName?.trim() || registryEntry?.name?.trim() || '';
+  const skillMdVersion = resolveInstalledSkillMdVersion(packageSlug);
+
+  logCheckUpdateTrace(marketplaceId, '入参', {
+    skill_id: Number(marketplaceId),
+    current_version: skillMdVersion,
+  });
+
+  const result = await checkCompanySkillUpdate(skillId, skillMdVersion, {
+    skillName: resolvedSkillName || undefined,
+  });
+
+  if (!result.skill_name?.trim() && resolvedSkillName) {
+    result.skill_name = resolvedSkillName;
+  }
+
+  return result;
+}
+
 export async function checkCompanySkillUpdate(
   skillId: number | string,
   currentVersion: string,
   options?: { skillName?: string },
 ): Promise<SkillCheckUpdateResult> {
   const id = Number(skillId);
-  const version = currentVersion.trim();
-  const displayName = options?.skillName?.trim() || `skill_id=${id}`;
+  const version = normalizeSkillMdVersionForUpdateCheck(currentVersion);
   const params = new URLSearchParams({
     skill_id: String(id),
     current_version: version,
   });
   const url = `${COMPANY_API_BASE}/check_update/?${params.toString()}`;
-  console.log(`[CompanySkillUpdate] 开始检测 · ${displayName}:`, { skill_id: id, current_version: version, url });
 
   try {
+    if (CHECK_UPDATE_DEBUG_SKILL_ID != null && Number(skillId) === CHECK_UPDATE_DEBUG_SKILL_ID) {
+      console.log(`[检查更新] skill_id=${CHECK_UPDATE_DEBUG_SKILL_ID} 公司 API 请求:`, {
+        url,
+        method: 'GET',
+        params: {
+          skill_id: id,
+          current_version: version,
+        },
+      });
+    }
+
     const response = await fetch(url, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
@@ -139,31 +259,41 @@ export async function checkCompanySkillUpdate(
       throw new Error(`Company API error: ${response.status}`);
     }
 
-    const data = await response.json() as {
-      has_update?: boolean;
-      latest_version?: string;
-      skill_name?: string;
-      skill_id?: number;
-    };
-    console.log(`[CompanySkillUpdate] API 原始返回 · ${displayName}:`, data);
+    const raw = await response.json();
+    const data = unwrapCompanyCheckUpdatePayload(raw);
+
+    const latestVersion = data.latest_version?.trim() || undefined;
+    const hasUpdate = resolveSkillHasUpdate(version, latestVersion);
+
+    if (CHECK_UPDATE_DEBUG_SKILL_ID != null && Number(skillId) === CHECK_UPDATE_DEBUG_SKILL_ID) {
+      console.log(`[检查更新] skill_id=${CHECK_UPDATE_DEBUG_SKILL_ID} 公司 API 完整响应:`, {
+        url,
+        status: response.status,
+        raw_body: raw,
+        parsed: data,
+        has_update_from_api: Boolean(data.has_update),
+        has_update_resolved: hasUpdate,
+      });
+    }
 
     const result: SkillCheckUpdateResult = {
       skill_id: data.skill_id ?? id,
       skill_name: data.skill_name?.trim() || options?.skillName?.trim(),
       current_version: version,
-      has_update: Boolean(data.has_update),
-      latest_version: data.latest_version?.trim() || undefined,
+      has_update: hasUpdate,
+      latest_version: latestVersion,
+      upstream_url: url,
+      upstream_status: response.status,
     };
-    console.log(`[CompanySkillUpdate] 解析结果 · ${result.skill_name ?? displayName}:`, result);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.log(`[CompanySkillUpdate] 检测异常 · ${displayName}:`, message);
     return {
       skill_id: id,
       skill_name: options?.skillName?.trim(),
       current_version: version,
       has_update: false,
+      upstream_url: url,
       error: message,
     };
   }
@@ -180,18 +310,7 @@ export async function checkInstalledCompanySkillUpdates(): Promise<SkillCheckUpd
   const checks = installedIds.map(async (marketplaceId) => {
     const entry = registry.byMarketplaceId[marketplaceId];
     const apiSkill = apiById.get(marketplaceId);
-    const currentVersion = (apiSkill?.version || entry.version || '').trim();
-    if (!currentVersion) {
-      return {
-        skill_id: Number(marketplaceId) || 0,
-        skill_name: entry.name || apiSkill?.name,
-        current_version: '',
-        has_update: false,
-        error: 'Missing current version',
-      } satisfies SkillCheckUpdateResult;
-    }
-
-    return checkCompanySkillUpdate(marketplaceId, currentVersion, {
+    return checkCompanySkillUpdateForInstalled(marketplaceId, {
       skillName: entry.name || apiSkill?.name,
     });
   });
