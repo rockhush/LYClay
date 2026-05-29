@@ -32,6 +32,7 @@ import {
   CheckCircle2,
   Pin,
   PinOff,
+  MoreHorizontal,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { rendererExtensionRegistry } from '@/extensions/registry';
@@ -322,6 +323,9 @@ export function Sidebar() {
   );
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+  const [openSessionMenuKey, setOpenSessionMenuKey] = useState<string | null>(null);
+  const [sessionMenuAnchor, setSessionMenuAnchor] = useState<{ top: number; left: number } | null>(null);
+  const sessionMenuRef = useRef<HTMLDivElement | null>(null);
 
   const toggleWorkspaceSection = () => {
     setWorkspacesCollapsed(!workspacesCollapsed);
@@ -518,6 +522,20 @@ export function Sidebar() {
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [userMenuOpen]);
 
+  useEffect(() => {
+    if (!openSessionMenuKey) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!sessionMenuRef.current?.contains(event.target as Node)) {
+        setOpenSessionMenuKey(null);
+        setSessionMenuAnchor(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [openSessionMenuKey]);
+
   const dingtalkOrg = dingtalkUser
     ? dingtalkUser.exclusiveAccountCorpName
       || dingtalkUser.orgEmail
@@ -590,7 +608,7 @@ export function Sidebar() {
           }
           className={cn(
             'w-full text-left rounded-lg py-1.5 text-[13px] transition-[padding,colors]',
-            inWorkspace ? 'pl-1.5 pr-1.5 group-hover:pr-[5.25rem]' : 'px-2.5 group-hover:pr-[4.25rem]',
+            inWorkspace ? 'pl-1.5 pr-1.5 group-hover:pr-7' : 'px-2.5 group-hover:pr-7',
             'hover:bg-white/60 dark:hover:bg-white/10',
             isSessionViewActive && currentSessionKey === s.key
               ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground'
@@ -630,76 +648,123 @@ export function Sidebar() {
                 {sessionLabel}
               </TooltipContent>
             </Tooltip>
-            {isPinned ? (
-              <Pin className="h-3 w-3 shrink-0 text-[#FF922B]" />
-            ) : null}
           </div>
         </button>
         <div
+          ref={openSessionMenuKey === s.key ? sessionMenuRef : undefined}
           className={cn(
-            'absolute right-1 flex items-center gap-0.5 transition-opacity',
-            isPinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
+            'absolute right-1 transition-opacity',
+            openSessionMenuKey === s.key
+              ? 'opacity-100'
+              : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
           )}
         >
           <button
             type="button"
-            aria-label={pinLabel}
-            title={pinLabel}
-            data-testid={`sidebar-session-pin-${s.key}`}
+            aria-label={t('common:sidebar.sessionActions', { defaultValue: '会话操作' })}
+            aria-expanded={openSessionMenuKey === s.key}
+            data-testid={`sidebar-session-menu-${s.key}`}
             onClick={(e) => {
               e.stopPropagation();
-              toggleSessionPinned(s.key);
-            }}
-            className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
-          >
-            {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            type="button"
-            aria-label={t('common:sidebar.renameSession')}
-            title={t('common:sidebar.renameSession')}
-            data-testid={`sidebar-session-rename-${s.key}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              const currentLabel = getSessionLabel(s.key, s.displayName, s.label);
-              setSessionToRename({ key: s.key, label: currentLabel });
-              setRenameDraft(currentLabel);
-            }}
-            className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          {inWorkspace ? (
-            <button
-              type="button"
-              aria-label={t('common:sidebar.removeFromWorkspace')}
-              title={t('common:sidebar.removeFromWorkspace')}
-              data-testid={`sidebar-session-remove-workspace-${s.key}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                unbindSessionWorkspace(s.key);
-                toast.success(t('common:sidebar.removeFromWorkspaceSuccess'));
-              }}
-              className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
-            >
-              <FolderOutput className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            aria-label={t('common:actions.delete')}
-            title={t('common:actions.delete')}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSessionToDelete({
-                key: s.key,
-                label: getSessionLabel(s.key, s.displayName, s.label),
+              if (openSessionMenuKey === s.key) {
+                setOpenSessionMenuKey(null);
+                setSessionMenuAnchor(null);
+                return;
+              }
+              const rect = e.currentTarget.getBoundingClientRect();
+              setSessionMenuAnchor({
+                top: rect.top + rect.height / 2,
+                left: rect.right + 4,
               });
+              setOpenSessionMenuKey(s.key);
             }}
             className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <MoreHorizontal className="h-3.5 w-3.5" />
           </button>
+          {openSessionMenuKey === s.key && sessionMenuAnchor ? (
+            <div
+              data-testid={`sidebar-session-menu-panel-${s.key}`}
+              style={{
+                top: sessionMenuAnchor.top,
+                left: sessionMenuAnchor.left,
+              }}
+              className="fixed z-50 w-40 -translate-y-1/2 rounded-xl border border-black/10 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-card"
+            >
+              <button
+                type="button"
+                aria-label={t('common:actions.delete')}
+                data-testid={`sidebar-session-delete-${s.key}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenSessionMenuKey(null);
+                  setSessionMenuAnchor(null);
+                  setSessionToDelete({
+                    key: s.key,
+                    label: getSessionLabel(s.key, s.displayName, s.label),
+                  });
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+              >
+                <Trash2 className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                <span>{t('common:actions.delete')}</span>
+              </button>
+              {inWorkspace ? (
+                <button
+                  type="button"
+                  aria-label={t('common:sidebar.removeFromWorkspace')}
+                  data-testid={`sidebar-session-remove-workspace-${s.key}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenSessionMenuKey(null);
+                    setSessionMenuAnchor(null);
+                    unbindSessionWorkspace(s.key);
+                    toast.success(t('common:sidebar.removeFromWorkspaceSuccess'));
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                >
+                  <FolderOutput className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                  <span>{t('common:sidebar.removeFromWorkspace')}</span>
+                </button>
+              ) : null}
+              <button
+                type="button"
+                aria-label={t('common:sidebar.renameSession')}
+                data-testid={`sidebar-session-rename-${s.key}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenSessionMenuKey(null);
+                  setSessionMenuAnchor(null);
+                  const currentLabel = getSessionLabel(s.key, s.displayName, s.label);
+                  setSessionToRename({ key: s.key, label: currentLabel });
+                  setRenameDraft(currentLabel);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+              >
+                <Pencil className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                <span>{t('common:sidebar.renameSession')}</span>
+              </button>
+              <button
+                type="button"
+                aria-label={pinLabel}
+                data-testid={`sidebar-session-pin-${s.key}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenSessionMenuKey(null);
+                  setSessionMenuAnchor(null);
+                  toggleSessionPinned(s.key);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+              >
+                {isPinned ? (
+                  <PinOff className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                ) : (
+                  <Pin className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                )}
+                <span>{pinLabel}</span>
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     );
