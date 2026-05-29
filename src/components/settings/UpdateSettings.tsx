@@ -184,6 +184,10 @@ export function UpdateSettings({ onAfterCheckUpdate }: UpdateSettingsProps) {
         {renderAction()}
       </div>
 
+      {status === 'downloaded' && autoInstallCountdown != null && autoInstallCountdown >= 0 && (
+        <p className="text-xs text-muted-foreground">{t('updates.antivirusHint')}</p>
+      )}
+
       {/* Download Progress */}
       {status === 'downloading' && progress && (
         <div className="space-y-2">

@@ -419,7 +419,17 @@ async function initialize(): Promise<void> {
   }
 
   // Register update handlers
-  registerUpdateHandlers(appUpdater, window);
+  registerUpdateHandlers(appUpdater, window, {
+    prepareForUpdateInstall: async () => {
+      logger.info('[Updater] Stopping gateway before update install');
+      await gatewayManager.stop().catch((error) => {
+        logger.warn('[Updater] gatewayManager.stop failed before update install:', error);
+      });
+      await gatewayManager.forceTerminateOwnedProcessForQuit().catch((error) => {
+        logger.warn('[Updater] forceTerminateOwnedProcessForQuit failed before update install:', error);
+      });
+    },
+  });
 
   // Note: Auto-check for updates is driven by the renderer (update store init)
   // so it respects the user's "Auto-check for updates" setting.

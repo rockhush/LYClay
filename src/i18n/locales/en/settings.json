@@ -170,7 +170,7 @@
       "downloading": "Downloading update...",
       "available": "Update available: v{{version}}",
       "downloaded": "Downloaded",
-      "autoInstalling": "Restarting to install update in {{seconds}}s...",
+      "autoInstalling": "Launching installer in {{seconds}}s...",
       "failed": "Update check failed",
       "latest": "You have the latest version",
       "check": "Check for updates to get the latest features"
@@ -186,7 +186,8 @@
       "openFolder": "Open Folder"
     },
     "downloadComplete": "Latest version package downloaded",
-    "installHint": "Please double-click {{filePath}} to install manually",
+    "installHint": "Package saved as {{filePath}}. If auto-install fails, double-click it to install manually",
+    "antivirusHint": "If antivirus software prompts you during install, choose \"Allow all\" for the installer",
     "currentVersion": "Current Version",
     "whatsNew": "What's New:",
     "errorDetails": "Error Details:",

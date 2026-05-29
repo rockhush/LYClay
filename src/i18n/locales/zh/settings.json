@@ -170,7 +170,7 @@
       "downloading": "正在下载更新...",
       "available": "可用更新：v{{version}}",
       "downloaded": "已下载",
-      "autoInstalling": "将在 {{seconds}} 秒后重启并安装更新...",
+      "autoInstalling": "将在 {{seconds}} 秒后启动安装程序...",
       "failed": "检查更新失败",
       "latest": "您已拥有最新版本",
       "check": "检查更新以获取最新功能"
@@ -186,7 +186,8 @@
       "openFolder": "打开文件夹"
     },
     "downloadComplete": "最新版安装包已下载完毕",
-    "installHint": "请双击 {{filePath}} 自行安装",
+    "installHint": "安装包已保存为 {{filePath}}。若自动安装失败，可双击该文件手动安装",
+    "antivirusHint": "安装过程中若出现 360 等杀毒软件提示，请选择「允许程序所有操作」",
     "currentVersion": "当前版本",
     "whatsNew": "更新内容：",
     "errorDetails": "错误详情：",
