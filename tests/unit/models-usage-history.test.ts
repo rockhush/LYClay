@@ -88,4 +88,22 @@ describe('models usage history helpers', () => {
     expect(resolveVisibleUsageHistory([], stable, { preferStableOnEmpty: true })).toEqual(stable);
     expect(resolveVisibleUsageHistory(fresh, stable, { preferStableOnEmpty: true })).toEqual(fresh);
   });
+
+  it('groups provider/model refs under the short model id label', () => {
+    const entries: UsageHistoryEntry[] = [
+      {
+        ...createEntry(1, 100),
+        model: 'ly-qwen/qwen3.5-397b',
+      },
+      {
+        ...createEntry(2, 50),
+        model: 'qwen3.5-397b',
+      },
+    ];
+
+    const groups = groupUsageHistory(entries, 'model');
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe('qwen3.5-397b');
+    expect(groups[0]?.totalTokens).toBe(150);
+  });
 });

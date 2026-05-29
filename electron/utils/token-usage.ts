@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'fs/promises';
+import { readFile, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { getOpenClawConfigDir } from './paths';
 import { logger } from './logger';
@@ -7,6 +7,7 @@ import {
   parseUsageEntriesFromJsonl,
   type TokenUsageHistoryEntry,
 } from './token-usage-core';
+import { parseTrajectoryUsageSupplements } from './token-usage-trajectory';
 import { listConfiguredAgentIds } from './agent-config';
 
 export {
@@ -100,10 +101,24 @@ export async function getRecentTokenUsageHistory(limit?: number): Promise<TokenU
     if (results.length >= maxEntries) break;
     try {
       const content = await readFile(file.filePath, 'utf8');
+      let trajectorySupplements = [];
+      const trajectoryPath = file.filePath.endsWith('.jsonl')
+        ? file.filePath.replace(/\.jsonl$/, '.trajectory.jsonl')
+        : null;
+      if (trajectoryPath) {
+        try {
+          const trajectoryContent = await readFile(trajectoryPath, 'utf8');
+          trajectorySupplements = parseTrajectoryUsageSupplements(trajectoryContent);
+        } catch {
+          // Trajectory files are optional diagnostics; ignore missing/unreadable files.
+        }
+      }
       const entries = parseUsageEntriesFromJsonl(content, {
         sessionId: file.sessionId,
         agentId: file.agentId,
-      }, Number.isFinite(maxEntries) ? maxEntries - results.length : undefined);
+      }, Number.isFinite(maxEntries) ? maxEntries - results.length : undefined, {
+        trajectorySupplements,
+      });
       results.push(...entries);
     } catch (error) {
       logger.debug(`Failed to read token usage transcript ${file.filePath}:`, error);

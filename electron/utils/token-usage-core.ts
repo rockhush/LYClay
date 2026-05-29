@@ -1,3 +1,8 @@
+import {
+  findTrajectoryUsageSupplement,
+  type TrajectoryUsageSupplement,
+} from './token-usage-trajectory';
+
 export interface TokenUsageHistoryEntry {
   timestamp: string;
   sessionId: string;
@@ -94,6 +99,89 @@ function firstUsageNumber(usage: TranscriptUsageShape | undefined, candidates: s
     if (parsed !== undefined) return parsed;
   }
   return undefined;
+}
+
+function estimateContentTokens(content: unknown): number {
+  if (!content) return 0;
+  if (typeof content === 'string') return estimateTokensFromText(content);
+  if (Array.isArray(content)) {
+    return content.reduce((sum, item) => sum + estimateContentTokens(item), 0);
+  }
+  if (typeof content === 'object') {
+    const block = content as Record<string, unknown>;
+    if (typeof block.text === 'string') return estimateTokensFromText(block.text);
+    if (typeof block.thinking === 'string') return estimateTokensFromText(block.thinking);
+    if (block.content !== undefined) return estimateContentTokens(block.content);
+    return estimateTokensFromText(JSON.stringify(block));
+  }
+  return estimateTokensFromText(String(content));
+}
+
+function estimateTokensFromText(text: string): number {
+  if (!text) return 0;
+
+  let count = 0;
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if (code >= 0x4e00 && code <= 0x9fff) {
+      count += 0.5;
+    } else if (/\s/.test(char)) {
+      count += 0.1;
+    } else {
+      count += 0.25;
+    }
+  }
+  return Math.ceil(count);
+}
+
+function isExplicitZeroUsage(usage: ParsedUsageTokens): boolean {
+  return usage.usageStatus === 'available'
+    && usage.totalTokens === 0
+    && usage.inputTokens === 0
+    && usage.outputTokens === 0
+    && usage.cacheReadTokens === 0
+    && usage.cacheWriteTokens === 0;
+}
+
+function applyUsageFallback(
+  usage: ParsedUsageTokens,
+  message: TranscriptLineShape['message'],
+  timestamp: string,
+  trajectorySupplements: TrajectoryUsageSupplement[],
+): ParsedUsageTokens {
+  if (!isExplicitZeroUsage(usage)) {
+    return usage;
+  }
+
+  const supplement = findTrajectoryUsageSupplement(trajectorySupplements, timestamp);
+  if (supplement && supplement.totalTokens > 0) {
+    return {
+      usageStatus: 'available',
+      inputTokens: supplement.inputTokens,
+      outputTokens: supplement.outputTokens,
+      cacheReadTokens: supplement.cacheReadTokens,
+      cacheWriteTokens: supplement.cacheWriteTokens,
+      totalTokens: supplement.totalTokens,
+    };
+  }
+
+  const outputEstimate = estimateContentTokens(
+    message && typeof message === 'object'
+      ? (message as Record<string, unknown>).content
+      : undefined,
+  );
+  if (outputEstimate <= 0) {
+    return usage;
+  }
+
+  return {
+    usageStatus: 'available',
+    inputTokens: 0,
+    outputTokens: outputEstimate,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: outputEstimate,
+  };
 }
 
 function parseUsageFromShape(usage: unknown): ParsedUsageTokens | undefined {
@@ -261,8 +349,10 @@ export function parseUsageEntriesFromJsonl(
   content: string,
   context: { sessionId: string; agentId: string },
   limit?: number,
+  options?: { trajectorySupplements?: TrajectoryUsageSupplement[] },
 ): TokenUsageHistoryEntry[] {
   const entries: TokenUsageHistoryEntry[] = [];
+  const trajectorySupplements = options?.trajectorySupplements ?? [];
   const lines = content.split(/\r?\n/).filter(Boolean);
   const maxEntries = typeof limit === 'number' && Number.isFinite(limit)
     ? Math.max(Math.floor(limit), 0)
@@ -282,8 +372,9 @@ export function parseUsageEntriesFromJsonl(
     }
 
     if (message.role === 'assistant' && 'usage' in message) {
-      const usage = parseUsageFromShape(message.usage);
-      if (!usage) continue;
+      const parsedUsage = parseUsageFromShape(message.usage);
+      if (!parsedUsage) continue;
+      const usage = applyUsageFallback(parsedUsage, message, parsed.timestamp, trajectorySupplements);
 
       const contentText = normalizeUsageContent((message as Record<string, unknown>).content);
       entries.push({

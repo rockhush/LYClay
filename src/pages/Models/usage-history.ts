@@ -66,6 +66,16 @@ export function getUsageDaySortKey(timestamp: string): number {
   return date.getTime();
 }
 
+export function normalizeUsageModelLabel(model?: string): string {
+  const trimmed = model?.trim();
+  if (!trimmed) return 'Unknown';
+  const slashIndex = trimmed.lastIndexOf('/');
+  if (slashIndex >= 0 && slashIndex < trimmed.length - 1) {
+    return trimmed.slice(slashIndex + 1);
+  }
+  return trimmed;
+}
+
 export function groupUsageHistory(
   entries: UsageHistoryEntry[],
   groupBy: UsageGroupBy,
@@ -74,7 +84,7 @@ export function groupUsageHistory(
 
   for (const entry of entries) {
     const label = groupBy === 'model'
-      ? (entry.model || 'Unknown')
+      ? normalizeUsageModelLabel(entry.model)
       : formatUsageDay(entry.timestamp);
     const current = grouped.get(label) ?? {
       label,
