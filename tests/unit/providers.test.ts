@@ -63,6 +63,25 @@ describe('provider metadata', () => {
     );
   });
 
+  it('marks LY OpenAI-compatible models as streaming-usage capable', () => {
+    expect(getProviderConfig('ly-qwen')?.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'qwen3.5-397b',
+          compat: { supportsUsageInStreaming: true },
+        }),
+      ])
+    );
+    expect(getProviderConfig('ly-deepseek')?.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'deepseek-v4-flash',
+          compat: { supportsUsageInStreaming: true },
+        }),
+      ])
+    );
+  });
+
   it('uses OpenAI-compatible Ollama default base URL', () => {
     expect(PROVIDER_TYPE_INFO).toEqual(
       expect.arrayContaining([

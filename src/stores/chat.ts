@@ -110,7 +110,9 @@ function clearAbortedChatRuns(): void {
 // before committing the error to give the recovery path a chance.
 let _errorRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
 let _thinkingLevelPatchTimer: ReturnType<typeof setTimeout> | null = null;
+let _sessionModelPatchTimer: ReturnType<typeof setTimeout> | null = null;
 const _pendingThinkingLevelPatches = new Map<string, ReasoningMode>();
+const _pendingSessionModelPatches = new Map<string, string | null>();
 let _loadSessionsInFlight: Promise<void> | null = null;
 let _lastLoadSessionsAt = 0;
 const _historyLoadInFlight = new Map<string, Promise<void>>();
@@ -274,6 +276,13 @@ async function patchSessionThinkingLevel(sessionKey: string, mode: ReasoningMode
   await useGatewayStore.getState().rpc('sessions.patch', {
     key: sessionKey,
     thinkingLevel: toThinkingLevel(mode),
+  }, 5_000);
+}
+
+async function patchSessionModel(sessionKey: string, model: string | null): Promise<void> {
+  await useGatewayStore.getState().rpc('sessions.patch', {
+    key: sessionKey,
+    model,
   }, 5_000);
 }
 
@@ -557,6 +566,48 @@ async function flushPendingThinkingLevelPatches(): Promise<void> {
 function deferSessionThinkingLevelPatch(sessionKey: string, mode: ReasoningMode): void {
   _pendingThinkingLevelPatches.set(sessionKey, mode);
   scheduleThinkingLevelPatchFlush();
+}
+
+const SESSION_MODEL_PATCH_IDLE_DELAY_MS = 1_000;
+
+function scheduleSessionModelPatchFlush(delayMs = SESSION_MODEL_PATCH_IDLE_DELAY_MS): void {
+  if (_sessionModelPatchTimer) return;
+  _sessionModelPatchTimer = setTimeout(() => {
+    _sessionModelPatchTimer = null;
+    void flushPendingSessionModelPatches();
+  }, delayMs);
+}
+
+async function flushPendingSessionModelPatches(sessionKey?: string): Promise<void> {
+  if (_pendingSessionModelPatches.size === 0) return;
+  const state = useChatStore.getState();
+  if (state.sending || state.activeRunId) {
+    scheduleSessionModelPatchFlush();
+    return;
+  }
+
+  const pending = sessionKey && _pendingSessionModelPatches.has(sessionKey)
+    ? [[sessionKey, _pendingSessionModelPatches.get(sessionKey)!] as const]
+    : [..._pendingSessionModelPatches.entries()];
+
+  for (const [pendingSessionKey, model] of pending) {
+    try {
+      await patchSessionModel(pendingSessionKey, model);
+      _pendingSessionModelPatches.delete(pendingSessionKey);
+    } catch (error) {
+      console.warn('[chat] Failed to persist session model; will retry later:', error);
+      scheduleSessionModelPatchFlush(5_000);
+    }
+  }
+}
+
+function deferSessionModelPatch(sessionKey: string, model: string | null): void {
+  _pendingSessionModelPatches.set(sessionKey, model);
+  scheduleSessionModelPatchFlush();
+}
+
+function getSessionModel(sessions: ChatSession[], sessionKey: string): string | undefined {
+  return sessions.find((session) => session.key === sessionKey)?.model;
 }
 
 const HISTORY_LOAD_MIN_INTERVAL_MS = 800;
@@ -1832,14 +1883,20 @@ function promoteEmptyMainSessionIfNeeded(
   const newKey = `${prefix}:session-${Date.now()}`;
   const currentWorkspaceId = useWorkspacesStore.getState().currentWorkspaceId;
 
-  set((s) => ({
-    currentSessionKey: newKey,
-    currentAgentId: getAgentIdFromSessionKey(newKey),
-    sessions: ensureSessionEntry(s.sessions, newKey),
-    sessionWorkspaceIds: currentWorkspaceId
-      ? { ...s.sessionWorkspaceIds, [newKey]: currentWorkspaceId }
-      : s.sessionWorkspaceIds,
-  }));
+  set((s) => {
+    const inheritedModel = s.sessions.find((session) => session.key === currentSessionKey)?.model;
+    const sessionsWithNewEntry = ensureSessionEntry(s.sessions, newKey);
+    return {
+      currentSessionKey: newKey,
+      currentAgentId: getAgentIdFromSessionKey(newKey),
+      sessions: inheritedModel
+        ? sessionsWithNewEntry.map((session) => session.key === newKey ? { ...session, model: inheritedModel } : session)
+        : sessionsWithNewEntry,
+      sessionWorkspaceIds: currentWorkspaceId
+        ? { ...s.sessionWorkspaceIds, [newKey]: currentWorkspaceId }
+        : s.sessionWorkspaceIds,
+    };
+  });
 
   return newKey;
 }
@@ -2525,6 +2582,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { needsPatch } = applySessionThinkingLevelInBackground(get().currentSessionKey, mode, set);
     if (needsPatch) {
       deferSessionThinkingLevelPatch(get().currentSessionKey, mode);
+    }
+  },
+
+  setCurrentSessionModel: async (model: string | null) => {
+    const sessionKey = get().currentSessionKey;
+    const normalizedModel = model && model.trim() ? model.trim() : null;
+
+    set((s) => {
+      const sessions = ensureSessionEntry(s.sessions, sessionKey).map((session) => {
+        if (session.key !== sessionKey) return session;
+        if (normalizedModel) {
+          return { ...session, model: normalizedModel };
+        }
+        const { model: _model, ...rest } = session;
+        void _model;
+        return rest;
+      });
+      return { sessions };
+    });
+
+    try {
+      await patchSessionModel(sessionKey, normalizedModel);
+      _pendingSessionModelPatches.delete(sessionKey);
+    } catch (error) {
+      deferSessionModelPatch(sessionKey, normalizedModel);
+      throw error;
     }
   },
 
@@ -3793,7 +3876,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             method: 'POST',
             body: JSON.stringify({
               sessionKey: currentSessionKey,
-              message: withThinkingDirective(runtimeMessage + workspaceContext, reasoningMode),
+              message: withThinkingDirective(runtimeMessage + workspaceContext, effectiveReasoningMode),
               deliver: false,
               idempotencyKey,
               media: (attachments ?? []).map((a) => ({
@@ -3805,14 +3888,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
           },
         );
       } else {
+        const chatSendParams: Record<string, unknown> = {
+          sessionKey: currentSessionKey,
+          message: withThinkingDirective(runtimeMessage + workspaceContext, effectiveReasoningMode),
+          deliver: false,
+          idempotencyKey,
+        };
         const rpcResult = await useGatewayStore.getState().rpc<{ runId?: string }>(
           'chat.send',
-          {
-            sessionKey: currentSessionKey,
-            message: withThinkingDirective(runtimeMessage + workspaceContext, reasoningMode),
-            deliver: false,
-            idempotencyKey,
-          },
+          chatSendParams,
           CHAT_SEND_TIMEOUT_MS,
         );
         result = { success: true, result: rpcResult };
@@ -3826,6 +3910,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       console.log(`[sendMessage] RPC result: success=${result.success}, runId=${result.result?.runId || 'none'}`);
       if (needsPatch) {
         deferSessionThinkingLevelPatch(currentSessionKey, reasoningMode);
+      }
+      if (_pendingSessionModelPatches.has(currentSessionKey)) {
+        void flushPendingSessionModelPatches(currentSessionKey);
       }
 
       if (!result.success) {

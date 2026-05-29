@@ -4,7 +4,29 @@ import * as path from 'path';
 export interface SkillManifestFields {
   name?: string;
   slug?: string;
+  description?: string;
   version?: string;
+}
+
+export function readFrontmatterScalar(body: string, key: string): string | undefined {
+  const quoted = body.match(new RegExp(`^\\s*${key}\\s*:\\s*"((?:\\\\.|[^"])*)"\\s*$`, 'm'));
+  if (quoted?.[1] != null) {
+    const value = quoted[1]
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .trim();
+    return value || undefined;
+  }
+
+  const singleQuoted = body.match(new RegExp(`^\\s*${key}\\s*:\\s*'([^']*)'\\s*$`, 'm'));
+  if (singleQuoted?.[1] != null) {
+    const value = singleQuoted[1].replace(/''/g, "'").trim();
+    return value || undefined;
+  }
+
+  const plain = body.match(new RegExp(`^\\s*${key}\\s*:\\s*([^\\n]+?)\\s*$`, 'm'));
+  const value = plain?.[1]?.trim();
+  return value || undefined;
 }
 
 export function parseSkillManifestFields(raw: string): SkillManifestFields {
@@ -12,21 +34,12 @@ export function parseSkillManifestFields(raw: string): SkillManifestFields {
   if (!frontmatterMatch) return {};
 
   const body = frontmatterMatch[1];
-  const readScalar = (key: string): string | undefined => {
-    const quoted = body.match(new RegExp(`^\\s*${key}\\s*:\\s*"([^"]*)"\\s*$`, 'm'));
-    if (quoted?.[1] != null) {
-      const value = quoted[1].trim();
-      return value || undefined;
-    }
-    const plain = body.match(new RegExp(`^\\s*${key}\\s*:\\s*([^\\n]+?)\\s*$`, 'm'));
-    const value = plain?.[1]?.trim();
-    return value || undefined;
-  };
 
   return {
-    name: readScalar('name'),
-    slug: readScalar('slug'),
-    version: readScalar('version'),
+    name: readFrontmatterScalar(body, 'name'),
+    slug: readFrontmatterScalar(body, 'slug'),
+    description: readFrontmatterScalar(body, 'description'),
+    version: readFrontmatterScalar(body, 'version'),
   };
 }
 

@@ -65,7 +65,7 @@
         "modelSwitching": "正在切换模型，请稍候…",
         "modelSwitchFailed": "切换模型失败: {{error}}",
         "defaultModel": "默认模型",
-        "modelSwitchNote": "切换模型将重启网关",
+        "modelSwitchNote": "仅影响当前会话，恢复会话后仍生效",
         "modelCatalog": {
             "featuresTitle": "可用功能",
             "featureImageInput": "图片输入",

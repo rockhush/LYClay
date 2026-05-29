@@ -3,9 +3,10 @@
 /**
  * Merge LYClaw built-in skill trees into openclaw/skills/ (bundled layout).
  *
- * Sources (in order; later sources do not overwrite existing slugs):
+ * Sources:
  *   1. resources/builtin-skills/
  *   2. build/preinstalled-skills/ or resources/preinstalled-skills/
+ *   3. resources/preinstalled-skill-overrides/ (overwrites selected files only)
  *
  * Usage:
  *   zx scripts/merge-bundled-skills.mjs
@@ -63,6 +64,23 @@ function mergeSourceIntoTarget({ sourceRoot, targetSkillsRoot, label }) {
   return { copied, skipped };
 }
 
+function overlaySourceIntoTarget({ sourceRoot, targetSkillsRoot, label }) {
+  if (!existsSync(sourceRoot)) {
+    echo`   [merge-skills] Skip ${label}: source not found (${sourceRoot})`;
+    return [];
+  }
+
+  const overlaid = [];
+  for (const slug of listSkillSlugs(sourceRoot)) {
+    const sourceDir = join(sourceRoot, slug);
+    const targetDir = join(targetSkillsRoot, slug);
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.cpSync(sourceDir, targetDir, { recursive: true, dereference: true, force: true });
+    overlaid.push(slug);
+  }
+  return overlaid;
+}
+
 const openclawDir = readArgValue('--openclaw-dir') || join(ROOT, 'build', 'openclaw');
 const targetSkillsRoot = join(openclawDir, 'skills');
 
@@ -91,6 +109,11 @@ const preinstalledResult = mergeSourceIntoTarget({
   targetSkillsRoot,
   label: 'preinstalled-skills',
 });
+const overrideResult = overlaySourceIntoTarget({
+  sourceRoot: join(ROOT, 'resources', 'preinstalled-skill-overrides'),
+  targetSkillsRoot,
+  label: 'preinstalled-skill-overrides',
+});
 
 const allCopied = [...builtinResult.copied, ...preinstalledResult.copied];
 const allSkipped = [...new Set([...builtinResult.skipped, ...preinstalledResult.skipped])];
@@ -98,10 +121,13 @@ const allSkipped = [...new Set([...builtinResult.skipped, ...preinstalledResult.
 if (allCopied.length > 0) {
   echo`   ✓ Copied: ${allCopied.join(', ')}`;
 }
+if (overrideResult.length > 0) {
+  echo`   ✓ Overlaid: ${overrideResult.join(', ')}`;
+}
 if (allSkipped.length > 0) {
   echo`   · Already present (kept openclaw copy): ${allSkipped.join(', ')}`;
 }
-if (allCopied.length === 0 && allSkipped.length === 0) {
+if (allCopied.length === 0 && allSkipped.length === 0 && overrideResult.length === 0) {
   echo`   (no skill sources to merge)`;
 }
 

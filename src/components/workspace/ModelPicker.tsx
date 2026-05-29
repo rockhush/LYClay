@@ -63,17 +63,17 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const { t } = useTranslation('chat');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [hoveredAccountId, setHoveredAccountId] = useState<string | null>(null);
+  const [switchingSessionModel, setSwitchingSessionModel] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   const { accounts, statuses, vendors, defaultAccountId } = useProviderStore();
   const isStreaming = useChatStore((s) => !s.runAborted && (s.activeRunId !== null || s.sending));
   const currentAgentId = useChatStore((s) => s.currentAgentId);
+  const currentSessionKey = useChatStore((s) => s.currentSessionKey);
+  const sessions = useChatStore((s) => s.sessions);
+  const setCurrentSessionModel = useChatStore((s) => s.setCurrentSessionModel);
   const agents = useAgentsStore((s) => s.agents);
   const defaultModelRef = useAgentsStore((s) => s.defaultModelRef);
-  const setDefaultAccount = useProviderStore((s) => s.setDefaultAccount);
-  const isDefaultAccountSwitching = useProviderStore((s) => s.isDefaultAccountSwitching);
-  const pendingDefaultAccountId = useProviderStore((s) => s.pendingDefaultAccountId);
-  const fetchAgents = useAgentsStore((s) => s.fetchAgents);
 
   const providerItems = useMemo(() => {
     return buildProviderListItems(accounts, statuses, vendors, defaultAccountId);
@@ -114,7 +114,15 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   }, [pickerOpen]);
 
   const handleSelectProvider = (item: ProviderListItem) => {
-    if (item.account.id === defaultAccountId || isDefaultAccountSwitching) {
+    const nextModel = item.account.model?.trim();
+    if (!nextModel || switchingSessionModel) {
+      setPickerOpen(false);
+      setHoveredAccountId(null);
+      return;
+    }
+
+    const currentSessionModel = sessions.find((session) => session.key === currentSessionKey)?.model;
+    if (nextModel === currentSessionModel) {
       setPickerOpen(false);
       setHoveredAccountId(null);
       return;
@@ -122,14 +130,16 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
     setPickerOpen(false);
     setHoveredAccountId(null);
+    setSwitchingSessionModel(true);
     void (async () => {
       try {
-        await setDefaultAccount(item.account.id);
-        await fetchAgents();
+        await setCurrentSessionModel(nextModel);
         toast.success(t('composer.modelSwitched', { name: item.vendor?.name || item.account.label }));
       } catch (error) {
-        console.error('Failed to switch model:', error);
+        console.error('Failed to persist session model:', error);
         toast.error(t('composer.modelSwitchFailed', { error: String(error) }));
+      } finally {
+        setSwitchingSessionModel(false);
       }
     })();
   };
@@ -138,12 +148,15 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
     return null;
   }
 
-  const isDisabled = disabled || isStreaming || isDefaultAccountSwitching;
-  const effectiveDefaultAccountId = pendingDefaultAccountId ?? defaultAccountId;
-  const currentItem = configuredProviders.find((item) => item.account.id === effectiveDefaultAccountId)
-    ?? configuredProviders[0];
+  const isDisabled = disabled || isStreaming || switchingSessionModel;
+  const currentSessionModel = sessions.find((session) => session.key === currentSessionKey)?.model;
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
-  const currentLabel = currentItem?.account.model
+  const effectiveModelRef = currentSessionModel || currentAgent?.modelRef || defaultModelRef || undefined;
+  const currentItem = configuredProviders.find((item) => item.account.model === effectiveModelRef)
+    ?? configuredProviders.find((item) => item.account.id === defaultAccountId)
+    ?? configuredProviders[0];
+  const currentLabel = effectiveModelRef
+    || currentItem?.account.model
     || currentItem?.vendor?.name
     || currentItem?.account.label
     || currentAgent?.modelDisplay
@@ -177,7 +190,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
         disabled={isDisabled}
         title={t('composer.switchModel')}
       >
-        {isDefaultAccountSwitching ? (
+        {switchingSessionModel ? (
           <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin" />
         ) : (
           <Sparkles className="h-3.5 w-3.5 shrink-0" />
@@ -199,7 +212,8 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
               <div className="max-h-64 overflow-y-auto">
                 {configuredProviders.map((item) => {
-                  const isSelected = item.account.id === effectiveDefaultAccountId;
+                  const isSelected = item.account.model === effectiveModelRef
+                    || (!effectiveModelRef && item.account.id === currentItem?.account.id);
                   const isHovered = item.account.id === hoveredAccountId;
                   const vendorName = item.vendor?.name || item.account.label;
                   const modelId = item.account.model?.includes('/')
@@ -210,7 +224,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
                     <button
                       key={item.account.id}
                       type="button"
-                      disabled={isDefaultAccountSwitching}
+                      disabled={switchingSessionModel}
                       onMouseEnter={() => setHoveredAccountId(item.account.id)}
                       onFocus={() => setHoveredAccountId(item.account.id)}
                       onClick={() => handleSelectProvider(item)}

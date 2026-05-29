@@ -204,13 +204,14 @@ export async function loadSkillContent(skillKey: string): Promise<string | null>
   const skillDir = join(skillsDir, skillKey);
 
   const candidateFiles = [
-    join(skillDir, 'README.md'),
-    join(skillDir, 'skill.md'),
-    join(skillDir, 'INSTRUCTIONS.md'),
+    'SKILL.md',
+    'README.md',
+    'skill.md',
+    'INSTRUCTIONS.md',
   ];
 
   for (const file of candidateFiles) {
-    const content = await getPromptContent(file, skillsDir);
+    const content = await getPromptContent(file, skillDir);
     if (content) {
       logger.info(`[skill-index] Loaded skill content from ${file}`);
       return content;

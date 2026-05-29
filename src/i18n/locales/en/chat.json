@@ -65,7 +65,7 @@
         "modelSwitching": "Switching model, please wait…",
         "modelSwitchFailed": "Failed to switch model: {{error}}",
         "defaultModel": "Default Model",
-        "modelSwitchNote": "Switching model will restart gateway",
+        "modelSwitchNote": "Only affects this chat and persists when reopened",
         "modelCatalog": {
             "featuresTitle": "Available features",
             "featureImageInput": "Image input",

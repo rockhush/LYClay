@@ -27,6 +27,11 @@ vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
 }));
 
+vi.mock('@/lib/ui-state-persistence', () => ({
+  hydrateUiStateFromDisk: vi.fn().mockResolvedValue(undefined),
+  persistUiStateSoon: vi.fn(),
+}));
+
 describe('chat target routing', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -164,7 +169,7 @@ describe('chat target routing', () => {
 
     const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
     expect(sendCall?.[1]).toMatchObject({
-      sessionKey: 'agent:main:main',
+      sessionKey: 'agent:main:session-1773230400000',
       message: '/think off hello',
       deliver: false,
     });
@@ -175,7 +180,7 @@ describe('chat target routing', () => {
     useChatStore.setState({ sending: false, activeRunId: null });
     await vi.advanceTimersByTimeAsync(5_000);
     const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
-    expect(patchCall?.[1]).toEqual({ key: 'agent:main:main', thinkingLevel: 'medium' });
+    expect(patchCall?.[1]).toEqual({ key: 'agent:main:session-1773230400000', thinkingLevel: 'medium' });
     const patchIndex = gatewayRpcMock.mock.calls.findIndex(([method]) => method === 'sessions.patch');
     expect(patchIndex).toBeGreaterThan(sendIndex);
   });
@@ -251,10 +256,43 @@ describe('chat target routing', () => {
     useChatStore.setState({ sending: false, activeRunId: null });
     await vi.advanceTimersByTimeAsync(5_000);
     const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
-    expect(patchCall?.[1]).toEqual({ key: 'agent:main:main', thinkingLevel: 'high' });
+    expect(patchCall?.[1]).toEqual({ key: 'agent:main:session-1773230400000', thinkingLevel: 'high' });
   });
 
-  it('uses the selected agent main session for attachment sends', async () => {
+  it('does not pass the current session model to unsupported chat.send params', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main', model: 'ly-qwen/qwen3.5-397b' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+    });
+
+    await useChatStore.getState().sendMessage('hello', undefined, null);
+
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect(sendCall?.[1]).toMatchObject({
+      sessionKey: 'agent:main:session-1773230400000',
+    });
+    expect(sendCall?.[1]).not.toHaveProperty('model');
+  });
+
+  it('keeps text sends unchanged when the session has no model override', async () => {
     const { useChatStore } = await import('@/stores/chat');
 
     useChatStore.setState({
@@ -275,6 +313,110 @@ describe('chat target routing', () => {
       error: null,
       loading: false,
       thinkingLevel: null,
+      reasoningMode: 'fast',
+    });
+
+    await useChatStore.getState().sendMessage('hello', undefined, null);
+
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect(sendCall?.[1]).not.toHaveProperty('model');
+  });
+
+  it('persists the current session model with sessions.patch', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+    });
+
+    await useChatStore.getState().setCurrentSessionModel('ly-deepseek/deepseek-v4-flash');
+
+    expect(useChatStore.getState().sessions.find((session) => session.key === 'agent:main:main')?.model)
+      .toBe('ly-deepseek/deepseek-v4-flash');
+    const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
+    expect(patchCall?.[1]).toEqual({
+      key: 'agent:main:main',
+      model: 'ly-deepseek/deepseek-v4-flash',
+    });
+  });
+
+  it('uses the local session model for the next send when sessions.patch fails', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    gatewayRpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.patch') {
+        throw new Error('session not ready');
+      }
+      if (method === 'chat.send') {
+        return { runId: 'run-text' };
+      }
+      if (method === 'chat.history') {
+        return { messages: [] };
+      }
+      if (method === 'chat.abort') {
+        return { ok: true };
+      }
+      if (method === 'sessions.list') {
+        return { sessions: [] };
+      }
+      throw new Error(`Unexpected gateway RPC: ${method}`);
+    });
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+    });
+
+    await expect(useChatStore.getState().setCurrentSessionModel('ly-qwen/qwen3.5-397b')).rejects.toThrow('session not ready');
+    await useChatStore.getState().sendMessage('hello', undefined, null);
+
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect(sendCall?.[1]).toMatchObject({
+      sessionKey: 'agent:main:session-1773230400000',
+    });
+    expect(sendCall?.[1]).not.toHaveProperty('model');
+  });
+
+  it('uses the selected agent main session for attachment sends', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }, { key: 'agent:research:desk', model: 'ly-qwen/qwen3.5-397b' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
     });
 
     await useChatStore.getState().sendMessage(
@@ -312,6 +454,7 @@ describe('chat target routing', () => {
 
     expect(payload.sessionKey).toBe('agent:research:desk');
     expect(payload.message).toBe('/think off Process the attached file(s).');
+    expect(payload).not.toHaveProperty('model');
     expect(payload.media[0]?.filePath).toBe('/tmp/design.png');
   });
 });

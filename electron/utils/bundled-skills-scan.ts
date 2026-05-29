@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { getOpenClawDir } from './paths';
 import { BUNDLED_SKILL_SLUGS } from './bundled-skills-slugs';
+import { readFrontmatterScalar } from './company-skill-package';
 
 export interface BundledSkillBootstrap {
   skillKey: string;
@@ -35,23 +36,13 @@ function parseSkillManifest(skillManifestPath: string): {
     if (!frontmatterMatch) return {};
 
     const body = frontmatterMatch[1];
-    const readScalar = (key: string): string | undefined => {
-      const quoted = body.match(new RegExp(`^\\s*${key}\\s*:\\s*"([^"]*)"\\s*$`, 'm'));
-      if (quoted?.[1] != null) {
-        const value = quoted[1].trim();
-        return value || undefined;
-      }
-      const plain = body.match(new RegExp(`^\\s*${key}\\s*:\\s*([^\\n]+?)\\s*$`, 'm'));
-      const value = plain?.[1]?.trim();
-      return value || undefined;
-    };
 
     return {
-      name: readScalar('name'),
-      slug: readScalar('slug'),
-      description: readScalar('description'),
-      version: readScalar('version'),
-      author: readScalar('author'),
+      name: readFrontmatterScalar(body, 'name'),
+      slug: readFrontmatterScalar(body, 'slug'),
+      description: readFrontmatterScalar(body, 'description'),
+      version: readFrontmatterScalar(body, 'version'),
+      author: readFrontmatterScalar(body, 'author'),
     };
   } catch {
     return {};

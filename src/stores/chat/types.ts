@@ -165,6 +165,7 @@ export interface ChatState {
   ) => Promise<void>;
   abortRun: () => Promise<void>;
   setReasoningMode: (mode: ReasoningMode) => Promise<void>;
+  setCurrentSessionModel: (model: string | null) => Promise<void>;
   handleChatEvent: (event: Record<string, unknown>) => void;
   refresh: () => Promise<void>;
   clearError: () => void;

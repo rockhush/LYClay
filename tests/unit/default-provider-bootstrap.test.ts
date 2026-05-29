@@ -162,6 +162,40 @@ describe('bootstrapLyManagedProviders', () => {
     }));
     expect(mocks.storeApiKey).toHaveBeenCalledWith('ly-qwen', 'EMPTY');
     expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
+      'ly-deepseek',
+      'deepseek-v4-flash',
+      expect.objectContaining({
+        baseUrl: 'http://10.7.221.62:8000/v1',
+        api: 'openai-completions',
+        apiKeyEnv: 'LY_DEEPSEEK_API_KEY',
+        modelOverrides: {
+          'deepseek-v4-flash': {
+            reasoning: true,
+            input: ['text'],
+            contextWindow: 100000,
+            maxTokens: 16384,
+            compat: { supportsUsageInStreaming: true },
+          },
+        },
+      }),
+    );
+    expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
+      'ly-deepseek',
+      expect.objectContaining({
+        baseUrl: 'http://10.7.221.62:8000/v1',
+        api: 'openai-completions',
+        apiKey: 'EMPTY',
+        models: [expect.objectContaining({
+          id: 'deepseek-v4-flash',
+          reasoning: true,
+          input: ['text'],
+          contextWindow: 100000,
+          maxTokens: 16384,
+          compat: { supportsUsageInStreaming: true },
+        })],
+      }),
+    );
+    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
       'ly-qwen',
       'qwen3.5-397b',
       expect.objectContaining({
@@ -174,6 +208,7 @@ describe('bootstrapLyManagedProviders', () => {
             input: ['text', 'image'],
             contextWindow: 100000,
             maxTokens: 16384,
+            compat: { supportsUsageInStreaming: true },
           },
         },
       }),
@@ -190,6 +225,7 @@ describe('bootstrapLyManagedProviders', () => {
           input: ['text', 'image'],
           contextWindow: 100000,
           maxTokens: 16384,
+          compat: { supportsUsageInStreaming: true },
         })],
       }),
     );

@@ -42,6 +42,7 @@ const LY_QWEN_MODEL_ID = 'qwen3.5-397b';
 const LY_QWEN_CONTEXT_WINDOW = 100000;
 const LY_QWEN_MAX_TOKENS = 16384;
 const LY_QWEN_API_KEY = 'EMPTY';
+const OPENAI_STREAM_USAGE_COMPAT = { supportsUsageInStreaming: true };
 
 // const LY_GLM_LABEL = 'LY-GLM';
 // const LY_GLM_BASE_URL = 'http://10.7.221.62:8000/v1';
@@ -357,6 +358,7 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
         contextWindow: LY_DEEPSEEK_CONTEXT_WINDOW,
         maxTokens: LY_DEEPSEEK_MAX_TOKENS,
         reasoning: true,
+        compat: OPENAI_STREAM_USAGE_COMPAT,
       },
     },
   });
@@ -365,6 +367,7 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     contextWindow: LY_DEEPSEEK_CONTEXT_WINDOW,
     maxTokens: LY_DEEPSEEK_MAX_TOKENS,
     reasoning: true,
+    compat: OPENAI_STREAM_USAGE_COMPAT,
   });
 
   const lyQwenExisting = await providerService.getAccount(LY_QWEN_PROVIDER_ID);
@@ -385,6 +388,7 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
           input: ['text', 'image'],
           contextWindow: LY_QWEN_CONTEXT_WINDOW,
           maxTokens: LY_QWEN_MAX_TOKENS,
+          compat: OPENAI_STREAM_USAGE_COMPAT,
         },
       },
     });
@@ -393,6 +397,7 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
       input: ['text', 'image'],
       contextWindow: LY_QWEN_CONTEXT_WINDOW,
       maxTokens: LY_QWEN_MAX_TOKENS,
+      compat: OPENAI_STREAM_USAGE_COMPAT,
     });
   }
 

@@ -28,6 +28,29 @@ description: test
     expect(resolvePackageDirNameFromManifest(manifest)).toBe('dws');
   });
 
+  it('parses quoted manifest scalars with escaped quotes', () => {
+    const manifest = parseSkillManifestFields(`---
+name: xlsx
+description: "Use when the user says \\"the xlsx in my downloads\\" and wants spreadsheet work."
+version: "1.0.0"
+---`);
+
+    expect(manifest).toMatchObject({
+      name: 'xlsx',
+      description: 'Use when the user says "the xlsx in my downloads" and wants spreadsheet work.',
+      version: '1.0.0',
+    });
+  });
+
+  it('parses single-quoted manifest scalars', () => {
+    const manifest = parseSkillManifestFields(`---
+name: xlsx
+description: 'Use for .xlsx, .xlsm, .csv, and .tsv files.'
+---`);
+
+    expect(manifest.description).toBe('Use for .xlsx, .xlsm, .csv, and .tsv files.');
+  });
+
   it('parses zip filename from content-disposition', () => {
     expect(parseZipBasenameFromContentDisposition('attachment; filename="dws.zip"')).toBe('dws.zip');
     expect(parseZipBasenameFromContentDisposition("attachment; filename*=UTF-8''dws.zip")).toBe('dws.zip');
