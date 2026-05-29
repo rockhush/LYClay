@@ -24,23 +24,23 @@ import { deleteProviderAccount, getProviderAccount, saveProviderAccount } from '
 const LY_MINIMAX_LABEL = 'LY-MiniMax';
 const LY_MINIMAX_BASE_URL = 'http://10.64.22.11:8000/v1';
 const LY_MINIMAX_MODEL_ID = 'MiniMax-M2.7';
-const LY_MINIMAX_CONTEXT_WINDOW = 204800;
-const LY_MINIMAX_MAX_TOKENS = 60000;
+const LY_MINIMAX_CONTEXT_WINDOW = 100000;
+const LY_MINIMAX_MAX_TOKENS = 16384;
 const LY_MINIMAX_API_KEY = 'EMPTY';
 
 const LY_MIMO_PROVIDER_ID = 'ly-mimo';
 const LY_DEEPSEEK_LABEL = 'LY-DeepSeek';
 const LY_DEEPSEEK_BASE_URL = 'http://10.7.221.62:8000/v1';
 const LY_DEEPSEEK_MODEL_ID = 'deepseek-v4-flash';
-const LY_DEEPSEEK_CONTEXT_WINDOW = 130000;
-const LY_DEEPSEEK_MAX_TOKENS = 60000;
+const LY_DEEPSEEK_CONTEXT_WINDOW = 100000;
+const LY_DEEPSEEK_MAX_TOKENS = 16384;
 const LY_DEEPSEEK_API_KEY = 'EMPTY';
 
 const LY_QWEN_LABEL = 'LY-Qwen';
 const LY_QWEN_BASE_URL = 'http://10.64.22.12:8000/v1';
 const LY_QWEN_MODEL_ID = 'qwen3.5-397b';
-const LY_QWEN_CONTEXT_WINDOW = 130000;
-const LY_QWEN_MAX_TOKENS = 81920;
+const LY_QWEN_CONTEXT_WINDOW = 100000;
+const LY_QWEN_MAX_TOKENS = 16384;
 const LY_QWEN_API_KEY = 'EMPTY';
 
 // const LY_GLM_LABEL = 'LY-GLM';

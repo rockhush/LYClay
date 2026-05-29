@@ -117,6 +117,8 @@ export interface ChatState {
   sessionLastActivity: Record<string, number>;
   /** Workspace entry id per session key (sidebar: nest history under that folder) */
   sessionWorkspaceIds: Record<string, string>;
+  /** Pin timestamp per session key; newer timestamps sort first in sidebar */
+  sessionPinnedAt: Record<string, number>;
   /** Streaming state per session, preserved when switching sessions */
   sessionStreamingStates: Record<string, SessionStreamingState>;
 
@@ -134,6 +136,8 @@ export interface ChatState {
   bindCurrentSessionWorkspace: (workspaceId: string | null) => void;
   /** Unlink a session from its workspace (session remains in history buckets). */
   unbindSessionWorkspace: (sessionKey: string) => void;
+  /** Toggle a session between pinned and normal sidebar ordering. */
+  toggleSessionPinned: (sessionKey: string) => void;
   /** Remove all session bindings pointing at the given workspace id. */
   clearSessionWorkspaceBindings: (workspaceId: string) => void;
   deleteSession: (key: string) => Promise<void>;

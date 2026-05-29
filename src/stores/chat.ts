@@ -225,6 +225,45 @@ function persistCustomSessionLabelsToStorage(labels: Record<string, string>): vo
   }
 }
 
+const SESSION_PINNED_AT_STORAGE_KEY = 'LYClaw:chat:session-pinned-at';
+
+function loadSessionPinnedAtFromStorage(): Record<string, number> {
+  try {
+    const raw = window.localStorage.getItem(SESSION_PINNED_AT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof k === 'string' && k && typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        out[k] = v;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function persistSessionPinnedAtToStorage(pinnedAt: Record<string, number>): void {
+  try {
+    window.localStorage.setItem(SESSION_PINNED_AT_STORAGE_KEY, JSON.stringify(pinnedAt));
+  } catch {
+    // Ignore quota / private mode failures; in-memory state still reflects the change.
+  }
+}
+
+let _lastPersistedSessionPinnedAt = '';
+
+function persistSessionPinnedAtIfChanged(pinnedAt: Record<string, number>): void {
+  const serialized = JSON.stringify(pinnedAt);
+  if (serialized === _lastPersistedSessionPinnedAt) return;
+  _lastPersistedSessionPinnedAt = serialized;
+  persistSessionPinnedAtToStorage(pinnedAt);
+}
+
+_lastPersistedSessionPinnedAt = JSON.stringify(loadSessionPinnedAtFromStorage());
+
 function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' | 'high' {
   if (mode === 'fast') return 'off';
   if (mode === 'expert') return 'high';
@@ -1827,6 +1866,7 @@ function buildSessionSwitchPatch(
     | 'sessionLabels'
     | 'sessionLastActivity'
     | 'sessionWorkspaceIds'
+    | 'sessionPinnedAt'
     | 'sessionStreamingStates'
     | 'activeRunId'
     | 'streamingText'
@@ -1904,6 +1944,9 @@ function buildSessionSwitchPatch(
     sessionWorkspaceIds: leavingEmpty
       ? clearSessionEntryFromMap(state.sessionWorkspaceIds, state.currentSessionKey)
       : state.sessionWorkspaceIds,
+    sessionPinnedAt: leavingEmpty
+      ? clearSessionEntryFromMap(state.sessionPinnedAt, state.currentSessionKey)
+      : state.sessionPinnedAt,
     // customSessionLabels is purely user-driven persisted state; preserved
     // across switches and only pruned in `deleteSession`/`renameSession`.
     sessionStreamingStates: finalStreamingStates,
@@ -2471,6 +2514,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   customSessionLabels: loadCustomSessionLabelsFromStorage(),
   sessionLastActivity: {},
   sessionWorkspaceIds: loadSessionWorkspaceIdsFromStorage(),
+  sessionPinnedAt: loadSessionPinnedAtFromStorage(),
   sessionStreamingStates: {},
   thinkingLevel: null,
   reasoningMode: loadStoredReasoningMode(),
@@ -2502,6 +2546,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const next = { ...s.sessionWorkspaceIds };
       delete next[sessionKey];
       return { sessionWorkspaceIds: next };
+    });
+  },
+
+  toggleSessionPinned: (sessionKey: string) => {
+    if (!sessionKey) return;
+    set((s) => {
+      const next = { ...s.sessionPinnedAt };
+      if (next[sessionKey]) {
+        delete next[sessionKey];
+      } else {
+        next[sessionKey] = Date.now();
+      }
+      persistSessionPinnedAtToStorage(next);
+      return { sessionPinnedAt: next };
     });
   },
 
@@ -2763,8 +2821,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const nextCustomLabels = Object.fromEntries(
           Object.entries(s.customSessionLabels).filter(([k]) => k !== key),
         );
+        const nextPinnedAt = Object.fromEntries(
+          Object.entries(s.sessionPinnedAt).filter(([k]) => k !== key),
+        );
         if (s.customSessionLabels[key]) {
           persistCustomSessionLabelsToStorage(nextCustomLabels);
+        }
+        if (s.sessionPinnedAt[key]) {
+          persistSessionPinnedAtToStorage(nextPinnedAt);
         }
         return {
           sessions: remaining,
@@ -2772,6 +2836,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           customSessionLabels: nextCustomLabels,
           sessionLastActivity: Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== key)),
           sessionWorkspaceIds: Object.fromEntries(Object.entries(s.sessionWorkspaceIds).filter(([k]) => k !== key)),
+          sessionPinnedAt: nextPinnedAt,
           sessionStreamingStates: Object.fromEntries(Object.entries(s.sessionStreamingStates).filter(([k]) => k !== key)),
           // Restore messages snapshot if there's an active stream, otherwise clear for loadHistory
           messages: preservedMessages,
@@ -2803,8 +2868,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const nextCustomLabels = Object.fromEntries(
           Object.entries(s.customSessionLabels).filter(([k]) => k !== key),
         );
+        const nextPinnedAt = Object.fromEntries(
+          Object.entries(s.sessionPinnedAt).filter(([k]) => k !== key),
+        );
         if (s.customSessionLabels[key]) {
           persistCustomSessionLabelsToStorage(nextCustomLabels);
+        }
+        if (s.sessionPinnedAt[key]) {
+          persistSessionPinnedAtToStorage(nextPinnedAt);
         }
         return {
           sessions: remaining,
@@ -2812,6 +2883,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           customSessionLabels: nextCustomLabels,
           sessionLastActivity: Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== key)),
           sessionWorkspaceIds: Object.fromEntries(Object.entries(s.sessionWorkspaceIds).filter(([k]) => k !== key)),
+          sessionPinnedAt: nextPinnedAt,
           sessionStreamingStates: Object.fromEntries(Object.entries(s.sessionStreamingStates).filter(([k]) => k !== key)),
         };
       });
@@ -2945,7 +3017,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       && !sessionLastActivity[currentSessionKey]
       && !sessionLabels[currentSessionKey];
     if (!isEmptyNonMain) return;
-    set((s) => ({
+    set((s) => {
+      const nextPinnedAt = Object.fromEntries(
+        Object.entries(s.sessionPinnedAt).filter(([k]) => k !== currentSessionKey),
+      );
+      if (s.sessionPinnedAt[currentSessionKey]) {
+        persistSessionPinnedAtToStorage(nextPinnedAt);
+      }
+      return {
       sessions: s.sessions.filter((sess) => sess.key !== currentSessionKey),
       sessionLabels: Object.fromEntries(
         Object.entries(s.sessionLabels).filter(([k]) => k !== currentSessionKey),
@@ -2956,10 +3035,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessionWorkspaceIds: Object.fromEntries(
         Object.entries(s.sessionWorkspaceIds).filter(([k]) => k !== currentSessionKey),
       ),
+      sessionPinnedAt: nextPinnedAt,
       sessionStreamingStates: Object.fromEntries(
         Object.entries(s.sessionStreamingStates).filter(([k]) => k !== currentSessionKey),
       ),
-    }));
+      };
+    });
   },
 
   // ── Load chat history ──
@@ -4222,4 +4303,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
 useChatStore.subscribe((state) => {
   persistSessionWorkspaceIdsIfChanged(state.sessionWorkspaceIds);
+  persistSessionPinnedAtIfChanged(state.sessionPinnedAt);
 });

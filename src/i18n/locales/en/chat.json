@@ -101,6 +101,7 @@
         "collapseWorkspaceChats": "Hide chats in this workspace"
     },
     "historyBuckets": {
+        "pinned": "Pinned",
         "today": "Today",
         "yesterday": "Yesterday",
         "withinWeek": "Within 1 Week",

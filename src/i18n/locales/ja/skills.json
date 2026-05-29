@@ -87,6 +87,7 @@
         "enabled": "スキルを有効にしました",
         "disabled": "スキルを無効にしました",
         "installed": "スキルをインストールして有効にしました",
+        "allSkillsUpdatedOnStartup": "すべてのスキルを更新しました",
         "updated": "スキルを更新しました",
         "uninstalled": "スキルのアンインストールに成功しました",
         "updatesFound": "更新可能なスキルが {{count}} 件あります",

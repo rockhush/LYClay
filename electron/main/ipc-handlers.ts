@@ -26,6 +26,13 @@ import { buildOpenClawControlUiUrl } from '../utils/openclaw-control-ui';
 import { logger } from '../utils/logger';
 import { resolveAgentIdFromChannel } from '../utils/agent-config';
 import { installLocalSkillZip } from '../utils/local-skill-upload';
+import {
+  appendWorkspaceMemorySummary,
+  getWorkspaceMemoryStatus,
+  openWorkspaceMemoryFile,
+  readWorkspaceMemoryFile,
+  type MemorySummaryBlock,
+} from '../services/workspace-memory-service';
 import { resolveAccountIdFromSessionHistory } from '../utils/session-util';
 import {
   saveChannelConfig,
@@ -129,6 +136,9 @@ export function registerIpcHandlers(
 
   // Cron task handlers (proxy to Gateway RPC)
   registerCronHandlers(gatewayManager);
+
+  // Workspace memory handlers
+  registerWorkspaceMemoryHandlers();
 
   // Window control handlers (for custom title bar on Windows/Linux)
   registerWindowHandlers(mainWindow);
@@ -2755,6 +2765,46 @@ function registerSkillUploadHandlers(): void {
         success: false,
         error: msg,
       };
+    }
+  });
+}
+
+/**
+ * Workspace memory IPC handlers
+ */
+function registerWorkspaceMemoryHandlers(): void {
+  ipcMain.handle('workspace-memory:status', async (_, workspaceDir?: string) => {
+    try {
+      return { success: true, result: await getWorkspaceMemoryStatus(workspaceDir) };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('workspace-memory:open', async (_, workspaceDir?: string) => {
+    try {
+      await openWorkspaceMemoryFile(workspaceDir);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('workspace-memory:read', async (_, workspaceDir?: string) => {
+    try {
+      const result = await readWorkspaceMemoryFile(workspaceDir);
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('workspace-memory:append', async (_, workspaceDir: string, summary: MemorySummaryBlock) => {
+    try {
+      await appendWorkspaceMemorySummary(workspaceDir, summary);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: String(error) };
     }
   });
 }

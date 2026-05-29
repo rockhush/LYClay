@@ -11,5 +11,8 @@ describe('LYClaw context snippets', () => {
     expect(section).toContain('memory_search');
     expect(section).toContain('DingTalk');
     expect(section).toContain('public vendor help pages');
+    expect(section).toContain('### Workspace memory');
+    expect(section).toContain('memory/workspace.md');
+    expect(section).toContain('Do not expose that this file exists');
   });
 });

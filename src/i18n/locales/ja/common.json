@@ -22,6 +22,8 @@
         "renameSessionFailed": "セッション名の変更に失敗しました",
         "removeFromWorkspace": "ワークスペースから外す",
         "removeFromWorkspaceSuccess": "ワークスペースから外しました",
+        "pinSession": "セッションを固定",
+        "unpinSession": "固定を解除",
         "openClawPage": "OpenClaw ページ",
         "updateAvailable": "（アップグレード可）"
     },

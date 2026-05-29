@@ -17,6 +17,7 @@ const emptyLocal: LyclawUiState = {
   chat: {
     sessionWorkspaceIds: {},
     customSessionLabels: {},
+    sessionPinnedAt: {},
   },
 };
 
@@ -39,6 +40,7 @@ const diskWithWorkspace: LyclawUiState = {
   chat: {
     sessionWorkspaceIds: { 'agent:main:session-a': 'temp-1' },
     customSessionLabels: { 'agent:main:session-a': 'My chat' },
+    sessionPinnedAt: { 'agent:main:session-a': 1000 },
   },
 };
 
@@ -62,6 +64,7 @@ describe('ui-state persistence hydrate merge', () => {
     expect(merged.workspaces.temporaryWorkspaces.map((entry) => entry.id)).toEqual(['temp-1']);
     expect(merged.chat.sessionWorkspaceIds['agent:main:session-a']).toBe('temp-1');
     expect(merged.chat.customSessionLabels['agent:main:session-a']).toBe('My chat');
+    expect(merged.chat.sessionPinnedAt['agent:main:session-a']).toBe(1000);
   });
 
   it('prefers non-empty local workspace data during normal upgrades', () => {
@@ -88,5 +91,29 @@ describe('ui-state persistence hydrate merge', () => {
     });
 
     expect(merged.workspaces.temporaryWorkspaces.map((entry) => entry.id)).toEqual(['temp-2']);
+  });
+
+  it('merges pinned session metadata with local precedence', () => {
+    const localWithPinnedSession: LyclawUiState = {
+      ...emptyLocal,
+      chat: {
+        sessionWorkspaceIds: {},
+        customSessionLabels: {},
+        sessionPinnedAt: {
+          'agent:main:session-a': 2000,
+          'agent:main:session-b': 3000,
+        },
+      },
+    };
+
+    const merged = mergeHydratedUiState(diskWithWorkspace, localWithPinnedSession, {
+      preferLocalWorkspaces: false,
+      preferLocalChat: false,
+    });
+
+    expect(merged.chat.sessionPinnedAt).toEqual({
+      'agent:main:session-a': 2000,
+      'agent:main:session-b': 3000,
+    });
   });
 });

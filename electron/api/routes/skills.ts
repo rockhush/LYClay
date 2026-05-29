@@ -8,6 +8,7 @@ import {
   logSkillCheckUpdateResultsSummary,
   toHostCheckUpdateResult,
 } from '../../utils/company-skill-update';
+import { isCompanyPortalReachable } from '../../utils/company-portal-reachability';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -135,6 +136,16 @@ export async function handleSkillRoutes(
       });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
+  if (url.pathname === '/api/clawhub/company-portal-reachable' && req.method === 'GET') {
+    try {
+      const reachable = await isCompanyPortalReachable();
+      sendJson(res, 200, { success: true, reachable });
+    } catch (error) {
+      sendJson(res, 500, { success: false, reachable: false, error: String(error) });
     }
     return true;
   }

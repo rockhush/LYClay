@@ -102,6 +102,7 @@
         "collapseWorkspaceChats": "このワークスペースのチャットを隠す"
     },
     "historyBuckets": {
+        "pinned": "固定済み",
         "today": "今日",
         "yesterday": "昨日",
         "withinWeek": "1週間以内",

@@ -10,6 +10,8 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from './logger';
 import { getResourcesDir } from './paths';
+import { readUiState } from './ui-state';
+import { ensureWorkspaceMemoryFile } from '../services/workspace-memory-service';
 
 const CLAWX_BEGIN = '<!-- LYClaw:begin -->';
 const CLAWX_END = '<!-- LYClaw:end -->';
@@ -142,6 +144,21 @@ async function resolveAllWorkspaceDirs(): Promise<string[]> {
     // ignore config parse errors
   }
 
+  try {
+    const uiState = readUiState();
+    for (const workspace of uiState.workspaces.temporaryWorkspaces) {
+      if (workspace.path.trim()) {
+        dirs.add(workspace.path.replace(/^~/, homedir()));
+      }
+    }
+    const currentWorkspacePath = uiState.workspaces.currentWorkspacePath;
+    if (currentWorkspacePath?.trim()) {
+      dirs.add(currentWorkspacePath.replace(/^~/, homedir()));
+    }
+  } catch {
+    // ignore UI state read errors
+  }
+
   // We intentionally do NOT scan ~/.openclaw/ for any directory starting
   // with 'workspace'. Doing so causes a race condition where a recently deleted
   // agent's workspace (e.g., workspace-code23) is found and resuscitated by
@@ -247,6 +264,11 @@ async function mergeClawXContextOnce(): Promise<number> {
 
   for (const workspaceDir of workspaceDirs) {
     await ensureDir(workspaceDir);
+    try {
+      await ensureWorkspaceMemoryFile(workspaceDir);
+    } catch (error) {
+      logger.warn(`Failed to ensure workspace memory file (${workspaceDir}):`, error);
+    }
 
     for (const file of files) {
       const targetName = file

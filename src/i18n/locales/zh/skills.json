@@ -89,6 +89,7 @@
         "enabled": "技能已启用",
         "disabled": "技能已禁用",
         "installed": "技能已安装并启用",
+        "allSkillsUpdatedOnStartup": "全部 skill 已更新",
         "updated": "技能已更新",
         "uninstalled": "技能已成功卸载",
         "updatesFound": "发现 {{count}} 个技能可更新",

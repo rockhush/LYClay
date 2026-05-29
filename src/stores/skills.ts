@@ -264,7 +264,7 @@ interface SkillsState {
 }
 
 let _errorTimeout: ReturnType<typeof setTimeout> | null = null;
-let startupSkillAutoUpdateDone = false;
+// let startupSkillAutoUpdateDone = false;
 
 const DEFAULT_MARKETPLACE_SORT = '-download_count';
 
@@ -993,12 +993,17 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   },
 
   autoUpdateInstalledSkillsOnStartup: async () => {
+    // Disabled: intranet probe + uninstall/reinstall all skills on startup.
+    // Skills list still loads via ensureGatewayReadySkillsRefetch() below.
+    return;
+
+    /*
     if (startupSkillAutoUpdateDone) return;
     startupSkillAutoUpdateDone = true;
 
-    try {
-      await get().prefetchMarketplaceCatalog();
+    let hadInstalledSkills = false;
 
+    try {
       let companyInstallEntries = get().companyInstallEntries;
       if (Object.keys(companyInstallEntries).length === 0) {
         const mapResult = await hostApiFetch<{
@@ -1015,46 +1020,58 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         }
       }
 
-      const payload = Object.keys(companyInstallEntries)
-        .map((marketplaceId) => ({ skill_id: Number(marketplaceId) }))
-        .filter((item) => Number.isFinite(item.skill_id));
+      const installedSnapshot = Object.entries(companyInstallEntries)
+        .filter(([marketplaceId]) => Number.isFinite(Number(marketplaceId)));
 
-      if (payload.length === 0) return;
+      if (installedSnapshot.length === 0) return;
 
-      console.log('[Skills Store] Startup auto skill update: checking', payload.length, 'installed skills');
-
-      const updates = await get().checkInstalledSkillUpdates(payload);
-      const candidates = Object.entries(companyInstallEntries).filter(([marketplaceId]) =>
-        updates[marketplaceId]?.hasUpdate,
+      const portalProbe = await hostApiFetch<{ success: boolean; reachable?: boolean }>(
+        '/api/clawhub/company-portal-reachable',
       );
-
-      if (candidates.length === 0) {
-        console.log('[Skills Store] Startup auto skill update: all skills up to date');
+      if (!portalProbe.success || !portalProbe.reachable) {
+        console.log('[Skills Store] Startup skill refresh skipped: company portal unreachable');
         return;
       }
 
-      console.log('[Skills Store] Startup auto skill update: updating', candidates.length, 'skills sequentially');
+      await get().prefetchMarketplaceCatalog();
 
-      for (const [marketplaceId, entry] of candidates) {
-        const latestVersion = updates[marketplaceId]?.latestVersion;
+      hadInstalledSkills = true;
+      console.log('[Skills Store] Startup skill refresh: reinstalling', installedSnapshot.length, 'skills');
+
+      for (const [marketplaceId, entry] of installedSnapshot) {
+        const uninstallKey = entry.packageSlug || marketplaceId;
         try {
-          const packageSlug = await get().updateSkill(marketplaceId, latestVersion);
+          await get().uninstallSkill(uninstallKey);
+          console.log(`[Skills Store] Startup skill refresh uninstalled: ${entry.name || marketplaceId}`);
+        } catch (error) {
+          console.error(`[Skills Store] Startup skill refresh uninstall failed for ${entry.name || marketplaceId}:`, error);
+        }
+      }
+
+      for (const [marketplaceId, entry] of installedSnapshot) {
+        try {
+          const packageSlug = await get().installSkill(marketplaceId);
           if (packageSlug) {
             const installed = get().skills.find(
               (skill) => skill.slug === packageSlug || skill.id === packageSlug,
             );
             await get().enableSkill(installed?.id || packageSlug);
           }
-          console.log(`[Skills Store] Startup auto skill update succeeded: ${entry.name || marketplaceId}`);
+          console.log(`[Skills Store] Startup skill refresh installed: ${entry.name || marketplaceId}`);
         } catch (error) {
-          console.error(`[Skills Store] Startup auto skill update failed for ${entry.name || marketplaceId}:`, error);
+          console.error(`[Skills Store] Startup skill refresh install failed for ${entry.name || marketplaceId}:`, error);
         }
       }
 
       await get().fetchSkills().catch(() => undefined);
     } catch (error) {
-      console.error('[Skills Store] Startup auto skill update failed:', error);
+      console.error('[Skills Store] Startup skill refresh failed:', error);
+    } finally {
+      if (hadInstalledSkills) {
+        toast.success(i18n.t('skills:toast.allSkillsUpdatedOnStartup'));
+      }
     }
+    */
   },
 
   clearSkillUpdates: () => set({ skillUpdates: {} }),

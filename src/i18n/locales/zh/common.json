@@ -22,6 +22,8 @@
         "renameSessionFailed": "重命名对话失败",
         "removeFromWorkspace": "移出工作空间",
         "removeFromWorkspaceSuccess": "已移出工作空间",
+        "pinSession": "置顶对话",
+        "unpinSession": "取消置顶",
         "openClawPage": "OpenClaw 页面",
         "updateAvailable": "（可升级）"
     },

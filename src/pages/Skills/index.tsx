@@ -48,11 +48,11 @@ import type { Skill, MarketplaceSkill } from '@/types/skill';
 import {
   buildMarketplaceLookupMaps,
   companyInstallEntriesToMarketplaceSkills,
-  findInstalledSkillForMarketplace,
   findMarketplaceSkillMatch,
   getMarketplaceSkillKey,
   isMarketplaceSkillInstalledOnDisk,
   formatSkillVersionLabel,
+  resolveSkillListVersionForDisplay,
   isLyclawBuiltinSkill,
   isPlaceholderSkillDescription,
   resolveSkillDisplayName,
@@ -249,7 +249,7 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle,
   const initial = getSkillInitial(displayName);
   const colorClass = getSkillColor(displayName);
   const displayVersion = formatSkillVersionLabel(
-    skill.version,
+    resolveSkillListVersionForDisplay(skill, marketplaceMatch),
     t('card.versionUnknown', { defaultValue: '未知' }),
     { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
@@ -260,6 +260,7 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle,
     : skill.isBundled
       ? t('detail.bundled')
       : t('detail.userInstalled');
+  const authorLabel = (skill.author || marketplaceMatch?.author || '').trim();
 
   return (
     <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -279,9 +280,16 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle,
             </div>
 
             <div className="flex-1 min-w-0">
-              <SheetTitle className="text-[18px] font-semibold text-foreground leading-tight truncate">
-                {displayName}
-              </SheetTitle>
+              <div className="flex items-center gap-2 min-w-0">
+                <SheetTitle className="text-[18px] font-semibold text-foreground leading-tight truncate min-w-0">
+                  {displayName}
+                </SheetTitle>
+                {authorLabel && (
+                  <span className="text-[12px] text-muted-foreground shrink-0">
+                    {authorLabel}
+                  </span>
+                )}
+              </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <Badge
                   variant="secondary"
@@ -305,11 +313,6 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle,
                   <DetailMetaComponent key={`skill-detail-meta-${index}`} skill={skill} />
                 ))}
               </div>
-              {skill.author && (
-                <p className="mt-2 text-[12px] text-muted-foreground">
-                  {skill.author}
-                </p>
-              )}
             </div>
 
             {!skill.isCore && (
@@ -479,7 +482,7 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
   const initial = getSkillInitial(displayName);
   const colorClass = getSkillColor(displayName);
   const versionLabel = formatSkillVersionLabel(
-    skill.version,
+    resolveSkillListVersionForDisplay(skill, marketplaceMatch),
     t('card.versionUnknown', { defaultValue: '未知' }),
     { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
@@ -562,7 +565,6 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
 interface MarketplaceSkillCardProps {
   skill: MarketplaceSkill;
   isInstalled: boolean;
-  installedLocalVersion?: string;
   isLoading: boolean;
   onInstall: () => void;
   onUninstall: () => void;
@@ -572,7 +574,6 @@ interface MarketplaceSkillCardProps {
 function MarketplaceSkillCard({
   skill,
   isInstalled,
-  installedLocalVersion,
   isLoading,
   onInstall,
   onUninstall,
@@ -581,7 +582,7 @@ function MarketplaceSkillCard({
   const initial = getSkillInitial(skill.name);
   const colorClass = getSkillColor(skill.name);
   const versionLabel = formatSkillVersionLabel(
-    isInstalled ? installedLocalVersion : skill.version,
+    skill.version,
     t('card.versionUnknown', { defaultValue: '未知' }),
   );
   const author =
@@ -1387,9 +1388,6 @@ export function Skills() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {visibleMarketplaceSkills.map((skill) => {
                     const isInstalled = isMarketplaceSkillInstalled(skill);
-                    const installedMatch = isInstalled
-                      ? findInstalledSkillForMarketplace(skill, safeSkills, companyInstallMap)
-                      : undefined;
                     const marketplaceKey = getMarketplaceSkillKey(skill);
                     const actionKey = skill.slug;
                     const isBusy = !!installing[actionKey];
@@ -1398,7 +1396,6 @@ export function Skills() {
                         key={marketplaceKey}
                         skill={skill}
                         isInstalled={isInstalled}
-                        installedLocalVersion={installedMatch?.version}
                         isLoading={isBusy}
                         onInstall={() => handleInstall(skill.slug)}
                         onUninstall={() => handleUninstall(skill.slug)}

@@ -22,6 +22,7 @@ describe('ui-state persistence', () => {
       chat: {
         sessionWorkspaceIds: { 'agent:main:session-a': 'temp-1' },
         customSessionLabels: {},
+        sessionPinnedAt: { 'agent:main:session-a': 1000 },
       },
     });
 
@@ -42,6 +43,7 @@ describe('ui-state persistence', () => {
       chat: {
         sessionWorkspaceIds: { 'agent:main:session-b': 'temp-2' },
         customSessionLabels: { 'agent:main:session-b': 'B' },
+        sessionPinnedAt: { 'agent:main:session-b': 2000 },
       },
     });
 
@@ -105,6 +107,7 @@ describe('ui-state persistence', () => {
       chat: {
         sessionWorkspaceIds: { 'agent:main:session-a': 'temp-1' },
         customSessionLabels: {},
+        sessionPinnedAt: { 'agent:main:session-a': 1000 },
       },
     });
 

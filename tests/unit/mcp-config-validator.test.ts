@@ -23,14 +23,13 @@ describe('validateMcpConfig', () => {
     expect(r.valid).toBe(true);
   });
 
-  it('rejects non-https url for streamable-http', () => {
+  it('accepts http url for streamable-http', () => {
     const r = validateMcpConfig({
       servers: {
         x: { type: 'streamable-http', url: 'http://example.com', disabled: false },
       },
     });
-    expect(r.valid).toBe(false);
-    expect(r.errors.some((e) => e.includes('https'))).toBe(true);
+    expect(r.valid).toBe(true);
   });
 
   it('rejects suspicious stdio command', () => {

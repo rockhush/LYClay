@@ -22,6 +22,8 @@
         "renameSessionFailed": "Failed to rename session",
         "removeFromWorkspace": "Remove from workspace",
         "removeFromWorkspaceSuccess": "Removed from workspace",
+        "pinSession": "Pin session",
+        "unpinSession": "Unpin session",
         "openClawPage": "OpenClaw Page",
         "updateAvailable": " (Upgrade available)"
     },

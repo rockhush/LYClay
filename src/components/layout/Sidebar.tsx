@@ -30,6 +30,8 @@ import {
   LogOut,
   User,
   CheckCircle2,
+  Pin,
+  PinOff,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { rendererExtensionRegistry } from '@/extensions/registry';
@@ -179,11 +181,13 @@ export function Sidebar() {
   const customSessionLabels = useChatStore((s) => s.customSessionLabels);
   const sessionLastActivity = useChatStore((s) => s.sessionLastActivity);
   const sessionWorkspaceIds = useChatStore((s) => s.sessionWorkspaceIds);
+  const sessionPinnedAt = useChatStore((s) => s.sessionPinnedAt);
   const sessionStreamingStates = useChatStore((s) => s.sessionStreamingStates);
   const switchSession = useChatStore((s) => s.switchSession);
   const newSession = useChatStore((s) => s.newSession);
   const clearSessionWorkspaceBindings = useChatStore((s) => s.clearSessionWorkspaceBindings);
   const unbindSessionWorkspace = useChatStore((s) => s.unbindSessionWorkspace);
+  const toggleSessionPinned = useChatStore((s) => s.toggleSessionPinned);
   const deleteSession = useChatStore((s) => s.deleteSession);
   const renameSession = useChatStore((s) => s.renameSession);
   const loadSessions = useChatStore((s) => s.loadSessions);
@@ -279,11 +283,26 @@ export function Sidebar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isPendingNewSession deps listed below
   }, [sessions, sessionLabels, customSessionLabels, currentSessionKey, messages.length]);
 
+  const pinnedSidebarSessions = useMemo(() => {
+    return orderedSidebarSessions
+      .filter((session) => Number.isFinite(sessionPinnedAt[session.key]) && sessionPinnedAt[session.key] > 0)
+      .sort((a, b) => {
+        const pinnedDiff = sessionPinnedAt[b.key] - sessionPinnedAt[a.key];
+        if (pinnedDiff !== 0) return pinnedDiff;
+        return resolveSessionActivityMs(b, sessionLastActivity) - resolveSessionActivityMs(a, sessionLastActivity);
+      });
+  }, [orderedSidebarSessions, sessionLastActivity, sessionPinnedAt]);
+
+  const unpinnedSidebarSessions = useMemo(
+    () => orderedSidebarSessions.filter((session) => !(Number.isFinite(sessionPinnedAt[session.key]) && sessionPinnedAt[session.key] > 0)),
+    [orderedSidebarSessions, sessionPinnedAt],
+  );
+
   const sessionsByWorkspaceId = useMemo(() => {
     const map: Record<string, ChatSession[]> = Object.fromEntries(
       allWorkspaces.map((workspace) => [workspace.id, [] as ChatSession[]]),
     );
-    for (const session of orderedSidebarSessions) {
+    for (const session of [...pinnedSidebarSessions, ...unpinnedSidebarSessions]) {
       const wid = sessionWorkspaceIds[session.key];
       if (wid && workspaceIdsKnown.has(wid)) {
         const list = map[wid];
@@ -291,7 +310,7 @@ export function Sidebar() {
       }
     }
     return map;
-  }, [allWorkspaces, orderedSidebarSessions, sessionWorkspaceIds, workspaceIdsKnown]);
+  }, [allWorkspaces, pinnedSidebarSessions, sessionWorkspaceIds, unpinnedSidebarSessions, workspaceIdsKnown]);
 
   const activeWorkspaceId = sessionWorkspaceIds[currentSessionKey] ?? null;
 
@@ -544,6 +563,10 @@ export function Sidebar() {
       ? t('chat:sidebar.statusRunning', { defaultValue: '问答进行中' })
       : t('chat:sidebar.statusCompleted', { defaultValue: '已完成' });
     const sessionLabel = getSessionLabel(s.key, s.displayName, s.label);
+    const isPinned = Number.isFinite(sessionPinnedAt[s.key]) && sessionPinnedAt[s.key] > 0;
+    const pinLabel = isPinned
+      ? t('common:sidebar.unpinSession')
+      : t('common:sidebar.pinSession');
     return (
       <div key={s.key} className="group relative flex items-center">
         <button
@@ -567,7 +590,7 @@ export function Sidebar() {
           }
           className={cn(
             'w-full text-left rounded-lg py-1.5 text-[13px] transition-[padding,colors]',
-            inWorkspace ? 'pl-1.5 pr-1.5 group-hover:pr-[4.25rem]' : 'px-2.5 group-hover:pr-12',
+            inWorkspace ? 'pl-1.5 pr-1.5 group-hover:pr-[5.25rem]' : 'px-2.5 group-hover:pr-[4.25rem]',
             'hover:bg-white/60 dark:hover:bg-white/10',
             isSessionViewActive && currentSessionKey === s.key
               ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground'
@@ -607,14 +630,30 @@ export function Sidebar() {
                 {sessionLabel}
               </TooltipContent>
             </Tooltip>
+            {isPinned ? (
+              <Pin className="h-3 w-3 shrink-0 text-[#FF922B]" />
+            ) : null}
           </div>
         </button>
         <div
           className={cn(
             'absolute right-1 flex items-center gap-0.5 transition-opacity',
-            'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
+            isPinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
           )}
         >
+          <button
+            type="button"
+            aria-label={pinLabel}
+            title={pinLabel}
+            data-testid={`sidebar-session-pin-${s.key}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleSessionPinned(s.key);
+            }}
+            className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
+          >
+            {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+          </button>
           <button
             type="button"
             aria-label={t('common:sidebar.renameSession')}
@@ -680,7 +719,7 @@ export function Sidebar() {
       (typeof buckets)[number]
     >;
 
-    for (const session of orderedSidebarSessions) {
+    for (const session of unpinnedSidebarSessions) {
       if (isSessionListedUnderWorkspace(session.key)) continue;
       const bucketKey = getSessionBucket(resolveSessionActivityMs(session, sessionLastActivity), nowMs);
       bucketMap[bucketKey].sessions.push(session);
@@ -688,11 +727,16 @@ export function Sidebar() {
 
     return buckets;
   }, [
-    orderedSidebarSessions,
+    unpinnedSidebarSessions,
     sessionLastActivity,
     nowMs,
     t,
   ]);
+
+  const pinnedHistorySessions = useMemo(
+    () => pinnedSidebarSessions.filter((session) => !isSessionListedUnderWorkspace(session.key)),
+    [pinnedSidebarSessions, sessionWorkspaceIds, workspaceIdsKnown],
+  );
 
   const hiddenRoutes = rendererExtensionRegistry.getHiddenRoutes();
   const extraNavItems = rendererExtensionRegistry.getExtraNavItems();
@@ -958,13 +1002,21 @@ export function Sidebar() {
           {/* Session list — below workspaces */}
           {orderedSidebarSessions.some((s) => !isSessionListedUnderWorkspace(s.key)) && (
             <div className="space-y-0.5">
+              {pinnedHistorySessions.length > 0 ? (
+                <div className="pt-2">
+                  <div className="px-2.5 pb-1 text-[11px] font-medium text-muted-foreground/60 tracking-tight">
+                    {t('chat:historyBuckets.pinned')}
+                  </div>
+                  {pinnedHistorySessions.map((session) => renderChatSessionRow(session))}
+                </div>
+              ) : null}
               {sessionBuckets.map((bucket) => (
                 bucket.sessions.length > 0 ? (
                   <div key={bucket.key} className="pt-2">
                     <div className="px-2.5 pb-1 text-[11px] font-medium text-muted-foreground/60 tracking-tight">
                       {bucket.label}
                     </div>
-                    {bucket.sessions.map(renderChatSessionRow)}
+                    {bucket.sessions.map((session) => renderChatSessionRow(session))}
                   </div>
                 ) : null
               ))}

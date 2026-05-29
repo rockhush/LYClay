@@ -22,6 +22,8 @@
         "renameSessionFailed": "Не удалось переименовать сессию",
         "removeFromWorkspace": "Убрать из рабочего пространства",
         "removeFromWorkspaceSuccess": "Убрано из рабочего пространства",
+        "pinSession": "Закрепить сессию",
+        "unpinSession": "Открепить сессию",
         "openClawPage": "Страница OpenClaw",
         "updateAvailable": " (Доступно обновление)"
     },

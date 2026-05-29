@@ -101,6 +101,7 @@
         "collapseWorkspaceChats": "Скрыть чаты в этой рабочей области"
     },
     "historyBuckets": {
+        "pinned": "Закреплённые",
         "today": "Сегодня",
         "yesterday": "Вчера",
         "withinWeek": "В течение недели",

@@ -234,8 +234,44 @@ describe('ensureClawXContext', () => {
     expect(result).toBe('done');
     await expect(readFile(join(defaultWorkspace, 'AGENTS.md'), 'utf-8')).resolves.toContain('## LYClaw Environment');
     await expect(readFile(join(defaultWorkspace, 'TOOLS.md'), 'utf-8')).resolves.toContain('## LYClaw Tool Notes');
+    await expect(readFile(join(defaultWorkspace, 'memory', 'workspace.md'), 'utf-8')).resolves.toContain('# Workspace Memory');
+    await expect(readFile(join(agentWorkspace, 'memory', 'workspace.md'), 'utf-8')).resolves.toContain('# Workspace Memory');
     await expect(access(join(agentWorkspace, 'AGENTS.md'))).rejects.toThrow();
     await expect(access(join(agentWorkspace, 'TOOLS.md'))).rejects.toThrow();
+  });
+
+  it('ensures workspace memory for user-added temporary workspaces', async () => {
+    const openclawDir = join(testHome, '.openclaw');
+    const userWorkspace = join(testHome, 'user-project');
+    await mkdir(openclawDir, { recursive: true });
+    await mkdir(userWorkspace, { recursive: true });
+    await writeFile(join(userWorkspace, 'AGENTS.md'), '# AGENTS.md\n\nExisting agents.\n', 'utf-8');
+    await writeFile(join(openclawDir, 'lyclaw-ui-state.json'), JSON.stringify({
+      version: 1,
+      updatedAt: Date.now(),
+      workspaces: {
+        currentWorkspaceId: 'temp-1',
+        currentWorkspacePath: userWorkspace,
+        temporaryWorkspaces: [{
+          id: 'temp-1',
+          name: 'User Project',
+          agentId: 'temp',
+          agentName: 'User Project',
+          path: userWorkspace,
+          createdAt: Date.now(),
+          lastAccessedAt: Date.now(),
+        }],
+      },
+      chat: {
+        sessionWorkspaceIds: {},
+        customSessionLabels: {},
+      },
+    }), 'utf-8');
+
+    await ensureClawXContext();
+
+    await expect(readFile(join(userWorkspace, 'memory', 'workspace.md'), 'utf-8')).resolves.toContain('# Workspace Memory');
+    await expect(readFile(join(userWorkspace, 'AGENTS.md'), 'utf-8')).resolves.toContain('## LYClaw Environment');
   });
 
   it('does not wait for missing external default workspaces', async () => {

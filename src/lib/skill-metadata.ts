@@ -262,6 +262,21 @@ export function resolveSkillDisplayName(
   return skill.name?.trim() || '';
 }
 
+/** Version label source for installed cards: prefer skill-list API version over local SKILL.md. */
+export function resolveSkillListVersionForDisplay(
+  skill: Pick<Skill, 'version' | 'isBundled' | 'isCore' | 'id' | 'slug' | 'name'>,
+  marketplace?: Pick<MarketplaceSkill, 'version'>,
+): string | undefined {
+  if (isLyclawBuiltinSkill(skill)) {
+    return skill.version;
+  }
+  const listVersion = marketplace?.version?.trim();
+  if (listVersion) {
+    return listVersion;
+  }
+  return skill.version;
+}
+
 export function mergeSkillWithMarketplaceMetadata(
   skill: Skill,
   marketplace?: MarketplaceSkill,

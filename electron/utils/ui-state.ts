@@ -28,6 +28,7 @@ export interface LyclawUiState {
   chat: {
     sessionWorkspaceIds: Record<string, string>;
     customSessionLabels: Record<string, string>;
+    sessionPinnedAt: Record<string, number>;
   };
 }
 
@@ -49,6 +50,7 @@ export function createEmptyUiState(): LyclawUiState {
     chat: {
       sessionWorkspaceIds: {},
       customSessionLabels: {},
+      sessionPinnedAt: {},
     },
   };
 }
@@ -58,6 +60,17 @@ function sanitizeStringRecord(input: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
     if (typeof key === 'string' && key && typeof value === 'string' && value) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function sanitizeNumberRecord(input: unknown): Record<string, number> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof key === 'string' && key && typeof value === 'number' && Number.isFinite(value) && value > 0) {
       out[key] = value;
     }
   }
@@ -116,6 +129,7 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
     chat: {
       sessionWorkspaceIds: sanitizeStringRecord(chatObj.sessionWorkspaceIds),
       customSessionLabels: sanitizeStringRecord(chatObj.customSessionLabels),
+      sessionPinnedAt: sanitizeNumberRecord(chatObj.sessionPinnedAt),
     },
   };
 }
@@ -183,6 +197,9 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
       customSessionLabels: replaceChat
         ? normalizedPatch.chat.customSessionLabels
         : { ...base.chat.customSessionLabels, ...normalizedPatch.chat.customSessionLabels },
+      sessionPinnedAt: replaceChat
+        ? normalizedPatch.chat.sessionPinnedAt
+        : { ...base.chat.sessionPinnedAt, ...normalizedPatch.chat.sessionPinnedAt },
     },
   };
 }

@@ -62,7 +62,11 @@ if (isE2EMode && requestedUserDataDir) {
   app.setPath('userData', requestedUserDataDir);
 }
 
-migrateLegacyUserDataIfNeeded();
+try {
+  migrateLegacyUserDataIfNeeded();
+} catch {
+  console.warn('[LYClaw] Failed to migrate legacy user data; continuing with fresh profile');
+}
 
 // Disable GPU hardware acceleration globally for maximum stability across
 // all GPU configurations (no GPU, integrated, discrete).

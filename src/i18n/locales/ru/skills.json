@@ -87,6 +87,7 @@
         "enabled": "Навык включён",
         "disabled": "Навык выключен",
         "installed": "Навык установлен и включён",
+        "allSkillsUpdatedOnStartup": "Все навыки обновлены",
         "updated": "Навык обновлён",
         "uninstalled": "Навык успешно удалён",
         "updatesFound": "Доступно обновлений: {{count}}",

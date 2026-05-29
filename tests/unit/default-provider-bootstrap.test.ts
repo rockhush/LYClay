@@ -135,8 +135,8 @@ describe('bootstrapLyManagedProviders', () => {
         modelOverrides: {
           'MiniMax-M2.7': {
             input: ['text'],
-            contextWindow: 204800,
-            maxTokens: 60000,
+            contextWindow: 100000,
+            maxTokens: 16384,
           },
         },
       }),
@@ -147,7 +147,7 @@ describe('bootstrapLyManagedProviders', () => {
         baseUrl: 'http://10.64.22.11:8000/anthropic',
         api: 'anthropic-messages',
         apiKey: 'EMPTY',
-        models: [expect.objectContaining({ id: 'MiniMax-M2.7', contextWindow: 204800, maxTokens: 60000 })],
+        models: [expect.objectContaining({ id: 'MiniMax-M2.7', contextWindow: 100000, maxTokens: 16384 })],
       }),
     );
     expect(mocks.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({
@@ -172,8 +172,8 @@ describe('bootstrapLyManagedProviders', () => {
           'qwen3.5-397b': {
             reasoning: true,
             input: ['text', 'image'],
-            contextWindow: 130000,
-            maxTokens: 81920,
+            contextWindow: 100000,
+            maxTokens: 16384,
           },
         },
       }),
@@ -188,8 +188,8 @@ describe('bootstrapLyManagedProviders', () => {
           id: 'qwen3.5-397b',
           reasoning: true,
           input: ['text', 'image'],
-          contextWindow: 130000,
-          maxTokens: 81920,
+          contextWindow: 100000,
+          maxTokens: 16384,
         })],
       }),
     );

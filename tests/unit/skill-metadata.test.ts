@@ -17,6 +17,7 @@ import {
   mergeSkillWithMarketplaceMetadata,
   normalizeSkillLookupKey,
   resolveSkillDisplayName,
+  resolveSkillListVersionForDisplay,
   shouldIncludeInMySkills,
 } from '@/lib/skill-metadata';
 import type { MarketplaceSkill, Skill } from '@/types/skill';
@@ -215,6 +216,33 @@ describe('skill metadata helpers', () => {
     expect(enriched[0]?.name).toBe('测试-file');
     expect(enriched[0]?.description).toBe('测试技能描述');
     expect(enriched[0]?.version).toBe('unknown');
+  });
+
+  it('prefers skill-list version over local unknown version for display', () => {
+    expect(
+      resolveSkillListVersionForDisplay(
+        {
+          id: 'attendance',
+          slug: 'attendance',
+          name: '考勤查询',
+          version: 'unknown',
+        },
+        { version: '1.0.6' },
+      ),
+    ).toBe('1.0.6');
+
+    expect(
+      resolveSkillListVersionForDisplay(
+        {
+          id: 'summarize',
+          slug: 'summarize',
+          name: 'summarize',
+          version: 'unknown',
+          isBundled: true,
+        },
+        { version: '9.9.9' },
+      ),
+    ).toBe('unknown');
   });
 
   it('formats unknown versions as 未知 for marketplace skills', () => {

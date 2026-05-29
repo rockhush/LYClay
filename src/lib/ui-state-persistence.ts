@@ -1,6 +1,7 @@
 import { hostApiFetch } from '@/lib/host-api';
 import { useChatStore } from '@/stores/chat';
 import { useWorkspacesStore } from '@/stores/workspaces';
+import type { WorkspaceEntry } from '@/types/workspace';
 
 export interface LyclawUiState {
   version: 1;
@@ -13,6 +14,7 @@ export interface LyclawUiState {
   chat: {
     sessionWorkspaceIds: Record<string, string>;
     customSessionLabels: Record<string, string>;
+    sessionPinnedAt: Record<string, number>;
   };
 }
 
@@ -34,6 +36,12 @@ const CUSTOM_LABEL_KEYS = [
   'clawx:chat:custom-session-labels',
 ];
 
+const SESSION_PINNED_AT_KEYS = [
+  'LYClaw:chat:session-pinned-at',
+  'ClawX:chat:session-pinned-at',
+  'clawx:chat:session-pinned-at',
+];
+
 function readJsonRecord(raw: string | null): Record<string, string> {
   if (!raw) return {};
   try {
@@ -42,6 +50,23 @@ function readJsonRecord(raw: string | null): Record<string, string> {
     const out: Record<string, string> = {};
     for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
       if (typeof key === 'string' && key && typeof value === 'string' && value) {
+        out[key] = value;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function readJsonNumberRecord(raw: string | null): Record<string, number> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof key === 'string' && key && typeof value === 'number' && Number.isFinite(value) && value > 0) {
         out[key] = value;
       }
     }
@@ -82,13 +107,17 @@ function readLocalWorkspaceState(): LyclawUiState['workspaces'] | null {
 function readLocalChatState(): LyclawUiState['chat'] {
   let sessionWorkspaceIds: Record<string, string> = {};
   let customSessionLabels: Record<string, string> = {};
+  let sessionPinnedAt: Record<string, number> = {};
   for (const key of SESSION_WORKSPACE_KEYS) {
     sessionWorkspaceIds = { ...sessionWorkspaceIds, ...readJsonRecord(window.localStorage.getItem(key)) };
   }
   for (const key of CUSTOM_LABEL_KEYS) {
     customSessionLabels = { ...customSessionLabels, ...readJsonRecord(window.localStorage.getItem(key)) };
   }
-  return { sessionWorkspaceIds, customSessionLabels };
+  for (const key of SESSION_PINNED_AT_KEYS) {
+    sessionPinnedAt = { ...sessionPinnedAt, ...readJsonNumberRecord(window.localStorage.getItem(key)) };
+  }
+  return { sessionWorkspaceIds, customSessionLabels, sessionPinnedAt };
 }
 
 function readLocalUiState(): LyclawUiState {
@@ -112,7 +141,8 @@ function hasLocalWorkspacePersist(): boolean {
 
 function hasLocalChatPersist(): boolean {
   return SESSION_WORKSPACE_KEYS.some((key) => window.localStorage.getItem(key) != null)
-    || CUSTOM_LABEL_KEYS.some((key) => window.localStorage.getItem(key) != null);
+    || CUSTOM_LABEL_KEYS.some((key) => window.localStorage.getItem(key) != null)
+    || SESSION_PINNED_AT_KEYS.some((key) => window.localStorage.getItem(key) != null);
 }
 
 export function isNonEmptyWorkspaceState(workspaces: LyclawUiState['workspaces']): boolean {
@@ -123,7 +153,8 @@ export function isNonEmptyWorkspaceState(workspaces: LyclawUiState['workspaces']
 
 export function isNonEmptyChatState(chat: LyclawUiState['chat']): boolean {
   return Object.keys(chat.sessionWorkspaceIds).length > 0
-    || Object.keys(chat.customSessionLabels).length > 0;
+    || Object.keys(chat.customSessionLabels).length > 0
+    || Object.keys(chat.sessionPinnedAt).length > 0;
 }
 
 /** Pure merge used on startup; exported for unit tests. */
@@ -158,6 +189,10 @@ export function mergeHydratedUiState(
             ...disk.chat.customSessionLabels,
             ...local.chat.customSessionLabels,
           },
+          sessionPinnedAt: {
+            ...disk.chat.sessionPinnedAt,
+            ...local.chat.sessionPinnedAt,
+          },
         }
       : local.chat;
 
@@ -190,6 +225,7 @@ function applyUiStateToStores(state: LyclawUiState): void {
     ...prev,
     sessionWorkspaceIds: state.chat.sessionWorkspaceIds,
     customSessionLabels: state.chat.customSessionLabels,
+    sessionPinnedAt: state.chat.sessionPinnedAt,
   }));
 }
 
@@ -207,6 +243,7 @@ function buildUiStateFromStores(): LyclawUiState {
     chat: {
       sessionWorkspaceIds: chat.sessionWorkspaceIds,
       customSessionLabels: chat.customSessionLabels,
+      sessionPinnedAt: chat.sessionPinnedAt,
     },
   };
 }
@@ -262,6 +299,7 @@ export function startUiStateSync(): void {
     if (
       state.sessionWorkspaceIds !== prev.sessionWorkspaceIds
       || state.customSessionLabels !== prev.customSessionLabels
+      || state.sessionPinnedAt !== prev.sessionPinnedAt
     ) {
       scheduleUiStateSync();
     }

@@ -31,26 +31,47 @@ export function migrateLegacyUserDataIfNeeded(): void {
   if (process.env.CLAWX_E2E === '1') return;
   if (process.env.CLAWX_USER_DATA_DIR?.trim()) return;
 
-  const currentUserData = getElectronPath('userData');
-  if (!currentUserData) return;
+	let currentUserData: string;
+  try {
+    currentUserData = app.getPath('userData');
+  } catch {
+    return;
+  }
   if (dirHasContent(currentUserData)) {
     return;
   }
 
-  const roamingRoot = getElectronPath('appData');
-  if (!roamingRoot) return;
-  const localAppDataRoot = process.platform === 'win32'
-    ? getElectronPath('localAppData' as Parameters<typeof app.getPath>[0]) || process.env.LOCALAPPDATA || null
-    : null;
+  // Same corruption can affect appData (roaming) on Windows; wrap both in try-catch.
+  let roamingRoot: string | null = null;
+  try {
+    roamingRoot = app.getPath('appData');
+  } catch {
+    roamingRoot = process.env.APPDATA || null;
+  }
 
   // localAppData is Windows-only; macOS/Linux don't have a separate local app data directory
+  // Wrap in try-catch because some Windows users have corrupted profiles where
+  // app.getPath('localAppData') throws "Failed to get 'localAppData' path".
+  let localRoot: string | null = null;
+  if (process.platform === 'win32') {
+    try {
+      localRoot = app.getPath('localAppData');
+    } catch {
+      // Fall back to LOCALAPPDATA env var when app.getPath fails
+      localRoot = process.env.LOCALAPPDATA || null;
+    }
+  }
   const localCandidates: string[] =
-    localAppDataRoot
-      ? LEGACY_LOCAL_DIR_NAMES.map((name) => join(localAppDataRoot, name))
+    localRoot
+      ? LEGACY_LOCAL_DIR_NAMES.map((name) => join(localRoot, name))
+      : [];
+  const roamingCandidates: string[] =
+    roamingRoot
+      ? LEGACY_ROAMING_DIR_NAMES.map((name) => join(roamingRoot, name))
       : [];
 
   const candidates = [
-    ...LEGACY_ROAMING_DIR_NAMES.map((name) => join(roamingRoot, name)),
+    ...roamingCandidates,
     ...localCandidates,
   ];
 

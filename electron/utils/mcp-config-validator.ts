@@ -54,10 +54,7 @@ export function validateMcpServerEntry(name: string, entry: unknown): string[] {
       errors.push(`Server "${name}": ${type} requires a non-empty url`);
     } else {
       try {
-        const u = new URL(s.url);
-        if (u.protocol !== 'https:') {
-          errors.push(`Server "${name}": url must use https`);
-        }
+        new URL(s.url);
       } catch {
         errors.push(`Server "${name}": url is not a valid URL`);
       }

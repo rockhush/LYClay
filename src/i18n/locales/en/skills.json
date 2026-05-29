@@ -89,6 +89,7 @@
         "enabled": "Skill enabled",
         "disabled": "Skill disabled",
         "installed": "Skill installed and enabled",
+        "allSkillsUpdatedOnStartup": "All skills updated",
         "updated": "Skill updated",
         "uninstalled": "Skill uninstalled successfully",
         "updatesFound": "{{count}} skill(s) can be updated",

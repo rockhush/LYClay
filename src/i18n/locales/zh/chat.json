@@ -101,6 +101,7 @@
         "collapseWorkspaceChats": "收起此工作空间的会话"
     },
     "historyBuckets": {
+        "pinned": "置顶",
         "today": "今天",
         "yesterday": "昨天",
         "withinWeek": "一周内",

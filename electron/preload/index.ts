@@ -57,6 +57,11 @@ const electronAPI = {
         'settings:getAll',
         'settings:reset',
         'usage:recentTokenHistory',
+        // Workspace memory
+        'workspace-memory:status',
+        'workspace-memory:open',
+        'workspace-memory:read',
+        'workspace-memory:append',
         // Update
         'update:status',
         'update:version',
