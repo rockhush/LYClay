@@ -322,6 +322,7 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle,
               >
                 <Switch
                   size="sm"
+                  className="origin-right scale-[0.75]"
                   checked={skill.enabled}
                   onCheckedChange={onToggle}
                   aria-label={skill.enabled ? t('detail.disable') : t('detail.enable')}
@@ -535,12 +536,13 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
           </div>
         </div>
         <div
-          className="shrink-0 origin-right scale-[0.85]"
+          className="shrink-0"
           onClick={(e) => {
             e.stopPropagation();
           }}
         >
           <Switch
+            className="origin-right scale-[0.75]"
             checked={skill.enabled}
             onCheckedChange={(checked) => onToggle(checked)}
             disabled={skill.isCore}

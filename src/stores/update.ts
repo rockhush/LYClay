@@ -121,7 +121,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
     window.electron.ipcRenderer.on('update:auto-install-countdown', (data) => {
       const { seconds, cancelled } = data as { seconds: number; cancelled?: boolean };
-      set({ autoInstallCountdown: cancelled ? null : seconds });
+      set({ autoInstallCountdown: cancelled || seconds < 0 ? null : seconds });
     });
 
     set({ isInitialized: true });

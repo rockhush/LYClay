@@ -11,6 +11,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { logger } from '../utils/logger';
 import { buildUpdateInstallerArgs } from '../utils/update-installer-args';
+import { launchMacDmgUpdateInstall } from '../utils/mac-update-installer';
 import { EventEmitter } from 'events';
 import { setQuitting } from './app-state';
 
@@ -535,9 +536,36 @@ export class AppUpdater extends EventEmitter {
 
     void this.runLocalInstallerAndQuit().catch((error) => {
       logger.error('[Updater] runLocalInstallerAndQuit failed:', error);
+      this.cancelAutoInstall();
       this.updateStatus({
         status: 'error',
         error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private async launchWindowsInstaller(installerPath: string): Promise<void> {
+    const installerArgs = buildUpdateInstallerArgs(process.platform, { silent: false });
+    logger.info('[Updater] Launching Windows installer:', installerPath, installerArgs.join(' '));
+
+    await new Promise<void>((resolve, reject) => {
+      const installer = spawn(installerPath, installerArgs, {
+        detached: true,
+        stdio: 'ignore',
+        cwd: path.dirname(installerPath),
+        // Show the NSIS window so users can respond to AV prompts during file replacement.
+        windowsHide: false,
+      });
+
+      installer.once('error', (err: Error) => {
+        logger.error('[Updater] Failed to spawn installer:', err.message);
+        reject(err);
+      });
+
+      installer.once('spawn', () => {
+        logger.info('[Updater] Installer process spawned', `pid=${installer.pid ?? 'unknown'}`);
+        installer.unref();
+        resolve();
       });
     });
   }
@@ -561,29 +589,17 @@ export class AppUpdater extends EventEmitter {
       }
     }
 
-    const installerArgs = buildUpdateInstallerArgs(process.platform, { silent: false });
-    logger.info('[Updater] Launching installer:', installerPath, installerArgs.join(' '));
-
-    await new Promise<void>((resolve, reject) => {
-      const installer = spawn(installerPath, installerArgs, {
-        detached: true,
-        stdio: 'ignore',
-        cwd: path.dirname(installerPath),
-        // Show the NSIS window so users can respond to AV prompts during file replacement.
-        windowsHide: process.platform !== 'win32',
-      });
-
-      installer.once('error', (err: Error) => {
-        logger.error('[Updater] Failed to spawn installer:', err.message);
-        reject(err);
-      });
-
-      installer.once('spawn', () => {
-        logger.info('[Updater] Installer process spawned', `pid=${installer.pid ?? 'unknown'}`);
-        installer.unref();
-        resolve();
-      });
-    }).catch(async (error) => {
+    try {
+      if (process.platform === 'darwin') {
+        logger.info('[Updater] Launching macOS DMG install script:', installerPath);
+        await launchMacDmgUpdateInstall(installerPath);
+      } else if (process.platform === 'win32') {
+        await this.launchWindowsInstaller(installerPath);
+      } else {
+        logger.info('[Updater] Opening installer for manual install:', installerPath);
+        await shell.openPath(installerPath);
+      }
+    } catch (error) {
       this.updateStatus({
         status: 'error',
         error: `Failed to launch installer: ${error instanceof Error ? error.message : String(error)}`,
@@ -591,15 +607,17 @@ export class AppUpdater extends EventEmitter {
       logger.info('[Updater] Opening installer for manual install:', installerPath);
       await shell.openPath(installerPath);
       throw error;
-    });
+    }
 
     await new Promise((resolve) => {
       setTimeout(resolve, AppUpdater.QUIT_AFTER_SPAWN_DELAY_MS);
     });
 
-    await this.showPreQuitInstallNotice();
+    if (process.platform === 'win32') {
+      await this.showPreQuitInstallNotice();
+    }
 
-    logger.info('[Updater] Quitting application so NSIS can complete the update');
+    logger.info('[Updater] Quitting application so the update can complete');
     app.quit();
   }
 
@@ -644,6 +662,7 @@ export class AppUpdater extends EventEmitter {
 
       if (this.autoInstallCountdown <= 0) {
         this.clearAutoInstallTimer();
+        this.sendToRenderer('update:auto-install-countdown', { seconds: -1, cancelled: true });
         this.quitAndInstall();
       }
     }, 1000);

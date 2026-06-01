@@ -70,7 +70,7 @@ export function UpdateAvailableDialog() {
 
   const version = updateInfo?.version;
 
-  // Open when update is available; keep open while downloading/installing.
+  // Open when update is available; keep open while downloading/installing/errors.
   useEffect(() => {
     if (!isInitialized || sessionDismissed) return;
     if (status === 'available' && version) {
@@ -78,7 +78,7 @@ export function UpdateAvailableDialog() {
       setOpen(true);
       return;
     }
-    if (status === 'downloading' || status === 'downloaded') {
+    if (status === 'downloading' || status === 'downloaded' || status === 'error') {
       setOpen(true);
     }
   }, [isInitialized, status, version, sessionDismissed, cancelAutoInstall]);
@@ -88,10 +88,12 @@ export function UpdateAvailableDialog() {
     [updateInfo?.releaseNotes],
   );
 
+  const isWindows = window.electron?.platform === 'win32';
+  const isInstallCountdownActive = autoInstallCountdown != null && autoInstallCountdown > 0;
   const isDownloading = status === 'downloading';
   const isInstalling =
-    status === 'downloaded'
-    || (autoInstallCountdown != null && autoInstallCountdown >= 0);
+    status !== 'error'
+    && (status === 'downloaded' || isInstallCountdownActive);
   const isDownloadError = status === 'error' && open;
   const showProgressPanel = isDownloading || isInstalling || isDownloadError;
   const isBusy = isDownloading || isInstalling;
@@ -188,7 +190,7 @@ export function UpdateAvailableDialog() {
                   : t('updates.status.downloaded')}
               </p>
               <p className="max-w-[360px] text-[12px] leading-relaxed text-muted-foreground">
-                {t('updates.antivirusHint')}
+                {isWindows ? t('updates.antivirusHint') : t('updates.status.downloaded')}
               </p>
             </div>
           ) : isDownloading ? (

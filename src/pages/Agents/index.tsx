@@ -358,9 +358,8 @@ function AgentCard({
           )}
           <Switch
             checked={agent.isDefault}
-            size="sm"
             disabled
-            className="ml-1 cursor-default disabled:opacity-100"
+            className="ml-1 origin-right scale-[0.75] cursor-default disabled:opacity-100"
             aria-label={t('defaultBadge')}
             tabIndex={-1}
           />
@@ -467,6 +466,7 @@ function AddAgentDialog({
             <Switch
               id="inherit-workspace"
               size="sm"
+              className="origin-right scale-[0.75]"
               checked={inheritWorkspace}
               onCheckedChange={setInheritWorkspace}
             />

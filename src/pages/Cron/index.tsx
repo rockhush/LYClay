@@ -793,7 +793,7 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
           </div>
         </div>
         <div
-          className="shrink-0 origin-right scale-[0.85]"
+          className="shrink-0"
           onClick={(e) => e.stopPropagation()}
         >
           <Switch
