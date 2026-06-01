@@ -52,6 +52,7 @@ interface UpdateState {
   downloadUpdate: () => Promise<void>;
   installUpdate: () => void;
   cancelAutoInstall: () => Promise<void>;
+  cancelDownload: () => Promise<void>;
   setChannel: (channel: 'stable' | 'beta' | 'dev') => Promise<void>;
   setAutoDownload: (enable: boolean) => Promise<void>;
   clearError: () => void;
@@ -104,18 +105,18 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     // Single source of truth: listen only to update:status-changed
     // (sent by AppUpdater.updateStatus() in the main process)
     window.electron.ipcRenderer.on('update:status-changed', (data) => {
-      const status = data as {
+      const payload = data as {
         status: UpdateStatus;
         info?: UpdateInfo;
         progress?: ProgressInfo;
         error?: string;
       };
-      set({
-        status: status.status,
-        updateInfo: status.info || null,
-        progress: status.progress || null,
-        error: status.error || null,
-      });
+      set((state) => ({
+        status: payload.status ?? state.status,
+        updateInfo: 'info' in payload ? (payload.info ?? null) : state.updateInfo,
+        progress: 'progress' in payload ? (payload.progress ?? null) : state.progress,
+        error: 'error' in payload ? (payload.error ?? null) : state.error,
+      }));
     });
 
     window.electron.ipcRenderer.on('update:auto-install-countdown', (data) => {
@@ -142,6 +143,11 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   },
 
   checkForUpdates: async () => {
+    const active = get().status;
+    if (active === 'downloading' || active === 'downloaded') {
+      return;
+    }
+
     set({ status: 'checking', error: null });
     
     try {
@@ -205,7 +211,18 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   },
 
   downloadUpdate: async () => {
-    set({ status: 'downloading', error: null });
+    set({
+      status: 'downloading',
+      error: null,
+      progress: {
+        percent: 0,
+        transferred: 0,
+        total: 0,
+        delta: 0,
+        bytesPerSecond: 0,
+      },
+      autoInstallCountdown: null,
+    });
     
     try {
       const result = await invokeIpc<{
@@ -228,8 +245,34 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   cancelAutoInstall: async () => {
     try {
       await invokeIpc('update:cancelAutoInstall');
+      set({ autoInstallCountdown: null });
     } catch (error) {
       console.error('Failed to cancel auto-install:', error);
+    }
+  },
+
+  cancelDownload: async () => {
+    try {
+      const result = await invokeIpc<{
+        success: boolean;
+        status?: {
+          status: UpdateStatus;
+          info?: UpdateInfo;
+          progress?: ProgressInfo;
+          error?: string;
+        };
+      }>('update:cancelDownload');
+      if (result.status) {
+        set({
+          status: result.status.status,
+          updateInfo: result.status.info ?? get().updateInfo,
+          progress: result.status.progress ?? null,
+          error: result.status.error ?? null,
+          autoInstallCountdown: null,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to cancel download:', error);
     }
   },
 

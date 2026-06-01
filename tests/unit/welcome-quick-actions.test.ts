@@ -40,8 +40,8 @@ describe('welcome-quick-actions', () => {
 
   it('builds composer text with @mention and default prompt', () => {
     const skill = findSkillForQuickAction(mockSkills, ['领益百事通']);
-    expect(buildQuickActionComposerText(skill, '领益百事通', '请帮我解答：……')).toBe(
-      '@领益百事通 请帮我解答：……',
+    expect(buildQuickActionComposerText(skill, '领益百事通', '请使用这个技能，帮我解答：')).toBe(
+      '@领益百事通 请使用这个技能，帮我解答：',
     );
   });
 });

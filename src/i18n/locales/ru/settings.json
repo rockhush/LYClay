@@ -178,6 +178,7 @@
     "action": {
       "checking": "Проверка...",
       "downloading": "Загрузка...",
+      "stopDownload": "Остановить обновление",
       "download": "Скачать обновление",
       "install": "Установить и перезапустить",
       "cancelAutoInstall": "Отмена",

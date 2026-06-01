@@ -71,6 +71,7 @@ const electronAPI = {
         'update:setChannel',
         'update:setAutoDownload',
         'update:cancelAutoInstall',
+        'update:cancelDownload',
         'update:getDownloadedFilePath',
         'update:openDownloadDirectory',
         // Env

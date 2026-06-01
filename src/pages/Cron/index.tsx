@@ -873,6 +873,11 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
   );
 }
 
+/** Light-tinted stat cards always use dark text (bg is fixed, not theme-aware). */
+const CRON_STAT_CARD = 'w-[150px] flex flex-col items-center justify-center bg-[#FFF2E5] rounded-lg py-3 px-3';
+const CRON_STAT_LABEL = 'text-[12px] text-[#666666]';
+const CRON_STAT_VALUE = 'text-[22px] font-semibold text-[#1A1A1A]';
+
 export function Cron() {
   const { t } = useTranslation('cron');
   const { jobs, loading, error, fetchJobs, createJob, updateJob, toggleJob, deleteJob, triggerJob } = useCronStore();
@@ -1007,36 +1012,36 @@ export function Cron() {
 
           {/* Statistics */}
           <div className="flex items-center gap-3 mb-8">
-            <div className="w-[150px] flex flex-col items-center justify-center bg-[#FFF2E5] rounded-lg py-3 px-3">
+            <div className={CRON_STAT_CARD}>
               <div className="flex items-center gap-1.5 mb-1">
                 <Clock className="h-3.5 w-3.5 text-[#FF922B]" />
-                <span className="text-[12px] text-muted-foreground">{t('stats.total')}</span>
+                <span className={CRON_STAT_LABEL}>{t('stats.total')}</span>
               </div>
-              <span className="text-[22px] font-semibold text-foreground">{safeJobs.length}</span>
+              <span className={CRON_STAT_VALUE}>{safeJobs.length}</span>
             </div>
 
-            <div className="w-[150px] flex flex-col items-center justify-center bg-[#FFF2E5] rounded-lg py-3 px-3">
+            <div className={CRON_STAT_CARD}>
               <div className="flex items-center gap-1.5 mb-1">
                 <Play className="h-3.5 w-3.5 text-green-600" />
-                <span className="text-[12px] text-muted-foreground">{t('stats.active')}</span>
+                <span className={CRON_STAT_LABEL}>{t('stats.active')}</span>
               </div>
-              <span className="text-[22px] font-semibold text-foreground">{activeJobs.length}</span>
+              <span className={CRON_STAT_VALUE}>{activeJobs.length}</span>
             </div>
 
-            <div className="w-[150px] flex flex-col items-center justify-center bg-[#FFF2E5] rounded-lg py-3 px-3">
+            <div className={CRON_STAT_CARD}>
               <div className="flex items-center gap-1.5 mb-1">
                 <Pause className="h-3.5 w-3.5 text-yellow-600" />
-                <span className="text-[12px] text-muted-foreground">{t('stats.paused')}</span>
+                <span className={CRON_STAT_LABEL}>{t('stats.paused')}</span>
               </div>
-              <span className="text-[22px] font-semibold text-foreground">{pausedJobs.length}</span>
+              <span className={CRON_STAT_VALUE}>{pausedJobs.length}</span>
             </div>
 
-            <div className="w-[150px] flex flex-col items-center justify-center bg-[#FFF2E5] rounded-lg py-3 px-3">
+            <div className={CRON_STAT_CARD}>
               <div className="flex items-center gap-1.5 mb-1">
                 <XCircle className="h-3.5 w-3.5 text-destructive" />
-                <span className="text-[12px] text-muted-foreground">{t('stats.failed')}</span>
+                <span className={CRON_STAT_LABEL}>{t('stats.failed')}</span>
               </div>
-              <span className="text-[22px] font-semibold text-foreground">{failedJobs.length}</span>
+              <span className={CRON_STAT_VALUE}>{failedJobs.length}</span>
             </div>
           </div>
 

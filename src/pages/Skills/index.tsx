@@ -1016,14 +1016,16 @@ export function Skills() {
   const showMineLoading = useMinLoading(showInitialLoading);
 
   return (
-    <div
-      className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden"
-      style={{
-        background:
-          'radial-gradient(120% 80% at 80% 20%, hsl(28 60% 95% / 0.85) 0%, hsl(28 50% 96% / 0.6) 35%, hsl(0 0% 100% / 0) 70%), radial-gradient(80% 60% at 20% 90%, hsl(18 80% 92% / 0.55) 0%, hsl(0 0% 100% / 0) 60%)',
-      }}
-    >
-      <div className="w-full max-w-[1400px] mx-auto flex flex-col h-full px-8 pt-[2em] pb-6">
+    <div className="relative flex flex-col -m-6 h-[calc(100vh-2.5rem)] overflow-hidden bg-background">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-0 dark:hidden"
+        style={{
+          background:
+            'radial-gradient(120% 80% at 80% 20%, hsl(28 60% 95% / 0.85) 0%, hsl(28 50% 96% / 0.6) 35%, hsl(0 0% 100% / 0) 70%), radial-gradient(80% 60% at 20% 90%, hsl(18 80% 92% / 0.55) 0%, hsl(0 0% 100% / 0) 60%)',
+        }}
+      />
+      <div className="relative z-10 flex flex-col h-full w-full max-w-[1400px] mx-auto px-8 pt-[2em] pb-6">
 
         {/* Header */}
         <div className="flex flex-row items-start justify-between mb-5 shrink-0 gap-4">

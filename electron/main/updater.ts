@@ -6,7 +6,7 @@
  */
 import { autoUpdater, UpdateInfo, ProgressInfo, UpdateDownloadedEvent } from 'electron-updater';
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
-import { access, open, readdir, stat } from 'fs/promises';
+import { access, open, readdir, stat, unlink } from 'fs/promises';
 import path from 'path';
 import { spawn } from 'child_process';
 import { logger } from '../utils/logger';
@@ -53,6 +53,9 @@ export class AppUpdater extends EventEmitter {
   private downloadedFilePath: string | null = null;
   private resolvedUpdateOS: string | null = null;
   private prepareForUpdateInstall: (() => Promise<void>) | null = null;
+  private downloadAbortController: AbortController | null = null;
+  private downloadCancelled = false;
+  private activeDownloadPromise: Promise<void> | null = null;
 
   /** Delay (in seconds) before auto-installing a downloaded update. */
   private static readonly AUTO_INSTALL_DELAY_SECONDS = 5;
@@ -150,9 +153,9 @@ export class AppUpdater extends EventEmitter {
   private updateStatus(newStatus: Partial<UpdateStatus>): void {
     this.status = {
       status: newStatus.status ?? this.status.status,
-      info: newStatus.info,
-      progress: newStatus.progress,
-      error: newStatus.error,
+      info: 'info' in newStatus ? newStatus.info : this.status.info,
+      progress: 'progress' in newStatus ? newStatus.progress : this.status.progress,
+      error: 'error' in newStatus ? newStatus.error : this.status.error,
     };
     this.sendToRenderer('update:status-changed', this.status);
   }
@@ -318,7 +321,8 @@ export class AppUpdater extends EventEmitter {
                 download_url: data.download_url,
               })}`,
             );
-            this.updateStatus({ status: 'available', info: updateInfo });
+            this.cancelAutoInstall();
+            this.updateStatus({ status: 'available', info: updateInfo, progress: undefined, error: undefined });
             return updateInfo;
           }
 
@@ -370,32 +374,61 @@ export class AppUpdater extends EventEmitter {
    * Download available update using internal API
    */
   async downloadUpdate(): Promise<void> {
+    const task = this.performDownload();
+    this.activeDownloadPromise = task;
     try {
+      await task;
+    } finally {
+      if (this.activeDownloadPromise === task) {
+        this.activeDownloadPromise = null;
+      }
+    }
+  }
+
+  private async performDownload(): Promise<void> {
+    let fileStream: Awaited<ReturnType<typeof open>> | null = null;
+    let filePath: string | null = null;
+
+    try {
+      this.cancelAutoInstall();
+      this.downloadCancelled = false;
+      this.downloadAbortController = new AbortController();
+      const { signal } = this.downloadAbortController;
+
+      this.updateStatus({
+        status: 'downloading',
+        info: this.status.info,
+        progress: {
+          percent: 0,
+          transferred: 0,
+          total: 0,
+          delta: 0,
+          bytesPerSecond: 0,
+        },
+        error: undefined,
+      });
+
       const os = this.getDownloadOSCandidates()[0] ?? this.getOS();
       const downloadUrl = `${INTERNAL_UPDATE_URL}/aihome/api/download/?os=${encodeURIComponent(os)}`;
       
       logger.info(`[Updater] Downloading update from: ${downloadUrl}, os=${os || '(empty)'}`);
       
-      // 使用直接下载方式，兼容返回安装包文件的接口
-      const response = await fetch(downloadUrl);
+      const response = await fetch(downloadUrl, { signal });
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      // 获取文件大小用于进度计算
       const contentLength = parseInt(response.headers.get('content-length') || '0');
       
-      // 创建更新文件路径（使用应用目录而非临时目录，避免退出时被清理）
       const appDir = app.getPath('userData');
       const ext = this.getOS() === 'windows' ? '.exe' : this.getOS() === 'macos' ? '.dmg' : '.tar.gz';
       const fileName = `update_${Date.now()}${ext}`;
-      const filePath = path.join(appDir, fileName);
+      filePath = path.join(appDir, fileName);
       
       logger.info('[Updater] Saving update file to:', filePath);
       
-      // 下载并保存文件
-      const fileStream = await open(filePath, 'w');
+      fileStream = await open(filePath, 'w');
       const responseStream = response.body;
       if (!responseStream) {
         throw new Error('Download response body is empty');
@@ -403,10 +436,13 @@ export class AppUpdater extends EventEmitter {
       
       let downloadedBytes = 0;
       for await (const chunk of responseStream) {
+        if (this.downloadCancelled) {
+          throw new Error('DOWNLOAD_CANCELLED');
+        }
+
         await fileStream.write(chunk);
         downloadedBytes += chunk.length;
         
-        // 发送进度更新
         const progress: ProgressInfo = {
           percent: contentLength > 0 ? (downloadedBytes / contentLength) * 100 : 0,
           transferred: downloadedBytes,
@@ -414,26 +450,72 @@ export class AppUpdater extends EventEmitter {
           delta: chunk.length,
           bytesPerSecond: 0,
         };
-        this.updateStatus({ status: 'downloading', progress });
+        this.updateStatus({ status: 'downloading', info: this.status.info, progress });
       }
       
       await fileStream.close();
+      fileStream = null;
       
       logger.info('[Updater] Download completed, size:', downloadedBytes);
       
-      // 使用 electron-updater 安装本地文件
-      this.updateStatus({ status: 'downloaded' });
+      this.updateStatus({ status: 'downloaded', info: this.status.info, progress: undefined });
       
-      // 保存下载的文件路径供安装使用
       this.downloadedFilePath = filePath;
+      filePath = null;
 
       this.startAutoInstallCountdown();
       
     } catch (error) {
+      if (fileStream) {
+        await fileStream.close().catch(() => {});
+      }
+
+      if (this.isDownloadCancelled(error)) {
+        if (filePath) {
+          await unlink(filePath).catch(() => {});
+        }
+        logger.info('[Updater] Download cancelled by user');
+        this.updateStatus({
+          status: 'available',
+          info: this.status.info,
+          progress: undefined,
+          error: undefined,
+        });
+        return;
+      }
+
       logger.error('[Updater] Download update failed:', error);
+      if (filePath) {
+        await unlink(filePath).catch(() => {});
+      }
       this.updateStatus({ status: 'error', error: (error as Error).message || String(error) });
       throw error;
+    } finally {
+      this.downloadAbortController = null;
+      this.downloadCancelled = false;
     }
+  }
+
+  /** Abort an in-progress update download and revert to available. */
+  async cancelDownload(): Promise<void> {
+    if (this.status.status !== 'downloading') {
+      return;
+    }
+    logger.info('[Updater] Download cancel requested');
+    this.downloadCancelled = true;
+    this.downloadAbortController?.abort();
+    if (this.activeDownloadPromise) {
+      await this.activeDownloadPromise.catch(() => {});
+    }
+  }
+
+  private isDownloadCancelled(error: unknown): boolean {
+    if (this.downloadCancelled) return true;
+    if (error instanceof Error) {
+      if (error.message === 'DOWNLOAD_CANCELLED') return true;
+      if (error.name === 'AbortError') return true;
+    }
+    return false;
   }
 
   /**
@@ -569,6 +651,7 @@ export class AppUpdater extends EventEmitter {
 
   cancelAutoInstall(): void {
     this.clearAutoInstallTimer();
+    this.autoInstallCountdown = 0;
     this.sendToRenderer('update:auto-install-countdown', { seconds: -1, cancelled: true });
   }
 
@@ -672,6 +755,12 @@ export function registerUpdateHandlers(
     } catch (error) {
       return { success: false, error: String(error) };
     }
+  });
+
+  // Cancel in-progress download
+  ipcMain.handle('update:cancelDownload', async () => {
+    await updater.cancelDownload();
+    return { success: true, status: updater.getStatus() };
   });
 
   // Install update and restart

@@ -495,6 +495,11 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             data = { success: true };
             break;
           }
+          if (request.action === 'cancelDownload') {
+            await appUpdater.cancelDownload();
+            data = { success: true, status: appUpdater.getStatus() };
+            break;
+          }
           return {
             id: request.id,
             ok: false,

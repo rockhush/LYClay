@@ -42,6 +42,7 @@ export function UpdateSettings({ onAfterCheckUpdate }: UpdateSettingsProps) {
     downloadUpdate,
     installUpdate,
     cancelAutoInstall,
+    cancelDownload,
     clearError,
     getDownloadedFilePath,
     openDownloadDirectory,
@@ -122,10 +123,21 @@ export function UpdateSettings({ onAfterCheckUpdate }: UpdateSettingsProps) {
         );
       case 'downloading':
         return (
-          <Button disabled variant="outline" size="sm">
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            {t('updates.action.downloading')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void cancelDownload()}
+              className="h-8 rounded-lg border-black/10 bg-white px-3 text-[13px] font-medium text-foreground/80 hover:bg-black/5 dark:border-white/10 dark:bg-transparent dark:hover:bg-white/5"
+            >
+              {t('updates.action.stopDownload')}
+            </Button>
+            <Button disabled variant="outline" size="sm">
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              {t('updates.action.downloading')}
+            </Button>
+          </div>
         );
       case 'available':
         return (

@@ -178,6 +178,7 @@
     "action": {
       "checking": "Checking...",
       "downloading": "Downloading...",
+      "stopDownload": "Stop Update",
       "download": "Download Update",
       "install": "Install & Restart",
       "cancelAutoInstall": "Cancel",
@@ -191,7 +192,17 @@
     "currentVersion": "Current Version",
     "whatsNew": "What's New:",
     "errorDetails": "Error Details:",
-    "help": "When auto-update is enabled, updates are downloaded and installed automatically."
+    "help": "When auto-update is enabled, updates are downloaded and installed automatically.",
+    "dialog": {
+      "title": "New Version Available",
+      "close": "Close",
+      "remindLater": "Remind Me Later",
+      "experienceNow": "Update Now",
+      "sectionFeatures": "New Features:",
+      "sectionOptimizations": "Improvements:",
+      "noReleaseNotes": "No detailed release notes available.",
+      "progressLabel": "Progress:"
+    }
   },
   "advanced": {
     "title": "Advanced",
