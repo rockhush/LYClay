@@ -696,7 +696,6 @@ export function Skills() {
     installing,
     companyInstallMap,
     companyInstallEntries,
-    marketplaceCatalogLoaded,
   } = useSkillsStore();
   const { t } = useTranslation('skills');
   const gatewayStatus = useGatewayStore((state) => state.status);
@@ -932,13 +931,8 @@ export function Skills() {
   useEffect(() => {
     if (activeTab !== 'market') return;
     const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
-    const isDefaultView = !installQuery.trim() && !selectedType && sortBy === 'download_count' && sortOrder === 'desc';
-    if (isDefaultView && marketplaceCatalogLoaded && searchResults.length > 0) {
-      return;
-    }
-    console.log('[Skills] Search triggered with params:', { query: installQuery.trim(), category: selectedType, sort });
-    searchSkills(installQuery.trim(), selectedType, sort);
-  }, [activeTab, selectedType, sortBy, sortOrder, installQuery, searchSkills, marketplaceCatalogLoaded, searchResults.length]);
+    void searchSkills(installQuery.trim(), selectedType, sort);
+  }, [activeTab, selectedType, sortBy, sortOrder, installQuery, searchSkills]);
 
   const handleSearch = useCallback(() => {
     // 服务器端规则：带-号是降序，不带是升序
