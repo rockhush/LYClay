@@ -68,6 +68,13 @@ export function findSkillForQuickAction(
   return undefined;
 }
 
+export const SKILL_INVOCATION_HINT = '请使用这个技能，帮我';
+
+export function buildSkillMentionWithHint(skillName: string): string {
+  const mentionName = skillName.trim();
+  return `@${mentionName} ${SKILL_INVOCATION_HINT}`;
+}
+
 export function buildQuickActionComposerText(
   skill: Skill | undefined,
   fallbackSkillName: string,

@@ -611,7 +611,7 @@ export function Sidebar() {
             inWorkspace ? 'pl-1.5 pr-1.5 group-hover:pr-7' : 'px-2.5 group-hover:pr-7',
             'hover:bg-white/60 dark:hover:bg-white/10',
             isSessionViewActive && currentSessionKey === s.key
-              ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground'
+              ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-blue-400'
               : 'text-foreground/75',
             firstResponsePreparingLocksSwitch && s.key !== currentSessionKey && 'opacity-50 cursor-not-allowed',
           )}

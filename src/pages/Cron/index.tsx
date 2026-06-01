@@ -670,7 +670,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 {t('dialog.enableImmediatelyDesc')}
               </p>
             </div>
-            <Switch size="sm" checked={enabled} onCheckedChange={setEnabled} />
+            <Switch size="sm" className="origin-right scale-[0.75]" checked={enabled} onCheckedChange={setEnabled} />
           </div>
 
           {/* Actions */}
@@ -797,7 +797,7 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
           onClick={(e) => e.stopPropagation()}
         >
           <Switch
-            size="sm"
+            className="origin-right scale-[0.75]"
             checked={job.enabled}
             onCheckedChange={onToggle}
           />

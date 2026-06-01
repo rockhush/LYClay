@@ -38,7 +38,6 @@ import {
 } from './quit-lifecycle';
 import { createSignalQuitHandler } from './signal-quit';
 import { acquireProcessInstanceFileLock } from './process-instance-lock';
-import { getSetting } from '../utils/store';
 import { ensurePreinstalledSkillsConfig } from '../utils/skill-config';
 import { migrateHomedirBuiltinSkills } from '../utils/skill-homedir-migration';
 import { ensureDwsEnvironmentInitialized } from '../utils/dws-env-setup';
@@ -564,9 +563,9 @@ async function initialize(): Promise<void> {
     });
   }
 
-  // Start Gateway automatically (this seeds missing bootstrap files with full templates)
-  const gatewayAutoStart = await getSetting('gatewayAutoStart');
-  if (!isE2EMode && gatewayAutoStart) {
+  // Start Gateway automatically (this seeds missing bootstrap files with full templates).
+  // Gateway auto-start is always enabled; there is no user-facing toggle.
+  if (!isE2EMode) {
     try {
       await syncAllProviderAuthToRuntime();
       logger.debug('Auto-starting Gateway...');
@@ -576,10 +575,8 @@ async function initialize(): Promise<void> {
       logger.error('Gateway auto-start failed:', error);
       mainWindow?.webContents.send('gateway:error', String(error));
     }
-  } else if (isE2EMode) {
-    logger.info('Gateway auto-start skipped in E2E mode');
   } else {
-    logger.info('Gateway auto-start disabled in settings');
+    logger.info('Gateway auto-start skipped in E2E mode');
   }
 
   // Merge LYClaw context snippets into the workspace bootstrap files.

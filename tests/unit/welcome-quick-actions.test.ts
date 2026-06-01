@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Skill } from '@/types/skill';
 import {
   buildQuickActionComposerText,
+  buildSkillMentionWithHint,
   findSkillForQuickAction,
 } from '../../src/pages/Chat/welcome-quick-actions';
 
@@ -43,5 +44,9 @@ describe('welcome-quick-actions', () => {
     expect(buildQuickActionComposerText(skill, '领益百事通', '请使用这个技能，帮我解答：')).toBe(
       '@领益百事通 请使用这个技能，帮我解答：',
     );
+  });
+
+  it('builds skill mention with invocation hint for composer pickers', () => {
+    expect(buildSkillMentionWithHint('翻译工具')).toBe('@翻译工具 请使用这个技能，帮我');
   });
 });

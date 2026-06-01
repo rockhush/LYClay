@@ -1018,21 +1018,27 @@ export function Chat() {
   return (
     <div
       className={cn(
-        "relative flex min-h-0 flex-col -m-6 transition-colors duration-500 dark:bg-background",
+        "relative flex min-h-0 flex-col -m-6 transition-colors duration-500 bg-background",
       )}
       style={{
         height: 'calc(100vh - 2.5rem)',
-        background:
-          'radial-gradient(120% 80% at 80% 20%, hsl(28 60% 95% / 0.85) 0%, hsl(28 50% 96% / 0.6) 35%, hsl(0 0% 100% / 0) 70%), radial-gradient(80% 60% at 20% 90%, hsl(18 80% 92% / 0.55) 0%, hsl(0 0% 100% / 0) 60%)',
       }}
     >
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-0 dark:hidden"
+        style={{
+          background:
+            'radial-gradient(120% 80% at 80% 20%, hsl(28 60% 95% / 0.85) 0%, hsl(28 50% 96% / 0.6) 35%, hsl(0 0% 100% / 0) 70%), radial-gradient(80% 60% at 20% 90%, hsl(18 80% 92% / 0.55) 0%, hsl(0 0% 100% / 0) 60%)',
+        }}
+      />
       {/* Toolbar */}
-      <div className="flex shrink-0 items-center justify-between px-4 py-2">
+      <div className="relative z-10 flex shrink-0 items-center justify-between px-4 py-2">
         <ChatToolbar />
       </div>
 
       {/* Messages Area */}
-      <div className="min-h-0 flex-1 overflow-hidden px-4 py-4">
+      <div className="relative z-10 min-h-0 flex-1 overflow-hidden px-4 py-4">
         <div className="mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-4 lg:flex-row lg:items-stretch">
           <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
             <div

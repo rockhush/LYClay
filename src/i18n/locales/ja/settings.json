@@ -192,7 +192,7 @@
     "dialog": {
       "title": "新しいバージョンがあります",
       "close": "閉じる",
-      "remindLater": "後で通知",
+      "remindLater": "後で更新",
       "experienceNow": "今すぐ更新",
       "sectionFeatures": "新機能：",
       "sectionOptimizations": "改善：",

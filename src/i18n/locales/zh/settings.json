@@ -196,7 +196,7 @@
     "dialog": {
       "title": "新版本可用",
       "close": "关闭",
-      "remindLater": "稍后提醒",
+      "remindLater": "稍后更新",
       "experienceNow": "立即体验",
       "sectionFeatures": "新功能：",
       "sectionOptimizations": "优化：",

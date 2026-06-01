@@ -17,14 +17,11 @@ import { invokeIpc } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
 import { detectMentionedSkillIds } from '@/stores/chat/usage-report-extract';
+import { buildSkillMentionWithHint } from '@/pages/Chat/welcome-quick-actions';
 
-// 5种随机颜色用于技能图标背景
+// 统一使用品牌橙色作为技能图标背景（与技能页一致）
 const SKILL_COLORS = [
-  'bg-cyan-500',
-  'bg-orange-500',
-  'bg-blue-500',
-  'bg-pink-500',
-  'bg-purple-500',
+  'bg-[#FF922B]',
 ];
 
 // 根据技能名称生成哈希值
@@ -487,10 +484,10 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     const skill = skills.find(s => s.id === skillId);
     if (!skill) return;
 
-    // Insert `@<skillName> ` into the textarea instead of pinning a chip
+    // Insert `@<skillName> 请使用这个技能，帮我` into the textarea instead of pinning a chip
     // card above the input, so the puzzle-icon picker matches the
     // slash-search behaviour the user already knows.
-    const mention = `@${skill.name} `;
+    const mention = `${buildSkillMentionWithHint(skill.name)} `;
     const textarea = textareaRef.current;
     let nextInput = input;
     if (textarea) {
@@ -520,8 +517,8 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
 
   // 斜杠搜索选择技能后插入到输入框
   const handleSlashSkillSelect = useCallback((skill: Skill) => {
-    // 替换 /xxx 为 @技能名
-    const newInput = input.replace(/^\/[^\s]*/, `@${skill.name}`);
+    // 替换 /xxx 为 @技能名 + 技能调用提示词
+    const newInput = input.replace(/^\/[^\s]*/, `${buildSkillMentionWithHint(skill.name)} `);
     handleInputChange(newInput);
     setSlashSearchOpen(false);
   }, [input]);

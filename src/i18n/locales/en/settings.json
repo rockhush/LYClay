@@ -196,7 +196,7 @@
     "dialog": {
       "title": "New Version Available",
       "close": "Close",
-      "remindLater": "Remind Me Later",
+      "remindLater": "Update Later",
       "experienceNow": "Update Now",
       "sectionFeatures": "New Features:",
       "sectionOptimizations": "Improvements:",

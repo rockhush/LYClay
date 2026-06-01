@@ -55,8 +55,6 @@ export function Settings() {
     setLanguage,
     launchAtStartup,
     setLaunchAtStartup,
-    gatewayAutoStart,
-    setGatewayAutoStart,
     proxyEnabled,
     proxyServer,
     proxyHttpServer,
@@ -626,20 +624,6 @@ export function Settings() {
                   </pre>
                 </div>
               )}
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-sm font-medium text-foreground/70">{t('gateway.autoStart')}</Label>
-                  <p className="text-sm text-muted-foreground mt-0.5">
-                    {t('gateway.autoStartDesc')}
-                  </p>
-                </div>
-                <Switch
-                  size="sm"
-                  checked={gatewayAutoStart}
-                  onCheckedChange={setGatewayAutoStart}
-                />
-              </div>
 
               <div className="flex items-center justify-between">
                 <div>
