@@ -222,35 +222,6 @@ export async function handleSkillRoutes(
     return true;
   }
 
-  if (url.pathname === '/api/clawhub/normalize-user-skills' && req.method === 'POST') {
-    try {
-      const updated = await ctx.clawHubService.normalizeUserCreatedSkills();
-      sendJson(res, 200, { success: true, updated });
-    } catch (error) {
-      sendJson(res, 500, { success: false, error: String(error) });
-    }
-    return true;
-  }
-
-  if (url.pathname === '/api/clawhub/read-skill-md' && req.method === 'POST') {
-    try {
-      const body = await parseJsonBody<{ slug?: string; skillKey?: string; baseDir?: string }>(req);
-      const result = ctx.clawHubService.readSkillMd(
-        body.skillKey || body.slug || '',
-        body.slug,
-        body.baseDir,
-      );
-      if (!result) {
-        sendJson(res, 404, { success: false, error: 'Skill documentation not found' });
-        return true;
-      }
-      sendJson(res, 200, { success: true, content: result.content, fileName: result.fileName });
-    } catch (error) {
-      sendJson(res, 500, { success: false, error: String(error) });
-    }
-    return true;
-  }
-
   if (url.pathname === '/api/clawhub/open-readme' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{ slug?: string; skillKey?: string; baseDir?: string }>(req);

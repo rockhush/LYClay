@@ -19,11 +19,6 @@ import {
   restorePreservedSkillDirectory,
 } from '../utils/skill-workspace-preserve';
 import { purgeCompanySkillForFreshInstall } from '../utils/company-skill-update';
-import {
-  DEFAULT_USER_CREATED_SKILL_VERSION,
-  normalizeUserCreatedSkillsUnderRoot,
-  resolveCurrentSkillAuthorName,
-} from '../utils/user-created-skill-metadata';
 
 export interface ClawHubSearchParams {
     query: string;
@@ -525,9 +520,7 @@ export class ClawHubService {
         try {
             const skillsRoot = path.join(this.workDir, 'skills');
             if (fs.existsSync(skillsRoot)) {
-                await normalizeUserCreatedSkillsUnderRoot(skillsRoot);
-                const authorFallback = await resolveCurrentSkillAuthorName();
-                const skillDirs = this.scanSkillDirectories(skillsRoot, authorFallback);
+                const skillDirs = this.scanSkillDirectories(skillsRoot);
                 cliResults.push(...skillDirs);
             }
         } catch (error) {
@@ -575,10 +568,7 @@ export class ClawHubService {
     /**
      * 扫描 skills 目录，查找所有技能（包括嵌套目录）
      */
-    private scanSkillDirectories(
-        skillsRoot: string,
-        authorFallback?: string,
-    ): ClawHubInstalledSkillResult[] {
+    private scanSkillDirectories(skillsRoot: string): ClawHubInstalledSkillResult[] {
         const results: ClawHubInstalledSkillResult[] = [];
         
         try {
@@ -596,22 +586,20 @@ export class ClawHubService {
                     const slug = manifest.slug || entry.name;
                     const localMetadata = resolveLocalUploadSkillMetadata(manifest, entry.name);
                     const name = sidecar?.name || localMetadata.name;
-                    const version = sidecar?.version?.trim()
-                        || localMetadata.version
-                        || DEFAULT_USER_CREATED_SKILL_VERSION;
+                    const version = localMetadata.version;
 
                     results.push({
                         slug,
                         name,
                         description: sidecar?.description || manifest.description,
-                        author: sidecar?.author || manifest.author || authorFallback,
+                        author: sidecar?.author || manifest.author,
                         version,
                         source: 'openclaw-managed',
                         baseDir: dirPath,
                     });
                 } else {
                     // 可能是嵌套目录，递归扫描
-                    const nestedResults = this.scanSkillDirectories(dirPath, authorFallback);
+                    const nestedResults = this.scanSkillDirectories(dirPath);
                     results.push(...nestedResults);
                 }
             }
@@ -634,40 +622,6 @@ export class ClawHubService {
             .map((id) => path.join(this.workDir, 'skills', id))
             .find((dir) => fs.existsSync(dir));
         return directSkillDir || this.resolveSkillDirByManifestName(uniqueCandidates);
-    }
-
-    /**
-     * Ensure user-created skills carry default version/author metadata in SKILL.md.
-     */
-    async normalizeUserCreatedSkills(): Promise<number> {
-        const skillsRoot = path.join(this.workDir, 'skills');
-        return normalizeUserCreatedSkillsUnderRoot(skillsRoot);
-    }
-
-    /**
-     * Read skill documentation file content (SKILL.md, README.md, etc.)
-     */
-    readSkillMd(
-        skillKeyOrSlug: string,
-        fallbackSlug?: string,
-        preferredBaseDir?: string,
-    ): { content: string; fileName: string } | null {
-        const skillDir = this.resolveSkillDir(skillKeyOrSlug, fallbackSlug, preferredBaseDir);
-        const possibleFiles = ['SKILL.md', 'README.md', 'skill.md', 'readme.md'];
-
-        if (skillDir) {
-            for (const file of possibleFiles) {
-                const filePath = path.join(skillDir, file);
-                if (fs.existsSync(filePath)) {
-                    return {
-                        content: fs.readFileSync(filePath, 'utf8'),
-                        fileName: file,
-                    };
-                }
-            }
-        }
-
-        return null;
     }
 
     /**

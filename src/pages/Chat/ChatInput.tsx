@@ -337,13 +337,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
         if ('toolName' in content && content.toolName === 'skill-creator') {
           // 延迟刷新，确保技能已经保存到磁盘
           setTimeout(() => {
-            void hostApiFetch<{ success: boolean }>('/api/clawhub/normalize-user-skills', {
-              method: 'POST',
-            })
-              .catch(() => {})
-              .finally(() => {
-                void fetchSkills();
-              });
+            void fetchSkills();
           }, 1000);
         }
       }
