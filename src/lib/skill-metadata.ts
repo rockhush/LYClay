@@ -48,6 +48,7 @@ export const LYCLAW_BUILTIN_SKILL_KEYS = new Set([
   'tavily-search',
   'dws',
   'lingyi-baishitong',
+  'mineru-ocr',
 ]);
 
 export function isLyclawBuiltinSkill(

@@ -684,11 +684,10 @@ function buildChatEventDedupeKey(eventState: string, event: Record<string, unkno
   const runId = event.runId != null ? String(event.runId) : '';
   const sessionKey = event.sessionKey != null ? String(event.sessionKey) : '';
   const seq = event.seq != null ? String(event.seq) : '';
-  // Some gateways emit multiple `delta` updates without a monotonically
+  // Some gateways emit multiple streaming/final updates without a monotonically
   // increasing `seq`. Deduping those by just `runId + sessionKey + state`
-  // collapses legitimate stream progression, so only seq-backed deltas are
-  // safe to dedupe generically.
-  if (eventState === 'delta' && !seq) {
+  // collapses legitimate stream progression and can drop the final assistant reply.
+  if ((eventState === 'delta' || eventState === 'final') && !seq) {
     return null;
   }
   if (runId || sessionKey || seq || eventState) {
@@ -3309,7 +3308,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return toMs(msg.timestamp) >= userMsTs;
       };
 
-      if (isSendingNow && !pendingFinal && !currentActiveRunId) {
+      const recentTerminalAssistant = [...finalMessages].reverse().find((msg) => {
+        if (msg.role !== 'assistant') return false;
+        if (!isTerminalAssistantMessage(msg)) return false;
+        return isAfterUserMsg(msg);
+      });
+
+      if (isSendingNow && recentTerminalAssistant) {
+        clearHistoryPoll();
+        clearErrorRecoveryTimer();
+        set({
+          sending: false,
+          activeRunId: null,
+          pendingFinal: false,
+          streamingText: '',
+          streamingMessage: null,
+          streamingTools: [],
+          pendingToolImages: [],
+          lastUserMessageAt: null,
+          runAborted: false,
+        });
+        finishChatRunPerf('history-final', currentActiveRunId ?? '');
+      } else if (isSendingNow && !pendingFinal && !currentActiveRunId) {
         const hasRecentAssistantActivity = [...finalMessages].reverse().some((msg) => {
           if (msg.role !== 'assistant') return false;
           return isAfterUserMsg(msg);
@@ -3319,18 +3339,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
 
-      // If pendingFinal, check whether the AI produced a final text response.
-      if (pendingFinal || get().pendingFinal) {
-        const recentAssistant = [...finalMessages].reverse().find((msg) => {
-          if (msg.role !== 'assistant') return false;
-          if (!isTerminalAssistantMessage(msg)) return false;
-          return isAfterUserMsg(msg);
-        });
-        if (recentAssistant) {
-          clearHistoryPoll();
-          set({ sending: false, activeRunId: null, pendingFinal: false });
-        }
-      }
       const latestPromptError = getLatestPromptErrorAfterUser(promptErrors, userMsTs);
       if (latestPromptError) {
         const promptErrorAt = getPromptErrorTimestamp(latestPromptError);
@@ -4279,7 +4287,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         } else {
           // No message in final event - reload history to get complete data
           set({ streamingText: '', streamingMessage: null, pendingFinal: true });
-          get().loadHistory();
+          void get().loadHistory(true, { force: true });
         }
         break;
       }

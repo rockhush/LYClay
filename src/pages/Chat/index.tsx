@@ -28,6 +28,7 @@ import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
 import { getChatWaitingMode, isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
 import { useSkillsStore } from '@/stores/skills';
 import { toast } from 'sonner';
+import { formatWelcomeDisplayName } from '@/lib/welcome-display-name';
 import {
   WELCOME_QUICK_ACTIONS,
   buildQuickActionComposerText,
@@ -1247,7 +1248,7 @@ function WelcomeScreen() {
   const skills = useSkillsStore((s) => s.skills);
   const skillsLoading = useSkillsStore((s) => s.loading);
   const fetchSkills = useSkillsStore((s) => s.fetchSkills);
-  const displayName = dingtalkUser?.name || dingtalkUser?.nickname || '';
+  const displayName = formatWelcomeDisplayName(dingtalkUser?.name || dingtalkUser?.nickname);
   const greetingText = displayName
     ? t('welcome.greeting', { name: displayName })
     : t('welcome.greetingFallback', { defaultValue: '你好～' });

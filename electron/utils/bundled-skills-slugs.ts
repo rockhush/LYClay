@@ -23,6 +23,7 @@ export const BUNDLED_SKILL_SLUGS = new Set([
   'tavily-search',
   'dws',
   'lingyi-baishitong',
+  'mineru-ocr',
 ]);
 
 export const PREINSTALLED_MARKER_NAME = '.LYClaw-preinstalled.json';

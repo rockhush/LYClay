@@ -27,6 +27,11 @@ vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
 }));
 
+vi.mock('@/lib/ui-state-persistence', () => ({
+  flushUiStateSync: vi.fn(async () => undefined),
+  hydrateUiStateFromDisk: vi.fn(async () => undefined),
+}));
+
 describe('useChatStore startup history retry', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -35,7 +40,7 @@ describe('useChatStore startup history retry', () => {
     agentsState.agents = [];
     gatewayRpcMock.mockReset();
     hostApiFetchMock.mockReset();
-    hostApiFetchMock.mockResolvedValue({ messages: [] });
+    hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
   });
 
   afterEach(() => {
@@ -152,6 +157,54 @@ describe('useChatStore startup history retry', () => {
     ]);
     expect(useChatStore.getState().sending).toBe(false);
     expect(useChatStore.getState().activeRunId).toBeNull();
+  });
+
+  it('finalizes an active send when quiet local history contains the terminal assistant message', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'hello', id: 'u1', timestamp: 1000 }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-history-final',
+      streamingText: '',
+      streamingMessage: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] },
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: 1000,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
+      messages: [
+        { role: 'user', content: 'hello', id: 'u1', timestamp: 1000 },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'terminal answer' }],
+          id: 'a1',
+          timestamp: 1001,
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    await useChatStore.getState().loadHistory(true, { force: true });
+
+    expect(useChatStore.getState().messages.map((message) => message.content)).toEqual([
+      'hello',
+      [{ type: 'text', text: 'terminal answer' }],
+    ]);
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
+    expect(useChatStore.getState().pendingFinal).toBe(false);
+    expect(useChatStore.getState().streamingMessage).toBeNull();
   });
 
   it('keeps non-startup foreground loading safety timeout at 15 seconds', async () => {
@@ -353,16 +406,17 @@ describe('useChatStore startup history retry', () => {
     expect(useChatStore.getState().activeRunId).toBe('run-local-progress');
     expect(useChatStore.getState().messages).toHaveLength(1);
 
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(hostApiFetchMock).not.toHaveBeenCalledWith(
-      '/api/sessions/history-local?sessionKey=agent%3Amain%3Amain',
-    );
+    const expectedHistoryUrl = '/api/sessions/history-local?sessionKey=agent%3Amain%3Asession-1779081057000';
+    const historyLocalCallCount = () => hostApiFetchMock.mock.calls.filter(
+      ([url]) => url === expectedHistoryUrl,
+    ).length;
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(historyLocalCallCount()).toBe(0);
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(hostApiFetchMock).toHaveBeenCalledWith(
-      '/api/sessions/history-local?sessionKey=agent%3Amain%3Amain',
-    );
+    expect(historyLocalCallCount()).toBe(1);
     expect(useChatStore.getState().messages.map((message) => message.id)).toEqual([
       'user-from-transcript',
       'assistant-tool-plan',

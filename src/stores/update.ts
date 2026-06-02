@@ -116,6 +116,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         updateInfo: 'info' in payload ? (payload.info ?? null) : state.updateInfo,
         progress: 'progress' in payload ? (payload.progress ?? null) : state.progress,
         error: 'error' in payload ? (payload.error ?? null) : state.error,
+        autoInstallCountdown: payload.status === 'error' ? null : state.autoInstallCountdown,
       }));
     });
 
@@ -211,6 +212,8 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   },
 
   downloadUpdate: async () => {
+    await get().cancelAutoInstall();
+
     set({
       status: 'downloading',
       error: null,
@@ -223,18 +226,42 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       },
       autoInstallCountdown: null,
     });
-    
+
     try {
       const result = await invokeIpc<{
         success: boolean;
         error?: string;
+        status?: {
+          status: UpdateStatus;
+          info?: UpdateInfo;
+          progress?: ProgressInfo;
+          error?: string;
+        };
       }>('update:download');
-      
+
+      if (result.status) {
+        set({
+          status: result.status.status,
+          updateInfo: result.status.info ?? get().updateInfo,
+          progress: result.status.progress ?? null,
+          error: result.status.error ?? null,
+          autoInstallCountdown: null,
+        });
+      }
+
       if (!result.success) {
-        set({ status: 'error', error: result.error || 'Failed to download update' });
+        set({
+          status: 'error',
+          error: result.error || 'Failed to download update',
+          autoInstallCountdown: null,
+        });
       }
     } catch (error) {
-      set({ status: 'error', error: String(error) });
+      set({
+        status: 'error',
+        error: String(error),
+        autoInstallCountdown: null,
+      });
     }
   },
 
