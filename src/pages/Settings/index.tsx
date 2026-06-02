@@ -1023,7 +1023,7 @@ export function Settings() {
               {t('updates.title')}
             </h2>
             <div className="space-y-2.5">
-              <UpdateSettings onAfterCheckUpdate={refreshAppLogs} />
+              <UpdateSettings />
             </div>
           </div>
 
