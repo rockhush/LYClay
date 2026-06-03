@@ -466,7 +466,7 @@ function AddAgentDialog({
             <Switch
               id="inherit-workspace"
               size="sm"
-              className="origin-right scale-[0.75]"
+              className="origin-right scale-[1]"
               checked={inheritWorkspace}
               onCheckedChange={setInheritWorkspace}
             />

@@ -13,13 +13,9 @@ import {
   X,
   AlertCircle,
   Plus,
-  Key,
   Trash2,
   RefreshCw,
-  FolderOpen,
-  FileCode,
   Globe,
-  Copy,
   ChevronUp,
   ChevronDown,
   Upload,
@@ -28,16 +24,21 @@ import {
   Download,
   CheckCircle2,
   Ban,
+  FileText,
+  BookOpen,
+  Tag,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { Badge } from '@/components/ui/badge';
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { ModalOverlay } from '@/components/ui/modal-overlay';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useSkillsStore } from '@/stores/skills';
 import { useGatewayStore } from '@/stores/gateway';
-import { LoadingSpinner, CenteredLoader } from '@/components/common/LoadingSpinner';
+import { LoadingSpinner, CenteredLoader, LoaderBadge } from '@/components/common/LoadingSpinner';
 import { useMinLoading } from '@/hooks/use-min-loading';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
@@ -57,7 +58,6 @@ import {
   isPlaceholderSkillDescription,
   resolveSkillDisplayName,
 } from '@/lib/skill-metadata';
-import { rendererExtensionRegistry } from '@/extensions/registry';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { flushUiStateSync, hydrateUiStateFromDisk } from '@/lib/ui-state-persistence';
@@ -105,145 +105,68 @@ interface SkillDetailDialogProps {
   marketplaceMatch?: MarketplaceSkill;
   isOpen: boolean;
   onClose: () => void;
-  onToggle: (enabled: boolean) => void;
-  onUninstall?: (slug: string) => void;
   onOpenFolder?: (skill: Skill) => Promise<void> | void;
 }
 
-function resolveSkillSourceLabel(skill: Skill, t: TFunction<'skills'>): string {
-  const source = (skill.source || '').trim().toLowerCase();
-  if (!source) {
-    if (skill.isBundled) return t('source.badge.bundled', { defaultValue: 'Bundled' });
-    return t('source.badge.unknown', { defaultValue: 'Unknown source' });
-  }
-  if (source === 'openclaw-bundled') return t('source.badge.bundled', { defaultValue: 'Bundled' });
-  if (source === 'openclaw-managed') return t('source.badge.managed', { defaultValue: 'Managed' });
-  if (source === 'openclaw-workspace') return t('source.badge.workspace', { defaultValue: 'Workspace' });
-  if (source === 'openclaw-extra') return t('source.badge.extra', { defaultValue: 'Extra dirs' });
-  if (source === 'agents-skills-personal') return t('source.badge.agentsPersonal', { defaultValue: 'Personal .agents' });
-  if (source === 'agents-skills-project') return t('source.badge.agentsProject', { defaultValue: 'Project .agents' });
-  return source;
-}
-
-function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle, onUninstall, onOpenFolder }: SkillDetailDialogProps) {
+function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFolder }: SkillDetailDialogProps) {
   const { t } = useTranslation('skills');
-  const { fetchSkills } = useSkillsStore();
-  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([]);
-  const [apiKey, setApiKey] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const detailMetaComponents = rendererExtensionRegistry.getSkillDetailMetaComponents();
+  const [skillMd, setSkillMd] = useState('');
+  const [skillMdFile, setSkillMdFile] = useState('SKILL.md');
+  const [skillMdLoading, setSkillMdLoading] = useState(false);
+  const [skillMdError, setSkillMdError] = useState<string | null>(null);
 
-  // Initialize config from skill
   useEffect(() => {
-    if (!skill) return;
-
-    // API Key
-    if (skill.config?.apiKey) {
-      setApiKey(String(skill.config.apiKey));
-    } else {
-      setApiKey('');
+    if (!isOpen || !skill) {
+      setSkillMd('');
+      setSkillMdFile('SKILL.md');
+      setSkillMdError(null);
+      setSkillMdLoading(false);
+      return;
     }
 
-    // Env Vars
-    if (skill.config?.env) {
-      const vars = Object.entries(skill.config.env).map(([key, value]) => ({
-        key,
-        value: String(value),
-      }));
-      setEnvVars(vars);
-    } else {
-      setEnvVars([]);
-    }
-  }, [skill]);
+    let cancelled = false;
+    setSkillMdLoading(true);
+    setSkillMdError(null);
+    setSkillMd('');
 
-  const handleOpenClawhub = async () => {
-    if (!skill?.slug) return;
-    await invokeIpc('shell:openExternal', `https://clawhub.ai/s/${skill.slug}`);
-  };
-
-  const handleOpenEditor = async () => {
-    if (!skill?.id) return;
-    try {
-      const result = await hostApiFetch<{ success: boolean; error?: string }>('/api/clawhub/open-readme', {
+    void hostApiFetch<{ success: boolean; content?: string; fileName?: string; error?: string }>(
+      '/api/clawhub/read-skill-md',
+      {
         method: 'POST',
-        body: JSON.stringify({ skillKey: skill.id, slug: skill.slug, baseDir: skill.baseDir }),
-      });
-      if (result.success) {
-        toast.success(t('toast.openedEditor'));
-      } else {
-        toast.error(result.error || t('toast.failedEditor'));
-      }
-    } catch (err) {
-      toast.error(t('toast.failedEditor') + ': ' + String(err));
-    }
-  };
-
-  const handleCopyPath = async () => {
-    if (!skill?.baseDir) return;
-    try {
-      await navigator.clipboard.writeText(skill.baseDir);
-      toast.success(t('toast.copiedPath'));
-    } catch (err) {
-      toast.error(t('toast.failedCopyPath') + ': ' + String(err));
-    }
-  };
-
-  const handleAddEnv = () => {
-    setEnvVars([...envVars, { key: '', value: '' }]);
-  };
-
-  const handleUpdateEnv = (index: number, field: 'key' | 'value', value: string) => {
-    const newVars = [...envVars];
-    newVars[index] = { ...newVars[index], [field]: value };
-    setEnvVars(newVars);
-  };
-
-  const handleRemoveEnv = (index: number) => {
-    const newVars = [...envVars];
-    newVars.splice(index, 1);
-    setEnvVars(newVars);
-  };
-
-  const handleSaveConfig = async () => {
-    if (isSaving || !skill) return;
-    setIsSaving(true);
-    try {
-      // Build env object, filtering out empty keys
-      const envObj = envVars.reduce((acc, curr) => {
-        const key = curr.key.trim();
-        const value = curr.value.trim();
-        if (key) {
-          acc[key] = value;
-        }
-        return acc;
-      }, {} as Record<string, string>);
-
-      // Use direct file access instead of Gateway RPC for reliability
-      const result = await invokeIpc<{ success: boolean; error?: string }>(
-        'skill:updateConfig',
-        {
+        body: JSON.stringify({
           skillKey: skill.id,
-          apiKey: apiKey || '', // Empty string will delete the key
-          env: envObj // Empty object will clear all env vars
+          slug: skill.slug,
+          baseDir: skill.baseDir,
+        }),
+      },
+    )
+      .then((result) => {
+        if (cancelled) return;
+        if (result.success && result.content) {
+          setSkillMd(result.content);
+          setSkillMdFile(result.fileName || 'SKILL.md');
+        } else {
+          setSkillMdError(result.error || t('detail.skillMdNotFound'));
         }
-      ) as { success: boolean; error?: string };
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const message = String(err);
+        const notFound = /not found|404/i.test(message);
+        setSkillMdError(notFound ? t('detail.skillMdNotFound') : message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSkillMdLoading(false);
+        }
+      });
 
-      if (!result.success) {
-        throw new Error(result.error || 'Unknown error');
-      }
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, skill, t]);
 
-      // Refresh skills from gateway to get updated config
-      await fetchSkills();
-
-      toast.success(t('detail.configSaved'));
-    } catch (err) {
-      toast.error(t('toast.failedSave') + ': ' + String(err));
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  if (!skill) return null;
+  if (!skill || !isOpen) return null;
 
   const displayName = resolveSkillDisplayName(skill, marketplaceMatch);
   const initial = getSkillInitial(displayName);
@@ -254,217 +177,108 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onToggle,
     { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
   const useInitialBadge = !skill.icon || ['⌛', '📦', '🔧'].includes(skill.icon);
-  const sourceLabel = resolveSkillSourceLabel(skill, t);
-  const installLabel = skill.isCore
-    ? t('detail.coreSystem')
-    : skill.isBundled
-      ? t('detail.bundled')
-      : t('detail.userInstalled');
-  const authorLabel = (skill.author || marketplaceMatch?.author || '').trim();
+  const authorLabel = (skill.author || marketplaceMatch?.author || '').trim()
+    || t('card.authorFallback', { defaultValue: '未知作者' });
+  const description = isPlaceholderSkillDescription(skill.description)
+    ? (marketplaceMatch?.description?.trim() || skill.description || '')
+    : (skill.description || marketplaceMatch?.description?.trim() || '');
 
   return (
-    <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent
-        className="w-full sm:max-w-[480px] p-0 flex flex-col border-l border-black/10 dark:border-white/10 bg-[#FAFAF8] dark:bg-background shadow-[0_0_40px_rgba(0,0,0,0.12)]"
-        side="right"
-      >
-        <div className="shrink-0 border-b border-black/[0.06] dark:border-white/10 bg-gradient-to-r from-[#FFF7EF] via-white to-white dark:from-[#FF922B]/10 dark:via-background dark:to-background px-6 py-5">
-          <div className="flex items-start gap-4">
+    <Sheet open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-[48rem] bg-white dark:bg-card">
+        <SheetHeader className="text-left pb-2">
+          <SheetTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
+            {t('detail.title')}
+          </SheetTitle>
+        </SheetHeader>
+
+        <div className="space-y-4 py-2 flex-1 overflow-y-auto min-h-0">
+          <div className="flex items-start gap-3.5">
             <div
               className={cn(
-                'w-12 h-12 shrink-0 flex items-center justify-center rounded-2xl text-[18px] font-semibold text-white shadow-sm',
+                'w-11 h-11 shrink-0 flex items-center justify-center rounded-xl text-[16px] font-semibold text-white shadow-sm',
                 useInitialBadge ? colorClass : 'bg-white dark:bg-accent border border-black/5 dark:border-white/10',
               )}
             >
-              {useInitialBadge ? initial : <span className="text-2xl leading-none">{skill.icon}</span>}
+              {useInitialBadge ? initial : <span className="text-xl leading-none">{skill.icon}</span>}
             </div>
 
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <SheetTitle className="text-[18px] font-semibold text-foreground leading-tight truncate min-w-0">
-                  {displayName}
-                </SheetTitle>
-                {authorLabel && (
-                  <span className="text-[12px] text-muted-foreground shrink-0">
-                    {authorLabel}
-                  </span>
+              <h3 className="text-[16px] font-semibold text-foreground leading-tight truncate">
+                {displayName}
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span className="inline-flex items-center gap-1.5 text-[12px] leading-none text-muted-foreground/70">
+                  <Tag className="h-3.5 w-3.5 shrink-0" />
+                  <span>{displayVersion}</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5 max-w-[60%] text-[12px] leading-none text-muted-foreground/70">
+                  <UserIcon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{authorLabel}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {description && (
+            <section className="px-0 py-0">
+              <h4 className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-foreground">
+                <FileText className="h-4 w-4 text-[#FF922B]" />
+                {t('detail.skillOverview')}
+              </h4>
+              <p className="text-[13px] leading-[1.7] text-foreground/80 whitespace-pre-wrap break-words">
+                {description}
+              </p>
+            </section>
+          )}
+
+          <section className="min-w-0 px-0 py-0">
+            <h4 className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-foreground">
+              <BookOpen className="h-4 w-4 text-[#FF922B]" />
+              {t('detail.functionDescription')}
+            </h4>
+
+            <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-black/[0.06] bg-white dark:border-white/10 dark:bg-muted/30">
+              <div className="px-3 pt-2 pb-0 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                {skillMdFile}
+              </div>
+              <div className="overflow-x-auto px-3 py-3">
+                {skillMdLoading ? (
+                  <div className="flex items-center justify-center py-10 text-[13px] text-muted-foreground">
+                    <LoadingSpinner size="sm" className="mr-2" />
+                    {t('detail.skillMdLoading')}
+                  </div>
+                ) : skillMdError ? (
+                  <p className="py-6 text-center text-[13px] text-muted-foreground">{skillMdError}</p>
+                ) : (
+                  <div className="prose prose-sm dark:prose-invert max-w-none w-max min-w-full text-[13px] leading-relaxed">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {skillMd}
+                    </ReactMarkdown>
+                  </div>
                 )}
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Badge
-                  variant="secondary"
-                  className="rounded-full border-0 bg-black/[0.05] dark:bg-white/10 px-2.5 py-0.5 font-mono text-[11px] text-foreground/70"
-                >
-                  {displayVersion}
-                </Badge>
-                <Badge
-                  variant="secondary"
-                  className="rounded-full border-0 bg-black/[0.05] dark:bg-white/10 px-2.5 py-0.5 text-[11px] text-foreground/70"
-                >
-                  {installLabel}
-                </Badge>
-                <Badge
-                  variant="secondary"
-                  className="rounded-full border-0 bg-black/[0.05] dark:bg-white/10 px-2.5 py-0.5 text-[11px] text-foreground/70"
-                >
-                  {sourceLabel}
-                </Badge>
-                {detailMetaComponents.map((DetailMetaComponent, index) => (
-                  <DetailMetaComponent key={`skill-detail-meta-${index}`} skill={skill} />
-                ))}
-              </div>
-            </div>
-
-            {!skill.isCore && (
-              <div
-                className="shrink-0 pt-1"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <Switch
-                  size="sm"
-                  className="origin-right scale-[0.75]"
-                  checked={skill.enabled}
-                  onCheckedChange={onToggle}
-                  aria-label={skill.enabled ? t('detail.disable') : t('detail.enable')}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-          {skill.description && (
-            <section className="rounded-2xl border border-black/[0.06] dark:border-white/10 bg-white/90 dark:bg-card px-4 py-3.5 shadow-sm">
-              <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-2">
-                {t('detail.description', { defaultValue: '技能说明' })}
-              </h3>
-              <p className="text-[13px] leading-[1.7] text-foreground/80 whitespace-pre-wrap break-words">
-                {skill.description}
-              </p>
-            </section>
-          )}
-
-          <section className="rounded-2xl border border-black/[0.06] dark:border-white/10 bg-white/90 dark:bg-card px-4 py-3.5 shadow-sm space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                {t('detail.source')}
-              </h3>
-              <div className="flex items-center gap-1.5">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
-                  disabled={!skill.baseDir}
-                  onClick={handleCopyPath}
-                  title={t('detail.copyPath')}
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
-                  disabled={!skill.baseDir}
-                  onClick={() => onOpenFolder?.(skill)}
-                  title={t('detail.openActualFolder')}
-                >
-                  <FolderOpen className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </div>
-            <div className="rounded-xl border border-black/[0.05] dark:border-white/10 bg-[#FAFAF8] dark:bg-muted/40 px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-foreground/70 break-all">
-              {skill.baseDir || t('detail.pathUnavailable')}
             </div>
           </section>
-
-          {!skill.isCore && (
-            <section className="rounded-2xl border border-black/[0.06] dark:border-white/10 bg-white/90 dark:bg-card px-4 py-3.5 shadow-sm space-y-3">
-              <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-2">
-                <Key className="h-3.5 w-3.5 text-[#FF922B]" />
-                {t('detail.apiKey')}
-              </h3>
-              <Input
-                placeholder={t('detail.apiKeyPlaceholder', 'Enter API Key (optional)')}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                type="password"
-                className="h-11 rounded-xl border-black/10 dark:border-white/10 bg-[#FAFAF8] dark:bg-muted/40 text-[13px] focus-visible:border-[#FF922B]/50 focus-visible:ring-[#FF922B]/20"
-              />
-              <p className="text-[12px] leading-relaxed text-muted-foreground">
-                {t('detail.apiKeyDesc', 'The primary API key for this skill. Leave blank if not required or configured elsewhere.')}
-              </p>
-            </section>
-          )}
-
-          {!skill.isCore && (
-            <section className="rounded-2xl border border-black/[0.06] dark:border-white/10 bg-white/90 dark:bg-card px-4 py-3.5 shadow-sm space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground flex items-center gap-2">
-                  {t('detail.envVars')}
-                  {envVars.length > 0 && (
-                    <Badge variant="secondary" className="h-5 rounded-full px-2 text-[10px]">
-                      {envVars.length}
-                    </Badge>
-                  )}
-                </h3>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 rounded-lg px-2.5 text-[12px] text-[#FF922B] hover:text-[#FF6A00] hover:bg-[#FFF2E5]"
-                  onClick={handleAddEnv}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
-                  {t('detail.addVariable', 'Add Variable')}
-                </Button>
-              </div>
-
-              {envVars.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-black/10 dark:border-white/10 bg-[#FAFAF8] dark:bg-muted/30 px-4 py-6 text-center text-[12.5px] text-muted-foreground">
-                  {t('detail.noEnvVars', 'No environment variables configured.')}
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  {envVars.map((env, index) => (
-                    <div className="flex items-center gap-2" key={index}>
-                      <Input
-                        value={env.key}
-                        onChange={(e) => handleUpdateEnv(index, 'key', e.target.value)}
-                        className="h-10 flex-1 rounded-xl border-black/10 dark:border-white/10 bg-[#FAFAF8] dark:bg-muted/40 font-mono text-[12px]"
-                        placeholder={t('detail.keyPlaceholder', 'Key')}
-                      />
-                      <Input
-                        value={env.value}
-                        onChange={(e) => handleUpdateEnv(index, 'value', e.target.value)}
-                        className="h-10 flex-1 rounded-xl border-black/10 dark:border-white/10 bg-[#FAFAF8] dark:bg-muted/40 font-mono text-[12px]"
-                        placeholder={t('detail.valuePlaceholder', 'Value')}
-                      />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-10 w-10 shrink-0 rounded-xl text-destructive/70 hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => handleRemoveEnv(index)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
         </div>
 
-        {!skill.isCore && (
-          <div className="shrink-0 border-t border-black/[0.06] dark:border-white/10 bg-white/95 dark:bg-background/95 px-6 py-4 backdrop-blur-sm">
-            <Button
-              onClick={handleSaveConfig}
-              className="h-11 w-full rounded-xl bg-[#FF922B] text-[13px] font-semibold text-white shadow-sm hover:bg-[#FF6A00]"
-              disabled={isSaving}
-            >
-              {isSaving ? t('detail.saving') : t('detail.saveConfig')}
-            </Button>
-          </div>
-        )}
+        <div className="mt-4 pt-4 border-t border-black/[0.06] dark:border-white/10 flex justify-end gap-2 shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            className="h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors"
+          >
+            {t('detail.back')}
+          </Button>
+          <Button
+            type="button"
+            onClick={() => onOpenFolder?.(skill)}
+            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+          >
+            {t('detail.open')}
+          </Button>
+        </div>
       </SheetContent>
     </Sheet>
   );
@@ -487,6 +301,8 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
     t('card.versionUnknown', { defaultValue: '未知' }),
     { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
+  const authorLabel = (skill.author || marketplaceMatch?.author || '').trim()
+    || t('card.authorFallback', { defaultValue: '未知作者' });
   const description = isPlaceholderSkillDescription(skill.description)
     ? (marketplaceMatch?.description?.trim() || skill.description || '—')
     : (skill.description || marketplaceMatch?.description?.trim() || '—');
@@ -530,9 +346,14 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
                 <Puzzle className="h-3 w-3 text-blue-500/70 shrink-0" />
               ) : null}
             </div>
-            <span className="text-[11px] font-mono text-muted-foreground/70 shrink-0">
-              {versionLabel}
-            </span>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 h-[16.5px]">
+              <span className="shrink-0 text-[11px] leading-none text-muted-foreground/70">
+                {versionLabel}
+              </span>
+              <span className="min-w-0 max-w-[55%] text-[11px] leading-none text-muted-foreground/70 truncate">
+                {authorLabel}
+              </span>
+            </div>
           </div>
         </div>
         <div
@@ -570,6 +391,7 @@ interface MarketplaceSkillCardProps {
   isLoading: boolean;
   onInstall: () => void;
   onUninstall: () => void;
+  onUpdate: () => void;
   t: TFunction<'skills'>;
 }
 
@@ -579,6 +401,7 @@ function MarketplaceSkillCard({
   isLoading,
   onInstall,
   onUninstall,
+  onUpdate,
   t,
 }: MarketplaceSkillCardProps) {
   const initial = getSkillInitial(skill.name);
@@ -594,6 +417,21 @@ function MarketplaceSkillCard({
     typeof skill.downloads === 'number' && Number.isFinite(skill.downloads)
       ? skill.downloads
       : null;
+  
+  // 格式化时间显示
+  const formatCreateTime = (time: string) => {
+    if (!time) return '';
+    try {
+      const date = new Date(time);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch {
+      return '';
+    }
+  };
+  const createTime = skill.update_time ? formatCreateTime(skill.update_time) : null;
 
   return (
     <div
@@ -621,6 +459,29 @@ function MarketplaceSkillCard({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {isInstalled && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUpdate();
+              }}
+              disabled={isLoading}
+              className={cn(
+                'h-8 w-8 rounded-lg transition-colors shadow-none',
+                'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
+              )}
+              title="更新"
+            >
+              {isLoading ? (
+                <LoadingSpinner size="sm" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          )}
           <Button
             type="button"
             size="icon"
@@ -660,10 +521,11 @@ function MarketplaceSkillCard({
       </Tooltip>
 
       <div className="mt-3 flex items-center gap-4 text-[11.5px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1 max-w-[60%] truncate">
+        <span className="inline-flex items-center gap-1 max-w-[40%] truncate">
           <UserIcon className="h-3 w-3 shrink-0" />
           <span className="truncate">{author}</span>
         </span>
+
         {downloads !== null && (
           <span
             className="inline-flex items-center gap-1"
@@ -671,6 +533,13 @@ function MarketplaceSkillCard({
           >
             <Download className="h-3 w-3" />
             {downloads}
+          </span>
+        )}
+
+        {createTime && (
+          <span className="inline-flex items-center gap-1">
+            <RefreshCw className="h-3 w-3" />
+            {createTime}
           </span>
         )}
       </div>
@@ -711,6 +580,7 @@ export function Skills() {
   const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'mine' | 'market'>('mine');
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -809,6 +679,7 @@ export function Skills() {
     { key: 'legal', label: '法务' },
     { key: 'office', label: '办公' },
     { key: 'it', label: 'IT' },
+    { key: 'logistics', label: '物流' },
     { key: 'other', label: '其他' },
   ];
 
@@ -947,6 +818,7 @@ export function Skills() {
   }, [handleSearch]);
 
   const handleInstall = useCallback(async (slug: string) => {
+    setIsUpdating(true);
     try {
       const currentScroll = listRef.current?.scrollTop || 0;
 
@@ -972,6 +844,8 @@ export function Skills() {
       }, 0);
 
       toast.success(t('toast.installed'));
+      // 等待 toast 显示一段时间后再关闭遮罩
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       if (INSTALL_ERROR_CODES.has(errorMessage)) {
@@ -979,6 +853,10 @@ export function Skills() {
       } else {
         toast.error(t('toast.failedInstall') + ': ' + errorMessage);
       }
+      // 失败也等待一下再关闭遮罩
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } finally {
+      setIsUpdating(false);
     }
   }, [installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
 
@@ -1007,6 +885,57 @@ export function Skills() {
       toast.error(t('toast.failedUninstall') + ': ' + String(err));
     }
   }, [uninstallSkill, fetchSkills, t]);
+
+  const handleUpdate = useCallback(async (slug: string) => {
+    setIsUpdating(true);
+    try {
+      // 保存当前滚动位置
+      const currentScroll = listRef.current?.scrollTop || 0;
+      
+      // 先卸载
+      await uninstallSkill(slug);
+      await hydrateUiStateFromDisk();
+      await flushUiStateSync().catch(() => undefined);
+      await fetchSkills();
+
+      // 再安装
+      const packageSlug = await installSkill(slug);
+      await fetchSkills();
+
+      if (packageSlug) {
+        const installed = useSkillsStore.getState().skills.find(
+          (skill) => skill.slug === packageSlug || skill.id === packageSlug,
+        );
+        await enableSkill(installed?.id || packageSlug);
+      } else {
+        await enableSkill(slug);
+      }
+
+      if (activeTab === 'market') {
+        const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+        await searchSkills(installQuery.trim(), selectedType, sort);
+      }
+
+      setTimeout(() => {
+        listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
+      }, 0);
+
+      toast.success(t('toast.installed'));
+      // 等待 toast 显示一段时间后再关闭遮罩
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (INSTALL_ERROR_CODES.has(errorMessage)) {
+        toast.error(t(`toast.${errorMessage}`, { path: skillsDirPath }), { duration: 10000 });
+      } else {
+        toast.error(t('toast.failedInstall') + ': ' + errorMessage);
+      }
+      // 失败也等待一下再关闭遮罩
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [uninstallSkill, installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
 
   const showInitialLoading = loading && activeTab === 'mine' && safeSkills.length === 0;
   const showMineLoading = useMinLoading(showInitialLoading);
@@ -1126,7 +1055,7 @@ export function Skills() {
 
           {activeTab === 'mine' ? (
             <div className="flex items-center gap-2 shrink-0">
-              <div className="relative flex items-center bg-[#FFF2E5] dark:bg-[#FF922B]/15 rounded-full px-3 py-1.5 border border-transparent focus-within:border-[#FF922B]/40 transition-colors w-56 -translate-y-[2px]">
+              <div className="relative flex items-center bg-[#FFF2E5] dark:bg-[#FF922B]/15 rounded-full px-3 py-1.5 border border-transparent focus-within:border-[#FF922B]/40 transition-colors w-64 -translate-y-[2px]">
                 <Search className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
                 <input
                   placeholder={t('search')}
@@ -1156,38 +1085,112 @@ export function Skills() {
               </Button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="relative flex items-center bg-[#FFF2E5] dark:bg-[#FF922B]/15 rounded-full px-3 py-1.5 border border-transparent focus-within:border-[#FF922B]/40 transition-colors w-56 -translate-y-[2px]">
-                <Search className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
-                <input
-                  placeholder={t('search')}
-                  value={installQuery}
-                  onChange={(e) => setInstallQuery(e.target.value)}
-                  onKeyDown={handleInstallQueryKeyDown}
-                  className="ml-2 bg-transparent outline-none w-full text-[13px] text-foreground placeholder:text-[#FF922B]/80"
-                />
-                {installQuery && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInstallQuery('');
-                      searchSkills('', selectedType);
-                    }}
-                    className="text-[#FF922B]/70 hover:text-[#FF922B] shrink-0 ml-1"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
+            <div className="flex items-center justify-end gap-4 shrink-0 flex-1">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-0 rounded">
+                  {(['download_count', 'update_time'] as const).map((sort, index) => {
+                    const labels = {
+                      download_count: '下载量',
+                      update_time: '时间',
+                    };
+                    const isSelected = sortBy === sort;
+                    return (
+                      <button
+                        key={sort}
+                        onClick={() => {
+                          if (sortBy === sort) {
+                            setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
+                          } else {
+                            setSortBy(sort);
+                            setSortOrder('desc');
+                          }
+                        }}
+                        className={cn(
+                          'px-3 py-1 text-[12.5px] transition-all flex items-center justify-center gap-1',
+                          index === 0 && 'rounded-l',
+                          index === 1 && 'rounded-r',
+                          isSelected
+                            ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
+                        )}
+                      >
+                        {labels[sort]}
+                        {isSelected && sortOrder === 'desc' && (
+                          <ChevronDown className="h-3 w-3" />
+                        )}
+                        {isSelected && sortOrder === 'asc' && (
+                          <ChevronUp className="h-3 w-3" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-0 rounded">
+                  {(['all', 'installed', 'uninstalled'] as const).map((filter, index) => {
+                    const counts = {
+                      all: searchResults.length,
+                      installed: installedMarketplaceCount,
+                      uninstalled: uninstalledMarketplaceCount,
+                    };
+                    const labels = {
+                      all: '全部',
+                      installed: '已安装',
+                      uninstalled: '未安装',
+                    };
+                    const isSelected = installFilter === filter;
+                    return (
+                      <button
+                        key={filter}
+                        onClick={() => setInstallFilter(filter)}
+                        className={cn(
+                          'px-3 py-1 text-[12.5px] transition-all flex items-center justify-center',
+                          index === 0 && 'rounded-l',
+                          index === 2 && 'rounded-r',
+                          isSelected
+                            ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
+                        )}
+                      >
+                        {labels[filter]} ({counts[filter]})
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="relative flex items-center bg-[#FFF2E5] dark:bg-[#FF922B]/15 rounded-full px-3 py-1.5 border border-transparent focus-within:border-[#FF922B]/40 transition-colors w-64">
+                  <Search className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
+                  <input
+                    placeholder={t('search')}
+                    value={installQuery}
+                    onChange={(e) => setInstallQuery(e.target.value)}
+                    onKeyDown={handleInstallQueryKeyDown}
+                    className="ml-2 bg-transparent outline-none w-full text-[13px] text-foreground placeholder:text-[#FF922B]/80"
+                  />
+                  {installQuery && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInstallQuery('');
+                        searchSkills('', selectedType);
+                      }}
+                      className="text-[#FF922B]/70 hover:text-[#FF922B] shrink-0 ml-1"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleSearch}
+                  className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+                  title={t('searchButton')}
+                >
+                  <RefreshCw className={cn('h-3.5 w-3.5', searching && 'animate-spin')} />
+                </Button>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleSearch}
-                className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
-                title={t('searchButton')}
-              >
-                <RefreshCw className={cn('h-3.5 w-3.5', searching && 'animate-spin')} />
-              </Button>
             </div>
           )}
         </div>
@@ -1232,101 +1235,26 @@ export function Skills() {
           </div>
         )}
 
-        {/* Filter chips for market tab */}
+        {/* Filter chips for market tab - only category options remain here */}
         {activeTab === 'market' && (
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4 shrink-0">
-            <div className="flex items-center flex-wrap gap-0.5">
-              {marketplaceCategoryOptions.map(({ key, label }) => {
-                const isActive = selectedType === key;
-                return (
-                  <button
-                    key={key || 'all'}
-                    onClick={() => setSelectedType(key)}
-                    className={cn(
-                      'px-2 py-1 rounded-full text-[13px] transition-all',
-                      isActive
-                        ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
-                    )}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-0 rounded">
-                {(['download_count', 'update_time'] as const).map((sort, index) => {
-                  const labels = {
-                    download_count: '下载量',
-                    update_time: '时间',
-                  };
-                  const isSelected = sortBy === sort;
-                  return (
-                    <button
-                      key={sort}
-                      onClick={() => {
-                        if (sortBy === sort) {
-                          setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
-                        } else {
-                          setSortBy(sort);
-                          setSortOrder('desc');
-                        }
-                      }}
-                      className={cn(
-                        'px-3 py-1 text-[12.5px] transition-all flex items-center justify-center gap-1',
-                        index === 0 && 'rounded-l',
-                        index === 1 && 'rounded-r',
-                        isSelected
-                          ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
-                      )}
-                    >
-                      {labels[sort]}
-                      {isSelected && sortOrder === 'desc' && (
-                        <ChevronDown className="h-3 w-3" />
-                      )}
-                      {isSelected && sortOrder === 'asc' && (
-                        <ChevronUp className="h-3 w-3" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="flex items-center gap-0 rounded">
-                {(['all', 'installed', 'uninstalled'] as const).map((filter, index) => {
-                  const counts = {
-                    all: searchResults.length,
-                    installed: installedMarketplaceCount,
-                    uninstalled: uninstalledMarketplaceCount,
-                  };
-                  const labels = {
-                    all: '全部',
-                    installed: '已安装',
-                    uninstalled: '未安装',
-                  };
-                  const isSelected = installFilter === filter;
-                  return (
-                    <button
-                      key={filter}
-                      onClick={() => setInstallFilter(filter)}
-                      className={cn(
-                        'px-3 py-1 text-[12.5px] transition-all flex items-center justify-center',
-                        index === 0 && 'rounded-l',
-                        index === 2 && 'rounded-r',
-                        isSelected
-                          ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
-                      )}
-                    >
-                      {labels[filter]} ({counts[filter]})
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+          <div className="flex flex-wrap gap-2 mb-4 shrink-0">
+            {marketplaceCategoryOptions.map(({ key, label }) => {
+              const isActive = selectedType === key;
+              return (
+                <button
+                  key={key || 'all'}
+                  onClick={() => setSelectedType(key)}
+                  className={cn(
+                    'px-3.5 py-1 rounded-full text-[13px] transition-all',
+                    isActive
+                      ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
+                  )}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -1352,7 +1280,7 @@ export function Skills() {
                 <p>{searchQuery ? t('noSkillsSearch') : t('noSkillsAvailable')}</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 {filteredSkills.map((skill) => (
                   <SkillCard
                     key={skill.baseDir || skill.slug || skill.id}
@@ -1378,17 +1306,17 @@ export function Skills() {
                 </div>
               )}
 
-              {searching && (
+              {searching && !isUpdating && (
                 <CenteredLoader message={t('marketplace.searching')} testId="skills-market-loading" />
               )}
 
               {!searching && visibleMarketplaceSkills.length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   {visibleMarketplaceSkills.map((skill) => {
                     const isInstalled = isMarketplaceSkillInstalled(skill);
                     const marketplaceKey = getMarketplaceSkillKey(skill);
                     const actionKey = skill.slug;
-                    const isBusy = !!installing[actionKey];
+                    const isBusy = !!installing[actionKey] && !isUpdating;
                     return (
                       <MarketplaceSkillCard
                         key={marketplaceKey}
@@ -1397,6 +1325,7 @@ export function Skills() {
                         isLoading={isBusy}
                         onInstall={() => handleInstall(skill.slug)}
                         onUninstall={() => handleUninstall(skill.slug)}
+                        onUpdate={() => handleUpdate(skill.slug)}
                         t={t}
                       />
                     );
@@ -1421,12 +1350,6 @@ export function Skills() {
         marketplaceMatch={selectedSkill ? findMarketplaceSkillMatch(selectedSkill, marketplaceLookup) : undefined}
         isOpen={!!selectedSkill}
         onClose={() => setSelectedSkill(null)}
-        onToggle={(enabled) => {
-          if (!selectedSkill) return;
-          handleToggle(selectedSkill.id, enabled);
-          setSelectedSkill({ ...selectedSkill, enabled });
-        }}
-        onUninstall={handleUninstall}
         onOpenFolder={handleOpenSkillFolder}
       />
 
@@ -1439,6 +1362,13 @@ export function Skills() {
           void fetchSkills();
         }}
       />
+
+      {/* 安装/更新遮罩 */}
+      {isUpdating && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-[2px] pointer-events-auto">
+          <LoaderBadge />
+        </div>
+      )}
     </div>
   );
 }

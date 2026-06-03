@@ -59,23 +59,15 @@ describe('provider metadata', () => {
 
   it('keeps builtin provider sources in sync', () => {
     expect(BUILTIN_PROVIDER_TYPES).toEqual(
-      expect.arrayContaining(['ly-minimax', 'anthropic', 'openai', 'google', 'openrouter', 'ark', 'moonshot', 'siliconflow', 'minimax-portal', 'minimax-portal-cn', 'modelstudio', 'ollama'])
+      expect.arrayContaining(['ly-auto', 'anthropic', 'openai', 'google', 'openrouter', 'ark', 'moonshot', 'siliconflow', 'minimax-portal', 'minimax-portal-cn', 'modelstudio', 'ollama'])
     );
   });
 
-  it('marks LY OpenAI-compatible models as streaming-usage capable', () => {
-    expect(getProviderConfig('ly-qwen')?.models).toEqual(
+  it('marks LY-Auto as streaming-usage capable', () => {
+    expect(getProviderConfig('ly-auto')?.models).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'qwen3.5-397b',
-          compat: { supportsUsageInStreaming: true },
-        }),
-      ])
-    );
-    expect(getProviderConfig('ly-deepseek')?.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'deepseek-v4-flash',
+          id: 'auto',
           compat: { supportsUsageInStreaming: true },
         }),
       ])

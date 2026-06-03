@@ -509,4 +509,39 @@ describe('agent config lifecycle', () => {
     expect(agentIds).not.toContain('2');
     expect(agentIds).not.toContain('1');
   });
+
+  it('ensures fixed-id agents without generating numeric copies', async () => {
+    await writeOpenClawJson({
+      agents: {
+        list: [
+          { id: 'main', name: 'Main', default: true },
+          { id: 'dingtalk-2', name: 'dingtalk' },
+          { id: 'dingtalk-3', name: 'dingtalk' },
+          { id: 'dingtalk-helper', name: 'dingtalk' },
+        ],
+      },
+      bindings: [
+        { agentId: 'dingtalk-2', match: { channel: 'dingtalk', accountId: 'official' } },
+      ],
+    });
+    await mkdir(join(testHome, '.openclaw', 'agents', 'dingtalk'), { recursive: true });
+
+    const { ensureAgentConfigEntry, listAgentsSnapshot } = await import('@electron/utils/agent-config');
+
+    await ensureAgentConfigEntry('dingtalk', 'dingtalk', {
+      inheritWorkspace: true,
+      removeGeneratedCopies: true,
+    });
+
+    const snapshot = await listAgentsSnapshot();
+    const agentIds = snapshot.agents.map((agent) => agent.id);
+    const config = await readOpenClawJson();
+    const bindings = config.bindings as Array<{ agentId: string }>;
+
+    expect(agentIds).toContain('dingtalk');
+    expect(agentIds).toContain('dingtalk-helper');
+    expect(agentIds).not.toContain('dingtalk-2');
+    expect(agentIds).not.toContain('dingtalk-3');
+    expect(bindings[0].agentId).toBe('dingtalk');
+  });
 });

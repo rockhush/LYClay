@@ -49,8 +49,10 @@
       "args": "参数（逗号分隔）",
       "url": "HTTPS 地址",
       "env": "环境变量（每行 KEY=value）",
+      "headers": "请求头（每行 KEY: value）",
       "disabled": "初始禁用",
       "badEnv": "环境变量每行需为 KEY=value 格式",
+      "badHeaders": "请求头每行需为 KEY: value 格式",
       "reservedName": "名称 notion 与 github 预留给内置连接器。"
     }
   },

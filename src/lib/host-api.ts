@@ -87,7 +87,6 @@ function parseUnifiedProxyResponse<T>(
   if (!response.ok) {
     throw new Error(resolveProxyErrorMessage(response.error));
   }
-
   const data: HostApiProxyData = response.data ?? {};
   trackUiEvent('hostapi.fetch', {
     path,
@@ -96,6 +95,31 @@ function parseUnifiedProxyResponse<T>(
     durationMs: Date.now() - startedAt,
     status: data.status ?? 200,
   });
+
+  // Check HTTP status code from the actual response
+  if (data.status && !data.ok) {
+    let message = `HTTP ${data.status}`;
+    if (data.json && typeof data.json === 'object' && 'error' in (data.json as Record<string, unknown>)) {
+      const errorPayload = (data.json as Record<string, unknown>).error;
+      if (typeof errorPayload === 'string') {
+        message = errorPayload;
+      } else if (errorPayload && typeof errorPayload === 'object') {
+        const errorObj = errorPayload as Record<string, unknown>;
+        const errorCode = typeof errorObj.code === 'string' ? errorObj.code : '';
+        const errorMsg = typeof errorObj.message === 'string' ? errorObj.message : '';
+        // Include both code and message so classifyMessage can match nginx error codes
+        message = errorCode ? `${errorCode}: ${errorMsg}` : (errorMsg || message);
+      }
+    } else if (data.text) {
+      message = data.text;
+    }
+    throw normalizeAppError(new Error(message), {
+      source: 'ipc-proxy',
+      status: data.status,
+      path,
+      method,
+    });
+  }
 
   if (data.status === 204) return undefined as T;
   if (data.json !== undefined) return data.json as T;

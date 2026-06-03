@@ -45,6 +45,7 @@ export function InstallDialog({
   const [argsText, setArgsText] = useState('-y, @modelcontextprotocol/server-example');
   const [disabled, setDisabled] = useState(false);
   const [envText, setEnvText] = useState('');
+  const [headersText, setHeadersText] = useState('');
 
   const resetCustom = () => {
     setName('');
@@ -54,6 +55,7 @@ export function InstallDialog({
     setArgsText('-y, @modelcontextprotocol/server-example');
     setDisabled(false);
     setEnvText('');
+    setHeadersText('');
   };
 
   const parseEnv = (): Record<string, string> | undefined => {
@@ -69,6 +71,21 @@ export function InstallDialog({
       env[k] = v;
     }
     return env;
+  };
+
+  const parseHeaders = (): Record<string, string> | undefined => {
+    const lines = headersText.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) return undefined;
+    const headers: Record<string, string> = {};
+    for (const line of lines) {
+      const idx = line.indexOf(':');
+      if (idx <= 0) throw new Error(t('dialog.custom.badHeaders'));
+      const k = line.slice(0, idx).trim();
+      const v = line.slice(idx + 1).trim();
+      if (!k) throw new Error(t('dialog.custom.badHeaders'));
+      headers[k] = v;
+    }
+    return headers;
   };
 
   const handleCustomSubmit = async () => {
@@ -92,6 +109,14 @@ export function InstallDialog({
         setBusy(false);
         return;
       }
+      let headers: Record<string, string> | undefined;
+      try {
+        headers = headersText.trim() ? parseHeaders() : undefined;
+      } catch {
+        toast.error(t('dialog.custom.badHeaders'));
+        setBusy(false);
+        return;
+      }
       const base = baseConfig ?? { servers: {} };
       const entry =
         transport === 'stdio'
@@ -105,7 +130,7 @@ export function InstallDialog({
           : {
             transport,
             url: url.trim(),
-            headers: undefined,
+            headers,
             env,
             disabled,
           };
@@ -164,10 +189,21 @@ export function InstallDialog({
               </div>
             </>
           ) : (
-            <div className="space-y-2">
-              <Label className={labelClasses}>{t('dialog.custom.url')}</Label>
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" className={inputClasses} />
-            </div>
+            <>
+              <div className="space-y-2">
+                <Label className={labelClasses}>{t('dialog.custom.url')}</Label>
+                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" className={inputClasses} />
+              </div>
+              <div className="space-y-2">
+                <Label className={labelClasses}>{t('dialog.custom.headers')}</Label>
+                <textarea
+                  className={textareaClasses}
+                  value={headersText}
+                  onChange={(e) => setHeadersText(e.target.value)}
+                  placeholder="Authorization: Bearer token"
+                />
+              </div>
+            </>
           )}
           <div className="space-y-2">
             <Label className={labelClasses}>{t('dialog.custom.env')}</Label>

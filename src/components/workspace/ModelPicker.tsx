@@ -8,7 +8,7 @@ import { useAgentsStore } from '@/stores/agents';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { buildProviderListItems, type ProviderListItem } from '@/lib/provider-accounts';
-import { LY_MINIMAX_PROVIDER_ID, LY_DEEPSEEK_PROVIDER_ID } from '@/lib/providers';
+import { LY_AUTO_PROVIDER_ID } from '@/lib/providers';
 import {
   formatContextWindowTokens,
   resolveModelPickerCatalog,
@@ -81,8 +81,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
   const configuredProviders = useMemo(() => {
     return providerItems.filter(item => {
-      if (item.account.vendorId === LY_MINIMAX_PROVIDER_ID) return true;
-      if (item.account.vendorId === LY_DEEPSEEK_PROVIDER_ID) return true;
+      if (item.account.vendorId === LY_AUTO_PROVIDER_ID) return true;
       if (!item.status) return false;
       if (item.account.authMode === 'oauth_device' ||
           item.account.authMode === 'oauth_browser' ||
@@ -114,12 +113,28 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   }, [pickerOpen]);
 
   const handleSelectProvider = (item: ProviderListItem) => {
-    const nextModel = item.account.model?.trim();
-    if (!nextModel || switchingSessionModel) {
-      setPickerOpen(false);
-      setHoveredAccountId(null);
+    if (switchingSessionModel) {
       return;
     }
+
+    // Build the model ref: use account.model if set, otherwise construct from vendor
+    let nextModel = item.account.model?.trim();
+    if (!nextModel) {
+      // If account doesn't have a model, try to use vendor's default
+      const vendorDefaultModel = item.vendor?.model || item.vendor?.defaultModelId;
+      if (vendorDefaultModel) {
+        // Construct full model ref: vendorId/modelId
+    nextModel = vendorDefaultModel.includes('/')
+        ? vendorDefaultModel
+          : `${item.account.vendorId}/${vendorDefaultModel}`;
+      } else {
+     // No default model available, cannot switch
+      toast.error(t('composer.noModelConfigured', { defaultValue: '该 Provider 未配置模型' }));
+        setPickerOpen(false);
+        setHoveredAccountId(null);
+      return;
+      }
+  }
 
     const currentSessionModel = sessions.find((session) => session.key === currentSessionKey)?.model;
     if (nextModel === currentSessionModel) {
@@ -136,9 +151,9 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
         await setCurrentSessionModel(nextModel);
         toast.success(t('composer.modelSwitched', { name: item.vendor?.name || item.account.label }));
       } catch (error) {
-        console.error('Failed to persist session model:', error);
+      console.error('Failed to persist session model:', error);
         toast.error(t('composer.modelSwitchFailed', { error: String(error) }));
-      } finally {
+    } finally {
         setSwitchingSessionModel(false);
       }
     })();

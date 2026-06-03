@@ -42,7 +42,7 @@ import {
   resolveProviderModelForSave,
   shouldShowProviderModelId,
   // LYCLAW_MODEL_PROVIDER_ID,
-  LY_MINIMAX_PROVIDER_ID,
+  LY_AUTO_PROVIDER_ID,
   shouldInvertInDark,
 } from '@/lib/providers';
 import {
@@ -58,6 +58,7 @@ import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '@/lib/api-client';
 import { useSettingsStore } from '@/stores/settings';
 import { hostApiFetch } from '@/lib/host-api';
+import { useAgentsStore } from '@/stores/agents';
 import { subscribeHostEvent } from '@/lib/host-events';
 
 const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors text-foreground placeholder:text-foreground/40';
@@ -137,7 +138,7 @@ function shouldShowUserAgentFieldForNewProvider(providerType: ProviderType | nul
 }
 
 function isReadonlyProvider(account: Pick<ProviderAccount, 'vendorId' | 'metadata'>): boolean {
-  return account.vendorId === LY_MINIMAX_PROVIDER_ID || account.metadata?.readonly === true;
+  return account.vendorId === LY_AUTO_PROVIDER_ID || account.metadata?.readonly === true;
 }
 
 function getAuthModeLabel(
@@ -236,6 +237,9 @@ export function ProvidersSettings() {
   const handleDeleteProvider = async (providerId: string) => {
     try {
       await removeAccount(providerId);
+      // Refresh agents so any model bindings to the deleted provider are cleared
+      // and agents fall back to the default model.
+      void useAgentsStore.getState().fetchAgents();
       toast.success(t('aiProviders.toast.deleted'));
     } catch (error) {
       toast.error(`${t('aiProviders.toast.failedDelete')}: ${error}`);

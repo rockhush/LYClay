@@ -49,8 +49,10 @@
       "args": "Arguments (comma-separated)",
       "url": "HTTPS URL",
       "env": "Environment (one KEY=value per line)",
+      "headers": "Headers (one KEY: value per line)",
       "disabled": "Start disabled",
       "badEnv": "Each env line must look like KEY=value",
+      "badHeaders": "Each header line must look like KEY: value",
       "reservedName": "The names notion and github are reserved for built-in connectors."
     }
   },

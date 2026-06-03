@@ -959,21 +959,21 @@ describe('syncProviderConfigToOpenClaw', () => {
 
     const { syncProviderConfigToOpenClaw } = await import('@electron/utils/openclaw-auth');
 
-    await syncProviderConfigToOpenClaw('ly-minimax', 'MiniMax-M2.7', {
-      baseUrl: 'http://10.64.22.11:8000/v1',
-      api: 'anthropic-messages',
+    await syncProviderConfigToOpenClaw('ly-auto', 'auto', {
+      baseUrl: 'http://10.64.10.48/v1',
+      api: 'openai-completions',
       modelOverrides: {
-        'MiniMax-M2.7': { maxTokens: 98304 },
+        'auto': { maxTokens: 8192 },
       },
     });
 
     const result = await readOpenClawJson();
     const models = result.models as Record<string, unknown>;
     const providers = models.providers as Record<string, unknown>;
-    const provider = providers['ly-minimax'] as Record<string, unknown>;
+    const provider = providers['ly-auto'] as Record<string, unknown>;
     const model = (provider.models as Array<Record<string, unknown>>)[0];
 
-    expect(model).toMatchObject({ id: 'MiniMax-M2.7', name: 'MiniMax-M2.7', maxTokens: 98304 });
+    expect(model).toMatchObject({ id: 'auto', name: 'auto', maxTokens: 8192 });
   });
 
   it('syncs ly-mimo config into its own runtime provider entry', async () => {

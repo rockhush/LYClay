@@ -71,17 +71,9 @@
             "featureImageInput": "图片输入",
             "featureReasoning": "推理模型",
             "featureLongContext": "长上下文（{{context}}）",
-            "lyMinimax": {
-                "title": "MiniMax-M2.7",
-                "description": "领益内置 MiniMax 模型，适合日常对话与办公自动化任务。"
-            },
-            "lyQwen": {
-                "title": "qwen3.5-397b",
-                "description": "通义千问旗舰模型，支持长上下文与多模态图片输入。"
-            },
-            "lyDeepseek": {
-                "title": "deepseek-v4-flash",
-                "description": "DeepSeek 高速推理模型，适合复杂分析与代码任务。"
+            "lyAuto": {
+                "title": "Auto",
+                "description": "自动选择最优模型，涵盖 DeepSeek、通义千问、MiniMax。"
             }
         },
         "reasoning": {
@@ -111,8 +103,8 @@
     },
 
     "errors": {
-        "modelResponseTimeout": "请求超时，请检查本机网络或者大模型配置！",
-        "modelResponseTimeoutLong": "较长时间仍未收到助手回复。可能是服务不可用、限流或仍在预热。请到「设置 → AI 提供商」检查后重试。",
+        "modelResponseTimeout": "较长时间未收到助手回复，本次请求已停止。请检查本机网络、AI 提供商配置或稍后重试。",
+        "modelResponseTimeoutLong": "长时间未收到助手回复，已自动停止本次等待。可能是模型仍在排队或预热、服务不可用、限流，或 AI 提供商配置异常。请到「设置 → AI 提供商」检查，或切换模型后重试。",
         "contextTooLarge": "当前会话上下文过大，自动压缩后仍超过当前模型限制。请开启更强压缩、切换更大上下文模型，或新建会话继续。",
         "currentMessageTooLarge": "本次输入过长，已超过当前模型可安全处理的上下文预算。请拆分输入，或改用文件/附件方式提供内容。",
         "contextCompressionFailedRecentOnly": "上下文压缩失败。系统仅保留最近对话，较早历史未进入本次请求。"

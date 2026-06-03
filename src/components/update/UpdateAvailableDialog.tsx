@@ -91,9 +91,9 @@ export function UpdateAvailableDialog() {
   const isWindows = window.electron?.platform === 'win32';
   const isInstallCountdownActive = autoInstallCountdown != null && autoInstallCountdown > 0;
   const isDownloading = status === 'downloading';
-  const isInstalling =
-    status !== 'error'
-    && (status === 'downloaded' || isInstallCountdownActive);
+  // Only show install countdown after a successful download — stale countdown ticks
+  // must not override the downloading/error panels during retry.
+  const isInstalling = status === 'downloaded';
   const isDownloadError = status === 'error' && open;
   const showProgressPanel = isDownloading || isInstalling || isDownloadError;
   const isBusy = isDownloading || isInstalling;
@@ -108,12 +108,16 @@ export function UpdateAvailableDialog() {
     setOpen(false);
   }, [status, cancelDownload, cancelAutoInstall]);
 
-  const handleExperienceNow = useCallback(async () => {
+  const handleRetryDownload = useCallback(async () => {
     if (isBusy) return;
     await cancelAutoInstall();
     setOpen(true);
     await downloadUpdate();
   }, [cancelAutoInstall, downloadUpdate, isBusy]);
+
+  const handleExperienceNow = useCallback(async () => {
+    await handleRetryDownload();
+  }, [handleRetryDownload]);
 
   if (!open) return null;
 
@@ -173,7 +177,7 @@ export function UpdateAvailableDialog() {
                 type="button"
                 variant="outline"
                 className="mt-5 h-8 rounded-lg"
-                onClick={() => void handleExperienceNow()}
+                onClick={() => void handleRetryDownload()}
               >
                 {t('updates.action.retry')}
               </Button>
