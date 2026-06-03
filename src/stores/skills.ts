@@ -593,14 +593,14 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     set({ searching: true, searchError: null });
     try {
       const requestBody = { query, category, sort };
-      // console.log('[Skills Store] Request URL: /api/clawhub/search, Method: POST, Body:', requestBody);
+      console.log('[Skills Store] Request URL: /api/clawhub/search, Method: POST, Body:', requestBody);
       const result = await hostApiFetch<{ success: boolean; results?: MarketplaceSkill[]; error?: string }>('/api/clawhub/search', {
         method: 'POST',
         body: JSON.stringify(requestBody),
       });
       if (result.success) {
-        // console.log('[Skills Store] Search results:', result.results);
-        // console.log('[Skills Store] First 5 results:', result.results?.slice(0, 5));
+        console.log('[Skills Store] Search results:', result.results);
+        console.log('[Skills Store] First 5 results:', result.results?.slice(0, 5));
         const isDefaultCatalog = !query.trim() && !category.trim() && sort === DEFAULT_MARKETPLACE_SORT;
         set({
           searchResults: result.results || [],

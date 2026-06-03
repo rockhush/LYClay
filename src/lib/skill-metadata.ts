@@ -65,39 +65,6 @@ export function isLyclawBuiltinSkill(
   );
 }
 
-/**
- * 判断一个技能是否是从技能广场安装的
- */
-export function isMarketplaceInstalledSkill(
-  skill: Pick<Skill, 'id' | 'slug' | 'name' | 'baseDir' | 'downloads' | 'source'>,
-  marketplaceLookup: ReturnType<typeof buildMarketplaceLookupMaps>,
-): boolean {
-  // 如果有 marketplace 的匹配，说明是从技能广场安装的
-  const hasMarketplaceMatch = findMarketplaceSkillMatch(skill, marketplaceLookup) !== undefined;
-  if (hasMarketplaceMatch) return true;
-  
-  // 如果有 downloads 字段，也可能是技能广场的技能
-  if (skill.downloads !== undefined) return true;
-  
-  return false;
-}
-
-/**
- * 判断一个技能是否是自定义技能（上传或创建的，不是内置也不是技能广场的）
- */
-export function isCustomSkill(
-  skill: Pick<Skill, 'id' | 'slug' | 'name' | 'baseDir' | 'downloads' | 'source' | 'isBundled' | 'isCore'>,
-  marketplaceLookup: ReturnType<typeof buildMarketplaceLookupMaps>,
-): boolean {
-  // 内置技能不是自定义技能
-  if (isLyclawBuiltinSkill(skill)) return false;
-  
-  // 技能广场安装的不是自定义技能
-  if (isMarketplaceInstalledSkill(skill, marketplaceLookup)) return false;
-  
-  return true;
-}
-
 export function resolveSkillVersionForDisplay(
   version: string | undefined,
   options?: { treatAsBuiltin?: boolean },

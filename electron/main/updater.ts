@@ -60,8 +60,6 @@ export class AppUpdater extends EventEmitter {
 
   /** Delay (in seconds) before auto-installing a downloaded update. */
   private static readonly AUTO_INSTALL_DELAY_SECONDS = 5;
-  /** Reject downloads smaller than this (empty/error HTML responses). */
-  private static readonly MIN_DOWNLOAD_BYTES = 64 * 1024;
   /** Brief pause after spawning NSIS so the detached installer can attach. */
   private static readonly QUIT_AFTER_SPAWN_DELAY_MS = 1500;
 
@@ -366,7 +364,6 @@ export class AppUpdater extends EventEmitter {
       const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
         ? '请使用内网检测'
         : errorMsg;
-      this.cancelAutoInstall();
       this.updateStatus({ status: 'error', error: friendlyError });
       throw error;
     } finally {
@@ -461,22 +458,14 @@ export class AppUpdater extends EventEmitter {
       fileStream = null;
       
       logger.info('[Updater] Download completed, size:', downloadedBytes);
-
-      if (downloadedBytes < AppUpdater.MIN_DOWNLOAD_BYTES) {
-        throw new Error(
-          downloadedBytes === 0
-            ? 'Download failed: empty response (check network connection)'
-            : `Download failed: file too small (${downloadedBytes} bytes)`,
-        );
-      }
-
+      
       this.updateStatus({ status: 'downloaded', info: this.status.info, progress: undefined });
-
+      
       this.downloadedFilePath = filePath;
       filePath = null;
 
       this.startAutoInstallCountdown();
-
+      
     } catch (error) {
       if (fileStream) {
         await fileStream.close().catch(() => {});
@@ -500,7 +489,6 @@ export class AppUpdater extends EventEmitter {
       if (filePath) {
         await unlink(filePath).catch(() => {});
       }
-      this.cancelAutoInstall();
       this.updateStatus({ status: 'error', error: (error as Error).message || String(error) });
       throw error;
     } finally {
@@ -782,9 +770,9 @@ export function registerUpdateHandlers(
   ipcMain.handle('update:download', async () => {
     try {
       await updater.downloadUpdate();
-      return { success: true, status: updater.getStatus() };
+      return { success: true };
     } catch (error) {
-      return { success: false, error: String(error), status: updater.getStatus() };
+      return { success: false, error: String(error) };
     }
   });
 

@@ -1,5 +1,4 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useTranslation } from 'react-i18next';
 import {
   ChevronLeft,
@@ -469,7 +468,7 @@ export function Models() {
                             </span>
                           )}
                           {typeof entry.costUsd === 'number' && Number.isFinite(entry.costUsd) && (
-                            <span className="flex items-center gap-1.5 ml-auto text-[#FE7B00] bg-[#FFF2E5] dark:text-primary dark:bg-[#FF922B]/15 px-2 py-0.5 rounded-md font-medium">{t('dashboard:recentTokenHistory.cost', { amount: entry.costUsd.toFixed(4) })}</span>
+                            <span className="flex items-center gap-1.5 ml-auto text-[#FF6A00] bg-[#FFF2E5] dark:text-primary dark:bg-[#FF922B]/15 px-2 py-0.5 rounded-md font-medium">{t('dashboard:recentTokenHistory.cost', { amount: entry.costUsd.toFixed(4) })}</span>
                           )}
                           {devModeUnlocked && entry.content && (
                             <Button
@@ -595,15 +594,15 @@ function UsageBarChart({
     <div className="space-y-4 bg-transparent p-5">
       <div className="flex flex-wrap items-center justify-center gap-5 text-[12px] font-medium text-muted-foreground mb-2">
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-sky-500" />
+          <span className="h-2 w-2 rounded-sm bg-sky-500" />
           {inputLabel}
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
+          <span className="h-2 w-2 rounded-sm bg-emerald-500" />
           {cacheLabel}
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-[#FF922B]" />
+          <span className="h-2 w-2 rounded-sm bg-[#FF922B]" />
           {outputLabel}
         </span>
       </div>
@@ -614,57 +613,35 @@ function UsageBarChart({
               {group.label} <span className="text-muted-foreground font-normal">| Tokens {formatTokenCount(group.totalTokens)}</span>
             </span>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="h-3 overflow-hidden rounded-full bg-black/[0.04] dark:bg-white/5 cursor-pointer">
+          <div className="h-3 overflow-hidden rounded-full bg-black/[0.04] dark:bg-white/5">
+            <div
+              className="flex h-full overflow-hidden rounded-full"
+              style={{
+                width: group.totalTokens > 0
+                  ? `${Math.max((group.totalTokens / maxTokens) * 100, 6)}%`
+                  : '0%',
+              }}
+            >
+              {group.inputTokens > 0 && (
                 <div
-                  className="flex h-full overflow-hidden rounded-full"
-                  style={{
-                    width: group.totalTokens > 0
-                      ? `${Math.max((group.totalTokens / maxTokens) * 100, 6)}%`
-                      : '0%',
-                  }}
-                >
-                  {group.inputTokens > 0 && (
-                    <div
-                      className="h-full bg-sky-500"
-                      style={{ width: `${(group.inputTokens / group.totalTokens) * 100}%` }}
-                    />
-                  )}
-                  {group.cacheTokens > 0 && (
-                    <div
-                      className="h-full bg-emerald-500"
-                      style={{ width: `${(group.cacheTokens / group.totalTokens) * 100}%` }}
-                    />
-                  )}
-                  {group.outputTokens > 0 && (
-                    <div
-                      className="h-full bg-[#FF922B]"
-                      style={{ width: `${(group.outputTokens / group.totalTokens) * 100}%` }}
-                    />
-                  )}
-                </div>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={5} className="bg-black/85 text-white px-3 py-2 rounded-lg shadow-none relative overflow-visible">
-              <div className="absolute -top-1.5 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[6px] border-b-black/85"></div>
-              <div className="space-y-1.5 text-sm">
-                <div className="text-white">{group.label}</div>
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-sky-500" />
-                  <span>{inputLabel}: {formatTokenCount(group.inputTokens)} token</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span>{cacheLabel}: {formatTokenCount(group.cacheTokens)} token</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-[#FF922B]" />
-                  <span>{outputLabel}: {formatTokenCount(group.outputTokens)} token</span>
-                </div>
-              </div>
-            </TooltipContent>
-          </Tooltip>
+                  className="h-full bg-sky-500"
+                  style={{ width: `${(group.inputTokens / group.totalTokens) * 100}%` }}
+                />
+              )}
+              {group.cacheTokens > 0 && (
+                <div
+                  className="h-full bg-emerald-500"
+                  style={{ width: `${(group.cacheTokens / group.totalTokens) * 100}%` }}
+                />
+              )}
+              {group.outputTokens > 0 && (
+                <div
+                  className="h-full bg-[#FF922B]"
+                  style={{ width: `${(group.outputTokens / group.totalTokens) * 100}%` }}
+                />
+              )}
+            </div>
+          </div>
         </div>
       ))}
     </div>

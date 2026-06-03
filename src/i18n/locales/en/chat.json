@@ -71,9 +71,17 @@
             "featureImageInput": "Image input",
             "featureReasoning": "Reasoning model",
             "featureLongContext": "Long context ({{context}})",
-            "lyAuto": {
-                "title": "Auto",
-                "description": "Auto-select the best model including DeepSeek, Qwen, and MiniMax."
+            "lyMinimax": {
+                "title": "MiniMax-M2.7",
+                "description": "Built-in MiniMax model for everyday chat and office automation."
+            },
+            "lyQwen": {
+                "title": "qwen3.5-397b",
+                "description": "Flagship Qwen model with long context and multimodal image input."
+            },
+            "lyDeepseek": {
+                "title": "deepseek-v4-flash",
+                "description": "Fast DeepSeek reasoning model for analysis and coding tasks."
             }
         },
         "reasoning": {
@@ -102,8 +110,8 @@
         "older": "Older than 1 Month"
     },
     "errors": {
-        "modelResponseTimeout": "No assistant reply was received for a while, so this request was stopped. Check your network, AI provider settings, or try again later.",
-        "modelResponseTimeoutLong": "No assistant reply was received after a long wait, so this request was stopped. The model may still be queued or warming up, the provider may be unavailable or rate-limited, or the AI provider settings may be incorrect. Check Settings → AI Providers or switch models, then try again.",
+        "modelResponseTimeout": "About 90 seconds passed with no assistant reply. The model may still be working in the background, or the provider may be slow, unavailable, rate-limited, or misconfigured. Check Settings → AI Providers, then try again.",
+        "modelResponseTimeoutLong": "Several minutes passed with no assistant reply. The provider may be unavailable, rate-limited, or still warming up. Check Settings → AI Providers, then try again.",
         "contextTooLarge": "This conversation is too large. Automatic compression still exceeds the current model limit. Use stronger compression, switch to a larger-context model, or start a new chat.",
         "currentMessageTooLarge": "This message is too long for the current model's safe context budget. Split the input or provide the content as a file/attachment.",
         "contextCompressionFailedRecentOnly": "Context compression failed. Only recent conversation turns were kept for this request; earlier history was not included."

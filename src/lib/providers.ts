@@ -6,10 +6,13 @@
  * layer so TypeScript project boundaries remain stable during the migration.
  */
 
-export const LY_AUTO_PROVIDER_ID = 'ly-auto' as const;
+export const LY_MINIMAX_PROVIDER_ID = 'ly-minimax' as const;
+export const LY_DEEPSEEK_PROVIDER_ID = 'ly-deepseek' as const;
+export const LY_QWEN_PROVIDER_ID = 'ly-qwen' as const;
+export const LEGACY_LY_MINIMAX_PROVIDER_ID = 'lyclaw-model' as const;
 
 export const PROVIDER_TYPES = [
-  LY_AUTO_PROVIDER_ID,
+  LY_MINIMAX_PROVIDER_ID,
   'anthropic',
   'openai',
   'google',
@@ -21,6 +24,8 @@ export const PROVIDER_TYPES = [
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
+  LY_DEEPSEEK_PROVIDER_ID,
+  LY_QWEN_PROVIDER_ID,
   'modelstudio',
   'ollama',
   'custom',
@@ -28,7 +33,7 @@ export const PROVIDER_TYPES = [
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
 export const BUILTIN_PROVIDER_TYPES = [
-  LY_AUTO_PROVIDER_ID,
+  LY_MINIMAX_PROVIDER_ID,
   'anthropic',
   'openai',
   'google',
@@ -40,6 +45,8 @@ export const BUILTIN_PROVIDER_TYPES = [
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
+  LY_DEEPSEEK_PROVIDER_ID,
+  LY_QWEN_PROVIDER_ID,
   'modelstudio',
   'ollama',
 ] as const;
@@ -141,16 +148,16 @@ import { providerIcons } from '@/assets/providers';
 /** All supported provider types with UI metadata */
 export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
   {
-    id: LY_AUTO_PROVIDER_ID,
-    name: 'LY-Auto',
+    id: LY_MINIMAX_PROVIDER_ID,
+    name: 'LY-MiniMax',
     icon: 'LY',
     placeholder: '',
-    model: 'Auto',
+    model: 'MiniMax',
     requiresApiKey: false,
-    defaultBaseUrl: 'http://10.64.10.48/v1',
-    defaultModelId: 'auto',
-    showBaseUrl: false,
-    showModelId: false,
+    defaultBaseUrl: 'http://10.64.22.11:8000/v1',
+    defaultModelId: 'MiniMax-M2.7',
+    showBaseUrl: true,
+    showModelId: true,
     hidden: true,
   },
   {
@@ -203,6 +210,36 @@ export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
   { id: 'ark', name: 'ByteDance Ark', icon: 'A', placeholder: 'your-ark-api-key', model: 'Doubao', requiresApiKey: true, defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3', showBaseUrl: true, showModelId: true, modelIdPlaceholder: 'ep-20260228000000-xxxxx', docsUrl: 'https://www.volcengine.com/', codePlanPresetBaseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3', codePlanPresetModelId: 'ark-code-latest', codePlanDocsUrl: 'https://www.volcengine.com/docs/82379/1928261?lang=zh' },
   { id: 'ollama', name: 'Ollama', icon: '🦙', placeholder: 'Not required', requiresApiKey: false, defaultBaseUrl: 'http://localhost:11434/v1', showBaseUrl: true, showModelId: true, modelIdPlaceholder: 'qwen3:latest' },
   {
+    id: LY_DEEPSEEK_PROVIDER_ID,
+    name: 'LY-DeepSeek',
+    icon: 'LY',
+    placeholder: 'sk-...',
+    model: 'DeepSeek',
+    requiresApiKey: true,
+    defaultBaseUrl: 'http://10.7.221.62:8000/v1',
+    defaultModelId: 'deepseek-v4-flash',
+    showBaseUrl: true,
+    showModelId: true,
+    showModelIdInDevModeOnly: true,
+    modelIdPlaceholder: 'deepseek-v4-flash',
+    hidden: true,
+  },
+  {
+    id: LY_QWEN_PROVIDER_ID,
+    name: 'LY-Qwen',
+    icon: 'LY',
+    placeholder: '',
+    model: 'Qwen',
+    requiresApiKey: false,
+    defaultBaseUrl: 'http://10.64.22.12:8000/v1',
+    defaultModelId: 'qwen3.5-397b',
+    showBaseUrl: true,
+    showModelId: true,
+    showModelIdInDevModeOnly: true,
+    modelIdPlaceholder: 'qwen3.5-397b',
+    hidden: true,
+  },
+  {
     id: 'custom',
     name: 'Custom',
     icon: '⚙️',
@@ -223,7 +260,7 @@ export function getProviderIconUrl(type: ProviderType | string): string | undefi
 
 /** Whether a provider's logo needs CSS invert in dark mode (all logos are monochrome) */
 export function shouldInvertInDark(type: ProviderType | string): boolean {
-  return type !== LY_AUTO_PROVIDER_ID;
+  return type !== LY_MINIMAX_PROVIDER_ID;
 }
 
 /** Shared class names for provider logo images in lists and pickers. */

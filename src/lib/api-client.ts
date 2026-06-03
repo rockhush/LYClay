@@ -5,7 +5,7 @@ import {
   mapBackendErrorCode,
   normalizeAppError,
 } from './error-model';
-export { AppError, normalizeAppError } from './error-model';
+export { AppError } from './error-model';
 
 export type TransportKind = 'ipc' | 'ws' | 'http';
 export type GatewayTransportPreference = 'ws-first';
@@ -916,31 +916,23 @@ export function toUserMessage(error: unknown): string {
 
   switch (appError.code) {
     case 'AUTH_INVALID':
-      return '身份验证失败，请检查 API 密钥或登录状态后重试。';
+      return 'Authentication failed. Check API key or login session and retry.';
     case 'TIMEOUT':
-      return '请求超时，请稍后重试。';
+      return 'Request timed out. Please retry.';
     case 'RATE_LIMIT':
-      return '请求过于频繁，请稍后再试。';
-    case 'MODEL_OVERLOADED':
-      return 'AI 模型服务繁忙，请稍后重试。';
-    case 'MULTIMODAL_OVERLOADED':
-      return '图片/视频理解服务繁忙，请稍后重试。';
-    case 'CONTEXT_TOO_LONG':
-      return '对话内容过长，无法继续。建议新建对话，或删除部分历史消息后重试。';
-    case 'SERVICE_UNAVAILABLE':
-      return '模型健康检查暂不可用，请稍后重试。';
+      return 'Too many requests. Please wait and try again.';
     case 'PERMISSION':
-      return '权限不足，请检查配置后重试。';
+      return 'Permission denied. Check your configuration and retry.';
     case 'CHANNEL_UNAVAILABLE':
-      return '服务通道不可用，请重启应用或网关后重试。';
+      return 'Service channel unavailable. Retry after restarting the app or gateway.';
     case 'NETWORK':
-      return '网络错误，请检查网络连接后重试。';
+      return 'Network error. Please verify connectivity and retry.';
     case 'CONFIG':
-      return '配置无效，请检查设置。';
+      return 'Configuration is invalid. Please review settings.';
     case 'GATEWAY':
-      return '网关不可用，请启动或重启网关后重试。';
+      return 'Gateway is unavailable. Start or restart the gateway and retry.';
     default:
-      return appError.message || '发生未知错误。';
+      return appError.message || 'Unexpected error occurred.';
   }
 }
 

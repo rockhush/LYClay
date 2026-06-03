@@ -415,7 +415,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       clearErrorRecoveryTimer();
 
       const SOFT_NO_RESPONSE_NOTICE_MS = 90_000;
-      const HARD_NO_RESPONSE_TIMEOUT_MS = 15 * 60_000;
+      const HARD_NO_RESPONSE_TIMEOUT_MS = 240_000;
       let slowResponseNoticeLogged = false;
       const checkStuck = () => {
         const state = get();

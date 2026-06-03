@@ -5,7 +5,7 @@
  * account-based provider storage and a dedicated secret-store abstraction.
  */
 
-import { BUILTIN_PROVIDER_TYPES, LY_AUTO_PROVIDER_ID, type ProviderType } from './provider-registry';
+import { BUILTIN_PROVIDER_TYPES, LY_MINIMAX_PROVIDER_ID, type ProviderType } from './provider-registry';
 import { getActiveOpenClawProviders } from './openclaw-auth';
 import {
   deleteProviderAccount,
@@ -188,8 +188,8 @@ export async function getAllProviders(): Promise<ProviderConfig[]> {
 export async function deleteProvider(providerId: string): Promise<boolean> {
   try {
     await ensureProviderStoreMigrated();
-    if (providerId === LY_AUTO_PROVIDER_ID) {
-      throw new Error('LY-Auto cannot be deleted');
+    if (providerId === LY_MINIMAX_PROVIDER_ID) {
+      throw new Error('LY-MiniMax cannot be deleted');
     }
     // Delete the API key
     await deleteApiKey(providerId);

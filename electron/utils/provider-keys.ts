@@ -1,8 +1,8 @@
-import { LY_AUTO_PROVIDER_ID } from './provider-registry';
+import { LY_MINIMAX_PROVIDER_ID } from './provider-registry';
 
 const MULTI_INSTANCE_PROVIDER_TYPES = new Set(['custom', 'ollama']);
 
-export const OPENCLAW_PROVIDER_KEY_LY_AUTO = LY_AUTO_PROVIDER_ID;
+export const OPENCLAW_PROVIDER_KEY_LY_MINIMAX = LY_MINIMAX_PROVIDER_ID;
 
 export const OPENCLAW_PROVIDER_KEY_MINIMAX = 'minimax-portal';
 export const OPENCLAW_PROVIDER_KEY_MOONSHOT = 'moonshot';
@@ -52,7 +52,7 @@ export function isOAuthProviderType(type: string): boolean {
 }
 
 export function isMiniMaxProviderType(type: string): boolean {
-  return type === OPENCLAW_PROVIDER_KEY_MINIMAX || type === 'minimax-portal-cn';
+  return type === OPENCLAW_PROVIDER_KEY_MINIMAX || type === 'minimax-portal-cn' || type === LY_MINIMAX_PROVIDER_ID;
 }
 
 export function getOAuthProviderTargetKey(type: string): string | undefined {

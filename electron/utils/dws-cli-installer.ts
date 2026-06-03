@@ -12,7 +12,6 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { app } from 'electron';
 import { logger } from './logger';
@@ -75,8 +74,6 @@ function getBundledDwsArchive(): string | null {
         path.join(process.resourcesPath, 'resources', 'bin', platformDir, assetName),
       ]
     : [
-        path.join(process.cwd(), 'resources', 'dws-bundles', platformDir, assetName),
-        path.join(process.cwd(), 'resources', 'dws-bundles', platform, assetName),
         path.join(process.cwd(), 'resources', 'bin', platformDir, assetName),
         path.join(process.cwd(), 'resources', 'bin', platform, assetName),
       ];
@@ -355,44 +352,6 @@ function findBinaryInDir(dir: string, binaryName: string): string | null {
   return null;
 }
 
-function getDwsInstallMarkerPath(): string {
-  return path.join(getDwsDir(), '.dws-cli-install.json');
-}
-
-function getArchiveFingerprint(archivePath: string): string {
-  const hash = createHash('sha256');
-  hash.update(fs.readFileSync(archivePath));
-  return hash.digest('hex');
-}
-
-function writeInstallMarker(archivePath: string): void {
-  const marker = {
-    archiveName: path.basename(archivePath),
-    archiveSize: fs.statSync(archivePath).size,
-    archiveSha256: getArchiveFingerprint(archivePath),
-    installedAt: new Date().toISOString(),
-  };
-  fs.writeFileSync(getDwsInstallMarkerPath(), JSON.stringify(marker, null, 2), 'utf-8');
-}
-
-function installMarkerMatches(archivePath: string): boolean {
-  try {
-    const markerPath = getDwsInstallMarkerPath();
-    if (!fs.existsSync(markerPath)) return false;
-    const marker = JSON.parse(fs.readFileSync(markerPath, 'utf-8')) as {
-      archiveName?: string;
-      archiveSize?: number;
-      archiveSha256?: string;
-    };
-    return marker.archiveName === path.basename(archivePath)
-      && marker.archiveSize === fs.statSync(archivePath).size
-      && marker.archiveSha256 === getArchiveFingerprint(archivePath);
-  } catch (error) {
-    logger.warn('[DwsCli] Failed to read DWS install marker:', error);
-    return false;
-  }
-}
-
 /**
  * Install DWS CLI from bundled resources
  */
@@ -484,7 +443,6 @@ export async function installDwsCliFromBundle(): Promise<{ success: boolean; err
       logger.info('[DwsCli] Setting executable permission...');
       fs.chmodSync(targetPath, 0o755);
     }
-    writeInstallMarker(archivePath);
 
     // 6. Cleanup
     logger.info('[DwsCli] Cleaning up temp directory...');
@@ -511,22 +469,12 @@ export async function installDwsCliFromBundle(): Promise<{ success: boolean; err
 /**
  * Check if DWS CLI needs installation
  */
-function needsInstallation(archivePath: string | null): boolean {
+function needsInstallation(): boolean {
   const dwsDir = getDwsDir();
   const binaryName = process.platform === 'win32' ? 'dws.exe' : 'dws';
   const targetPath = path.join(dwsDir, binaryName);
 
-  if (!fs.existsSync(targetPath)) {
-    return true;
-  }
-  if (!archivePath) {
-    return false;
-  }
-  if (!installMarkerMatches(archivePath)) {
-    logger.info('[DwsCli] Installed DWS CLI does not match bundled archive; reinstalling');
-    return true;
-  }
-  return false;
+  return !fs.existsSync(targetPath);
 }
 
 /**
@@ -539,10 +487,8 @@ export async function ensureDwsCliInstalled(): Promise<{ success: boolean; error
       return { success: true };
     }
 
-    const archivePath = getBundledDwsArchive();
-
-    // If already installed from the same bundled archive, just ensure PATH is set.
-    if (!needsInstallation(archivePath)) {
+    // If already installed, just ensure PATH is set
+    if (!needsInstallation()) {
       logger.info('[DwsCli] DWS CLI is already installed');
       logger.info('[DwsCli] Ensuring PATH is configured...');
       addToPath();

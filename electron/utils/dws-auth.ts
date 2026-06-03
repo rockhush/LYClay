@@ -64,10 +64,6 @@ function getDwsAppJsonPath(): string {
   return path.join(getDwsDir(), 'app.json');
 }
 
-function getDwsIdentityJsonPath(): string {
-  return path.join(getDwsDir(), 'identity.json');
-}
-
 function readDwsAppConfig(): DwsAppConfig | null {
   try {
     const appJsonPath = getDwsAppJsonPath();
@@ -154,13 +150,11 @@ function normalizeDwsLoginUser(raw: unknown): DwsCliLoginUser {
 
   return {
     userId: getPathStringValue(payload, ['orgEmployeeModel', 'userId'])
-      || getPathStringValue(payload, ['orgEmployeeModel', 'orgMasterUserId'])
       || getStringValue(payload, ['userId', 'userid', 'openId', 'openId']),
     unionId: getStringValue(payload, ['unionId', 'unionid']),
     name: getPathStringValue(payload, ['orgEmployeeModel', 'orgUserName'])
-      || getPathStringValue(payload, ['orgEmployeeModel', 'orgMasterDisplayName'])
       || getStringValue(payload, ['name', 'nick', 'nickname', 'displayName'])
-      || getStringValue(employee, ['orgUserName', 'orgMasterDisplayName']),
+      || getStringValue(employee, ['orgUserName']),
     jobNumber: getPathStringValue(payload, ['orgEmployeeModel', 'jobNumber'])
       || getPathStringValue(payload, ['orgEmployeeModel', 'jobNo'])
       || getPathStringValue(payload, ['orgEmployeeModel', 'job_number'])
@@ -173,21 +167,6 @@ function normalizeDwsLoginUser(raw: unknown): DwsCliLoginUser {
     mobile: getStringValue(payload, ['mobile', 'orgUserMobile']),
     raw,
   };
-}
-
-function readDwsIdentityUser(): DwsCliLoginUser | null {
-  try {
-    const identityPath = getDwsIdentityJsonPath();
-    if (!existsSync(identityPath)) {
-      return null;
-    }
-    const raw = JSON.parse(readFileSync(identityPath, 'utf-8'));
-    const user = normalizeDwsLoginUser(raw);
-    return hasUsableDwsUser(user) ? user : null;
-  } catch (error) {
-    logger.warn('[DwsAuth] Failed to read DWS identity.json:', error);
-    return null;
-  }
 }
 
 async function execDwsJsonCommand(args: string[]): Promise<unknown> {
@@ -204,43 +183,9 @@ async function execDwsJsonCommand(args: string[]): Promise<unknown> {
   return JSON.parse(stdout || '{}');
 }
 
-function getDwsCommandErrorOutput(error: unknown): string {
-  if (!error || typeof error !== 'object') {
-    return String(error);
-  }
-  const record = error as Record<string, unknown>;
-  const stdout = typeof record.stdout === 'string' || Buffer.isBuffer(record.stdout)
-    ? record.stdout.toString()
-    : '';
-  const stderr = typeof record.stderr === 'string' || Buffer.isBuffer(record.stderr)
-    ? record.stderr.toString()
-    : '';
-  const message = error instanceof Error ? error.message : String(error);
-  return stripAnsi([stdout, stderr, message].filter(Boolean).join('\n')).trim();
-}
-
-function hasUsableDwsUser(user: DwsCliLoginUser): boolean {
-  return Boolean(user.userId || user.unionId || user.name);
-}
-
 async function fetchDwsCurrentUser(): Promise<DwsCliLoginUser> {
-  try {
-    const raw = await execDwsJsonCommand(['contact', 'user', 'get-self', '--format', 'json']);
-    const user = normalizeDwsLoginUser(raw);
-    if (hasUsableDwsUser(user)) {
-      return user;
-    }
-    logger.warn('[DwsAuth] DWS contact service returned no usable user identity');
-  } catch (error) {
-    logger.warn('[DwsAuth] Failed to fetch current user via contact service:', getDwsCommandErrorOutput(error));
-  }
-
-  const identityUser = readDwsIdentityUser();
-  if (identityUser) {
-    return identityUser;
-  }
-
-  throw new Error('DWS login succeeded but no DingTalk user identity was available. The bundled DWS CLI is incompatible because it cannot provide the current user profile.');
+  const raw = await execDwsJsonCommand(['contact', 'user', 'get-self', '--format', 'json']);
+  return normalizeDwsLoginUser(raw);
 }
 
 function sanitizeDwsEnv(options?: { suppressBrowser?: boolean }): NodeJS.ProcessEnv {
@@ -251,7 +196,6 @@ function sanitizeDwsEnv(options?: { suppressBrowser?: boolean }): NodeJS.Process
   delete env.http_proxy;
   delete env.https_proxy;
   delete env.all_proxy;
-  delete env.DWS_ACCESS_TOKEN;
   if (options?.suppressBrowser) {
     env.BROWSER = process.platform === 'win32' ? 'cmd /c exit 0' : 'true';
   }

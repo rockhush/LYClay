@@ -1,16 +1,14 @@
 // @vitest-environment node
 import { mkdir, readFile, rm, writeFile } from 'fs/promises';
-import { writeFileSync } from 'fs';
 import { EventEmitter } from 'events';
 import { join } from 'path';
 import { PassThrough } from 'stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { execFileMock, execFileSyncMock, execSyncMock, spawnMock, testHome } = vi.hoisted(() => {
+const { execFileMock, execSyncMock, spawnMock, testHome } = vi.hoisted(() => {
   const suffix = Math.random().toString(36).slice(2);
   return {
     execFileMock: vi.fn(),
-    execFileSyncMock: vi.fn(),
     execSyncMock: vi.fn(),
     spawnMock: vi.fn(),
     testHome: `/tmp/clawx-dws-auth-${suffix}`,
@@ -40,7 +38,6 @@ vi.mock('electron', () => ({
 
 vi.mock('child_process', () => ({
   execFile: execFileMock,
-  execFileSync: execFileSyncMock,
   execSync: execSyncMock,
   spawn: spawnMock,
 }));
@@ -55,10 +52,6 @@ describe('DWS auth helper', () => {
     await writeFile(join(dwsDir, process.platform === 'win32' ? 'dws.exe' : 'dws'), '');
     execFileMock.mockImplementation((_file, _args, _options, callback) => {
       callback(null, '{"success":true}', '');
-    });
-    execFileSyncMock.mockImplementation(() => {
-      writeFileSync(join(dwsDir, '.dws-cli-temp', process.platform === 'win32' ? 'dws.exe' : 'dws'), '');
-      return Buffer.from('');
     });
     execSyncMock.mockReturnValue('{"success":true,"authenticated":true}');
   });
@@ -218,131 +211,5 @@ describe('DWS auth helper', () => {
     expect(result.user.name).toBe('Leon/龙鸣');
     expect(result.user.corpName).toBe('领益科技(深圳)有限公司');
     expect(result.user.userId).toBe('11427192');
-  });
-
-  it('uses org master display name from newer DWS get-self output', async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: PassThrough;
-      stderr: PassThrough;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    child.kill = vi.fn();
-    spawnMock.mockReturnValue(child);
-    execFileMock.mockImplementation((_file, _args, _options, callback) => {
-      callback(null, JSON.stringify({
-        result: [{
-          isAdmin: true,
-          orgEmployeeModel: {
-            corpId: 'ding5f10cf4fee1d08ab',
-            depts: [{ deptId: 1053124031, deptName: 'AI 分部' }],
-            labels: [{ groupName: '默认', id: 39468723, name: '子管理员' }],
-            orgMasterDisplayName: 'Gavin Tang/唐峰',
-            orgMasterUserId: '11373374',
-            orgName: '领益科技(深圳)有限公司',
-          },
-        }],
-        success: true,
-      }), '');
-    });
-
-    const { startDwsCliLoginSession } = await import('@electron/utils/dws-auth');
-    const sessionPromise = startDwsCliLoginSession();
-    child.stdout.write('https://login.dingtalk.com/oauth2/auth?client_id=dingmbw5n9ktkkbbjv3g&redirect_uri=http%3A%2F%2F127.0.0.1%3A3121%2Fcallback\n');
-    const session = await sessionPromise;
-    child.emit('close', 0);
-    const result = await session.result;
-
-    expect(result.user.name).toBe('Gavin Tang/唐峰');
-    expect(result.user.userId).toBe('11373374');
-    expect(result.user.corpName).toBe('领益科技(深圳)有限公司');
-  });
-
-  it('uses DWS identity.json when contact service is unavailable', async () => {
-    await writeFile(
-      join(testHome, '.dws', 'identity.json'),
-      JSON.stringify({
-        result: {
-          userid: 'identity-user-123',
-          unionid: 'identity-union-123',
-          name: 'Identity Leon',
-        },
-      }),
-      'utf-8',
-    );
-
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: PassThrough;
-      stderr: PassThrough;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    child.kill = vi.fn();
-    spawnMock.mockReturnValue(child);
-    execFileMock.mockImplementation((_file, args, _options, callback) => {
-      if (Array.isArray(args) && args.includes('contact')) {
-        const error = new Error('Command failed: unknown command "contact" for "dws"') as Error & {
-          stdout?: string;
-          stderr?: string;
-        };
-        error.stdout = '{"error":{"message":"unknown command \\"contact\\" for \\"dws\\""}}';
-        callback(error, '', error.stdout);
-        return;
-      }
-      callback(null, JSON.stringify({
-        authenticated: true,
-        token_valid: true,
-      }), '');
-    });
-
-    const { startDwsCliLoginSession } = await import('@electron/utils/dws-auth');
-    const sessionPromise = startDwsCliLoginSession();
-    child.stdout.write('https://login.dingtalk.com/oauth2/auth?client_id=dingmbw5n9ktkkbbjv3g&redirect_uri=http%3A%2F%2F127.0.0.1%3A3121%2Fcallback\n');
-    const session = await sessionPromise;
-    child.emit('close', 0);
-    const result = await session.result;
-
-    expect(result.user).toMatchObject({
-      userId: 'identity-user-123',
-      unionId: 'identity-union-123',
-      name: 'Identity Leon',
-    });
-  });
-
-  it('fails login when no real DingTalk user identity is available', async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: PassThrough;
-      stderr: PassThrough;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    child.kill = vi.fn();
-    spawnMock.mockReturnValue(child);
-    execFileMock.mockImplementation((_file, args, _options, callback) => {
-      if (Array.isArray(args) && args.includes('contact')) {
-        const error = new Error('Command failed: unknown command "contact" for "dws"') as Error & {
-          stdout?: string;
-          stderr?: string;
-        };
-        error.stdout = '{"error":{"message":"unknown command \\"contact\\" for \\"dws\\""}}';
-        callback(error, '', error.stdout);
-        return;
-      }
-      callback(null, JSON.stringify({
-        authenticated: true,
-        token_valid: true,
-      }), '');
-    });
-
-    const { startDwsCliLoginSession } = await import('@electron/utils/dws-auth');
-    const sessionPromise = startDwsCliLoginSession();
-    child.stdout.write('https://login.dingtalk.com/oauth2/auth?client_id=dingmbw5n9ktkkbbjv3g&redirect_uri=http%3A%2F%2F127.0.0.1%3A3121%2Fcallback\n');
-    const session = await sessionPromise;
-    child.emit('close', 0);
-
-    await expect(session.result).rejects.toThrow('no DingTalk user identity');
   });
 });

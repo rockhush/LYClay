@@ -34,9 +34,9 @@ extraResources:
   # Pre-bundled third-party skills (full directories, not only SKILL.md)
   - from: build/preinstalled-skills/
     to: resources/preinstalled-skills/
-  # Pre-bundled DWS CLI binaries (extracted at runtime to ~/.dws/)
+  # Pre-bundled DWS CLI binaries (extracted at runtime to resources/dws/)
   # This ensures Skills can find and execute dws commands
-  - from: resources/dws-bundles/
+  - from: resources/bin/
     to: dws/
     filter:
       - "**/*.zip"

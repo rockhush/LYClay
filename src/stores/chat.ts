@@ -6,7 +6,6 @@
 import { create } from 'zustand';
 import i18n from '@/i18n';
 import { hostApiFetch } from '@/lib/host-api';
-import { toUserMessage, normalizeAppError } from '@/lib/api-client';
 import { useGatewayStore } from './gateway';
 import { useAgentsStore } from './agents';
 import { useWorkspacesStore } from './workspaces';
@@ -3748,7 +3747,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     _lastRuntimeTranscriptProgressSignatureBySession.delete(currentSessionKey);
     startActiveSendHistoryFallback(currentSessionKey);
 
-    const SAFETY_TIMEOUT_MS = 15 * 60_000;
+    const SAFETY_TIMEOUT_MS = 240_000;
     // Removed polling mechanism to prevent duplicate user messages.
     // UI updates now rely solely on Gateway event pushes.
 
@@ -3930,8 +3929,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           console.warn(`[sendMessage] Recoverable chat.send timeout, keeping poll alive: ${errorMsg}`);
         } else {
           clearHistoryPoll();
-        const normalizedError = normalizeAppError(new Error(errorMsg));
-          set({ error: toUserMessage(normalizedError), sending: false });
+          set({ error: errorMsg, sending: false });
         }
       } else if (result.result?.runId && get().sending) {
         const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
@@ -3953,8 +3951,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         console.warn(`[sendMessage] Recoverable chat.send timeout, keeping poll alive: ${errStr}`);
       } else {
         clearHistoryPoll();
-        const normalizedError = normalizeAppError(err);
-        set({ error: toUserMessage(normalizedError), sending: false });
+        set({ error: errStr, sending: false });
       }
     }
   },

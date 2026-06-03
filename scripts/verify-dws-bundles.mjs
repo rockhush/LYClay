@@ -7,16 +7,16 @@ import path from 'node:path';
 
 const REQUIRED_ASSETS = {
   mac: [
-    'resources/dws-bundles/darwin/dws-darwin-amd64.tar.gz',
-    'resources/dws-bundles/darwin/dws-darwin-arm64.tar.gz',
+    'resources/bin/darwin/dws-darwin-amd64.tar.gz',
+    'resources/bin/darwin/dws-darwin-arm64.tar.gz',
   ],
   win: [
-    'resources/dws-bundles/win/dws-windows-amd64.zip',
-    'resources/dws-bundles/win/dws-windows-arm64.zip',
+    'resources/bin/win/dws-windows-amd64.zip',
+    'resources/bin/win/dws-windows-arm64.zip',
   ],
   linux: [
-    'resources/dws-bundles/linux/dws-linux-amd64.tar.gz',
-    'resources/dws-bundles/linux/dws-linux-arm64.tar.gz',
+    'resources/bin/linux/dws-linux-amd64.tar.gz',
+    'resources/bin/linux/dws-linux-arm64.tar.gz',
   ],
 };
 

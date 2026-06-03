@@ -196,7 +196,7 @@ export function InstallDialog({
             type="button"
             onClick={() => void handleCustomSubmit()}
             disabled={busy || !name.trim()}
-            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
           >
             {t('dialog.save')}
           </Button>

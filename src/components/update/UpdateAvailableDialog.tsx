@@ -91,9 +91,9 @@ export function UpdateAvailableDialog() {
   const isWindows = window.electron?.platform === 'win32';
   const isInstallCountdownActive = autoInstallCountdown != null && autoInstallCountdown > 0;
   const isDownloading = status === 'downloading';
-  // Only show install countdown after a successful download — stale countdown ticks
-  // must not override the downloading/error panels during retry.
-  const isInstalling = status === 'downloaded';
+  const isInstalling =
+    status !== 'error'
+    && (status === 'downloaded' || isInstallCountdownActive);
   const isDownloadError = status === 'error' && open;
   const showProgressPanel = isDownloading || isInstalling || isDownloadError;
   const isBusy = isDownloading || isInstalling;
@@ -108,16 +108,12 @@ export function UpdateAvailableDialog() {
     setOpen(false);
   }, [status, cancelDownload, cancelAutoInstall]);
 
-  const handleRetryDownload = useCallback(async () => {
+  const handleExperienceNow = useCallback(async () => {
     if (isBusy) return;
     await cancelAutoInstall();
     setOpen(true);
     await downloadUpdate();
   }, [cancelAutoInstall, downloadUpdate, isBusy]);
-
-  const handleExperienceNow = useCallback(async () => {
-    await handleRetryDownload();
-  }, [handleRetryDownload]);
 
   if (!open) return null;
 
@@ -177,7 +173,7 @@ export function UpdateAvailableDialog() {
                 type="button"
                 variant="outline"
                 className="mt-5 h-8 rounded-lg"
-                onClick={() => void handleRetryDownload()}
+                onClick={() => void handleExperienceNow()}
               >
                 {t('updates.action.retry')}
               </Button>
@@ -271,7 +267,7 @@ export function UpdateAvailableDialog() {
             type="button"
             disabled={isBusy}
             onClick={() => void handleExperienceNow()}
-            className="h-9 min-w-[108px] rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FE7B00]"
+            className="h-9 min-w-[108px] rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FF6A00]"
           >
             {t('updates.dialog.experienceNow')}
           </Button>

@@ -42,7 +42,7 @@ import {
   resolveProviderModelForSave,
   shouldShowProviderModelId,
   // LYCLAW_MODEL_PROVIDER_ID,
-  LY_AUTO_PROVIDER_ID,
+  LY_MINIMAX_PROVIDER_ID,
   shouldInvertInDark,
 } from '@/lib/providers';
 import {
@@ -137,7 +137,7 @@ function shouldShowUserAgentFieldForNewProvider(providerType: ProviderType | nul
 }
 
 function isReadonlyProvider(account: Pick<ProviderAccount, 'vendorId' | 'metadata'>): boolean {
-  return account.vendorId === LY_AUTO_PROVIDER_ID || account.metadata?.readonly === true;
+  return account.vendorId === LY_MINIMAX_PROVIDER_ID || account.metadata?.readonly === true;
 }
 
 function getAuthModeLabel(
@@ -305,7 +305,7 @@ export function ProvidersSettings() {
               {t('aiProviders.sendUsageReport', { defaultValue: '发送统计' })}
             </Button>
           */}
-          <Button data-testid="providers-add-button" onClick={() => setShowAddDialog(true)} className="rounded-lg px-3 h-8 font-medium text-[13px] bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm">
+          <Button data-testid="providers-add-button" onClick={() => setShowAddDialog(true)} className="rounded-lg px-3 h-8 font-medium text-[13px] bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm">
             <Plus className="h-3.5 w-3.5 mr-1" />
             {t('aiProviders.add')}
           </Button>
@@ -323,7 +323,7 @@ export function ProvidersSettings() {
           <p className="text-[13px] text-center mb-6 max-w-sm">
             {t('aiProviders.empty.desc')}
           </p>
-          <Button onClick={() => setShowAddDialog(true)} className="rounded-lg px-4 h-8 text-[13px] font-medium bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm">
+          <Button onClick={() => setShowAddDialog(true)} className="rounded-lg px-4 h-8 text-[13px] font-medium bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm">
             <Plus className="h-3.5 w-3.5 mr-1" />
             {t('aiProviders.empty.cta')}
           </Button>
@@ -645,7 +645,7 @@ function ProviderCard({
               data-testid={`provider-set-default-${account.id}`}
               variant="ghost"
               size="icon"
-              className="h-8 w-8 rounded-md text-muted-foreground hover:text-[#FE7B00] hover:bg-[#FF922B]/10 dark:hover:text-primary dark:hover:bg-primary/15 transition-colors"
+              className="h-8 w-8 rounded-md text-muted-foreground hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:hover:text-primary dark:hover:bg-primary/15 transition-colors"
                 onClick={onSetDefault}
                 title={t('aiProviders.card.setDefault')}
               >
@@ -658,7 +658,7 @@ function ProviderCard({
                   data-testid={`provider-edit-${account.id}`}
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 rounded-md text-muted-foreground hover:text-[#FE7B00] hover:bg-[#FF922B]/10 dark:hover:text-primary dark:hover:bg-primary/15 transition-colors"
+                  className="h-8 w-8 rounded-md text-muted-foreground hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:hover:text-primary dark:hover:bg-primary/15 transition-colors"
                   onClick={onEdit}
                   title={t('aiProviders.card.editKey')}
                 >
@@ -668,7 +668,7 @@ function ProviderCard({
                   data-testid={`provider-delete-${account.id}`}
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 rounded-md text-muted-foreground hover:text-[#FE7B00] hover:bg-[#FF922B]/10 dark:hover:text-primary dark:hover:bg-primary/15 transition-colors"
+                  className="h-8 w-8 rounded-md text-muted-foreground hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:hover:text-primary dark:hover:bg-primary/15 transition-colors"
                   onClick={onDelete}
                   title={t('aiProviders.card.delete')}
                 >
@@ -1368,7 +1368,7 @@ function AddProviderDialog({
                       <span className="text-2xl opacity-45 dark:opacity-60">{type.icon}</span>
                     )}
                   </div>
-                  <p className="font-medium text-[13px] group-hover:text-[#FE7B00] dark:group-hover:text-primary transition-colors">{type.id === 'custom' ? t('aiProviders.custom') : type.name}</p>
+                  <p className="font-medium text-[13px] group-hover:text-[#FF6A00] dark:group-hover:text-primary transition-colors">{type.id === 'custom' ? t('aiProviders.custom') : type.name}</p>
                 </button>
               ))}
             </div>
@@ -1394,7 +1394,7 @@ function AddProviderDialog({
                     setShowAdvancedConfig(false);
                     setArkMode('apikey');
                   }}
-                  className="text-[12px] text-[#FE7B00] hover:text-[#FE7B00] hover:underline font-medium dark:text-primary"
+                  className="text-[12px] text-[#FF6A00] hover:text-[#FF6A00] hover:underline font-medium dark:text-primary"
                 >
                     {t('aiProviders.dialog.change')}
                   </button>
@@ -1405,7 +1405,7 @@ function AddProviderDialog({
                         href={effectiveDocsUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-[12px] text-[#FE7B00] hover:text-[#FE7B00] hover:underline font-medium inline-flex items-center gap-1 dark:text-primary"
+                        className="text-[12px] text-[#FF6A00] hover:text-[#FF6A00] hover:underline font-medium inline-flex items-center gap-1 dark:text-primary"
                       >
                         {t('aiProviders.dialog.customDoc')}
                         <ExternalLink className="h-3 w-3" />
@@ -1466,7 +1466,7 @@ function AddProviderDialog({
                           href={typeInfo.apiKeyUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[12px] text-[#FE7B00] hover:underline font-medium flex items-center gap-1 dark:text-primary"
+                          className="text-[12px] text-[#FF6A00] hover:underline font-medium flex items-center gap-1 dark:text-primary"
                           tabIndex={-1}
                         >
                           {t('aiProviders.oauth.getApiKey')} <ExternalLink className="h-3 w-3" />
@@ -1559,7 +1559,7 @@ function AddProviderDialog({
                           href={typeInfo.codePlanDocsUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[12px] text-[#FE7B00] hover:underline font-medium inline-flex items-center gap-1 dark:text-primary"
+                          className="text-[12px] text-[#FF6A00] hover:underline font-medium inline-flex items-center gap-1 dark:text-primary"
                           tabIndex={-1}
                         >
                           {t('aiProviders.dialog.codePlanDoc')}
@@ -1689,7 +1689,7 @@ function AddProviderDialog({
                       <Button
                         onClick={handleStartOAuth}
                         disabled={oauthFlowing}
-                        className="w-full rounded-full h-[42px] font-semibold bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm"
+                        className="w-full rounded-full h-[42px] font-semibold bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm"
                       >
                         {oauthFlowing ? (
                           <><Loader2 className="h-4 w-4 mr-2 animate-spin" />{t('aiProviders.oauth.waiting')}</>
@@ -1746,7 +1746,7 @@ function AddProviderDialog({
                               />
 
                               <Button
-                                className="w-full rounded-full h-[42px] font-semibold bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-md shadow-[#FF922B]/30"
+                                className="w-full rounded-full h-[42px] font-semibold bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-md shadow-[#FF922B]/30"
                                 onClick={handleSubmitManualOAuthCode}
                                 disabled={!manualCodeInput.trim()}
                               >
@@ -1818,7 +1818,7 @@ function AddProviderDialog({
                   data-testid="add-provider-submit-button"
                   onClick={handleAdd}
                   className={cn(
-                    'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors',
+                    'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors',
                     useOAuthFlow && 'hidden',
                   )}
                   disabled={!selectedType || saving || (showModelIdField && modelId.trim().length === 0)}

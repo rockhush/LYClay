@@ -144,7 +144,7 @@ export function UpdateSettings({ onAfterCheckUpdate }: UpdateSettingsProps) {
           <Button
             onClick={downloadUpdate}
             size="sm"
-            className="h-9 rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FE7B00]"
+            className="h-9 rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FF6A00]"
           >
             <Download className="h-4 w-4 mr-2" />
             {t('updates.action.download')}

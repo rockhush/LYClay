@@ -1,7 +1,11 @@
-export const LY_AUTO_PROVIDER_ID = 'ly-auto' as const;
+export const LY_MINIMAX_PROVIDER_ID = 'ly-minimax' as const;
+export const LEGACY_LY_MINIMAX_PROVIDER_ID = 'lyclaw-model' as const;
+export const LY_DEEPSEEK_PROVIDER_ID = 'ly-deepseek' as const;
+export const LY_QWEN_PROVIDER_ID = 'ly-qwen' as const;
+// export const LY_GLM_PROVIDER_ID = 'ly-glm' as const;
 
 export const PROVIDER_TYPES = [
-  LY_AUTO_PROVIDER_ID,
+  LY_MINIMAX_PROVIDER_ID,
   'anthropic',
   'openai',
   'google',
@@ -13,13 +17,16 @@ export const PROVIDER_TYPES = [
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
+  LY_DEEPSEEK_PROVIDER_ID,
+  LY_QWEN_PROVIDER_ID,
+  // 'ly-glm',
   'modelstudio',
   'ollama',
   'custom',
 ] as const;
 
 export const BUILTIN_PROVIDER_TYPES = [
-  LY_AUTO_PROVIDER_ID,
+  LY_MINIMAX_PROVIDER_ID,
   'anthropic',
   'openai',
   'google',
@@ -31,6 +38,9 @@ export const BUILTIN_PROVIDER_TYPES = [
   'siliconflow',
   'minimax-portal',
   'minimax-portal-cn',
+  LY_DEEPSEEK_PROVIDER_ID,
+  LY_QWEN_PROVIDER_ID,
+  // 'ly-glm',
   'modelstudio',
   'ollama',
 ] as const;

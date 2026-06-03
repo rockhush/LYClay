@@ -337,13 +337,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
         if ('toolName' in content && content.toolName === 'skill-creator') {
           // 延迟刷新，确保技能已经保存到磁盘
           setTimeout(() => {
-            void hostApiFetch<{ success: boolean }>('/api/clawhub/normalize-user-skills', {
-              method: 'POST',
-            })
-              .catch(() => {})
-              .finally(() => {
-                void fetchSkills();
-              });
+            void fetchSkills();
           }, 1000);
         }
       }
@@ -1012,7 +1006,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                 className={cn(
                   'shrink-0 h-8 w-8 rounded-full border-0 shadow-none transition-colors',
                   sending || canSend
-                    ? 'bg-[#FF922B] text-white hover:bg-[#FE7B00] hover:text-white focus-visible:ring-[#FF922B]/40 dark:bg-white/10 dark:text-white dark:hover:bg-white/20 dark:hover:text-white'
+                    ? 'bg-[#FF922B] text-white hover:bg-[#FF6A00] hover:text-white focus-visible:ring-[#FF922B]/40 dark:bg-white/10 dark:text-white dark:hover:bg-white/20 dark:hover:text-white'
                     : 'bg-[#FF922B]/15 text-[#FF922B]/60 hover:bg-[#FF922B]/15 hover:text-[#FF922B]/60 dark:bg-white/5 dark:text-muted-foreground/60 dark:hover:bg-white/5 dark:hover:text-muted-foreground/60',
                 )}
                 title={sending ? t('composer.stop') : t('composer.send')}
@@ -1233,7 +1227,7 @@ function SkillPickerItem({
         <span
           className={cn(
             'text-[14px] font-medium',
-            selected ? 'text-[#FE7B00] dark:text-primary' : 'text-foreground',
+            selected ? 'text-[#FF6A00] dark:text-primary' : 'text-foreground',
           )}
         >
           {skill.name}
@@ -1243,7 +1237,7 @@ function SkillPickerItem({
         <p
           className={cn(
             'mt-0.5 line-clamp-2 text-[11px] leading-[1.5]',
-            selected ? 'text-[#FE7B00]/80 dark:text-primary/80' : 'text-muted-foreground',
+            selected ? 'text-[#FF6A00]/80 dark:text-primary/80' : 'text-muted-foreground',
           )}
           style={{
             display: '-webkit-box',
@@ -1258,7 +1252,7 @@ function SkillPickerItem({
       )}
       {selected && (
         <div className="absolute right-3 top-1/2 -translate-y-1/2">
-          <Check className="h-4 w-4 text-[#FE7B00] dark:text-primary" />
+          <Check className="h-4 w-4 text-[#FF6A00] dark:text-primary" />
         </div>
       )}
     </button>

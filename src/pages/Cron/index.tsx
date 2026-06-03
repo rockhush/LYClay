@@ -494,7 +494,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                     className={cn(
                       'justify-start h-8 rounded-lg font-medium text-[13px] transition-colors px-3',
                       schedule === preset.value
-                        ? 'bg-[#FF922B] hover:bg-[#FE7B00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
+                        ? 'bg-[#FF922B] hover:bg-[#FF6A00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
                         : 'bg-white dark:bg-muted border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground shadow-none',
                     )}
                   >
@@ -520,7 +520,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 variant="ghost"
                 size="sm"
                 onClick={() => setUseCustom(!useCustom)}
-                className="text-[12px] h-7 px-2 text-[#FE7B00] hover:text-[#FE7B00] hover:bg-[#FF922B]/10 rounded-md dark:text-primary dark:hover:bg-primary/15"
+                className="text-[12px] h-7 px-2 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 rounded-md dark:text-primary dark:hover:bg-primary/15"
               >
                 {useCustom ? t('dialog.usePresets') : t('dialog.useCustomCron')}
               </Button>
@@ -543,7 +543,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 className={cn(
                   'justify-start h-auto min-h-12 rounded-lg px-3 py-2.5 text-left whitespace-normal transition-colors',
                   deliveryMode === 'none'
-                    ? 'bg-[#FF922B] hover:bg-[#FE7B00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
+                    ? 'bg-[#FF922B] hover:bg-[#FF6A00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
                     : 'bg-white dark:bg-muted border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground shadow-none',
                 )}
               >
@@ -560,7 +560,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 className={cn(
                   'justify-start h-auto min-h-12 rounded-lg px-3 py-2.5 text-left whitespace-normal transition-colors',
                   deliveryMode === 'announce'
-                    ? 'bg-[#FF922B] hover:bg-[#FE7B00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
+                    ? 'bg-[#FF922B] hover:bg-[#FF6A00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
                     : 'bg-white dark:bg-muted border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground shadow-none',
                 )}
               >
@@ -685,7 +685,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
             <Button
               onClick={handleSubmit}
               disabled={saving}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
             >
               {saving ? (
                 <>
@@ -980,7 +980,7 @@ export function Cron() {
                 setShowDialog(true);
               }}
               disabled={!isGatewayRunning}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
             >
               <Plus className="h-4 w-4 mr-2" />
               {t('newTask')}
@@ -1059,7 +1059,7 @@ export function Cron() {
                   setShowDialog(true);
                 }}
                 disabled={!isGatewayRunning}
-                className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+                className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
               >
                 <Plus className="h-4 w-4 mr-2" />
                 {t('empty.create')}

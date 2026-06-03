@@ -705,7 +705,7 @@ export function Channels() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+                          className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
                           onClick={() => setDeleteTarget({ channelType: group.channelType })}
                           title={t('account.deleteChannel')}
                         >
@@ -781,7 +781,7 @@ export function Channels() {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+                                className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
                                 onClick={() => setDeleteTarget({ channelType: group.channelType, accountId: account.accountId })}
                                 title={t('account.delete')}
                               >
@@ -838,7 +838,7 @@ export function Channels() {
                       </p>
                     </div>
                     <Pencil
-                      className="absolute top-3 right-3 h-3.5 w-3.5 text-[#FE7B00] opacity-0 group-hover:opacity-100 transition-opacity dark:text-primary"
+                      className="absolute top-3 right-3 h-3.5 w-3.5 text-[#FF6A00] opacity-0 group-hover:opacity-100 transition-opacity dark:text-primary"
                       aria-hidden
                     />
                   </button>

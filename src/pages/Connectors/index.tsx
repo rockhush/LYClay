@@ -76,7 +76,7 @@ export function Connectors() {
           </div>
           <Button
             type="button"
-            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors shrink-0"
+            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors shrink-0"
             onClick={() => {
               setConnectorPageTab('custom');
               setDialog('custom');
@@ -107,7 +107,7 @@ export function Connectors() {
                   <p className="text-[13px] text-muted-foreground">{t('custom.empty')}</p>
                   <Button
                     type="button"
-                    className="mt-4 h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+                    className="mt-4 h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
                     onClick={() => {
                       setConnectorPageTab('custom');
                       setDialog('custom');
