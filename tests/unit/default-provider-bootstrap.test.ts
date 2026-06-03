@@ -7,27 +7,18 @@ const mocks = vi.hoisted(() => ({
   syncProviderConfigToOpenClaw: vi.fn(),
   updateAgentModelProvider: vi.fn(),
   getOpenClawProviderKeyForType: vi.fn(),
-  listConfiguredAgentIds: vi.fn(),
-  getOpenClawConfigDir: vi.fn(),
   getAccount: vi.fn(),
   getDefaultAccountId: vi.fn(),
   setDefaultAccount: vi.fn(),
-  getDefaultProvider: vi.fn(),
-  setDefaultProvider: vi.fn(),
   storeApiKey: vi.fn(),
   saveProviderAccount: vi.fn(),
   getProviderAccount: vi.fn(),
-  deleteProviderAccount: vi.fn(),
   deleteProvider: vi.fn(),
   removeProviderFromOpenClaw: vi.fn(),
 }));
 
 vi.mock('@electron/shared/providers/registry', () => ({
   getProviderDefinition: mocks.getProviderDefinition,
-}));
-
-vi.mock('@electron/utils/agent-config', () => ({
-  listConfiguredAgentIds: mocks.listConfiguredAgentIds,
 }));
 
 vi.mock('@electron/utils/channel-config', () => ({
@@ -54,10 +45,6 @@ vi.mock('@electron/utils/openclaw-auth', () => ({
   updateAgentModelProvider: mocks.updateAgentModelProvider,
 }));
 
-vi.mock('@electron/utils/paths', () => ({
-  getOpenClawConfigDir: mocks.getOpenClawConfigDir,
-}));
-
 vi.mock('@electron/utils/provider-keys', () => ({
   getOpenClawProviderKeyForType: mocks.getOpenClawProviderKeyForType,
 }));
@@ -72,13 +59,10 @@ vi.mock('@electron/services/providers/provider-service', () => ({
 
 vi.mock('@electron/utils/secure-storage', () => ({
   deleteProvider: mocks.deleteProvider,
-  getDefaultProvider: mocks.getDefaultProvider,
-  setDefaultProvider: mocks.setDefaultProvider,
   storeApiKey: mocks.storeApiKey,
 }));
 
 vi.mock('@electron/services/providers/provider-store', () => ({
-  deleteProviderAccount: mocks.deleteProviderAccount,
   getProviderAccount: mocks.getProviderAccount,
   saveProviderAccount: mocks.saveProviderAccount,
 }));
@@ -88,146 +72,83 @@ import { bootstrapLyManagedProviders } from '@electron/services/providers/defaul
 describe('bootstrapLyManagedProviders', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getProviderDefinition.mockReturnValue({ defaultModelId: 'MiniMax-M2.7' });
+    mocks.getProviderDefinition.mockReturnValue({ defaultModelId: 'auto' });
     mocks.readOpenClawConfig.mockResolvedValue({ models: { providers: {} }, agents: { defaults: { model: {} } } });
     mocks.writeOpenClawConfig.mockResolvedValue(undefined);
     mocks.syncProviderConfigToOpenClaw.mockResolvedValue(undefined);
     mocks.updateAgentModelProvider.mockResolvedValue(undefined);
     mocks.getOpenClawProviderKeyForType.mockImplementation((type: string) => type);
-    mocks.listConfiguredAgentIds.mockResolvedValue([]);
-    mocks.getOpenClawConfigDir.mockReturnValue('C:/tmp/openclaw');
     mocks.getAccount.mockResolvedValue(null);
     mocks.getDefaultAccountId.mockResolvedValue('existing-default');
     mocks.setDefaultAccount.mockResolvedValue(undefined);
     mocks.getProviderAccount.mockResolvedValue(null);
     mocks.deleteProvider.mockResolvedValue(true);
     mocks.removeProviderFromOpenClaw.mockResolvedValue(undefined);
-    mocks.getDefaultProvider.mockResolvedValue('existing-default');
-    mocks.setDefaultProvider.mockResolvedValue(undefined);
     mocks.storeApiKey.mockResolvedValue(true);
     mocks.saveProviderAccount.mockResolvedValue(undefined);
   });
 
-  it('pre-registers LY-managed providers and removes retired LY-Mimo', async () => {
+  it('registers only ly-auto as the LY-managed provider', async () => {
     await bootstrapLyManagedProviders();
 
     expect(mocks.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'ly-minimax',
-      vendorId: 'ly-minimax',
-      label: 'LY-MiniMax',
+      id: 'ly-auto',
+      vendorId: 'ly-auto',
+      label: 'LY-Auto',
       authMode: 'api_key',
-      baseUrl: 'http://10.64.22.11:8000/v1',
-      apiProtocol: 'anthropic-messages',
-      model: 'MiniMax-M2.7',
+      baseUrl: 'http://10.64.10.48/v1',
+      apiProtocol: 'openai-completions',
+      model: 'auto',
       metadata: expect.objectContaining({ managedBy: 'lyclaw', readonly: true }),
     }));
+
+    expect(mocks.storeApiKey).toHaveBeenCalledWith('ly-auto', 'EMPTY');
+
+    // Should remove old LY providers
+    expect(mocks.deleteProvider).toHaveBeenCalledWith('ly-minimax');
+    expect(mocks.deleteProvider).toHaveBeenCalledWith('ly-deepseek');
+    expect(mocks.deleteProvider).toHaveBeenCalledWith('ly-qwen');
     expect(mocks.deleteProvider).toHaveBeenCalledWith('ly-mimo');
-    expect(mocks.removeProviderFromOpenClaw).toHaveBeenCalledWith('ly-mimo');
-    expect(mocks.storeApiKey).toHaveBeenCalledWith('ly-minimax', 'EMPTY');
-    expect(mocks.storeApiKey).not.toHaveBeenCalledWith('ly-mimo', expect.anything());
+
+    // Should sync only ly-auto
     expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
-      'ly-minimax',
-      'MiniMax-M2.7',
+      'ly-auto',
+      'auto',
       expect.objectContaining({
-        baseUrl: 'http://10.64.22.11:8000/v1',
-        api: 'anthropic-messages',
-        apiKeyEnv: 'LY_MINIMAX_API_KEY',
-        modelOverrides: {
-          'MiniMax-M2.7': {
-            input: ['text'],
-            contextWindow: 100000,
-            maxTokens: 16384,
-          },
-        },
-      }),
-    );
-    expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
-      'ly-minimax',
-      expect.objectContaining({
-        baseUrl: 'http://10.64.22.11:8000/anthropic',
-        api: 'anthropic-messages',
-        apiKey: 'EMPTY',
-        models: [expect.objectContaining({ id: 'MiniMax-M2.7', contextWindow: 100000, maxTokens: 16384 })],
-      }),
-    );
-    expect(mocks.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'ly-qwen',
-      vendorId: 'ly-qwen',
-      label: 'LY-Qwen',
-      authMode: 'api_key',
-      baseUrl: 'http://10.64.22.12:8000/v1',
-      apiProtocol: 'openai-completions',
-      model: 'qwen3.5-397b',
-      metadata: expect.objectContaining({ managedBy: 'lyclaw' }),
-    }));
-    expect(mocks.storeApiKey).toHaveBeenCalledWith('ly-qwen', 'EMPTY');
-    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
-      'ly-deepseek',
-      'deepseek-v4-flash',
-      expect.objectContaining({
-        baseUrl: 'http://10.7.221.62:8000/v1',
+        baseUrl: 'http://10.64.10.48/v1',
         api: 'openai-completions',
-        apiKeyEnv: 'LY_DEEPSEEK_API_KEY',
         modelOverrides: {
-          'deepseek-v4-flash': {
-            reasoning: true,
-            input: ['text'],
-            contextWindow: 100000,
-            maxTokens: 16384,
-            compat: { supportsUsageInStreaming: true },
-          },
-        },
-      }),
-    );
-    expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
-      'ly-deepseek',
-      expect.objectContaining({
-        baseUrl: 'http://10.7.221.62:8000/v1',
-        api: 'openai-completions',
-        apiKey: 'EMPTY',
-        models: [expect.objectContaining({
-          id: 'deepseek-v4-flash',
-          reasoning: true,
-          input: ['text'],
-          contextWindow: 100000,
-          maxTokens: 16384,
-          compat: { supportsUsageInStreaming: true },
-        })],
-      }),
-    );
-    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
-      'ly-qwen',
-      'qwen3.5-397b',
-      expect.objectContaining({
-        baseUrl: 'http://10.64.22.12:8000/v1',
-        api: 'openai-completions',
-        apiKeyEnv: 'LY_QWEN_API_KEY',
-        modelOverrides: {
-          'qwen3.5-397b': {
+          auto: {
             reasoning: true,
             input: ['text', 'image'],
             contextWindow: 100000,
-            maxTokens: 16384,
+            maxTokens: 8192,
             compat: { supportsUsageInStreaming: true },
           },
         },
       }),
     );
+
     expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
-      'ly-qwen',
+      'ly-auto',
       expect.objectContaining({
-        baseUrl: 'http://10.64.22.12:8000/v1',
+        baseUrl: 'http://10.64.10.48/v1',
         api: 'openai-completions',
         apiKey: 'EMPTY',
         models: [expect.objectContaining({
-          id: 'qwen3.5-397b',
+          id: 'auto',
           reasoning: true,
           input: ['text', 'image'],
           contextWindow: 100000,
-          maxTokens: 16384,
+          maxTokens: 8192,
           compat: { supportsUsageInStreaming: true },
         })],
       }),
     );
+
+    // Should not create old providers
+    expect(mocks.saveProviderAccount).not.toHaveBeenCalledWith(expect.objectContaining({ vendorId: 'ly-minimax' }));
+    expect(mocks.saveProviderAccount).not.toHaveBeenCalledWith(expect.objectContaining({ vendorId: 'ly-deepseek' }));
+    expect(mocks.saveProviderAccount).not.toHaveBeenCalledWith(expect.objectContaining({ vendorId: 'ly-qwen' }));
   });
 });

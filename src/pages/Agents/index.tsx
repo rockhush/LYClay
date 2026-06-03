@@ -197,7 +197,7 @@ export function Agents() {
             </Button>
             <Button
               onClick={() => setShowAddDialog(true)}
-              className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm"
+              className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm"
             >
               <Plus className="h-3.5 w-3.5 mr-1" />
               {t('addAgent')}
@@ -329,7 +329,7 @@ function AgentCard({
         {agent.isDefault && (
           <Badge
             variant="secondary"
-            className="hidden xl:inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0 h-[18px] rounded-md bg-[#FF922B]/10 border-0 text-[#FF6A00] dark:bg-primary/15 dark:text-primary"
+            className="hidden xl:inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0 h-[18px] rounded-md bg-[#FF922B]/10 border-0 text-[#FE7B00] dark:bg-primary/15 dark:text-primary"
           >
             <Check className="h-2.5 w-2.5" />
             {t('defaultBadge')}
@@ -339,7 +339,7 @@ function AgentCard({
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+            className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
             onClick={onOpenSettings}
             title={t('settings')}
           >
@@ -349,7 +349,7 @@ function AgentCard({
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+              className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
               onClick={onDelete}
               title={t('deleteAgent')}
             >
@@ -384,7 +384,7 @@ const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-b
 const selectClasses = 'h-9 w-full rounded-lg text-[13px] bg-white dark:bg-muted border border-black/10 dark:border-white/10 px-3 text-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors [background-image:none] appearance-none';
 const labelClasses = 'text-[13px] text-foreground/80 font-medium';
 const outlineButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors';
-const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
+const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
 const infoCardClasses = 'space-y-1 rounded-lg bg-white dark:bg-muted border border-black/[0.06] dark:border-white/10 p-3.5';
 
 function ChannelLogo({ type, muted = false }: { type: ChannelType; muted?: boolean }) {
@@ -482,7 +482,7 @@ function AddAgentDialog({
             <Button
               onClick={() => void handleSubmit()}
               disabled={saving || !name.trim()}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
             >
               {saving ? (
                 <>
@@ -894,7 +894,7 @@ function AgentModelModal({
             </p>
           )}
           {runtimeProviderOptions.length === 0 && (
-            <p className="text-[12px] rounded-lg bg-[#FFF2E5] px-3 py-2 text-[#FF6A00] border border-[#FFD79A]/60">
+            <p className="text-[12px] rounded-lg bg-[#FFF2E5] px-3 py-2 text-[#FE7B00] border border-[#FFD79A]/60">
               {t('settingsDialog.modelProviderEmpty')}
             </p>
           )}

@@ -8,7 +8,7 @@ import { useAgentsStore } from '@/stores/agents';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { buildProviderListItems, type ProviderListItem } from '@/lib/provider-accounts';
-import { LY_MINIMAX_PROVIDER_ID, LY_DEEPSEEK_PROVIDER_ID } from '@/lib/providers';
+import { LY_AUTO_PROVIDER_ID } from '@/lib/providers';
 import {
   formatContextWindowTokens,
   resolveModelPickerCatalog,
@@ -81,8 +81,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
   const configuredProviders = useMemo(() => {
     return providerItems.filter(item => {
-      if (item.account.vendorId === LY_MINIMAX_PROVIDER_ID) return true;
-      if (item.account.vendorId === LY_DEEPSEEK_PROVIDER_ID) return true;
+      if (item.account.vendorId === LY_AUTO_PROVIDER_ID) return true;
       if (!item.status) return false;
       if (item.account.authMode === 'oauth_device' ||
           item.account.authMode === 'oauth_browser' ||

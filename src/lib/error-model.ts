@@ -2,6 +2,10 @@ export type AppErrorCode =
   | 'AUTH_INVALID'
   | 'TIMEOUT'
   | 'RATE_LIMIT'
+  | 'MODEL_OVERLOADED'
+  | 'MULTIMODAL_OVERLOADED'
+  | 'CONTEXT_TOO_LONG'
+  | 'SERVICE_UNAVAILABLE'
   | 'PERMISSION'
   | 'CHANNEL_UNAVAILABLE'
   | 'NETWORK'
@@ -41,6 +45,20 @@ export function mapBackendErrorCode(code?: string): AppErrorCode {
 
 function classifyMessage(message: string): AppErrorCode {
   const lower = message.toLowerCase();
+
+  // Nginx gateway error codes — check before generic HTTP status matches
+  if (lower.includes('model_overloaded')) {
+    return 'MODEL_OVERLOADED';
+  }
+  if (lower.includes('multimodal_overloaded')) {
+    return 'MULTIMODAL_OVERLOADED';
+  }
+  if (lower.includes('context_too_long') || lower.includes('context is too long')) {
+    return 'CONTEXT_TOO_LONG';
+  }
+  if (lower.includes('metrics_unavailable')) {
+    return 'SERVICE_UNAVAILABLE';
+  }
 
   if (
     lower.includes('invalid ipc channel')
@@ -86,6 +104,12 @@ function classifyMessage(message: string): AppErrorCode {
   }
   if (lower.includes('config') || lower.includes('invalid') || lower.includes('validation') || lower.includes('400')) {
     return 'CONFIG';
+  }
+  if (lower.includes('503') || lower.includes('service unavailable')) {
+    return 'SERVICE_UNAVAILABLE';
+  }
+  if (lower.includes('413') || lower.includes('payload too large')) {
+    return 'CONTEXT_TOO_LONG';
   }
 
   return 'UNKNOWN';

@@ -65,6 +65,7 @@ export interface MarketplaceSkill {
   author?: string;
   downloads?: number;
   stars?: number;
+  update_time?: string;
   /** Local UI override after uninstall before list refresh completes. */
   __installed?: boolean;
 }

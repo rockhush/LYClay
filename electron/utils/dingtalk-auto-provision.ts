@@ -16,7 +16,7 @@ import { logger } from './logger';
 import { proxyAwareFetch } from './proxy-fetch';
 import { readOpenClawConfig, saveChannelConfig } from './channel-config';
 import { ensureDingTalkPluginInstalled } from './plugin-install';
-import { assignChannelAccountToAgent, createAgent, deduplicateAgentEntries, listAgentsSnapshot } from './agent-config';
+import { assignChannelAccountToAgent, ensureAgentConfigEntry } from './agent-config';
 import { expandPath } from './paths';
 import {
   buildDingTalkBindingId,
@@ -104,22 +104,11 @@ async function findExistingDingTalkAccountWithCreds(
  * process narration — so DingTalk bot replies stay clean.
  */
 export async function ensureDingTalkDedicatedAgent(): Promise<void> {
-  const agents = await listAgentsSnapshot();
-
-  const dingtalkEntries = agents.agents.filter((entry) => entry.id === DINGTALK_DEDICATED_AGENT_ID);
-
-  if (dingtalkEntries.length > 1) {
-    logger.warn('[DingTalkAuto] Found duplicate dingtalk agent entries in config, cleaning up', {
-      count: dingtalkEntries.length,
-    });
-    // Directly clean the persisted config of duplicate entries
-    await deduplicateAgentEntries();
-  } else if (dingtalkEntries.length === 0) {
-    await createAgent(DINGTALK_DEDICATED_AGENT_ID, { inheritWorkspace: true });
-    logger.info('[DingTalkAuto] Created dedicated dingtalk agent');
-  } else {
-    logger.info('[DingTalkAuto] Dedicated dingtalk agent already exists');
-  }
+  await ensureAgentConfigEntry(DINGTALK_DEDICATED_AGENT_ID, DINGTALK_DEDICATED_AGENT_ID, {
+    inheritWorkspace: true,
+    removeGeneratedCopies: true,
+  });
+  logger.info('[DingTalkAuto] Ensured dedicated dingtalk agent');
 
   // Always write/update the channel reply policy (so existing agents
   // get the latest policy, and upgrades overwrite any old version)
@@ -131,7 +120,7 @@ async function writeDingTalkAgentReplyPolicy(): Promise<void> {
   const workspaceDir = expandPath(`~/.openclaw/workspace-${DINGTALK_DEDICATED_AGENT_ID}`);
   const agentsPath = join(workspaceDir, 'AGENTS.md');
 
-  let existing = '';
+  let existing: string;
   try {
     existing = await readFile(agentsPath, 'utf-8');
   } catch {

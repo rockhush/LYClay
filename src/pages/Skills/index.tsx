@@ -38,7 +38,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSkillsStore } from '@/stores/skills';
 import { useGatewayStore } from '@/stores/gateway';
-import { LoadingSpinner, CenteredLoader } from '@/components/common/LoadingSpinner';
+import { LoadingSpinner, CenteredLoader, LoaderBadge } from '@/components/common/LoadingSpinner';
 import { useMinLoading } from '@/hooks/use-min-loading';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
@@ -57,6 +57,8 @@ import {
   isLyclawBuiltinSkill,
   isPlaceholderSkillDescription,
   resolveSkillDisplayName,
+  isCustomSkill,
+  isMarketplaceInstalledSkill,
 } from '@/lib/skill-metadata';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -106,14 +108,16 @@ interface SkillDetailDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenFolder?: (skill: Skill) => Promise<void> | void;
+  onUninstall?: (slug: string) => Promise<void>;
 }
 
-function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFolder }: SkillDetailDialogProps) {
+function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFolder, onUninstall }: SkillDetailDialogProps) {
   const { t } = useTranslation('skills');
   const [skillMd, setSkillMd] = useState('');
   const [skillMdFile, setSkillMdFile] = useState('SKILL.md');
   const [skillMdLoading, setSkillMdLoading] = useState(false);
   const [skillMdError, setSkillMdError] = useState<string | null>(null);
+  const [uninstalling, setUninstalling] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !skill) {
@@ -166,6 +170,16 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
     };
   }, [isOpen, skill, t]);
 
+  const handleUninstall = async () => {
+    if (!skill?.slug) return;
+    setUninstalling(true);
+    try {
+      await onUninstall?.(skill.slug);
+    } finally {
+      setUninstalling(false);
+    }
+  };
+
   if (!skill || !isOpen) return null;
 
   const displayName = resolveSkillDisplayName(skill, marketplaceMatch);
@@ -182,6 +196,8 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
   const description = isPlaceholderSkillDescription(skill.description)
     ? (marketplaceMatch?.description?.trim() || skill.description || '')
     : (skill.description || marketplaceMatch?.description?.trim() || '');
+
+  const isBuiltin = isLyclawBuiltinSkill(skill);
 
   return (
     <Sheet open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -262,7 +278,32 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
           </section>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-black/[0.06] dark:border-white/10 flex justify-end gap-2 shrink-0">
+        <div className="mt-4 pt-4 border-t border-black/[0.06] dark:border-white/10 flex justify-between items-center shrink-0">
+          {/* 左下角：打开和卸载按钮 */}
+          <div className="flex gap-2">
+            {/* 打开文件夹按钮 */}
+            <Button
+              type="button"
+              onClick={() => onOpenFolder?.(skill)}
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+            >
+              {t('detail.open')}
+            </Button>
+            {/* 卸载按钮 */}
+            <Button
+              type="button"
+              onClick={handleUninstall}
+              disabled={uninstalling}
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-red-600 hover:bg-red-700 text-white shadow-sm transition-colors"
+            >
+              {uninstalling ? (
+                <><LoadingSpinner size="sm" className="mr-1.5" /> 卸载中...</>
+              ) : (
+                '卸载'
+              )}
+            </Button>
+          </div>
+          {/* 右下角：返回按钮 */}
           <Button
             type="button"
             variant="outline"
@@ -270,13 +311,6 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
             className="h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors"
           >
             {t('detail.back')}
-          </Button>
-          <Button
-            type="button"
-            onClick={() => onOpenFolder?.(skill)}
-            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
-          >
-            {t('detail.open')}
           </Button>
         </div>
       </SheetContent>
@@ -391,6 +425,7 @@ interface MarketplaceSkillCardProps {
   isLoading: boolean;
   onInstall: () => void;
   onUninstall: () => void;
+  onUpdate: () => void;
   t: TFunction<'skills'>;
 }
 
@@ -400,6 +435,7 @@ function MarketplaceSkillCard({
   isLoading,
   onInstall,
   onUninstall,
+  onUpdate,
   t,
 }: MarketplaceSkillCardProps) {
   const initial = getSkillInitial(skill.name);
@@ -415,6 +451,21 @@ function MarketplaceSkillCard({
     typeof skill.downloads === 'number' && Number.isFinite(skill.downloads)
       ? skill.downloads
       : null;
+  
+  // 格式化时间显示
+  const formatCreateTime = (time: string) => {
+    if (!time) return '';
+    try {
+      const date = new Date(time);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch {
+      return '';
+    }
+  };
+  const createTime = skill.update_time ? formatCreateTime(skill.update_time) : null;
 
   return (
     <div
@@ -442,6 +493,29 @@ function MarketplaceSkillCard({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {isInstalled && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUpdate();
+              }}
+              disabled={isLoading}
+              className={cn(
+                'h-8 w-8 rounded-lg transition-colors shadow-none',
+                'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
+              )}
+              title="更新"
+            >
+              {isLoading ? (
+                <LoadingSpinner size="sm" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          )}
           <Button
             type="button"
             size="icon"
@@ -495,6 +569,13 @@ function MarketplaceSkillCard({
             {downloads}
           </span>
         )}
+
+        {createTime && (
+          <span className="inline-flex items-center gap-1">
+            <RefreshCw className="h-3 w-3" />
+            {createTime}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -525,7 +606,7 @@ export function Skills() {
   const [installQuery, setInstallQuery] = useState('');
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [selectedType, setSelectedType] = useState<string>('');
-  const [selectedSource, setSelectedSource] = useState<'all' | 'built-in' | 'marketplace'>('all');
+  const [selectedSource, setSelectedSource] = useState<'all' | 'built-in' | 'marketplace' | 'custom'>('all');
   const [installFilter, setInstallFilter] = useState<'all' | 'installed' | 'uninstalled'>('all');
   const [sortBy, setSortBy] = useState<'download_count' | 'update_time'>('download_count');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -533,6 +614,7 @@ export function Skills() {
   const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'mine' | 'market'>('mine');
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -575,42 +657,6 @@ export function Skills() {
 
   const safeSkills = Array.isArray(skills) ? skills : [];
   
-  // 调试：输出所有技能信息
-  // console.log('[Skills] All skills:', safeSkills.map(s => ({ id: s.id, name: s.name, slug: s.slug, isBundled: s.isBundled })));
-  
-  const filteredSkills = safeSkills.filter((skill) => {
-    const q = searchQuery.toLowerCase().trim();
-    const matchesSearch =
-      q.length === 0 ||
-      skill.name.toLowerCase().includes(q) ||
-      skill.description.toLowerCase().includes(q) ||
-      skill.id.toLowerCase().includes(q) ||
-      (skill.slug || '').toLowerCase().includes(q) ||
-      (skill.author || '').toLowerCase().includes(q);
-
-    let matchesSource = true;
-    const isBuiltin = isLyclawBuiltinSkill(skill);
-    if (selectedSource === 'built-in') {
-      matchesSource = isBuiltin;
-    } else if (selectedSource === 'marketplace') {
-      matchesSource = !isBuiltin;
-    }
-
-    return matchesSearch && matchesSource;
-  }).sort((a, b) => {
-    if (a.enabled && !b.enabled) return -1;
-    if (!a.enabled && b.enabled) return 1;
-    if (a.isCore && !b.isCore) return -1;
-    if (!a.isCore && b.isCore) return 1;
-    return a.name.localeCompare(b.name);
-  });
-
-  const sourceStats = {
-    all: safeSkills.length,
-    builtIn: safeSkills.filter((s) => isLyclawBuiltinSkill(s)).length,
-    marketplace: safeSkills.filter((s) => !isLyclawBuiltinSkill(s)).length,
-  };
-
   // Build lookup tables so installed skills can borrow author / download
   // count from the marketplace (技能广场) response when available.
   const marketplaceLookup = useMemo(() => (
@@ -619,6 +665,50 @@ export function Skills() {
       ...companyInstallEntriesToMarketplaceSkills(companyInstallEntries),
     ])
   ), [searchResults, companyInstallEntries]);
+  
+  // 调试：输出所有技能信息
+  // console.log('[Skills] All skills:', safeSkills.map(s => ({ id: s.id, name: s.name, slug: s.slug, isBundled: s.isBundled })));
+  
+  const sourceStats = useMemo(() => ({
+    all: safeSkills.length,
+    builtIn: safeSkills.filter((s) => isLyclawBuiltinSkill(s)).length,
+    marketplace: safeSkills.filter((s) => isMarketplaceInstalledSkill(s, marketplaceLookup)).length,
+    custom: safeSkills.filter((s) => isCustomSkill(s, marketplaceLookup)).length,
+  }), [safeSkills, marketplaceLookup]);
+
+  const filteredSkills = useMemo(() => {
+    return safeSkills.filter((skill) => {
+      const q = searchQuery.toLowerCase().trim();
+      const matchesSearch =
+        q.length === 0 ||
+        skill.name.toLowerCase().includes(q) ||
+        skill.description.toLowerCase().includes(q) ||
+        skill.id.toLowerCase().includes(q) ||
+        (skill.slug || '').toLowerCase().includes(q) ||
+        (skill.author || '').toLowerCase().includes(q);
+
+      let matchesSource = true;
+      const isBuiltin = isLyclawBuiltinSkill(skill);
+      const isMarketplace = isMarketplaceInstalledSkill(skill, marketplaceLookup);
+      const isCustom = isCustomSkill(skill, marketplaceLookup);
+      
+      if (selectedSource === 'built-in') {
+        matchesSource = isBuiltin;
+      } else if (selectedSource === 'marketplace') {
+        matchesSource = isMarketplace;
+      } else if (selectedSource === 'custom') {
+        matchesSource = isCustom;
+      }
+
+      return matchesSearch && matchesSource;
+    }).sort((a, b) => {
+      if (a.enabled && !b.enabled) return -1;
+      if (!a.enabled && b.enabled) return 1;
+      if (a.isCore && !b.isCore) return -1;
+      if (!a.isCore && b.isCore) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [safeSkills, searchQuery, selectedSource, marketplaceLookup]);
 
   const marketplaceCategoryOptions = [
     { key: '', label: '全部' },
@@ -631,7 +721,7 @@ export function Skills() {
     { key: 'legal', label: '法务' },
     { key: 'office', label: '办公' },
     { key: 'it', label: 'IT' },
-    // { key: 'logistics', label: '物流' },
+    { key: 'logistics', label: '物流' },
     { key: 'other', label: '其他' },
   ];
 
@@ -770,6 +860,7 @@ export function Skills() {
   }, [handleSearch]);
 
   const handleInstall = useCallback(async (slug: string) => {
+    setIsUpdating(true);
     try {
       const currentScroll = listRef.current?.scrollTop || 0;
 
@@ -795,6 +886,8 @@ export function Skills() {
       }, 0);
 
       toast.success(t('toast.installed'));
+      // 等待 toast 显示一段时间后再关闭遮罩
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       if (INSTALL_ERROR_CODES.has(errorMessage)) {
@@ -802,6 +895,10 @@ export function Skills() {
       } else {
         toast.error(t('toast.failedInstall') + ': ' + errorMessage);
       }
+      // 失败也等待一下再关闭遮罩
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } finally {
+      setIsUpdating(false);
     }
   }, [installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
 
@@ -830,6 +927,57 @@ export function Skills() {
       toast.error(t('toast.failedUninstall') + ': ' + String(err));
     }
   }, [uninstallSkill, fetchSkills, t]);
+
+  const handleUpdate = useCallback(async (slug: string) => {
+    setIsUpdating(true);
+    try {
+      // 保存当前滚动位置
+      const currentScroll = listRef.current?.scrollTop || 0;
+      
+      // 先卸载
+      await uninstallSkill(slug);
+      await hydrateUiStateFromDisk();
+      await flushUiStateSync().catch(() => undefined);
+      await fetchSkills();
+
+      // 再安装
+      const packageSlug = await installSkill(slug);
+      await fetchSkills();
+
+      if (packageSlug) {
+        const installed = useSkillsStore.getState().skills.find(
+          (skill) => skill.slug === packageSlug || skill.id === packageSlug,
+        );
+        await enableSkill(installed?.id || packageSlug);
+      } else {
+        await enableSkill(slug);
+      }
+
+      if (activeTab === 'market') {
+        const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+        await searchSkills(installQuery.trim(), selectedType, sort);
+      }
+
+      setTimeout(() => {
+        listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
+      }, 0);
+
+      toast.success(t('toast.installed'));
+      // 等待 toast 显示一段时间后再关闭遮罩
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (INSTALL_ERROR_CODES.has(errorMessage)) {
+        toast.error(t(`toast.${errorMessage}`, { path: skillsDirPath }), { duration: 10000 });
+      } else {
+        toast.error(t('toast.failedInstall') + ': ' + errorMessage);
+      }
+      // 失败也等待一下再关闭遮罩
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [uninstallSkill, installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
 
   const showInitialLoading = loading && activeTab === 'mine' && safeSkills.length === 0;
   const showMineLoading = useMinLoading(showInitialLoading);
@@ -860,7 +1008,7 @@ export function Skills() {
           <div className="relative shrink-0 w-[132px]" ref={addMenuRef}>
             <button
               onClick={() => setAddMenuOpen((open) => !open)}
-              className="w-full bg-[#FF922B] hover:bg-[#FF6A00] transition-colors text-white text-[13px] font-medium h-8 px-3 rounded-lg flex items-center justify-center gap-1.5 shadow-sm shadow-[#FF922B]/25"
+              className="w-full bg-[#FF922B] hover:bg-[#FE7B00] transition-colors text-white text-[13px] font-medium h-8 px-3 rounded-lg flex items-center justify-center gap-1.5 shadow-sm shadow-[#FF922B]/25"
             >
               <Plus className="h-4 w-4" />
               {t('actions.addSkill')}
@@ -992,15 +1140,11 @@ export function Skills() {
                       <button
                         key={sort}
                         onClick={() => {
-                          if (sortBy === sort) {
-                            setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
-                          } else {
-                            setSortBy(sort);
-                            setSortOrder('desc');
-                          }
+                          setSortBy(sort);
+                          setSortOrder('desc');
                         }}
                         className={cn(
-                          'px-3 py-1 text-[12.5px] transition-all flex items-center justify-center gap-1',
+                          'px-3 py-1 text-[12.5px] transition-all flex items-center justify-center',
                           index === 0 && 'rounded-l',
                           index === 1 && 'rounded-r',
                           isSelected
@@ -1009,12 +1153,6 @@ export function Skills() {
                         )}
                       >
                         {labels[sort]}
-                        {isSelected && sortOrder === 'desc' && (
-                          <ChevronDown className="h-3 w-3" />
-                        )}
-                        {isSelected && sortOrder === 'asc' && (
-                          <ChevronUp className="h-3 w-3" />
-                        )}
                       </button>
                     );
                   })}
@@ -1107,6 +1245,7 @@ export function Skills() {
                 { key: 'all', label: '全部', count: sourceStats.all },
                 { key: 'built-in', label: '内置', count: sourceStats.builtIn },
                 { key: 'marketplace', label: '技能广场', count: sourceStats.marketplace },
+                { key: 'custom', label: '自定义', count: sourceStats.custom },
               ] as const).map(({ key, label, count }) => {
                 const isActive = selectedSource === key;
                 const filterKey = key === 'built-in' ? 'builtIn' : key;
@@ -1200,7 +1339,7 @@ export function Skills() {
                 </div>
               )}
 
-              {searching && (
+              {searching && !isUpdating && (
                 <CenteredLoader message={t('marketplace.searching')} testId="skills-market-loading" />
               )}
 
@@ -1210,7 +1349,7 @@ export function Skills() {
                     const isInstalled = isMarketplaceSkillInstalled(skill);
                     const marketplaceKey = getMarketplaceSkillKey(skill);
                     const actionKey = skill.slug;
-                    const isBusy = !!installing[actionKey];
+                    const isBusy = !!installing[actionKey] && !isUpdating;
                     return (
                       <MarketplaceSkillCard
                         key={marketplaceKey}
@@ -1219,6 +1358,7 @@ export function Skills() {
                         isLoading={isBusy}
                         onInstall={() => handleInstall(skill.slug)}
                         onUninstall={() => handleUninstall(skill.slug)}
+                        onUpdate={() => handleUpdate(skill.slug)}
                         t={t}
                       />
                     );
@@ -1244,6 +1384,7 @@ export function Skills() {
         isOpen={!!selectedSkill}
         onClose={() => setSelectedSkill(null)}
         onOpenFolder={handleOpenSkillFolder}
+        onUninstall={handleUninstall}
       />
 
       {/* Upload Skill Dialog */}
@@ -1255,6 +1396,13 @@ export function Skills() {
           void fetchSkills();
         }}
       />
+
+      {/* 安装/更新遮罩 */}
+      {isUpdating && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-[2px] pointer-events-auto">
+          <LoaderBadge />
+        </div>
+      )}
     </div>
   );
 }

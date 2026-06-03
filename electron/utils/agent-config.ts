@@ -629,6 +629,74 @@ export async function createAgent(
   });
 }
 
+export async function ensureAgentConfigEntry(
+  agentId: string,
+  name: string,
+  options?: { inheritWorkspace?: boolean; removeGeneratedCopies?: boolean },
+): Promise<AgentsSnapshot> {
+  return withConfigLock(async () => {
+    const config = await readOpenClawConfig() as AgentConfigDocument;
+    const { agentsConfig, entries, syntheticMain } = normalizeAgentsConfig(config);
+    const normalizedId = agentId.trim();
+    const normalizedName = normalizeAgentName(name);
+    if (!normalizedId || normalizedId === MAIN_AGENT_ID) {
+      throw new Error('agentId is invalid');
+    }
+
+    const nextEntries = syntheticMain ? [createImplicitMainEntry(config), ...entries.filter((_, index) => index > 0)] : [...entries];
+    const targetIndex = nextEntries.findIndex((entry) => entry.id === normalizedId);
+    const duplicateIds = new Set<string>();
+
+    for (const entry of nextEntries) {
+      if (entry.id !== normalizedId && options?.removeGeneratedCopies && entry.id.startsWith(`${normalizedId}-`) && /^\d+$/.test(entry.id.slice(normalizedId.length + 1))) {
+        duplicateIds.add(entry.id);
+      }
+    }
+
+    let targetAgent: AgentListEntry;
+    if (targetIndex === -1) {
+      targetAgent = {
+        id: normalizedId,
+        name: normalizedName,
+        workspace: `~/.openclaw/workspace-${normalizedId}`,
+        agentDir: getDefaultAgentDirPath(normalizedId),
+      };
+      nextEntries.push(targetAgent);
+    } else {
+      targetAgent = {
+        ...nextEntries[targetIndex],
+        name: nextEntries[targetIndex].name || normalizedName,
+        workspace: nextEntries[targetIndex].workspace || `~/.openclaw/workspace-${normalizedId}`,
+        agentDir: nextEntries[targetIndex].agentDir || getDefaultAgentDirPath(normalizedId),
+      };
+      nextEntries[targetIndex] = targetAgent;
+    }
+
+    config.agents = {
+      ...agentsConfig,
+      list: nextEntries.filter((entry) => !duplicateIds.has(entry.id)),
+    };
+
+    if (duplicateIds.size > 0 && Array.isArray(config.bindings)) {
+      config.bindings = config.bindings.map((binding) => {
+        if (!isChannelBinding(binding) || !duplicateIds.has(binding.agentId!)) {
+          return binding;
+        }
+        return { ...binding, agentId: normalizedId };
+      });
+    }
+
+    await provisionAgentFilesystem(config, targetAgent, { inheritWorkspace: options?.inheritWorkspace });
+    await writeOpenClawConfig(config);
+    logger.info('Ensured agent config entry', {
+      agentId: normalizedId,
+      removedDuplicates: duplicateIds.size,
+      inheritWorkspace: !!options?.inheritWorkspace,
+    });
+    return buildSnapshotFromConfig(config);
+  });
+}
+
 export async function updateAgentName(agentId: string, name: string): Promise<AgentsSnapshot> {
   return withConfigLock(async () => {
     const config = await readOpenClawConfig() as AgentConfigDocument;

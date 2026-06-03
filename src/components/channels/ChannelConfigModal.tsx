@@ -66,7 +66,7 @@ interface ChannelConfigModalProps {
 const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors text-foreground placeholder:text-foreground/40';
 const labelClasses = 'text-[13px] text-foreground/80 font-medium';
 const outlineButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors';
-const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
+const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
 
 export function ChannelConfigModal({
   initialSelectedType = null,
@@ -612,7 +612,7 @@ export function ChannelConfigModal({
           ) : (
             <div className="space-y-5">
               {isExistingConfig && (
-                <div className="bg-[#FFF2E5] text-[#FF6A00] dark:bg-[#FF922B]/15 dark:text-primary p-3.5 rounded-lg text-[13px] flex items-center gap-2 border border-[#FFD79A]/60 dark:border-[#FF922B]/30">
+                <div className="bg-[#FFF2E5] text-[#FE7B00] dark:bg-[#FF922B]/15 dark:text-primary p-3.5 rounded-lg text-[13px] flex items-center gap-2 border border-[#FFD79A]/60 dark:border-[#FF922B]/30">
                   <CheckCircle className="h-4 w-4 shrink-0" />
                   <span>{t('dialog.existingHint')}</span>
                 </div>
@@ -628,7 +628,7 @@ export function ChannelConfigModal({
                   </div>
                   <Button
                     variant="ghost"
-                    className="h-8 px-3 shrink-0 text-[12px] text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15"
+                    className="h-8 px-3 shrink-0 text-[12px] text-[#FE7B00] hover:text-[#FE7B00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15"
                     onClick={openDocs}
                   >
                     <BookOpen className="h-3 w-3 mr-1" />

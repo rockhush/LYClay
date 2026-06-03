@@ -678,7 +678,7 @@ export function Sidebar() {
               });
               setOpenSessionMenuKey(s.key);
             }}
-            className="flex items-center justify-center rounded p-0.5 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
+            className="flex items-center justify-center rounded p-0.5 text-[#FE7B00] hover:text-[#FE7B00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
           >
             <MoreHorizontal className="h-3.5 w-3.5" />
           </button>
@@ -706,7 +706,7 @@ export function Sidebar() {
                 }}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
               >
-                <Trash2 className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                <Trash2 className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
                 <span>{t('common:actions.delete')}</span>
               </button>
               {inWorkspace ? (
@@ -723,7 +723,7 @@ export function Sidebar() {
                   }}
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
                 >
-                  <FolderOutput className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                  <FolderOutput className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
                   <span>{t('common:sidebar.removeFromWorkspace')}</span>
                 </button>
               ) : null}
@@ -741,7 +741,7 @@ export function Sidebar() {
                 }}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
               >
-                <Pencil className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                <Pencil className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
                 <span>{t('common:sidebar.renameSession')}</span>
               </button>
               <button
@@ -757,9 +757,9 @@ export function Sidebar() {
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
               >
                 {isPinned ? (
-                  <PinOff className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                  <PinOff className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
                 ) : (
-                  <Pin className="h-3.5 w-3.5 shrink-0 text-[#FF6A00]" />
+                  <Pin className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
                 )}
                 <span>{pinLabel}</span>
               </button>
@@ -1300,7 +1300,7 @@ export function Sidebar() {
                 onClick={() => void submitRename()}
                 disabled={renameSaving || !renameDraft.trim()}
                 data-testid="sidebar-session-rename-save"
-                className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm"
+                className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm"
               >
                 {renameSaving ? t('common:status.saving') : t('common:actions.save')}
               </Button>

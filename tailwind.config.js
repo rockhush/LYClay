@@ -229,7 +229,7 @@ module.exports = {
         // Pair with `brand-hover` for the hover state.
         brand: {
           DEFAULT: '#FF922B',
-          hover: '#FF6A00',
+          hover: '#FE7B00',
         },
 
         // Highlight blue for inline /skill chips in the chat input.

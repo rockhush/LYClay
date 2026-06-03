@@ -19,12 +19,14 @@ import {
 } from '../../utils/openclaw-auth';
 import { logger } from '../../utils/logger';
 import { listAgentsSnapshot } from '../../utils/agent-config';
+import { getSetting } from '../../utils/store';
+import { LY_AUTO_PROVIDER_ID } from '../../shared/providers/types';
 
 const GOOGLE_OAUTH_RUNTIME_PROVIDER = 'google-gemini-cli';
 const GOOGLE_OAUTH_DEFAULT_MODEL_REF = `${GOOGLE_OAUTH_RUNTIME_PROVIDER}/gemini-3-pro-preview`;
 const OPENAI_OAUTH_RUNTIME_PROVIDER = 'openai-codex';
 const OPENAI_OAUTH_DEFAULT_MODEL_REF = `${OPENAI_OAUTH_RUNTIME_PROVIDER}/gpt-5.4`;
-const LY_MANAGED_PROVIDER_TYPES = new Set(['ly-minimax']);
+const LY_MANAGED_PROVIDER_TYPES = new Set(['ly-auto']);
 
 /**
  * Provider types that are not in the built-in provider registry (no `providerConfig.api`).
@@ -51,7 +53,7 @@ function normalizeProviderBaseUrl(
 
   const normalized = baseUrl.trim().replace(/\/+$/, '');
 
-  if (config.type === 'minimax-portal' || config.type === 'minimax-portal-cn' || config.type === 'ly-minimax') {
+  if (config.type === 'minimax-portal' || config.type === 'minimax-portal-cn') {
     return normalized.replace(/\/v1$/, '').replace(/\/anthropic$/, '').replace(/\/$/, '') + '/anthropic';
   }
 
@@ -318,16 +320,64 @@ async function resolveRuntimeSyncContext(config: ProviderConfig): Promise<Runtim
   };
 }
 
+/**
+ * Build headers for ly-auto provider requests.
+ *
+ * NOTE ON SESSION ID:
+ * Ideally, X-LYClaw-Session-Id should be conversation-level (based on sessionKey),
+ * but OpenClaw's models.json headers are static and cannot change per-request.
+ *
+ * CURRENT SOLUTION: Let HAProxy handle session stickiness automatically.
+ * HAProxy config line 657:
+ *   http-request set-header X-LYClaw-Session-Id %[src] unless { req.hdr(X-LYClaw-Session-Id) -m found }
+ *
+ * This means HAProxy will use the source IP as Session ID if the header is missing.
+ * This provides machine-level stickiness, which is acceptable until OpenClaw
+ * supports request-level dynamic headers.
+ *
+ * Headers:
+ * - X-LYClaw-JobNumber: DingTalk job number from user profile (for future usage tracking)
+ */
+async function buildLyAutoHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+
+  // Get DingTalk job number from user profile
+  try {
+    const dingtalkUser = await getSetting('dingtalkUser');
+    if (dingtalkUser?.jobNumber) {
+      headers['X-LYClaw-JobNumber'] = dingtalkUser.jobNumber;
+    } else if (dingtalkUser?.userId) {
+      // Fallback to userId if jobNumber is not available
+      headers['X-LYClaw-JobNumber'] = dingtalkUser.userId;
+    }
+  } catch (error) {
+    logger.warn('[provider-runtime-sync] Failed to get DingTalk user info for ly-auto headers:', error);
+  }
+
+  return headers;
+}
+
 async function syncRuntimeProviderConfig(
   config: ProviderConfig,
   context: RuntimeProviderSyncContext,
 ): Promise<void> {
   const modelOverrides = buildModelOverridesFromRegistry(context.meta?.models, config.model);
+
+  // Build headers: merge static headers from registry/config with dynamic ly-auto headers
+  let headers = config.headers ?? context.meta?.headers;
+
+  // For ly-auto provider, add dynamic headers (session ID and job number)
+  if (config.type === LY_AUTO_PROVIDER_ID) {
+    const lyAutoHeaders = await buildLyAutoHeaders();
+  headers = { ...headers, ...lyAutoHeaders };
+    logger.info('[provider-runtime-sync] Added ly-auto dynamic headers:', lyAutoHeaders);
+  }
+
   await syncProviderConfigToOpenClaw(context.runtimeProviderKey, config.model, {
     baseUrl: normalizeProviderBaseUrl(config, config.baseUrl || context.meta?.baseUrl, context.api),
     api: context.api,
     apiKeyEnv: context.meta?.apiKeyEnv,
-    headers: config.headers ?? context.meta?.headers,
+    headers,
     modelOverrides,
   });
 }
@@ -473,7 +523,7 @@ async function buildAgentModelProviderEntry(
       authHeader = true;
       apiKey = 'minimax-oauth';
     }
-  } else if (config.type === 'ly-minimax') {
+  } else if (config.type === 'ly-auto') {
     apiKey = (await getApiKey(config.id)) || undefined;
   }
 

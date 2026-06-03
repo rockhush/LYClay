@@ -469,7 +469,7 @@ export function Models() {
                             </span>
                           )}
                           {typeof entry.costUsd === 'number' && Number.isFinite(entry.costUsd) && (
-                            <span className="flex items-center gap-1.5 ml-auto text-[#FF6A00] bg-[#FFF2E5] dark:text-primary dark:bg-[#FF922B]/15 px-2 py-0.5 rounded-md font-medium">{t('dashboard:recentTokenHistory.cost', { amount: entry.costUsd.toFixed(4) })}</span>
+                            <span className="flex items-center gap-1.5 ml-auto text-[#FE7B00] bg-[#FFF2E5] dark:text-primary dark:bg-[#FF922B]/15 px-2 py-0.5 rounded-md font-medium">{t('dashboard:recentTokenHistory.cost', { amount: entry.costUsd.toFixed(4) })}</span>
                           )}
                           {devModeUnlocked && entry.content && (
                             <Button

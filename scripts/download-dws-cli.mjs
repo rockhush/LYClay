@@ -1,7 +1,9 @@
 /**
  * download-dws-cli.mjs
  *
- * Downloads DWS CLI binaries during build time.
+ * Downloads pinned DWS CLI binaries into the vendored bundle directory.
+ * This is a manual refresh helper. Packaging uses the checked-in files under
+ * resources/dws-bundles and does not download from the network.
  *
  * Usage:
  *   node scripts/download-dws-cli.mjs                 # Download for current platform/arch
@@ -88,7 +90,7 @@ async function fetchLatestRelease() {
       headers: {
         'User-Agent': 'ClawX-Builder',
         'Accept': 'application/vnd.github.v3+json',
-        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+       // 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
       },
     }, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
@@ -128,7 +130,7 @@ async function downloadDwsCli(platform, arch) {
     throw new Error(`Asset ${assetName} not found in release ${release.tag_name}`);
   }
 
-  const outputDir = path.resolve('resources/bin', platform === 'mac' ? 'darwin' : platform);
+  const outputDir = path.resolve('resources/dws-bundles', platform === 'mac' ? 'darwin' : platform);
   await fs.mkdir(outputDir, { recursive: true });
 
   const outputPath = path.join(outputDir, assetName);

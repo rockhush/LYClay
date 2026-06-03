@@ -436,7 +436,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
           <Button
             onClick={handleUpload}
             disabled={!selectedFile || uploading}
-            className="h-8 rounded-lg px-4 text-[13px] font-medium bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 disabled:opacity-50"
+            className="h-8 rounded-lg px-4 text-[13px] font-medium bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 disabled:opacity-50"
           >
             {uploading ? (
               <>

@@ -13,7 +13,7 @@ import custom from './custom.svg';
 import lyModel from '../../../resources/icons/512x512.png';
 
 export const providerIcons: Record<string, string> = {
-    'ly-minimax': lyModel,
+    'ly-auto': lyModel,
     anthropic,
     openai,
     google,
@@ -25,10 +25,6 @@ export const providerIcons: Record<string, string> = {
     siliconflow,
     'minimax-portal': minimaxPortal,
     'minimax-portal-cn': minimaxPortal,
-    'ly-mimo': lyModel,
-    'ly-deepseek': lyModel,
-    'ly-qwen': lyModel,
-    // 'ly-glm': lyModel,
     'modelstudio': qwenPortal,
     ollama,
     custom,

@@ -271,7 +271,7 @@ export function UpdateAvailableDialog() {
             type="button"
             disabled={isBusy}
             onClick={() => void handleExperienceNow()}
-            className="h-9 min-w-[108px] rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FF6A00]"
+            className="h-9 min-w-[108px] rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FE7B00]"
           >
             {t('updates.dialog.experienceNow')}
           </Button>

@@ -40,6 +40,7 @@ interface CompanySkill {
   version: string;
   author: string;
   download_count: number;
+  update_time: string;
 }
 
 class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
@@ -220,6 +221,7 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
         author: skill.author,
         downloads: skill.download_count,
         category: skill.category,
+        update_time: skill.update_time,
       }));
 
       // 过滤掉内置技能，这些技能已经捆绑在openclaw包中
