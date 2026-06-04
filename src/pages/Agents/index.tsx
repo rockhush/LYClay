@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Bot, Check, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { AlertCircle, Bot, Check, ChevronDown, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -197,7 +197,7 @@ export function Agents() {
             </Button>
             <Button
               onClick={() => setShowAddDialog(true)}
-              className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm"
+              className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm"
             >
               <Plus className="h-3.5 w-3.5 mr-1" />
               {t('addAgent')}
@@ -329,7 +329,7 @@ function AgentCard({
         {agent.isDefault && (
           <Badge
             variant="secondary"
-            className="hidden xl:inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0 h-[18px] rounded-md bg-[#FF922B]/10 border-0 text-[#FF6A00] dark:bg-primary/15 dark:text-primary"
+            className="hidden xl:inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0 h-[18px] rounded-md bg-[#FF922B]/10 border-0 text-[#FE7B00] dark:bg-primary/15 dark:text-primary"
           >
             <Check className="h-2.5 w-2.5" />
             {t('defaultBadge')}
@@ -339,7 +339,7 @@ function AgentCard({
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+            className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
             onClick={onOpenSettings}
             title={t('settings')}
           >
@@ -349,7 +349,7 @@ function AgentCard({
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+              className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
               onClick={onDelete}
               title={t('deleteAgent')}
             >
@@ -384,7 +384,7 @@ const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-b
 const selectClasses = 'h-9 w-full rounded-lg text-[13px] bg-white dark:bg-muted border border-black/10 dark:border-white/10 px-3 text-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors [background-image:none] appearance-none';
 const labelClasses = 'text-[13px] text-foreground/80 font-medium';
 const outlineButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors';
-const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
+const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
 const infoCardClasses = 'space-y-1 rounded-lg bg-white dark:bg-muted border border-black/[0.06] dark:border-white/10 p-3.5';
 
 function ChannelLogo({ type, muted = false }: { type: ChannelType; muted?: boolean }) {
@@ -438,14 +438,24 @@ function AddAgentDialog({
 
   return (
     <ModalOverlay className="p-4">
-      <Card className="w-full max-w-md rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
-        <CardHeader className="pb-2 px-6 pt-6">
-          <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
-            {t('createDialog.title')}
-          </CardTitle>
-          <CardDescription className="text-[13px] mt-1 text-muted-foreground">
-            {t('createDialog.description')}
-          </CardDescription>
+      <Card className="w-[500px] rounded-[6px] border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
+        <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0 px-6 pt-6 -mt-1">
+          <div>
+            <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
+              {t('createDialog.title')}
+            </CardTitle>
+            <CardDescription className="text-[13px] mt-1 text-muted-foreground">
+              {t('createDialog.description')}
+            </CardDescription>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="rounded-lg h-8 w-8 -mr-2 -mt-2 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+          >
+            <X className="h-4 w-4" />
+          </Button>
         </CardHeader>
         <CardContent className="space-y-5 pt-3 px-6 pb-6">
           <div className="space-y-2">
@@ -482,7 +492,7 @@ function AddAgentDialog({
             <Button
               onClick={() => void handleSubmit()}
               disabled={saving || !name.trim()}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
             >
               {saving ? (
                 <>
@@ -559,7 +569,7 @@ function AgentSettingsModal({
 
   return (
     <ModalOverlay className="p-4">
-      <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
+      <Card className="w-[500px] max-h-[90vh] flex flex-col rounded-[6px] border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
         <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0 px-6 pt-6">
           <div>
             <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
@@ -713,6 +723,22 @@ function AgentModelModal({
   const [selectedRuntimeProviderKey, setSelectedRuntimeProviderKey] = useState('');
   const [modelIdInput, setModelIdInput] = useState('');
   const [savingModel, setSavingModel] = useState(false);
+  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const providerMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (providerMenuRef.current && !providerMenuRef.current.contains(event.target as Node)) {
+        setProviderMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const initialFormRef = useRef({ providerKey: '', modelId: '' });
 
@@ -837,7 +863,7 @@ function AgentModelModal({
 
   return (
     <ModalOverlay className="p-4" zIndexClass="z-[60]">
-      <Card className="w-full max-w-xl rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
+      <Card className="w-full max-w-[440px] rounded-[6px] border-0 shadow-2xl bg-white dark:bg-card overflow-hidden">
         <CardHeader className="flex flex-row items-start justify-between pb-2 px-6 pt-6">
           <div>
             <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
@@ -858,25 +884,35 @@ function AgentModelModal({
         </CardHeader>
         <CardContent className="space-y-4 px-6 pb-6 pt-2">
           <div className="space-y-2">
-            <Label htmlFor="agent-model-provider" className={labelClasses}>{t('settingsDialog.modelProviderLabel')}</Label>
-            <select
-              id="agent-model-provider"
-              value={selectedRuntimeProviderKey}
-              onChange={(event) => {
-                const nextProvider = event.target.value;
-                setSelectedRuntimeProviderKey(nextProvider);
-                const option = runtimeProviderOptions.find((candidate) => candidate.runtimeProviderKey === nextProvider);
-                setModelIdInput(option?.configuredModelId || '');
-              }}
-              className={selectClasses}
-            >
-              <option value="">{t('settingsDialog.modelProviderPlaceholder')}</option>
-              {runtimeProviderOptions.map((option) => (
-                <option key={option.runtimeProviderKey} value={option.runtimeProviderKey}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            <Label className="text-[13px] text-foreground/80 font-medium mb-2 block">{t('settingsDialog.modelProviderLabel')}</Label>
+            <div className="relative" ref={providerMenuRef}>
+              <button
+                onClick={() => setProviderMenuOpen(!providerMenuOpen)}
+                className="w-full h-9 bg-white dark:bg-muted border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-foreground text-[13px] font-medium px-3 rounded-lg flex items-center justify-between"
+              >
+                {selectedRuntimeProviderKey
+                  ? runtimeProviderOptions.find((option) => option.runtimeProviderKey === selectedRuntimeProviderKey)?.label
+                  : t('settingsDialog.modelProviderPlaceholder')}
+                <ChevronDown className="h-4 w-4 opacity-90" />
+              </button>
+              {providerMenuOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
+                  {runtimeProviderOptions.map((option) => (
+                    <button
+                      key={option.runtimeProviderKey}
+                      className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${selectedRuntimeProviderKey === option.runtimeProviderKey ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                      onClick={() => {
+                        setSelectedRuntimeProviderKey(option.runtimeProviderKey);
+                        setModelIdInput(option?.configuredModelId || '');
+                        setProviderMenuOpen(false);
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           <div className="space-y-2">
             <Label htmlFor="agent-model-id" className={labelClasses}>{t('settingsDialog.modelIdLabel')}</Label>
@@ -894,7 +930,7 @@ function AgentModelModal({
             </p>
           )}
           {runtimeProviderOptions.length === 0 && (
-            <p className="text-[12px] rounded-lg bg-[#FFF2E5] px-3 py-2 text-[#FF6A00] border border-[#FFD79A]/60">
+            <p className="text-[12px] rounded-lg bg-[#FFF2E5] px-3 py-2 text-[#FE7B00] border border-[#FFD79A]/60">
               {t('settingsDialog.modelProviderEmpty')}
             </p>
           )}

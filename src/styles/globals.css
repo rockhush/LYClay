@@ -71,6 +71,20 @@
     color: hsl(var(--popover-foreground));
   }
 
+  /* Custom selected option style - light orange background */
+  select option:checked,
+  select option:hover {
+    background-color: #FFF2E5 !important;
+    color: #FF922B !important;
+    background-image: none !important;
+  }
+
+  /* For WebKit browsers */
+  select:-webkit-any(option):checked {
+    background-color: #FFF2E5;
+    color: #FF922B;
+  }
+
   input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']):not([type='hidden']),
   textarea,
   select {

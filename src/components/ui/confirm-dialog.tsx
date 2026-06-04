@@ -109,7 +109,7 @@ export function ConfirmDialog({
           <Button
             onClick={handleConfirm}
             disabled={confirming}
-            className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm"
+            className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm"
           >
             {confirmLabel}
           </Button>

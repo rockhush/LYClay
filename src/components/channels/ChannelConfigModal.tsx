@@ -66,7 +66,7 @@ interface ChannelConfigModalProps {
 const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors text-foreground placeholder:text-foreground/40';
 const labelClasses = 'text-[13px] text-foreground/80 font-medium';
 const outlineButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors';
-const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
+const primaryButtonClasses = 'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors';
 
 export function ChannelConfigModal({
   initialSelectedType = null,
@@ -501,7 +501,7 @@ export function ChannelConfigModal({
       }}
     >
       <Card
-        className="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden"
+        className="w-[500px] max-h-[90vh] flex flex-col rounded-[6px] border-0 shadow-2xl bg-white dark:bg-card overflow-hidden"
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
@@ -514,11 +514,6 @@ export function ChannelConfigModal({
                   : t('dialog.configureTitle', { name: CHANNEL_NAMES[selectedType] })
                 : t('dialog.addTitle')}
             </CardTitle>
-            <CardDescription className="text-[13px] mt-1 text-muted-foreground">
-              {selectedType && isExistingConfig
-                ? t('dialog.existingDesc')
-                : meta ? t(meta.description.replace('channels:', '')) : t('dialog.selectDesc')}
-            </CardDescription>
           </div>
           <Button
             variant="ghost"
@@ -612,13 +607,13 @@ export function ChannelConfigModal({
           ) : (
             <div className="space-y-5">
               {isExistingConfig && (
-                <div className="bg-[#FFF2E5] text-[#FF6A00] dark:bg-[#FF922B]/15 dark:text-primary p-3.5 rounded-lg text-[13px] flex items-center gap-2 border border-[#FFD79A]/60 dark:border-[#FF922B]/30">
+                <div className="bg-[#FFF2E5] text-[#FE7B00] dark:bg-[#FF922B]/15 dark:text-primary p-3.5 rounded-lg text-[13px] flex items-center gap-2 border border-[#FFD79A]/60 dark:border-[#FF922B]/30">
                   <CheckCircle className="h-4 w-4 shrink-0" />
                   <span>{t('dialog.existingHint')}</span>
                 </div>
               )}
 
-              <div className="bg-white dark:bg-card p-3.5 rounded-lg space-y-3 border border-black/[0.06] dark:border-white/10">
+              <div className="bg-[#F8F9F9] p-3.5 rounded-lg space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className={labelClasses}>{t('dialog.howToConnect')}</p>
@@ -628,7 +623,7 @@ export function ChannelConfigModal({
                   </div>
                   <Button
                     variant="ghost"
-                    className="h-8 px-3 shrink-0 text-[12px] text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15"
+                    className="h-8 px-3 shrink-0 text-[12px] text-[#FE7B00] hover:text-[#FE7B00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15"
                     onClick={openDocs}
                   >
                     <BookOpen className="h-3 w-3 mr-1" />
@@ -672,10 +667,8 @@ export function ChannelConfigModal({
                     placeholder={t('account.customIdPlaceholder')}
                     className={cn(inputClasses, accountIdError && 'border-destructive/50 focus-visible:border-destructive')}
                   />
-                  {accountIdError ? (
+                  {accountIdError && (
                     <p className="text-[12px] text-destructive">{accountIdError}</p>
-                  ) : (
-                    <p className="text-[12px] text-muted-foreground">{t('account.customIdHint')}</p>
                   )}
                 </div>
               )}
@@ -741,8 +734,6 @@ export function ChannelConfigModal({
                 </div>
               )}
 
-              <Separator className="bg-black/10 dark:bg-white/10" />
-
               <div className="flex flex-col sm:flex-row sm:justify-end gap-2 pt-1">
                 <div className="flex flex-col sm:flex-row gap-2">
                   {meta?.connectionType === 'token' && shouldUseCredentialValidation && (
@@ -753,15 +744,9 @@ export function ChannelConfigModal({
                       className={outlineButtonClasses}
                     >
                       {validating ? (
-                        <>
-                          <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                          {t('dialog.validating')}
-                        </>
+                        t('dialog.validating')
                       ) : (
-                        <>
-                          <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />
-                          {t('dialog.validateConfig')}
-                        </>
+                        t('dialog.validateConfig')
                       )}
                     </Button>
                   )}
@@ -780,10 +765,7 @@ export function ChannelConfigModal({
                     ) : meta?.connectionType === 'qr' ? (
                       t('dialog.generateQRCode')
                     ) : (
-                      <>
-                        <Check className="h-3.5 w-3.5 mr-1.5" />
-                        {isExistingConfig ? t('dialog.updateAndReconnect') : t('dialog.saveAndConnect')}
-                      </>
+                      isExistingConfig ? t('dialog.updateAndReconnect') : t('dialog.saveAndConnect')
                     )}
                   </Button>
                 </div>

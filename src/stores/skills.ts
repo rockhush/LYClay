@@ -6,7 +6,7 @@ import { create } from 'zustand';
 import { getHostApiBase, hostApiFetch } from '@/lib/host-api';
 import { invokeIpc } from '@/lib/api-client';
 import { AppError, normalizeAppError } from '@/lib/error-model';
-import { reportSkillDownload } from '@/lib/usage-reporter';
+import { reportSkillDownload, updateSkillNameMap } from '@/lib/usage-reporter';
 import {
   enrichSkillsWithMarketplaceMetadata,
   findExistingInstalledSkill,
@@ -554,6 +554,14 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         );
       }
 
+      // 更新技能名称映射，包含所有技能（我的技能和技能广场）
+      const allSkillsForMapping = [
+        ...combinedSkills,
+        ...(marketplaceResults || []),
+        ...companyInstallEntriesToMarketplaceSkills(companyInstallEntries),
+      ];
+      updateSkillNameMap(allSkillsForMapping);
+
       set({
         skills: combinedSkills,
         companyInstallMap,
@@ -593,15 +601,25 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     set({ searching: true, searchError: null });
     try {
       const requestBody = { query, category, sort };
-      console.log('[Skills Store] Request URL: /api/clawhub/search, Method: POST, Body:', requestBody);
+      // console.log('[Skills Store] Request URL: /api/clawhub/search, Method: POST, Body:', requestBody);
       const result = await hostApiFetch<{ success: boolean; results?: MarketplaceSkill[]; error?: string }>('/api/clawhub/search', {
         method: 'POST',
         body: JSON.stringify(requestBody),
       });
       if (result.success) {
-        console.log('[Skills Store] Search results:', result.results);
-        console.log('[Skills Store] First 5 results:', result.results?.slice(0, 5));
+        // console.log('[Skills Store] Search results:', result.results);
+        // console.log('[Skills Store] First 5 results:', result.results?.slice(0, 5));
         const isDefaultCatalog = !query.trim() && !category.trim() && sort === DEFAULT_MARKETPLACE_SORT;
+        
+        // 更新技能名称映射，包含我的技能和新搜索到的技能
+        const { skills, companyInstallEntries } = get();
+        const allSkillsForMapping = [
+          ...skills,
+          ...(result.results || []),
+          ...companyInstallEntriesToMarketplaceSkills(companyInstallEntries),
+        ];
+        updateSkillNameMap(allSkillsForMapping);
+        
         set({
           searchResults: result.results || [],
           ...(isDefaultCatalog ? { marketplaceCatalogLoaded: true } : {}),
@@ -642,9 +660,12 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       const packageSlug = result.slug?.trim()
         || result.baseDir?.split(/[/\\]/).filter(Boolean).pop()
         || slug;
-      void reportSkillDownload(packageSlug, 1);
 
       const installedSkill = get().searchResults.find((s) => s.slug === slug);
+      // 使用技能名称（marketplace 接口返回的 name）作为 skillId
+      const skillName = installedSkill?.name || packageSlug;
+      void reportSkillDownload(skillName, 1);
+
       const newSkill: Skill = mergeSkillWithMarketplaceMetadata({
         id: packageSlug,
         slug: packageSlug,

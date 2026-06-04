@@ -2,7 +2,7 @@
  * Cron Page
  * Manage scheduled tasks
  */
-import { useEffect, useState, useCallback, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { useEffect, useState, useCallback, useRef, type ReactNode, type SelectHTMLAttributes } from 'react';
 import {
   Plus,
   Clock,
@@ -247,7 +247,9 @@ interface TaskDialogProps {
 function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProps) {
   const { t } = useTranslation('cron');
   const [saving, setSaving] = useState(false);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const agents = useAgentsStore((s) => s.agents);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
 
   const [name, setName] = useState(job?.name || '');
   const [message, setMessage] = useState(job?.message || '');
@@ -270,6 +272,37 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
   const [deliveryChannel, setDeliveryChannel] = useState(job?.delivery?.channel || '');
   const [deliveryTarget, setDeliveryTarget] = useState(job?.delivery?.to || '');
   const [selectedDeliveryAccountId, setSelectedDeliveryAccountId] = useState(job?.delivery?.accountId || '');
+  const [channelMenuOpen, setChannelMenuOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [targetMenuOpen, setTargetMenuOpen] = useState(false);
+
+  // Refs for click outside detection
+  const channelMenuRef = useRef<HTMLDivElement>(null);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const targetMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (agentMenuRef.current && !agentMenuRef.current.contains(event.target as Node)) {
+        setAgentMenuOpen(false);
+      }
+      if (channelMenuRef.current && !channelMenuRef.current.contains(event.target as Node)) {
+        setChannelMenuOpen(false);
+      }
+      if (accountMenuRef.current && !accountMenuRef.current.contains(event.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+      if (targetMenuRef.current && !targetMenuRef.current.contains(event.target as Node)) {
+        setTargetMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
   const [channelTargetOptions, setChannelTargetOptions] = useState<ChannelTargetOption[]>([]);
   const [loadingChannelTargets, setLoadingChannelTargets] = useState(false);
   const schedulePreview = estimateNextRun(useCustom ? customSchedule : schedule);
@@ -424,7 +457,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
 
   return (
     <ModalOverlay className="p-4" onClick={onClose}>
-      <Card className="w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <Card className="w-full max-w-lg max-h-[90vh] flex flex-col rounded-[6px] border-0 shadow-2xl bg-white dark:bg-card overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0 px-6 pt-6">
           <div>
             <CardTitle className="!text-[16px] font-bold text-foreground leading-tight tracking-normal">{job ? t('dialog.editTitle') : t('dialog.createTitle')}</CardTitle>
@@ -462,21 +495,32 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
 
           {/* Agent */}
           <div className="space-y-2">
-            <Label htmlFor="agent" className="text-[13px] text-foreground/80 font-medium">{t('dialog.agent')}</Label>
-            <SelectField
-              id="agent"
-              value={selectedAgentId}
-              onChange={(e) => {
-                setSelectedAgentId(e.target.value);
-              }}
-              className="h-9 rounded-lg border-black/10 dark:border-white/10 bg-white dark:bg-muted text-[13px]"
-            >
-              {agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name}
-                </option>
-              ))}
-            </SelectField>
+            <Label className="text-[13px] text-foreground/80 font-medium mb-2 block">{t('dialog.agent')}</Label>
+            <div className="relative" ref={agentMenuRef}>
+              <button
+                onClick={() => setAgentMenuOpen(!agentMenuOpen)}
+                className="w-full h-9 bg-white dark:bg-muted border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-foreground text-[13px] font-medium px-3 rounded-lg flex items-center justify-between"
+              >
+                {agents.find((a) => a.id === selectedAgentId)?.name || t('dialog.selectAgent')}
+                <ChevronDown className="h-4 w-4 opacity-90" />
+              </button>
+              {agentMenuOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
+                  {agents.map((agent) => (
+                    <button
+                      key={agent.id}
+                      className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${selectedAgentId === agent.id ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                      onClick={() => {
+                        setSelectedAgentId(agent.id);
+                        setAgentMenuOpen(false);
+                      }}
+                    >
+                      {agent.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Schedule */}
@@ -494,7 +538,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                     className={cn(
                       'justify-start h-8 rounded-lg font-medium text-[13px] transition-colors px-3',
                       schedule === preset.value
-                        ? 'bg-[#FF922B] hover:bg-[#FF6A00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
+                        ? 'bg-[#FF922B] hover:bg-[#FE7B00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
                         : 'bg-white dark:bg-muted border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground shadow-none',
                     )}
                   >
@@ -511,16 +555,13 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 className="h-9 rounded-lg font-mono text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors text-foreground placeholder:text-foreground/40"
               />
             )}
-            <div className="flex items-center justify-between mt-1">
-              <p className="text-[12px] text-muted-foreground/80">
-                {schedulePreview ? `${t('card.next')}: ${schedulePreview}` : t('dialog.cronPlaceholder')}
-              </p>
+            <div className="flex items-center justify-end mt-1">
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 onClick={() => setUseCustom(!useCustom)}
-                className="text-[12px] h-7 px-2 text-[#FF6A00] hover:text-[#FF6A00] hover:bg-[#FF922B]/10 rounded-md dark:text-primary dark:hover:bg-primary/15"
+                className="text-[12px] h-7 px-2 text-[#FE7B00] hover:text-[#FE7B00] hover:bg-[#FF922B]/10 rounded-md dark:text-primary dark:hover:bg-primary/15"
               >
                 {useCustom ? t('dialog.usePresets') : t('dialog.useCustomCron')}
               </Button>
@@ -543,7 +584,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 className={cn(
                   'justify-start h-auto min-h-12 rounded-lg px-3 py-2.5 text-left whitespace-normal transition-colors',
                   deliveryMode === 'none'
-                    ? 'bg-[#FF922B] hover:bg-[#FF6A00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
+                    ? 'bg-[#FF922B] hover:bg-[#FE7B00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
                     : 'bg-white dark:bg-muted border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground shadow-none',
                 )}
               >
@@ -560,7 +601,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 className={cn(
                   'justify-start h-auto min-h-12 rounded-lg px-3 py-2.5 text-left whitespace-normal transition-colors',
                   deliveryMode === 'announce'
-                    ? 'bg-[#FF922B] hover:bg-[#FF6A00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
+                    ? 'bg-[#FF922B] hover:bg-[#FE7B00] text-white border-transparent shadow-sm shadow-[#FF922B]/25'
                     : 'bg-white dark:bg-muted border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground shadow-none',
                 )}
               >
@@ -574,27 +615,53 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
             {deliveryMode === 'announce' && (
               <div className="space-y-3 rounded-lg border border-black/[0.06] dark:border-white/10 bg-white dark:bg-muted p-3.5">
                 <div className="space-y-2">
-                  <Label htmlFor="delivery-channel" className="text-[13px] text-foreground/80 font-medium">
+                  <Label className="text-[13px] text-foreground/80 font-medium mb-2 block">
                     {t('dialog.deliveryChannel')}
                   </Label>
-                  <SelectField
-                    id="delivery-channel"
-                    value={effectiveDeliveryChannel}
-                    onChange={(event) => {
-                      setDeliveryChannel(event.target.value);
-                      setSelectedDeliveryAccountId('');
-                      setDeliveryTarget('');
-                    }}
-                  >
-                    <option value="">{t('dialog.selectChannel')}</option>
-                    {availableChannels.map((group) => (
-                      <option key={group.channelType} value={group.channelType}>
-                        {!isSupportedCronDeliveryChannel(group.channelType)
-                          ? `${getChannelDisplayName(group.channelType)} (${t('dialog.channelUnsupportedTag')})`
-                          : getChannelDisplayName(group.channelType)}
-                      </option>
-                    ))}
-                  </SelectField>
+                  <div className="relative" ref={channelMenuRef}>
+                    <button
+                      onClick={() => setChannelMenuOpen(!channelMenuOpen)}
+                      className="w-full h-9 bg-white dark:bg-muted border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-foreground text-[13px] font-medium px-3 rounded-lg flex items-center justify-between"
+                    >
+                      {effectiveDeliveryChannel
+                        ? (!isSupportedCronDeliveryChannel(effectiveDeliveryChannel)
+                          ? `${getChannelDisplayName(effectiveDeliveryChannel)} (${t('dialog.channelUnsupportedTag')})`
+                          : getChannelDisplayName(effectiveDeliveryChannel))
+                        : t('dialog.selectChannel')}
+                      <ChevronDown className="h-4 w-4 opacity-90" />
+                    </button>
+                    {channelMenuOpen && (
+                      <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
+                        <button
+                          className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${!effectiveDeliveryChannel ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                          onClick={() => {
+                            setDeliveryChannel('');
+                            setSelectedDeliveryAccountId('');
+                            setDeliveryTarget('');
+                            setChannelMenuOpen(false);
+                          }}
+                        >
+                          {t('dialog.selectChannel')}
+                        </button>
+                        {availableChannels.map((group) => (
+                          <button
+                            key={group.channelType}
+                            className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${effectiveDeliveryChannel === group.channelType ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                            onClick={() => {
+                              setDeliveryChannel(group.channelType);
+                              setSelectedDeliveryAccountId('');
+                              setDeliveryTarget('');
+                              setChannelMenuOpen(false);
+                            }}
+                          >
+                            {!isSupportedCronDeliveryChannel(group.channelType)
+                              ? `${getChannelDisplayName(group.channelType)} (${t('dialog.channelUnsupportedTag')})`
+                              : getChannelDisplayName(group.channelType)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   {availableChannels.length === 0 && (
                     <p className="text-[12px] text-muted-foreground">{t('dialog.noChannels')}</p>
                   )}
@@ -610,48 +677,93 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
 
                 {showsAccountSelector && (
                   <div className="space-y-2">
-                    <Label htmlFor="delivery-account" className="text-[13px] text-foreground/80 font-medium">
+                    <Label className="text-[13px] text-foreground/80 font-medium mb-2 block">
                       {t('dialog.deliveryAccount')}
                     </Label>
-                    <SelectField
-                      id="delivery-account"
-                      value={effectiveDeliveryAccountId}
-                      onChange={(event) => {
-                        setSelectedDeliveryAccountId(event.target.value);
-                        setDeliveryTarget('');
-                      }}
-                      disabled={deliveryAccountOptions.length === 0}
-                    >
-                      <option value="">
-                        {t('dialog.selectDeliveryAccount')}
-                      </option>
-                      {deliveryAccountOptions.map((option) => (
-                        <option key={option.accountId} value={option.accountId}>
-                          {option.displayName}
-                        </option>
-                      ))}
-                    </SelectField>
+                    <div className="relative" ref={accountMenuRef}>
+                      <button
+                        onClick={() => setAccountMenuOpen(!accountMenuOpen)}
+                        disabled={deliveryAccountOptions.length === 0}
+                        className="w-full h-9 bg-white dark:bg-muted border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-foreground text-[13px] font-medium px-3 rounded-lg flex items-center justify-between disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {effectiveDeliveryAccountId
+                          ? deliveryAccountOptions.find((o) => o.accountId === effectiveDeliveryAccountId)?.displayName || effectiveDeliveryAccountId
+                          : t('dialog.selectDeliveryAccount')}
+                        <ChevronDown className="h-4 w-4 opacity-90" />
+                      </button>
+                      {accountMenuOpen && (
+                        <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
+                          <button
+                            className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${!effectiveDeliveryAccountId ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                            onClick={() => {
+                              setSelectedDeliveryAccountId('');
+                              setDeliveryTarget('');
+                              setAccountMenuOpen(false);
+                            }}
+                          >
+                            {t('dialog.selectDeliveryAccount')}
+                          </button>
+                          {deliveryAccountOptions.map((option) => (
+                            <button
+                              key={option.accountId}
+                              className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${effectiveDeliveryAccountId === option.accountId ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                              onClick={() => {
+                                setSelectedDeliveryAccountId(option.accountId);
+                                setDeliveryTarget('');
+                                setAccountMenuOpen(false);
+                              }}
+                            >
+                              {option.displayName}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <p className="text-[12px] text-muted-foreground">{t('dialog.deliveryAccountDesc')}</p>
                   </div>
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="delivery-target-select" className="text-[13px] text-foreground/80 font-medium">
+                  <Label className="text-[13px] text-foreground/80 font-medium mb-2 block">
                     {t('dialog.deliveryTarget')}
                   </Label>
-                  <SelectField
-                    id="delivery-target-select"
-                    value={deliveryTarget}
-                    onChange={(event) => setDeliveryTarget(event.target.value)}
-                    disabled={loadingChannelTargets || availableTargetOptions.length === 0}
-                  >
-                    <option value="">{loadingChannelTargets ? t('dialog.loadingTargets') : t('dialog.selectDeliveryTarget')}</option>
-                    {availableTargetOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </SelectField>
+                  <div className="relative" ref={targetMenuRef}>
+                    <button
+                      onClick={() => setTargetMenuOpen(!targetMenuOpen)}
+                      disabled={loadingChannelTargets || availableTargetOptions.length === 0}
+                      className="w-full h-9 bg-white dark:bg-muted border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-foreground text-[13px] font-medium px-3 rounded-lg flex items-center justify-between disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {deliveryTarget
+                        ? availableTargetOptions.find((o) => o.value === deliveryTarget)?.label || deliveryTarget
+                        : (loadingChannelTargets ? t('dialog.loadingTargets') : t('dialog.selectDeliveryTarget'))}
+                      <ChevronDown className="h-4 w-4 opacity-90" />
+                    </button>
+                    {targetMenuOpen && (
+                      <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
+                        <button
+                          className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${!deliveryTarget ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                          onClick={() => {
+                            setDeliveryTarget('');
+                            setTargetMenuOpen(false);
+                          }}
+                        >
+                          {loadingChannelTargets ? t('dialog.loadingTargets') : t('dialog.selectDeliveryTarget')}
+                        </button>
+                        {availableTargetOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${deliveryTarget === option.value ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                            onClick={() => {
+                              setDeliveryTarget(option.value);
+                              setTargetMenuOpen(false);
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <p className="text-[12px] text-muted-foreground">
                     {availableTargetOptions.length > 0
                       ? t('dialog.deliveryTargetDescAuto')
@@ -670,7 +782,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 {t('dialog.enableImmediatelyDesc')}
               </p>
             </div>
-            <Switch size="sm" className="origin-right scale-[0.75]" checked={enabled} onCheckedChange={setEnabled} />
+            <Switch className="origin-right scale-[0.75]" checked={enabled} onCheckedChange={setEnabled} />
           </div>
 
           {/* Actions */}
@@ -685,7 +797,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
             <Button
               onClick={handleSubmit}
               disabled={saving}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
             >
               {saving ? (
                 <>
@@ -980,7 +1092,7 @@ export function Cron() {
                 setShowDialog(true);
               }}
               disabled={!isGatewayRunning}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
             >
               <Plus className="h-4 w-4 mr-2" />
               {t('newTask')}
@@ -1059,7 +1171,7 @@ export function Cron() {
                   setShowDialog(true);
                 }}
                 disabled={!isGatewayRunning}
-                className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+                className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
               >
                 <Plus className="h-4 w-4 mr-2" />
                 {t('empty.create')}

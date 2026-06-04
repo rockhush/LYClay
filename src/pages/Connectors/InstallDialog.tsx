@@ -1,23 +1,19 @@
-import { useState } from 'react';
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
+import { useState, useRef, useEffect } from 'react';
+import { ChevronDown, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select } from '@/components/ui/select';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ModalOverlay } from "@/components/ui/modal-overlay";
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import type { McpConfigFile, McpTransportType } from '@/types/connector';
 import { LYCLAW_BUILTIN_MCP_KEYS } from '@/lib/mcp-builtins';
 
 const inputClasses = 'h-9 rounded-lg text-[13px] bg-white dark:bg-muted border-black/10 dark:border-white/10 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors text-foreground placeholder:text-foreground/40';
-const labelClasses = 'text-[13px] text-foreground/80 font-medium';
-const selectClasses = 'h-9 w-full rounded-lg text-[13px] bg-white dark:bg-muted border border-black/10 dark:border-white/10 px-3 text-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors [background-image:none] appearance-none';
+const labelClasses = 'text-[13px] text-foreground/80 font-medium mb-2 block';
 const textareaClasses = 'flex min-h-[72px] w-full rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-muted px-3 py-2 text-[13px] text-foreground placeholder:text-foreground/40 focus-visible:outline-none focus-visible:ring-0 focus-visible:border-[#FFD79A] transition-colors';
 
 export type InstallDialogMode = 'custom' | null;
@@ -37,9 +33,24 @@ export function InstallDialog({
 }: InstallDialogProps) {
   const { t } = useTranslation('connectors');
   const [busy, setBusy] = useState(false);
-
   const [name, setName] = useState('');
   const [transport, setTransport] = useState<McpTransportType>('stdio');
+  const [transportMenuOpen, setTransportMenuOpen] = useState(false);
+  const transportMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (transportMenuRef.current && !transportMenuRef.current.contains(event.target as Node)) {
+        setTransportMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
   const [url, setUrl] = useState('');
   const [command, setCommand] = useState('npx');
   const [argsText, setArgsText] = useState('-y, @modelcontextprotocol/server-example');
@@ -153,29 +164,79 @@ export function InstallDialog({
   if (mode !== 'custom') return null;
 
   return (
-    <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-md bg-white dark:bg-card">
-        <SheetHeader className="text-left pb-2">
-          <SheetTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
+    <ModalOverlay
+      className="p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <Card
+        className="w-[500px] max-h-[90vh] flex flex-col rounded-[6px] border-0 shadow-2xl bg-white dark:bg-card overflow-hidden"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <CardHeader className="flex flex-row items-start justify-between pb-2 shrink-0 px-6 pt-6">
+          <CardTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
             {t('dialog.custom.title')}
-          </SheetTitle>
-        </SheetHeader>
-        <div className="space-y-4 py-2 flex-1">
+          </CardTitle>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="rounded-lg h-8 w-8 -mr-2 -mt-2 text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-3 overflow-y-auto flex-1 px-6 pb-6" onClick={() => setTransportMenuOpen(false)}>
           <div className="space-y-2">
             <Label className={labelClasses}>{t('dialog.custom.name')}</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" className={inputClasses} />
           </div>
           <div className="space-y-2">
             <Label className={labelClasses}>{t('dialog.custom.type')}</Label>
-            <Select
-              value={transport}
-              onChange={(e) => setTransport(e.target.value as McpTransportType)}
-              className={selectClasses}
-            >
-              <option value="stdio">stdio</option>
-              <option value="streamable-http">streamable-http</option>
-              <option value="sse">sse</option>
-            </Select>
+            <div className="relative" ref={transportMenuRef} onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={() => setTransportMenuOpen(!transportMenuOpen)}
+                className="w-full h-9 bg-white dark:bg-muted border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-foreground text-[13px] font-medium px-3 rounded-lg flex items-center justify-between"
+              >
+                {transport}
+                <ChevronDown className="h-4 w-4 opacity-90" />
+              </button>
+              {transportMenuOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
+                  <button
+                    className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${transport === 'stdio' ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                    onClick={() => {
+                      setTransport('stdio');
+                      setTransportMenuOpen(false);
+                    }}
+                  >
+                    stdio
+                  </button>
+                  <button
+                    className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${transport === 'streamable-http' ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                    onClick={() => {
+                      setTransport('streamable-http');
+                      setTransportMenuOpen(false);
+                    }}
+                  >
+                    streamable-http
+                  </button>
+                  <button
+                    className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${transport === 'sse' ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                    onClick={() => {
+                      setTransport('sse');
+                      setTransportMenuOpen(false);
+                    }}
+                  >
+                    sse
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
           {transport === 'stdio' ? (
             <>
@@ -214,30 +275,30 @@ export function InstallDialog({
               placeholder="KEY=value"
             />
           </div>
-          <div className="flex items-center justify-between bg-white dark:bg-muted px-3.5 py-3 rounded-lg border border-black/[0.06] dark:border-white/10">
+          <div className="flex items-center justify-between bg-[#F8F9F9] px-3.5 py-3 rounded-lg">
             <Label className={labelClasses}>{t('dialog.custom.disabled')}</Label>
             <Switch size="sm" checked={disabled} onCheckedChange={setDisabled} />
           </div>
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onClose}
-            className="h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors"
-          >
-            {t('dialog.cancel')}
-          </Button>
-          <Button
-            type="button"
-            onClick={() => void handleCustomSubmit()}
-            disabled={busy || !name.trim()}
-            className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
-          >
-            {t('dialog.save')}
-          </Button>
-        </div>
-      </SheetContent>
-    </Sheet>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              className="h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors"
+            >
+              {t('dialog.cancel')}
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void handleCustomSubmit()}
+              disabled={busy || !name.trim()}
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+            >
+              {t('dialog.save')}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </ModalOverlay>
   );
 }

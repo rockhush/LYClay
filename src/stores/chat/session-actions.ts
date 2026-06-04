@@ -31,6 +31,11 @@ function parseSessionRecord(record: Record<string, unknown>): ChatSession | null
     ? String(record.firstUserMessagePreview)
     : undefined;
 
+  // 过滤掉没有 firstUserMessagePreview 的会话记录
+  if (!firstUserMessagePreview) {
+    return null;
+  }
+
   return {
     key,
     label: firstUserMessagePreview || (record.label ? String(record.label) : undefined),

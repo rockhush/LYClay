@@ -132,7 +132,7 @@ export function UpdateAvailableDialog() {
         aria-modal="true"
         aria-labelledby="update-available-dialog-title"
         className={cn(
-          'relative mx-4 flex w-full max-w-[520px] flex-col overflow-hidden rounded-2xl border border-[#FFD79A]/50 bg-white shadow-2xl',
+          'relative mx-4 flex w-full max-w-[520px] flex-col overflow-hidden rounded-[6px] border border-[#FFD79A]/50 bg-white shadow-2xl',
           'dark:border-white/10 dark:bg-[#1c1c1c]',
         )}
       >
@@ -271,7 +271,7 @@ export function UpdateAvailableDialog() {
             type="button"
             disabled={isBusy}
             onClick={() => void handleExperienceNow()}
-            className="h-9 min-w-[108px] rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FF6A00]"
+            className="h-9 min-w-[108px] rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FE7B00]"
           >
             {t('updates.dialog.experienceNow')}
           </Button>

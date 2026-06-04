@@ -147,6 +147,7 @@ export function Channels() {
   const [existingAccountIdsForModal, setExistingAccountIdsForModal] = useState<string[]>([]);
   const [initialConfigValuesForModal, setInitialConfigValuesForModal] = useState<Record<string, string> | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const convergenceRefreshTimersRef = useRef<number[]>([]);
   const fetchInFlightRef = useRef(false);
   const queuedFetchOptionsRef = useRef<FetchPageDataOptions | null>(null);
@@ -679,9 +680,7 @@ export function Channels() {
 
                       <div className="flex items-center gap-2">
                         <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 text-xs rounded-lg border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
+                          className="h-8 text-[13px] font-medium rounded-lg px-3 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm"
                           onClick={() => {
                             const shouldUseGeneratedAccountId = !usesPluginManagedQrAccounts(group.channelType);
                             const nextAccountId = shouldUseGeneratedAccountId
@@ -705,7 +704,7 @@ export function Channels() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+                          className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
                           onClick={() => setDeleteTarget({ channelType: group.channelType })}
                           title={t('account.deleteChannel')}
                         >
@@ -730,27 +729,45 @@ export function Channels() {
                               {account.lastError && (
                                 <div className="text-[12px] text-destructive mt-1">{account.lastError}</div>
                               )}
-                              {!account.lastError && account.statusReason && account.status === 'degraded' && (
-                                <div className="text-[12px] text-yellow-700 dark:text-yellow-300 mt-1">
-                                  {t(`health.reasons.${account.statusReason}`)}
-                                </div>
-                              )}
+
                             </div>
 
                             <div className="flex items-center gap-2 ml-auto">
                               <span className="text-xs text-muted-foreground whitespace-nowrap">{t('account.bindAgentLabel')}</span>
-                              <select
-                                className="h-8 max-w-[120px] rounded-lg border border-black/10 dark:border-white/10 bg-background px-2 text-xs"
-                                value={account.agentId || ''}
-                                onChange={(event) => {
-                                  void handleBindAgent(group.channelType, account.accountId, event.target.value);
-                                }}
-                              >
-                                <option value="">{t('account.unassigned')}</option>
-                                {visibleAgents.map((agent) => (
-                                  <option key={agent.id} value={agent.id}>{agent.name}</option>
-                                ))}
-                              </select>
+                              <div className="relative">
+                                <button
+                                  onClick={() => setAgentMenuOpen(!agentMenuOpen)}
+                                  className="h-8 min-w-[120px] bg-[#FF922B] hover:bg-[#FE7B00] transition-colors text-white text-[13px] font-medium px-3 rounded-lg flex items-center justify-center gap-1.5 shadow-sm shadow-[#FF922B]/25"
+                                >
+                                  {account.agentId ? visibleAgents.find((a) => a.id === account.agentId)?.name || account.agentId : t('account.unassigned')}
+                                  <ChevronDown className="h-3.5 w-3.5 opacity-90" />
+                                </button>
+                                {agentMenuOpen && (
+                                  <div className="absolute right-0 top-full mt-1.5 w-full min-w-[120px] rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
+                                    <button
+                                      className="w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5"
+                                      onClick={() => {
+                                        void handleBindAgent(group.channelType, account.accountId, '');
+                                        setAgentMenuOpen(false);
+                                      }}
+                                    >
+                                      {t('account.unassigned')}
+                                    </button>
+                                    {visibleAgents.map((agent) => (
+                                      <button
+                                        key={agent.id}
+                                        className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${account.agentId === agent.id ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                                        onClick={() => {
+                                          void handleBindAgent(group.channelType, account.accountId, agent.id);
+                                          setAgentMenuOpen(false);
+                                        }}
+                                      >
+                                        {agent.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -781,7 +798,7 @@ export function Channels() {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                className="h-7 w-7 rounded-md text-[#FF6A00] hover:bg-[#FF922B]/10 hover:text-[#FF6A00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+                                className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
                                 onClick={() => setDeleteTarget({ channelType: group.channelType, accountId: account.accountId })}
                                 title={t('account.delete')}
                               >
@@ -838,7 +855,7 @@ export function Channels() {
                       </p>
                     </div>
                     <Pencil
-                      className="absolute top-3 right-3 h-3.5 w-3.5 text-[#FF6A00] opacity-0 group-hover:opacity-100 transition-opacity dark:text-primary"
+                      className="absolute top-3 right-3 h-3.5 w-3.5 text-[#FE7B00] opacity-0 group-hover:opacity-100 transition-opacity dark:text-primary"
                       aria-hidden
                     />
                   </button>

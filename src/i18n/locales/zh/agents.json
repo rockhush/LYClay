@@ -14,7 +14,7 @@
     "creating": "创建中...",
     "createDialog": {
         "title": "添加 Agent",
-        "description": "输入名称即可创建新 Agent，可选择是否继承主 Agent 的工作区引导文件。",
+        "description": "输入名称创建新Agent，可选择是否继承主 Agent 的工作区引导文件。",
         "nameLabel": "Agent 名称",
         "namePlaceholder": "Coding Helper",
         "inheritWorkspaceLabel": "继承主 Agent 工作区",

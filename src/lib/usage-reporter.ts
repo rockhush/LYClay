@@ -9,6 +9,27 @@
 
 import { hostApiFetch } from './host-api';
 
+/** 技能 ID/slug 到名称的映射 */
+let skillNameMap: Map<string, string> = new Map();
+
+/**
+ * 更新技能名称映射
+ */
+export function updateSkillNameMap(skills: Array<{ id?: string; slug?: string; name: string }>): void {
+  skillNameMap.clear();
+  for (const skill of skills) {
+    if (skill.id) skillNameMap.set(skill.id, skill.name);
+    if (skill.slug) skillNameMap.set(skill.slug, skill.name);
+  }
+}
+
+/**
+ * 根据技能 ID/slug 获取技能名称，如果找不到则返回原 ID
+ */
+function getSkillName(skillId: string): string {
+  return skillNameMap.get(skillId) || skillId;
+}
+
 export interface ChannelDiagnostic {
   channel: 'tokenConsume' | 'skillDownload' | 'skillInvoke';
   url: string;
@@ -82,10 +103,11 @@ export async function reportTokenConsume(model: string, consume: number): Promis
 export async function reportSkillDownload(skillId: string, count = 1): Promise<void> {
   const trimmedSkillId = (skillId || '').trim();
   if (!trimmedSkillId) return;
+  const skillName = getSkillName(trimmedSkillId);
   try {
     await hostApiFetch('/api/usage-report/skill-download', {
       method: 'POST',
-      body: JSON.stringify({ skillId: trimmedSkillId, count }),
+      body: JSON.stringify({ skillId: skillName, count }),
     });
   } catch (error) {
     console.warn('[UsageReport] queue skill-download failed (non-fatal):', error);
@@ -95,10 +117,11 @@ export async function reportSkillDownload(skillId: string, count = 1): Promise<v
 export async function reportSkillInvoke(skillId: string, count = 1): Promise<void> {
   const trimmedSkillId = (skillId || '').trim();
   if (!trimmedSkillId) return;
+  const skillName = getSkillName(trimmedSkillId);
   try {
     await hostApiFetch('/api/usage-report/skill-invoke', {
       method: 'POST',
-      body: JSON.stringify({ skillId: trimmedSkillId, count }),
+      body: JSON.stringify({ skillId: skillName, count }),
     });
   } catch (error) {
     console.warn('[UsageReport] queue skill-invoke failed (non-fatal):', error);

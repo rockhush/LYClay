@@ -313,7 +313,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
       onKeyDown={handleKeyDown}
     >
       <div
-        className="relative w-full max-w-md rounded-2xl border-0 shadow-2xl bg-white dark:bg-card overflow-hidden focus:outline-none"
+        className="relative w-[500px] rounded-[6px] border-0 shadow-2xl bg-white dark:bg-card overflow-hidden focus:outline-none"
         tabIndex={-1}
       >
         <div className="relative px-6 pt-6 pb-2">
@@ -436,7 +436,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
           <Button
             onClick={handleUpload}
             disabled={!selectedFile || uploading}
-            className="h-8 rounded-lg px-4 text-[13px] font-medium bg-[#FF922B] hover:bg-[#FF6A00] text-white shadow-sm shadow-[#FF922B]/25 disabled:opacity-50"
+            className="h-8 rounded-lg px-4 text-[13px] font-medium bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 disabled:opacity-50"
           >
             {uploading ? (
               <>
