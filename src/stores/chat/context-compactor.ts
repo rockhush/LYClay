@@ -3,13 +3,21 @@
  * Compresses long conversation history by summarizing older messages.
  * Designed for 200K token context windows.
  */
-import type { RawMessage } from './types';
+import type { CompressionStateEntry, RawMessage } from './types';
 import { estimateHistoryTokens, estimateMessageTokens, needsCompression } from '@/lib/token-estimator';
 
 export interface CompressionResult {
   originalCount: number;
   compressedMessages: RawMessage[];
   summaryMessage: RawMessage;
+  /** Number of messages that were compressed (the older ones) */
+  compressedCount: number;
+  /** Total message count at the time of compression */
+  totalMessagesAtCompression: number;
+  /** Estimated tokens of compressed messages */
+  compressedTokens: number;
+  /** Whether this was a truncation fallback (not LLM summarization) */
+  isTruncation: boolean;
 }
 
 /** Token threshold to trigger compression (150K for 200K context window) */
@@ -20,9 +28,6 @@ const KEEP_RECENT_TOKENS = 30000;
 
 /** Minimum rounds between compressions (to avoid frequent compressions) */
 const MIN_ROUNDS_BETWEEN_COMPRESSION = 5;
-
-/** Track when last compression happened per session */
-const lastCompressionRound = new Map<string, number>();
 
 const SUMMARY_PROMPT_TEMPLATE = `请将以下对话历史压缩为结构化摘要，保留后续继续对话和执行任务所需的关键信息。
 
@@ -87,16 +92,18 @@ export interface InvokeRpcFn {
  */
 export function checkNeedsCompression(
   messages: RawMessage[],
-  sessionKey: string,
+  _sessionKey: string,
   options: CompactorOptions,
+  persistedCompressionState?: CompressionStateEntry | null,
 ): boolean {
-  const { threshold, minMessageCount = 10, minRoundsBetweenCompression = MIN_ROUNDS_BETWEEN_COMPRESSION } = options;
+  const { threshold, minMessageCount = 10 } = options;
 
   // Check if enough rounds have passed since last compression
-  const lastRound = lastCompressionRound.get(sessionKey) ?? 0;
-  const roundsSinceLastCompression = messages.length - lastRound;
-  if (roundsSinceLastCompression < minRoundsBetweenCompression) {
-    return false;
+  if (persistedCompressionState && !persistedCompressionState.isTruncation) {
+    const roundsSinceLastCompression = messages.length - persistedCompressionState.totalMessagesAtCompression;
+    if (roundsSinceLastCompression < MIN_ROUNDS_BETWEEN_COMPRESSION) {
+      return false;
+    }
   }
 
   return needsCompression(messages, threshold, minMessageCount);
@@ -175,6 +182,7 @@ export async function compressHistory(
   sessionKey: string,
   invokeRpc: InvokeRpcFn,
   options: CompactorOptions,
+  persistedCompressionState?: CompressionStateEntry | null,
 ): Promise<CompressionResult | null> {
   const {
     keepRecentTokens = KEEP_RECENT_TOKENS,
@@ -182,7 +190,7 @@ export async function compressHistory(
     hardLimitTokens,
   } = options;
 
-  if (!checkNeedsCompression(messages, sessionKey, options)) {
+  if (!checkNeedsCompression(messages, sessionKey, options, persistedCompressionState)) {
     return null;
   }
 
@@ -232,9 +240,6 @@ export async function compressHistory(
 
     const summaryText = response?.result?.message?.content ?? '（历史对话已压缩）';
 
-    // Update compression tracking
-    lastCompressionRound.set(sessionKey, messages.length);
-
     return {
       originalCount: messages.length,
       compressedMessages: keepRecent,
@@ -244,6 +249,10 @@ export async function compressHistory(
         timestamp: Date.now() / 1000,
         id: crypto.randomUUID(),
       },
+      compressedCount: toCompress.length,
+      totalMessagesAtCompression: messages.length,
+      compressedTokens: toCompressTokens,
+      isTruncation: false,
     };
   } catch (error) {
     console.error('[context-compactor] compression error:', error);
@@ -266,12 +275,17 @@ function createSimpleTruncationByTokens(messages: RawMessage[], keepTokens: numb
       timestamp: Date.now() / 1000,
       id: crypto.randomUUID(),
     },
+    compressedCount: toCompress.length,
+    totalMessagesAtCompression: messages.length,
+    compressedTokens: estimateHistoryTokens(toCompress),
+    isTruncation: true,
   };
 }
 
 /**
- * Reset compression tracking for a session (call when session changes).
+ * Reset compression tracking for a session (no-op, state is now persisted).
  */
-export function resetCompactorSession(sessionKey: string): void {
-  lastCompressionRound.delete(sessionKey);
+export function resetCompactorSession(_sessionKey: string): void {
+  // Compression state is now persisted in sessionCompressionState store field.
+  // No module-level state to reset.
 }

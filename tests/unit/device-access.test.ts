@@ -1,30 +1,39 @@
 import { describe, expect, it } from 'vitest';
 import { deviceAccessInternals } from '@electron/utils/device-access';
 
-describe('device access token helpers', () => {
-  it('formats SHA bytes like .NET Guid(byte[]).ToString()', () => {
-    const bytes = Buffer.from([
-      0x00, 0x01, 0x02, 0x03,
-      0x04, 0x05,
-      0x06, 0x07,
-      0x08, 0x09,
-      0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-    ]);
-
-    expect(deviceAccessInternals.formatDotNetGuidFromBytes(bytes))
-      .toBe('03020100-0504-0706-0809-0a0b0c0d0e0f');
+describe('device access helper exe integration', () => {
+  it('extracts the GUID token printed by GetDeviceGUID.exe', () => {
+    expect(deviceAccessInternals.parseDeviceGuidOutput([
+      'banner',
+      '72662979-ebf8-78a1-549e-a07a95df1d73',
+      '',
+    ].join('\n'))).toBe('72662979-ebf8-78a1-549e-a07a95df1d73');
   });
 
-  it('builds stable Windows device-id candidates from hardware fields', () => {
-    expect(deviceAccessInternals.buildWindowsDeviceIdCandidates({
-      macAddresses: ['AA:BB:CC:DD:EE:FF'],
-      processorId: 'CPU123',
-      motherboardSerialNumber: 'BOARD456',
-    })).toEqual([
-      'AA:BB:CC:DD:EE:FFCPU123BOARD456',
-      'AA:BB:CC:DD:EE:FF|CPU123|BOARD456',
-      'MacAddress=AA:BB:CC:DD:EE:FF|ProcessorId=CPU123|MotherboardSerialNumber=BOARD456',
-      'MacAddress=AA:BB:CC:DD:EE:FF;ProcessorId=CPU123;MotherboardSerialNumber=BOARD456',
-    ]);
+  it('normalizes uppercase helper output', () => {
+    expect(deviceAccessInternals.parseDeviceGuidOutput('72662979-EBF8-78A1-549E-A07A95DF1D73'))
+      .toBe('72662979-ebf8-78a1-549e-a07a95df1d73');
+  });
+
+  it('extracts the macOS serial number printed by ioreg', () => {
+    expect(deviceAccessInternals.parseMacSerialNumberOutput([
+      '+-o IOPlatformExpertDevice',
+      '    "IOPlatformSerialNumber" = "C02XG2LFJGH5"',
+    ].join('\n'))).toBe('C02XG2LFJGH5');
+  });
+
+  it('extracts the macOS serial number printed by system_profiler', () => {
+    expect(deviceAccessInternals.parseMacSerialNumberOutput('Serial Number (system): C02XG2LFJGH5'))
+      .toBe('C02XG2LFJGH5');
+  });
+
+  it('adds the Bearer scheme when the configured auth token omits it', () => {
+    expect(deviceAccessInternals.formatAuthorizationHeader('test-api-token')).toBe('Bearer test-api-token');
+    expect(deviceAccessInternals.formatAuthorizationHeader('Bearer test-api-token')).toBe('Bearer test-api-token');
+  });
+
+  it('maps authorization failures to a user-friendly device access message', () => {
+    expect(deviceAccessInternals.formatDeviceAccessHttpError(401, { message: 'Unauthorized' }))
+      .toBe('设备校验服务授权失败，请联系 IT 检查授权配置');
   });
 });

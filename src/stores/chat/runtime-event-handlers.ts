@@ -102,7 +102,7 @@ function reportUsageFromFinalAssistant(message: RawMessage | undefined, runId: s
     }
   }
 }
-import { isAbortedChatRun } from './helpers';
+import { forgetAbortedChatRun, isAbortedChatRun } from './helpers';
 import {
   buildComplexTaskExecutionRequest,
   clearPendingComplexTaskPlan,
@@ -202,7 +202,7 @@ export function handleRuntimeEventState(
                 sending: false,
                 activeRunId: null,
                 pendingFinal: false,
-                runError: getMessageErrorMessage(normalizedFinalMessage),
+                error: getMessageErrorMessage(normalizedFinalMessage),
               });
               clearHistoryPoll();
               break;
@@ -371,8 +371,16 @@ export function handleRuntimeEventState(
               }
             }
           } else {
-            // No message in final event - reload history to get complete data
-            set({ streamingText: '', streamingMessage: null, pendingFinal: true });
+            set({
+              sending: false,
+              activeRunId: null,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
+              lastUserMessageAt: null,
+            });
             get().loadHistory();
           }
           break;
@@ -380,10 +388,11 @@ export function handleRuntimeEventState(
         case 'error': {
           const errorMsg = String(event.errorMessage || 'An error occurred');
 
-          // 忽略 abort 相关的错误消息，因为这是用户主动终止会话的结果
+          // 仅当用户主动终止（点击停止按钮）时才静默处理 abort error，
+          // 系统侧 abort（如上下文溢出、provider 中断）应正常展示错误
           const isAbortError = errorMsg.toLowerCase().includes('abort') || errorMsg === 'This operation was aborted';
-          if (isAbortError) {
-            // 静默处理 abort，不显示错误提示
+          const isUserAbort = runId && isAbortedChatRun(runId);
+          if (isAbortError && isUserAbort) {
             set({
               sending: false,
               activeRunId: null,
@@ -394,6 +403,7 @@ export function handleRuntimeEventState(
               pendingToolImages: [],
               error: null,
             });
+            forgetAbortedChatRun(runId!);
             break;
           }
 

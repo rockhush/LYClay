@@ -18,7 +18,7 @@ import {
     normalizeOpenClawAccountId,
     toOpenClawChannelType,
 } from './channel-alias';
-import { ensureOpenClawSessionDefaults, type OpenClawDmScope } from './openclaw-config-defaults';
+import { ensureOpenClawAgentDefaults, ensureOpenClawSessionDefaults, type OpenClawDmScope } from './openclaw-config-defaults';
 
 const OPENCLAW_DIR = join(homedir(), '.openclaw');
 const CONFIG_FILE = join(OPENCLAW_DIR, 'openclaw.json');
@@ -414,6 +414,7 @@ export async function writeOpenClawConfig(config: OpenClawConfig): Promise<void>
         config.commands = commands;
 
         ensureOpenClawSessionDefaults(config as Record<string, unknown>);
+        ensureOpenClawAgentDefaults(config as Record<string, unknown>);
 
         await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
     } catch (error) {

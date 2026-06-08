@@ -522,25 +522,68 @@ function patchBundledOpenClawOpenAITransport(outputDir) {
   const filePath = path.join(distDir, transportFiles[0]);
   let source = fs.readFileSync(filePath, 'utf8');
 
-  // Check if already patched
-  if (source.includes('model.params && typeof model.params === "object" && !Array.isArray(model.params)')) {
+  const alreadyHasParamsPatch = source.includes('model.params && typeof model.params === "object" && !Array.isArray(model.params)');
+  const alreadyHasLyAutoSessionPatch = source.includes('X-LYClaw-Session-Id');
+  if (alreadyHasParamsPatch && alreadyHasLyAutoSessionPatch) {
     return true;
   }
 
   let patched = false;
 
-  // Patch completions transport: spread model.params into request params
-  // Pattern: const params = {\n\t\tmodel: model.id,
-  const completionsParamsRegex = /const params = \{\s*\n?\s*model: model\.id,/;
-  if (completionsParamsRegex.test(source)) {
-    source = source.replace(completionsParamsRegex,
-      'const params = {\n\t\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\n\t\tmodel: model.id,');
-    patched = true;
+  if (!alreadyHasParamsPatch) {
+    const completionsParamsRegex = /const params = \{\s*\n?\s*model: model\.id,/;
+    if (completionsParamsRegex.test(source)) {
+      source = source.replace(completionsParamsRegex,
+        'const params = {\n\t\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\n\t\tmodel: model.id,');
+      patched = true;
+    }
+  }
+
+  if (!alreadyHasLyAutoSessionPatch) {
+    const sessionHeaderPatches = [
+      [
+        [
+          'function createOpenAICompletionsClient(model, context, apiKey, optionHeaders) {',
+          '\tconst clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);',
+        ].join('\n'),
+        [
+          'function createOpenAICompletionsClient(model, context, apiKey, optionHeaders, turnHeaders) {',
+          '\tconst clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders, turnHeaders);',
+        ].join('\n'),
+      ],
+      [
+        [
+          'function buildOpenAICompletionsClientConfig(model, context, optionHeaders) {',
+          '\tconst headers = buildOpenAIClientHeaders(model, context, optionHeaders);',
+        ].join('\n'),
+        [
+          'function buildOpenAICompletionsClientConfig(model, context, optionHeaders, turnHeaders) {',
+          '\tconst headers = buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders);',
+        ].join('\n'),
+      ],
+      [
+        [
+          'const client = createOpenAICompletionsClient(model, context, options?.apiKey || getEnvApiKey(model.provider) || "", options?.headers);',
+          'const client = createOpenAICompletionsClient(model, context, options?.apiKey || getEnvApiKey(model.provider) || "", options?.headers, (() => { const sid = options?.sessionId; const ts = resolveProviderTransportTurnState(model, { sessionId: sid, turnId: randomUUID(), attempt: 1, transport: "stream" }); const lyHdrs = model.provider === "ly-auto" && sid ? { "X-LYClaw-Session-Id": sid } : {}; return { ...ts?.headers, ...lyHdrs }; })());',
+        ],
+      ],
+    ];
+
+    let matchedSessionPatch = false;
+    for (const [search, replace] of sessionHeaderPatches) {
+      if (!source.includes(search)) continue;
+      source = source.replace(search, replace);
+      matchedSessionPatch = true;
+      patched = true;
+    }
+    if (!matchedSessionPatch) {
+      echo`   ⚠️ Could not find target patterns for ly-auto session header patch`;
+    }
   }
 
   if (patched) {
     fs.writeFileSync(filePath, source, 'utf8');
-    echo`   🩹 Patched OpenAI transport to spread model.params for request parameters`;
+    echo`   🩹 Patched OpenAI transport for model.params and ly-auto session headers`;
     return true;
   }
 

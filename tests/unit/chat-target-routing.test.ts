@@ -75,7 +75,7 @@ describe('chat target routing', () => {
       if (method === 'sessions.patch') {
         return { ok: true };
       }
-      if (method === 'chat.abort') {
+      if (method === 'sessions.abort') {
         return { ok: true };
       }
       if (method === 'sessions.list') {
@@ -355,7 +355,7 @@ describe('chat target routing', () => {
       if (method === 'chat.history') {
         return { messages: [] };
       }
-      if (method === 'chat.abort') {
+      if (method === 'sessions.abort') {
         return { ok: true };
       }
       if (method === 'sessions.list') {

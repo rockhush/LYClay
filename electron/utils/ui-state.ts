@@ -29,6 +29,8 @@ export interface LyclawUiState {
     sessionWorkspaceIds: Record<string, string>;
     customSessionLabels: Record<string, string>;
     sessionPinnedAt: Record<string, number>;
+    sessionLastActivity: Record<string, number>;
+    sessionCompressionState: Record<string, unknown>;
   };
 }
 
@@ -51,6 +53,8 @@ export function createEmptyUiState(): LyclawUiState {
       sessionWorkspaceIds: {},
       customSessionLabels: {},
       sessionPinnedAt: {},
+      sessionLastActivity: {},
+      sessionCompressionState: {},
     },
   };
 }
@@ -77,7 +81,16 @@ function sanitizeNumberRecord(input: unknown): Record<string, number> {
   return out;
 }
 
-function sanitizeWorkspaceEntry(raw: unknown): UiStateWorkspaceEntry | null {
+function sanitizeCompressionStateRecord(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof key === 'string' && key && value && typeof value === 'object' && !Array.isArray(value)) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const entry = raw as Record<string, unknown>;
   if (typeof entry.id !== 'string' || !entry.id) return null;
@@ -130,6 +143,8 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
       sessionWorkspaceIds: sanitizeStringRecord(chatObj.sessionWorkspaceIds),
       customSessionLabels: sanitizeStringRecord(chatObj.customSessionLabels),
       sessionPinnedAt: sanitizeNumberRecord(chatObj.sessionPinnedAt),
+      sessionLastActivity: sanitizeNumberRecord(chatObj.sessionLastActivity),
+      sessionCompressionState: sanitizeCompressionStateRecord(chatObj.sessionCompressionState),
     },
   };
 }
@@ -200,6 +215,12 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
       sessionPinnedAt: replaceChat
         ? normalizedPatch.chat.sessionPinnedAt
         : { ...base.chat.sessionPinnedAt, ...normalizedPatch.chat.sessionPinnedAt },
+      sessionLastActivity: replaceChat
+        ? normalizedPatch.chat.sessionLastActivity
+        : { ...base.chat.sessionLastActivity, ...normalizedPatch.chat.sessionLastActivity },
+      sessionCompressionState: replaceChat
+        ? normalizedPatch.chat.sessionCompressionState
+        : { ...base.chat.sessionCompressionState, ...normalizedPatch.chat.sessionCompressionState },
     },
   };
 }

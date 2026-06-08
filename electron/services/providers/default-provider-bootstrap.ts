@@ -9,6 +9,8 @@ import { withConfigLock } from '../../utils/config-mutex';
 import { logger } from '../../utils/logger';
 import { removeProviderFromOpenClaw, syncProviderConfigToOpenClaw, updateAgentModelProvider } from '../../utils/openclaw-auth';
 import { getOpenClawProviderKeyForType } from '../../utils/provider-keys';
+import { getProviderConfig } from '../../utils/provider-registry';
+import { proxyAwareFetch } from '../../utils/proxy-fetch';
 import { getProviderService } from './provider-service';
 import { deleteProvider, storeApiKey } from '../../utils/secure-storage';
 import { getProviderAccount, saveProviderAccount } from './provider-store';
@@ -19,6 +21,64 @@ const LY_AUTO_MODEL_ID = 'auto';
 const LY_AUTO_API_KEY = 'EMPTY';
 
 const OLD_LY_PROVIDER_IDS = ['ly-minimax', 'lyclaw-model', 'ly-deepseek', 'ly-qwen', 'ly-mimo'];
+
+interface NginxModelEntry {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: string[];
+  contextWindow?: number;
+  maxTokens?: number;
+  compat?: Record<string, unknown>;
+}
+
+interface NginxModelConfigResponse {
+  models: NginxModelEntry[];
+}
+
+const LY_AUTO_FALLBACK_OVERRIDES: Record<string, unknown> = {
+  reasoning: true,
+  input: ['text', 'image'],
+  contextWindow: 100000,
+  maxTokens: 8192,
+  compat: { supportsUsageInStreaming: true },
+};
+
+async function fetchNginxModelConfig(baseUrl: string): Promise<NginxModelEntry | null> {
+  const normalized = baseUrl.trim().replace(/\/+$/, '');
+  const url = `${normalized}/lyclaw/models`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await proxyAwareFetch(url, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as NginxModelConfigResponse;
+    const models = data?.models;
+    if (!Array.isArray(models) || models.length === 0) return null;
+    return models.find((m) => m.id === 'auto') ?? null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildModelOverrides(nginxEntry: NginxModelEntry | null): Record<string, unknown> {
+  const overrides = { ...LY_AUTO_FALLBACK_OVERRIDES };
+  if (nginxEntry) {
+    if (typeof nginxEntry.reasoning === 'boolean') overrides.reasoning = nginxEntry.reasoning;
+    if (Array.isArray(nginxEntry.input)) overrides.input = nginxEntry.input;
+    if (typeof nginxEntry.contextWindow === 'number') overrides.contextWindow = nginxEntry.contextWindow;
+    if (typeof nginxEntry.maxTokens === 'number') overrides.maxTokens = nginxEntry.maxTokens;
+    if (nginxEntry.compat && typeof nginxEntry.compat === 'object') {
+      overrides.compat = { ...(overrides.compat as Record<string, unknown>), ...nginxEntry.compat };
+    }
+  }
+  return overrides;
+}
 
 function createLyAutoAccount(existing?: ProviderAccount | null): ProviderAccount {
   const now = new Date().toISOString();
@@ -164,29 +224,27 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     return;
   }
 
+  // Fetch model config from nginx gateway, with hardcoded defaults as fallback
+  const nginxBaseUrl = account.baseUrl || getProviderConfig(LY_AUTO_PROVIDER_ID)?.baseUrl || LY_AUTO_BASE_URL;
+  const nginxConfig = await fetchNginxModelConfig(nginxBaseUrl);
+  if (nginxConfig) {
+    logger.info(`[provider-bootstrap] Fetched nginx model config: maxTokens=${nginxConfig.maxTokens}, contextWindow=${nginxConfig.contextWindow}`);
+  } else {
+    logger.warn('[provider-bootstrap] Failed to fetch nginx model config, using defaults');
+  }
+  const modelOverrides = buildModelOverrides(nginxConfig);
+
   // Sync provider config to openclaw.json
   await syncProviderConfigToOpenClaw(runtimeProviderKey, modelId, {
     baseUrl: account.baseUrl,
     api: account.apiProtocol,
     modelOverrides: {
-      [LY_AUTO_MODEL_ID]: {
-        reasoning: true,
-        input: ['text', 'image'],
-        contextWindow: 100000,
-        maxTokens: 8192,
-        compat: { supportsUsageInStreaming: true },
-      },
+      [LY_AUTO_MODEL_ID]: modelOverrides,
     },
   });
 
   // Sync to agent models.json
-  await syncManagedProviderToAgentModels(account, LY_AUTO_MODEL_ID, {
-    reasoning: true,
-    input: ['text', 'image'],
-    contextWindow: 100000,
-    maxTokens: 8192,
-    compat: { supportsUsageInStreaming: true },
-  });
+  await syncManagedProviderToAgentModels(account, LY_AUTO_MODEL_ID, modelOverrides);
 
   // Set default provider account
   const defaultProviderId = await providerService.getDefaultAccountId();

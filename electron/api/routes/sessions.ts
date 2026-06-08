@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { listAgentsSnapshot } from '../../utils/agent-config';
 import { getOpenClawConfigDir } from '../../utils/paths';
@@ -30,6 +30,56 @@ type TranscriptCache = FileSignature & {
 
 const sessionFileIndexCache = new Map<string, SessionFileIndexCache>();
 const transcriptCache = new Map<string, TranscriptCache>();
+const SESSIONS_JSON_READ_RETRY_DELAYS_MS = [30, 80, 150];
+
+type ReadSessionsJsonOptions = {
+  label: string;
+  allowMissing?: boolean;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientReadError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES';
+}
+
+async function readSessionsJsonSafe(
+  sessionsJsonPath: string,
+  options: ReadSessionsJsonOptions,
+): Promise<Record<string, unknown> | null> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= SESSIONS_JSON_READ_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const raw = await readFile(sessionsJsonPath, 'utf8');
+      if (!raw.trim()) return {};
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch (error) {
+      lastError = error;
+      const code = getErrorCode(error);
+      if (code === 'ENOENT' && options.allowMissing) return null;
+      const retryable = isTransientReadError(error) || error instanceof SyntaxError;
+      if (!retryable || attempt >= SESSIONS_JSON_READ_RETRY_DELAYS_MS.length) break;
+      await sleep(SESSIONS_JSON_READ_RETRY_DELAYS_MS[attempt]!);
+    }
+  }
+
+  logger.warn(`[${options.label}] Could not read valid sessions.json at ${sessionsJsonPath}:`, lastError);
+  return null;
+}
+
+async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
+  const tempPath = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    await writeFile(tempPath, JSON.stringify(value, null, 2), 'utf8');
+    await rename(tempPath, filePath);
+  } catch (error) {
+    await unlink(tempPath).catch(() => undefined);
+    throw error;
+  }
+}
 
 function sameSignature(a: FileSignature, b: FileSignature): boolean {
   return a.mtimeMs === b.mtimeMs && a.size === b.size;
@@ -70,8 +120,14 @@ async function getSessionFileIndex(agentId: string, sessionsJsonPath: string): P
   const cached = sessionFileIndexCache.get(agentId);
   if (cached && sameSignature(cached, signature)) return cached;
 
-  const raw = await readFile(sessionsJsonPath, 'utf8');
-  const sessionsJson = JSON.parse(raw) as Record<string, unknown>;
+  const sessionsJson = await readSessionsJsonSafe(sessionsJsonPath, {
+    label: 'sessions:history-local',
+    allowMissing: true,
+  });
+  if (!sessionsJson) {
+    sessionFileIndexCache.delete(agentId);
+    return null;
+  }
   const filesBySessionKey = new Map<string, { fileName?: string; resolvedPath?: string }>();
 
   if (Array.isArray(sessionsJson.sessions)) {
@@ -256,13 +312,19 @@ export async function handleSessionRoutes(
 
       const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
-      const fsP = await import('node:fs/promises');
 
       try {
         logger.info(`[sessions:list-local] Reading ${sessionsJsonPath}`);
-        const raw = await fsP.readFile(sessionsJsonPath, 'utf8');
-        const sessionsJson = JSON.parse(raw) as Record<string, unknown>;
-        
+        const sessionsJson = await readSessionsJsonSafe(sessionsJsonPath, {
+          label: 'sessions:list-local',
+          allowMissing: true,
+        });
+        if (!sessionsJson) {
+          logger.warn(`[sessions:list-local] sessions.json not found or invalid at ${sessionsJsonPath}`);
+          sendJson(res, 200, { success: true, sessions: [] });
+          return true;
+        }
+
         logger.info(`[sessions:list-local] Parsed sessions.json, keys: ${Object.keys(sessionsJson).join(', ')}`);
         
         let sessions: Array<Record<string, unknown>> = [];
@@ -489,8 +551,14 @@ export async function handleSessionRoutes(
       const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
       const fsP = await import('node:fs/promises');
-      const raw = await fsP.readFile(sessionsJsonPath, 'utf8');
-      const sessionsJson = JSON.parse(raw) as Record<string, unknown>;
+      const sessionsJson = await readSessionsJsonSafe(sessionsJsonPath, {
+        label: 'sessions:delete',
+        allowMissing: false,
+      });
+      if (!sessionsJson) {
+        sendJson(res, 409, { success: false, error: 'sessions.json is temporarily unavailable or invalid' });
+        return true;
+      }
 
       let uuidFileName: string | undefined;
       let resolvedSrcPath: string | undefined;
@@ -538,15 +606,22 @@ export async function handleSessionRoutes(
       } catch {
         // Non-fatal; still try to update sessions.json.
       }
-      const raw2 = await fsP.readFile(sessionsJsonPath, 'utf8');
-      const json2 = JSON.parse(raw2) as Record<string, unknown>;
+      const json2 = await readSessionsJsonSafe(sessionsJsonPath, {
+        label: 'sessions:delete',
+        allowMissing: false,
+      });
+      if (!json2) {
+        sendJson(res, 409, { success: false, error: 'sessions.json is temporarily unavailable or invalid' });
+        return true;
+      }
       if (Array.isArray(json2.sessions)) {
         json2.sessions = (json2.sessions as Array<Record<string, unknown>>)
           .filter((s) => s.key !== sessionKey && s.sessionKey !== sessionKey);
       } else if (json2[sessionKey]) {
         delete json2[sessionKey];
       }
-      await fsP.writeFile(sessionsJsonPath, JSON.stringify(json2, null, 2), 'utf8');
+      await writeJsonAtomic(sessionsJsonPath, json2);
+      sessionFileIndexCache.delete(agentId);
       sendJson(res, 200, { success: true });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });

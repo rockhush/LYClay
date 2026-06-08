@@ -147,7 +147,8 @@ export function Channels() {
   const [existingAccountIdsForModal, setExistingAccountIdsForModal] = useState<string[]>([]);
   const [initialConfigValuesForModal, setInitialConfigValuesForModal] = useState<Record<string, string> | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
-  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const [openAgentMenuKey, setOpenAgentMenuKey] = useState<string | null>(null);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
   const convergenceRefreshTimersRef = useRef<number[]>([]);
   const fetchInFlightRef = useRef(false);
   const queuedFetchOptionsRef = useRef<FetchPageDataOptions | null>(null);
@@ -311,6 +312,21 @@ export function Channels() {
       clearConvergenceRefreshTimers();
     };
   }, [clearConvergenceRefreshTimers]);
+
+  useEffect(() => {
+    if (!openAgentMenuKey) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (agentMenuRef.current && !agentMenuRef.current.contains(event.target as Node)) {
+        setOpenAgentMenuKey(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [openAgentMenuKey]);
 
   useEffect(() => {
     // Throttle channel-status events to avoid flooding fetchPageData during AI tasks.
@@ -719,6 +735,8 @@ export function Channels() {
                           account.accountId === 'default' && account.name === account.accountId
                             ? t('account.mainAccount')
                             : account.name;
+                        const agentMenuKey = `${group.channelType}:${account.accountId}`;
+                        const isAgentMenuOpen = openAgentMenuKey === agentMenuKey;
                         return (
                         <div key={`${group.channelType}-${account.accountId}`} className="rounded-lg bg-black/[0.03] dark:bg-white/5 px-3 py-2">
                           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -734,21 +752,23 @@ export function Channels() {
 
                             <div className="flex items-center gap-2 ml-auto">
                               <span className="text-xs text-muted-foreground whitespace-nowrap">{t('account.bindAgentLabel')}</span>
-                              <div className="relative">
+                              <div className="relative" ref={isAgentMenuOpen ? agentMenuRef : undefined}>
                                 <button
-                                  onClick={() => setAgentMenuOpen(!agentMenuOpen)}
+                                  type="button"
+                                  onClick={() => setOpenAgentMenuKey(isAgentMenuOpen ? null : agentMenuKey)}
                                   className="h-8 min-w-[120px] bg-[#FF922B] hover:bg-[#FE7B00] transition-colors text-white text-[13px] font-medium px-3 rounded-lg flex items-center justify-center gap-1.5 shadow-sm shadow-[#FF922B]/25"
                                 >
                                   {account.agentId ? visibleAgents.find((a) => a.id === account.agentId)?.name || account.agentId : t('account.unassigned')}
                                   <ChevronDown className="h-3.5 w-3.5 opacity-90" />
                                 </button>
-                                {agentMenuOpen && (
+                                {isAgentMenuOpen && (
                                   <div className="absolute right-0 top-full mt-1.5 w-full min-w-[120px] rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
                                     <button
+                                      type="button"
                                       className="w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5"
                                       onClick={() => {
                                         void handleBindAgent(group.channelType, account.accountId, '');
-                                        setAgentMenuOpen(false);
+                                        setOpenAgentMenuKey(null);
                                       }}
                                     >
                                       {t('account.unassigned')}
@@ -756,10 +776,11 @@ export function Channels() {
                                     {visibleAgents.map((agent) => (
                                       <button
                                         key={agent.id}
+                                        type="button"
                                         className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${account.agentId === agent.id ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
                                         onClick={() => {
                                           void handleBindAgent(group.channelType, account.accountId, agent.id);
-                                          setAgentMenuOpen(false);
+                                          setOpenAgentMenuKey(null);
                                         }}
                                       >
                                         {agent.name}

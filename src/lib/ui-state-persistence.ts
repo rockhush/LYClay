@@ -1,5 +1,6 @@
 import { hostApiFetch } from '@/lib/host-api';
 import { useChatStore } from '@/stores/chat';
+import type { CompressionStateEntry } from '@/stores/chat/types';
 import { useWorkspacesStore } from '@/stores/workspaces';
 import type { WorkspaceEntry } from '@/types/workspace';
 
@@ -15,6 +16,8 @@ export interface LyclawUiState {
     sessionWorkspaceIds: Record<string, string>;
     customSessionLabels: Record<string, string>;
     sessionPinnedAt: Record<string, number>;
+    sessionLastActivity: Record<string, number>;
+    sessionCompressionState: Record<string, unknown>;
   };
 }
 
@@ -40,6 +43,12 @@ const SESSION_PINNED_AT_KEYS = [
   'LYClaw:chat:session-pinned-at',
   'ClawX:chat:session-pinned-at',
   'clawx:chat:session-pinned-at',
+];
+
+const SESSION_LAST_ACTIVITY_KEYS = [
+  'LYClaw:chat:session-last-activity',
+  'ClawX:chat:session-last-activity',
+  'clawx:chat:session-last-activity',
 ];
 
 function readJsonRecord(raw: string | null): Record<string, string> {
@@ -108,6 +117,7 @@ function readLocalChatState(): LyclawUiState['chat'] {
   let sessionWorkspaceIds: Record<string, string> = {};
   let customSessionLabels: Record<string, string> = {};
   let sessionPinnedAt: Record<string, number> = {};
+  let sessionLastActivity: Record<string, number> = {};
   for (const key of SESSION_WORKSPACE_KEYS) {
     sessionWorkspaceIds = { ...sessionWorkspaceIds, ...readJsonRecord(window.localStorage.getItem(key)) };
   }
@@ -117,7 +127,10 @@ function readLocalChatState(): LyclawUiState['chat'] {
   for (const key of SESSION_PINNED_AT_KEYS) {
     sessionPinnedAt = { ...sessionPinnedAt, ...readJsonNumberRecord(window.localStorage.getItem(key)) };
   }
-  return { sessionWorkspaceIds, customSessionLabels, sessionPinnedAt };
+  for (const key of SESSION_LAST_ACTIVITY_KEYS) {
+    sessionLastActivity = { ...sessionLastActivity, ...readJsonNumberRecord(window.localStorage.getItem(key)) };
+  }
+  return { sessionWorkspaceIds, customSessionLabels, sessionPinnedAt, sessionLastActivity, sessionCompressionState: {} };
 }
 
 function readLocalUiState(): LyclawUiState {
@@ -142,7 +155,8 @@ function hasLocalWorkspacePersist(): boolean {
 function hasLocalChatPersist(): boolean {
   return SESSION_WORKSPACE_KEYS.some((key) => window.localStorage.getItem(key) != null)
     || CUSTOM_LABEL_KEYS.some((key) => window.localStorage.getItem(key) != null)
-    || SESSION_PINNED_AT_KEYS.some((key) => window.localStorage.getItem(key) != null);
+    || SESSION_PINNED_AT_KEYS.some((key) => window.localStorage.getItem(key) != null)
+    || SESSION_LAST_ACTIVITY_KEYS.some((key) => window.localStorage.getItem(key) != null);
 }
 
 export function isNonEmptyWorkspaceState(workspaces: LyclawUiState['workspaces']): boolean {
@@ -154,7 +168,9 @@ export function isNonEmptyWorkspaceState(workspaces: LyclawUiState['workspaces']
 export function isNonEmptyChatState(chat: LyclawUiState['chat']): boolean {
   return Object.keys(chat.sessionWorkspaceIds).length > 0
     || Object.keys(chat.customSessionLabels).length > 0
-    || Object.keys(chat.sessionPinnedAt).length > 0;
+    || Object.keys(chat.sessionPinnedAt).length > 0
+    || Object.keys(chat.sessionLastActivity).length > 0
+    || Object.keys(chat.sessionCompressionState).length > 0;
 }
 
 /** Pure merge used on startup; exported for unit tests. */
@@ -193,6 +209,14 @@ export function mergeHydratedUiState(
             ...disk.chat.sessionPinnedAt,
             ...local.chat.sessionPinnedAt,
           },
+          sessionLastActivity: {
+            ...disk.chat.sessionLastActivity,
+            ...local.chat.sessionLastActivity,
+          },
+          sessionCompressionState: {
+            ...disk.chat.sessionCompressionState,
+            ...local.chat.sessionCompressionState,
+          },
         }
       : local.chat;
 
@@ -226,6 +250,8 @@ function applyUiStateToStores(state: LyclawUiState): void {
     sessionWorkspaceIds: state.chat.sessionWorkspaceIds,
     customSessionLabels: state.chat.customSessionLabels,
     sessionPinnedAt: state.chat.sessionPinnedAt,
+    sessionLastActivity: state.chat.sessionLastActivity as Record<string, number>,
+    sessionCompressionState: state.chat.sessionCompressionState as Record<string, CompressionStateEntry | null>,
   }));
 }
 
@@ -244,6 +270,8 @@ function buildUiStateFromStores(): LyclawUiState {
       sessionWorkspaceIds: chat.sessionWorkspaceIds,
       customSessionLabels: chat.customSessionLabels,
       sessionPinnedAt: chat.sessionPinnedAt,
+      sessionLastActivity: chat.sessionLastActivity,
+      sessionCompressionState: chat.sessionCompressionState as unknown as Record<string, unknown>,
     },
   };
 }
@@ -300,6 +328,8 @@ export function startUiStateSync(): void {
       state.sessionWorkspaceIds !== prev.sessionWorkspaceIds
       || state.customSessionLabels !== prev.customSessionLabels
       || state.sessionPinnedAt !== prev.sessionPinnedAt
+      || state.sessionLastActivity !== prev.sessionLastActivity
+      || state.sessionCompressionState !== prev.sessionCompressionState
     ) {
       scheduleUiStateSync();
     }

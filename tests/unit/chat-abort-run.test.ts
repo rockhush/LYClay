@@ -27,6 +27,11 @@ vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
 }));
 
+vi.mock('@/lib/ui-state-persistence', () => ({
+  flushUiStateSync: vi.fn(async () => undefined),
+  hydrateUiStateFromDisk: vi.fn(async () => undefined),
+}));
+
 describe('chat abort run', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -70,9 +75,9 @@ describe('chat abort run', () => {
     expect(useChatStore.getState().activeRunId).toBeNull();
     expect(useChatStore.getState().runAborted).toBe(true);
     expect(gatewayRpcMock).toHaveBeenCalledWith(
-      'chat.abort',
+      'sessions.abort',
       expect.objectContaining({
-        sessionKey: 'agent:main:main',
+        key: 'agent:main:main',
         runId: 'run-abort-me',
       }),
       expect.anything(),

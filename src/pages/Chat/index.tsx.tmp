@@ -4,16 +4,13 @@
  * via gateway:rpc IPC. Session selector, thinking toggle, and refresh
  * are in the toolbar; messages render with markdown + streaming.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Loader2, Sparkles } from 'lucide-react';
-import chatDoubleIcon from '@/assets/chat-double.svg';
 import { useChatStore, type RawMessage } from '@/stores/chat';
 import { useGatewayStore } from '@/stores/gateway';
-import { useProviderStore } from '@/stores/providers';
 import { useAgentsStore } from '@/stores/agents';
-import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
 import { hostApiFetch } from '@/lib/host-api';
-import { LoaderBadge } from '@/components/common/LoadingSpinner';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard } from './ExecutionGraphCard';
@@ -25,15 +22,7 @@ import { cn } from '@/lib/utils';
 import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
 import { useMinLoading } from '@/hooks/use-min-loading';
 import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
-import { getChatWaitingMode, isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
-import { useSkillsStore } from '@/stores/skills';
-import { toast } from 'sonner';
-import { formatWelcomeDisplayName } from '@/lib/welcome-display-name';
-import {
-  WELCOME_QUICK_ACTIONS,
-  buildQuickActionComposerText,
-  findSkillForQuickAction,
-} from './welcome-quick-actions';
+import { isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
 
 type GraphStepCacheEntry = {
   steps: ReturnType<typeof deriveTaskSteps>;
@@ -54,8 +43,6 @@ type UserRunCard = {
   steps: TaskStep[];
   messageStepTexts: string[];
   streamingReplyText: string | null;
-  /** Whether to filter out 'thinking' kind steps in the ExecutionGraphCard. */
-  isMimo: boolean;
   /**
    * Whether the trailing "Thinking..." indicator should be hidden for this
    * card. True only when the run's live stream is currently rendered AS a
@@ -121,18 +108,6 @@ function describeRunTermination(error: string | null): { title: string; detail: 
       detail: 'Communication with the service timed out, so the current flow did not continue.',
     };
   }
-  if (normalized.includes('list index out of range') || normalized.includes('tool call stream error')) {
-    return {
-      title: '执行失败',
-      detail: '执行失败，请重试！',
-    };
-  }
-  if (normalized.includes('context overflow')) {
-    return {
-      title: '上下文过长',
-      detail: '会话消息过多导致超出模型上下文窗口限制。建议开始新会话，或手动 /reset（/new）以刷新上下文。',
-    };
-  }
   return {
     title: 'Run ended',
     detail: error,
@@ -177,7 +152,6 @@ export function Chat() {
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
   const sessionLabels = useChatStore((s) => s.sessionLabels);
-  const sessionLastActivity = useChatStore((s) => s.sessionLastActivity);
   const loading = useChatStore((s) => s.loading);
   const sending = useChatStore((s) => s.sending);
   const error = useChatStore((s) => s.error);
@@ -188,13 +162,10 @@ export function Chat() {
   const sendMessage = useChatStore((s) => s.sendMessage);
   const abortRun = useChatStore((s) => s.abortRun);
   const clearError = useChatStore((s) => s.clearError);
-  const newSession = useChatStore((s) => s.newSession);
   const loadHistory = useChatStore((s) => s.loadHistory);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const agents = useAgentsStore((s) => s.agents);
   const runAborted = useChatStore((s) => s.runAborted);
-  const defaultAccountId = useProviderStore((s) => s.defaultAccountId);
-  const isMimo = defaultAccountId === 'ly-mimo';
   const subagentCompletionInfos = useMemo(
     () => messages.map((message) => parseSubagentCompletionInfo(message)),
     [messages],
@@ -265,31 +236,6 @@ export function Chat() {
   // spam `chat.history` / local history IPC (each completion toggles `loading`).
   useEffect(() => {
     if (messages.length === 0 && !loading) {
-      const state = useChatStore.getState();
-      const hasLocalSession = Boolean(
-        state.sessionLabels[state.currentSessionKey]
-        || state.sessionLastActivity[state.currentSessionKey],
-      );
-      if (hasLocalSession) {
-        const snapshot = state.sessionStreamingStates[state.currentSessionKey]?.messagesSnapshot;
-        if (snapshot && snapshot.length > 0) {
-          useChatStore.setState({ messages: snapshot });
-        } else {
-          const label = state.sessionLabels[state.currentSessionKey];
-          if (label) {
-            const activity = state.sessionLastActivity[state.currentSessionKey] ?? Date.now();
-            useChatStore.setState({
-              messages: [{
-                role: 'user',
-                content: label.endsWith('…') ? label.slice(0, -1) : label,
-                timestamp: activity / 1000,
-                id: `local-${state.currentSessionKey}`,
-              }],
-            });
-          }
-        }
-        return;
-      }
       void loadHistory();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally omit `loading` to avoid empty-thread refetch loops
@@ -382,9 +328,7 @@ export function Chat() {
   const [runtimeActivity, setRuntimeActivity] = useState<RuntimeActivity | null>(null);
   const [activityClock, setActivityClock] = useState(0);
 
-  const showFirstResponseProgress = false;
-
-  const chatWaitingMode = getChatWaitingMode({
+  const showFirstResponseProgress = isFirstResponsePreparing({
     gatewayStatus,
     sending,
     streamingMessage: streamingMessage as RawMessage | string | null,
@@ -392,11 +336,23 @@ export function Chat() {
     streamingTools,
   });
 
-  const isEmpty = messages.length === 0
-    && !sending
-    && !loading
-    && !sessionLabels[currentSessionKey]
-    && !sessionLastActivity[currentSessionKey];
+  // Bar fill only (same curve as post-login warmup) 鈥?no seconds in copy.
+  const [firstResponseBarSeconds, setFirstResponseBarSeconds] = useState(0);
+  useEffect(() => {
+    if (!showFirstResponseProgress) return;
+    setFirstResponseBarSeconds(0);
+    const id = window.setInterval(() => {
+      setFirstResponseBarSeconds((s) => s + 1);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [showFirstResponseProgress]);
+
+  const firstResponseProgress = estimateGatewayWarmupProgress(
+    gatewayStatus,
+    firstResponseBarSeconds,
+  );
+
+  const isEmpty = messages.length === 0 && !sending && !loading;
 
   const {
     foldedNarrationIndices,
@@ -476,10 +432,9 @@ export function Chat() {
         (b) => b.type === 'tool_use' || b.type === 'toolCall',
       );
     });
-      const runStillExecutingTools = (sending || pendingFinal || hasAnyStreamContent) && hasToolActivity && !hasFinalReply;
-    // const runStillExecutingTools = hasToolActivity && !hasFinalReply;
-      const isLatestOpenRun = nextUserIndex === -1
-        && (sending || pendingFinal || hasAnyStreamContent || (runStillExecutingTools && !error));
+    const runStillExecutingTools = hasToolActivity && !hasFinalReply;
+    const isLatestOpenRun = nextUserIndex === -1
+      && (sending || pendingFinal || hasAnyStreamContent || (runStillExecutingTools && !error));
     const replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
     const replyIndex = replyIndexOffset === -1 ? null : idx + 1 + replyIndexOffset;
 
@@ -588,7 +543,6 @@ export function Chat() {
           messageStepTexts: [],
           streamingReplyText: null,
           suppressThinking: false,
-          isMimo,
         }];
       }
       const cached = graphStepCache[runKey];
@@ -611,7 +565,6 @@ export function Chat() {
         messageStepTexts: getPrimaryMessageStepTexts(cleanedSteps),
         streamingReplyText: null,
         suppressThinking: false,
-        isMimo,
       }];
     }
 
@@ -674,7 +627,6 @@ export function Chat() {
         messageStepTexts: getPrimaryMessageStepTexts(steps),
         streamingReplyText,
         suppressThinking,
-        isMimo,
       }];
     });
 
@@ -692,7 +644,6 @@ export function Chat() {
     hasRunningStreamToolStatus,
     hasStreamImages,
     hasStreamText,
-    isMimo,
     messages,
     pendingFinal,
     runAborted,
@@ -763,7 +714,7 @@ export function Chat() {
     return {
       label: latestSpawn.label,
       childSessionKey,
-      childSessionId: null,
+      childSessionId: completion?.sessionId ?? null,
       runId,
     };
   }, [messages, subagentCompletionInfos, userRunCards]);
@@ -832,67 +783,54 @@ export function Chat() {
       .map((tool) => tool.name || tool.id || 'tool')
       .slice(0, 3);
 
-    let title = '\u6b63\u5728\u6267\u884c';
+    let title = 'Working';
     if (runningTools.length > 0) {
-      title = `\u6b63\u5728\u8fd0\u884c\u5de5\u5177\uff1a${runningTools.join(', ')}`;
+      title = `Running tools: ${runningTools.join(', ')}`;
     } else if (hasStreamTools) {
-      title = '\u6b63\u5728\u51c6\u5907\u5de5\u5177\u8c03\u7528';
+      title = 'Preparing tool call';
     } else if (activeDelegation && !hasStreamText) {
-      title = '\u5df2\u6d3e\u53d1\u5b50\u4efb\u52a1\uff0c\u7b49\u5f85\u6267\u884c\u7ed3\u679c';
+      title = 'Subtask dispatched, waiting for results';
     } else if (hasStreamText && idleSeconds >= 90) {
-      title = '\u4e0a\u4e00\u6b65\u5df2\u5b8c\u6210\uff0c\u7b49\u5f85\u6a21\u578b\u7ee7\u7eed\u8fd4\u56de';
+      title = 'Last step finished, waiting for the model to continue';
     } else if (hasStreamText) {
-      title = '\u6b63\u5728\u751f\u6210\u56de\u590d';
+      title = 'Generating reply';
     } else if (pendingFinal) {
       title = completedTools.length > 0
-        ? `\u5de5\u5177\u5df2\u8fd4\u56de\uff1a${completedTools.join(', ')}`
-        : '\u5de5\u5177\u5df2\u8fd4\u56de\uff0c\u7b49\u5f85\u4e0b\u4e00\u6b65';
+        ? `Tools returned: ${completedTools.join(', ')}`
+        : 'Tools returned, waiting for the next step';
     } else if (sending) {
-      title = elapsedSeconds >= 10
-        ? '\u6a21\u578b\u5c1a\u672a\u8fd4\u56de\u9996\u4e2a\u4e8b\u4ef6'
-        : '\u8bf7\u6c42\u5df2\u53d1\u9001\uff0c\u7b49\u5f85\u6a21\u578b\u54cd\u5e94';
+      title = 'Request sent, waiting for model response';
     } else if (hasActiveExecutionGraph) {
-      title = idleSeconds >= 90
-        ? '\u6267\u884c\u4ecd\u672a\u6536\u53e3\uff0c\u7b49\u5f85\u6a21\u578b\u7ee7\u7eed\u8f93\u51fa'
-        : '\u7b49\u5f85\u4efb\u52a1\u7ee7\u7eed';
+      title = idleSeconds >= 90 ? 'Run is still open, waiting for more model output' : 'Waiting for the task to continue';
     }
 
     const details: string[] = [
-      `\u5df2\u8fd0\u884c ${formatDuration(elapsedSeconds)}`,
-      idleSeconds <= 1 ? '\u521a\u521a\u6536\u5230\u8fdb\u5ea6' : `${formatDuration(idleSeconds)} \u524d\u6536\u5230\u8fdb\u5ea6`,
+      `Running for ${formatDuration(elapsedSeconds)}`,
+      idleSeconds <= 1 ? 'Progress just arrived' : `Last progress ${formatDuration(idleSeconds)} ago`,
     ];
     if (activeDelegation?.label) {
-      details.push(`\u5b50\u4efb\u52a1\uff1a${activeDelegation.label}`);
+      details.push(`Subtask: ${activeDelegation.label}`);
     }
     if (activeDelegation?.childSessionKey) {
-      details.push(`\u4f1a\u8bdd\uff1a${activeDelegation.childSessionKey}`);
+      details.push(`Session: ${activeDelegation.childSessionKey}`);
     } else if (activeDelegation?.runId) {
-      details.push(`Run ID\uff1a${activeDelegation.runId}`);
+      details.push(`Run ID: ${activeDelegation.runId}`);
     }
     if (pendingFinal && idleSeconds >= 45) {
-      details.push('\u6b63\u5728\u81ea\u52a8\u56de\u8bfb\u5386\u53f2\uff0c\u786e\u8ba4\u662f\u5426\u5df2\u7ecf\u6709\u6700\u7ec8\u7ed3\u679c\u3002');
+      details.push('Re-reading history automatically to confirm whether a final result already exists.');
     } else if (activeDelegation && idleSeconds >= 30) {
-      details.push('Main Agent \u6b63\u5728\u7b49\u5f85\u5b50\u4efb\u52a1\u8fd4\u56de\u3002');
-    } else if (sending && !hasAnyStreamContent && !hasActiveExecutionGraph && elapsedSeconds >= 10) {
-      details.push('\u8bf7\u6c42\u5df2\u88ab Gateway \u63a5\u53d7\uff0c\u4f46\u8fd8\u6ca1\u6709\u6536\u5230\u6a21\u578b\u7684\u9996\u4e2a delta\u3002');
-      if (elapsedSeconds >= 30) {
-        details.push('\u8fd9\u901a\u5e38\u8868\u793a\u6a21\u578b\u6216 provider \u6b63\u5728\u957f\u65f6\u95f4\u751f\u6210\uff0c\u800c\u4e0d\u662f\u672c\u5730 IPC \u5361\u4f4f\u3002');
-      }
-      if (elapsedSeconds >= 60) {
-        details.push('\u590d\u6742\u4efb\u52a1\u5df2\u9644\u52a0\u5206\u5757\u6267\u884c\u6307\u4ee4\uff1b\u82e5\u6a21\u578b\u4ecd\u4e00\u6b21\u6027\u751f\u6210\u5927\u6587\u4ef6\uff0c\u9996\u5305\u4ecd\u53ef\u80fd\u8f83\u6162\u3002');
-      }
+      details.push('Main Agent is waiting for the spawned subtask to return.');
     } else if (idleSeconds >= 90) {
-      details.push('\u957f\u65f6\u95f4\u65e0\u65b0\u4e8b\u4ef6\uff1b\u6b63\u5728\u81ea\u52a8\u56de\u8bfb\u5386\u53f2\u5e76\u7b49\u5f85\u540e\u7eed\u8f93\u51fa\u3002');
+      details.push('No new events for a while; the app is re-reading history and waiting for follow-up output.');
     }
     if (idleSeconds >= 120) {
-      details.push('\u5982\u679c\u4ecd\u6ca1\u6709\u65b0\u5185\u5bb9\u8fd4\u56de\uff0c\u754c\u9762\u4f1a\u81ea\u52a8\u6536\u53e3\u5e76\u4fdd\u7559\u5df2\u751f\u6210\u5185\u5bb9\u3002');
+      details.push('If nothing else arrives soon, the UI will auto-close this run and keep the generated content.');
     }
 
     return { title, details };
   }, [
     activityClock,
     activeDelegation,
-    hasAnyStreamContent,
     hasStreamText,
     hasStreamTools,
     hasActiveExecutionGraph,
@@ -1011,70 +949,26 @@ export function Chat() {
     }
   }, [userRunCards, messages, currentSessionKey]);
 
-  const isDefaultAccountSwitching = useProviderStore((s) => s.isDefaultAccountSwitching);
-
-  const chatInputElement = (
-    <ChatInput
-      onSend={sendMessage}
-      onStop={abortRun}
-      disabled={!isGatewayRunning}
-      sending={sending || hasActiveExecutionGraph}
-      isEmpty={isEmpty}
-      initialText={editingText || prefilledInput || undefined}
-      onTextChange={(text) => {
-        if (prefilledInput && text !== prefilledInput) {
-          setPrefilledInput(null);
-        }
-      }}
-    />
-  );
-
   return (
-    <div
-      className={cn(
-        "relative flex min-h-0 flex-col -m-6 transition-colors duration-500 bg-background",
-      )}
-      style={{
-        height: 'calc(100vh - 2.5rem)',
-      }}
-    >
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 z-0 dark:hidden"
-        style={{
-          background:
-            'radial-gradient(120% 80% at 80% 20%, hsl(28 60% 95% / 0.85) 0%, hsl(28 50% 96% / 0.6) 35%, hsl(0 0% 100% / 0) 70%), radial-gradient(80% 60% at 20% 90%, hsl(18 80% 92% / 0.55) 0%, hsl(0 0% 100% / 0) 60%)',
-        }}
-      />
+    <div className={cn("relative flex min-h-0 flex-col -m-6 transition-colors duration-500 dark:bg-background")} style={{ height: 'calc(100vh - 2.5rem)' }}>
       {/* Toolbar */}
-      <div className="relative z-10 flex shrink-0 items-center justify-between px-4 py-2">
+      <div className="flex shrink-0 items-center justify-end px-4 py-2">
         <ChatToolbar />
       </div>
 
       {/* Messages Area */}
-      <div className="relative z-10 min-h-0 flex-1 overflow-hidden px-4 py-4">
+      <div className="min-h-0 flex-1 overflow-hidden px-4 py-4">
         <div className="mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-4 lg:flex-row lg:items-stretch">
           <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
             <div
               ref={contentRef}
               className={cn(
-                "transition-all duration-300 mx-auto",
-                isEmpty
-                  ? "w-full max-w-3xl flex min-h-full flex-col items-center justify-center"
-                  : "w-full max-w-4xl space-y-4",
+                "space-y-4 transition-all duration-300 mx-auto",
+                isEmpty ? "w-full max-w-3xl" : "w-full max-w-4xl",
               )}
             >
               {isEmpty ? (
-                <>
-                  <WelcomeScreen />
-                  {/* Empty-state input: rendered inline under the welcome
-                      block so the composer sits in the upper-middle of the
-                      page, matching the design. Once messages exist the
-                      composer switches to the bottom-pinned slot below. */}
-                  <div className="w-full mt-2">
-                    {chatInputElement}
-                  </div>
-                </>
+                <WelcomeScreen />
               ) : (
                 <>
                   {messages.map((msg, idx) => {
@@ -1118,7 +1012,6 @@ export function Chat() {
                                 steps={card.steps}
                                 active={card.active}
                                 suppressThinking={card.suppressThinking}
-                                isMimo={card.isMimo}
                                 expanded={expanded}
                                 onExpandedChange={(next) =>
                                   setGraphExpandedOverrides((prev) => ({ ...prev, [runKey]: next }))
@@ -1190,8 +1083,8 @@ export function Chat() {
                   )}
 
                   {/* Typing indicator when sending but no stream content yet */}
-                  {sending && !pendingFinal && !hasAnyStreamContent && !hasActiveExecutionGraph && (
-                    <TypingIndicator summary={activitySummary} mode={chatWaitingMode} />
+                  {sending && !showFirstResponseProgress && !pendingFinal && !hasAnyStreamContent && !hasActiveExecutionGraph && (
+                    <TypingIndicator summary={activitySummary} />
                   )}
                 </>
               )}
@@ -1204,35 +1097,35 @@ export function Chat() {
       {/* Error bar */}
       {error && (
         <div className="px-4 py-2 bg-destructive/10 border-t border-destructive/20">
-          <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
-            <p className="text-sm text-destructive flex items-center gap-2 min-w-0">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              <span className="truncate">{error}</span>
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <p className="text-sm text-destructive flex items-center gap-2">
+              <AlertCircle className="h-4 w-4" />
+              {error}
             </p>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {error.toLowerCase().includes('context overflow') && (
-                <button
-                  onClick={() => { clearError(); newSession(); }}
-                  className="text-xs px-3 py-1 rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-                >
-                  {t('common:actions.newSession')}
-                </button>
-              )}
-              <button
-                onClick={clearError}
-                className="text-xs text-destructive/60 hover:text-destructive underline"
-              >
-                {t('common:actions.dismiss')}
-              </button>
-            </div>
+            <button
+              onClick={clearError}
+              className="text-xs text-destructive/60 hover:text-destructive underline"
+            >
+              {t('common:actions.dismiss')}
+            </button>
           </div>
         </div>
       )}
 
-      {/* Input Area — only when there are messages. The empty-state
-          composer is rendered inline under the welcome block above so it
-          sits in the upper-middle of the page (per design). */}
-      {!isEmpty && chatInputElement}
+      {/* Input Area */}
+      <ChatInput
+        onSend={sendMessage}
+        onStop={abortRun}
+        disabled={!isGatewayRunning}
+        sending={sending || hasActiveExecutionGraph}
+        isEmpty={isEmpty}
+        initialText={editingText || prefilledInput || undefined}
+        onTextChange={(text) => {
+          if (prefilledInput && text !== prefilledInput) {
+            setPrefilledInput(null);
+          }
+        }}
+      />
 
       {/* Transparent loading overlay */}
       {minLoading && !sending && (
@@ -1240,22 +1133,9 @@ export function Chat() {
           data-testid="chat-history-loading-overlay"
           className="absolute inset-0 z-50 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-xl pointer-events-auto"
         >
-          <LoaderBadge />
-        </div>
-      )}
-
-      {isDefaultAccountSwitching && (
-        <div
-          data-testid="chat-model-switch-overlay"
-          className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-background/30 backdrop-blur-[2px] pointer-events-auto"
-          role="status"
-          aria-live="polite"
-          aria-busy="true"
-        >
-          <LoaderBadge />
-          <p className="mt-4 text-sm text-muted-foreground">
-            {t('composer.modelSwitching', { defaultValue: '正在切换模型，请稍候…' })}
-          </p>
+          <div className="bg-background shadow-lg rounded-full p-2.5 border border-border">
+            <LoadingSpinner size="md" />
+          </div>
         </div>
       )}
     </div>
@@ -1266,70 +1146,28 @@ export function Chat() {
 
 function WelcomeScreen() {
   const { t } = useTranslation('chat');
-  const dingtalkUser = useDingTalkAuthStore((s) => s.user);
-  const setPrefilledInput = useChatStore((s) => s.setPrefilledInput);
-  const skills = useSkillsStore((s) => s.skills);
-  const skillsLoading = useSkillsStore((s) => s.loading);
-  const fetchSkills = useSkillsStore((s) => s.fetchSkills);
-  const displayName = formatWelcomeDisplayName(dingtalkUser?.name || dingtalkUser?.nickname);
-  const greetingText = displayName
-    ? t('welcome.greeting', { name: displayName })
-    : t('welcome.greetingFallback', { defaultValue: '你好～' });
-
-  useEffect(() => {
-    if (skills.length === 0 && !skillsLoading) {
-      void fetchSkills();
-    }
-  }, [skills.length, skillsLoading, fetchSkills]);
-
-  const handleQuickAction = useCallback((action: typeof WELCOME_QUICK_ACTIONS[number]) => {
-    const skill = findSkillForQuickAction(skills, action.skillNames);
-    const fallbackName = action.skillNames[0];
-    const text = buildQuickActionComposerText(skill, fallbackName, action.defaultPrompt);
-    setPrefilledInput(text);
-    if (!skill) {
-      toast.message(t('welcome.skillNotInstalled', { name: fallbackName }));
-    }
-  }, [skills, setPrefilledInput, t]);
+  const quickActions = [
+    { key: 'askQuestions', label: t('welcome.askQuestions') },
+    { key: 'creativeTasks', label: t('welcome.creativeTasks') },
+    { key: 'brainstorming', label: t('welcome.brainstorming') },
+  ];
 
   return (
     <div
-      className="flex w-full flex-col items-center justify-center text-center pb-3"
+      className="flex flex-col items-center justify-center text-center h-[60vh]"
       data-testid="chat-welcome"
     >
-      <div className="mb-4 flex items-start justify-center gap-3">
-        <div
-          className="flex h-12 w-8 shrink-0 items-center justify-center"
-          aria-hidden
-        >
-          <img
-            src={chatDoubleIcon}
-            alt=""
-            className="h-8 w-8 select-none"
-            draggable={false}
-          />
-        </div>
-        <h1
-          className="text-[26px] md:text-[32px] font-medium text-foreground/85 tracking-tight leading-[1.5] text-left"
-        >
-          <span className="block">{greetingText}</span>
-          <span className="block">{t('welcome.subtitle')}</span>
-        </h1>
-      </div>
+      <h1 className="text-4xl md:text-5xl font-serif text-foreground/80 mb-8 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
+        {t('welcome.subtitle')}
+      </h1>
 
-      <div className="flex flex-wrap items-center justify-center gap-2.5 max-w-2xl w-full">
-        <span className="text-[13px] text-foreground/55 mr-1">
-          {t('welcome.canHelpPrefix', { defaultValue: '我可以' })}
-        </span>
-        {WELCOME_QUICK_ACTIONS.map((action) => (
-          <button
-            key={action.key}
-            type="button"
-            data-testid={`chat-welcome-action-${action.key}`}
-            onClick={() => handleQuickAction(action)}
-            className="px-3.5 py-1 rounded-full text-[13px] text-[#FF922B] bg-[#FF922B]/10 hover:bg-[#FF922B]/15 dark:bg-white/5 dark:text-foreground/80 dark:hover:bg-white/10 transition-colors"
+      <div className="flex flex-wrap items-center justify-center gap-2.5 max-w-lg w-full">
+        {quickActions.map(({ key, label }) => (
+          <button 
+            key={key}
+            className="px-4 py-1.5 rounded-full border border-black/10 dark:border-white/10 text-[13px] font-medium text-foreground/70 hover:bg-black/5 dark:hover:bg-white/5 transition-colors bg-black/[0.02]"
           >
-            {t(action.labelKey)}
+            {label}
           </button>
         ))}
       </div>
@@ -1337,7 +1175,7 @@ function WelcomeScreen() {
   );
 }
 
-// First Response Preparing Indicator
+// 鈹€鈹€ First Response Preparing Indicator 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 function FirstResponsePreparing({
   progress,
@@ -1350,11 +1188,16 @@ function FirstResponsePreparing({
   const [mascotSrc, setMascotSrc] = useState<string | null>(null);
   const [mascotFailed, setMascotFailed] = useState(false);
   const title = t('firstMessage.preparingTitle', {
-    defaultValue: '正在准备执行...',
+    defaultValue: '姝ｅ湪鍑嗗鎵ц...',
   });
-  const description = t('firstMessage.preparingDescription', {
-    defaultValue: 'Agent 正在接手并进入工作状态。',
-  });
+  const description = warmupStatus === 'warming'
+    ? t('firstMessage.preparingDescriptionWarmup', {
+      defaultValue:
+        '缃戝叧姝ｅ湪鍚庡彴棰勭儹妯″瀷锛岃绋嶇瓑',
+    })
+    : t('firstMessage.preparingDescription', {
+      defaultValue: 'Agent 姝ｅ湪鎺ユ墜骞惰繘鍏ュ伐浣滅姸鎬併€?,
+    });
 
   useEffect(() => {
     let cancelled = false;
@@ -1398,11 +1241,9 @@ function FirstResponsePreparing({
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">
           {title}
         </h2>
-        {description && (
-          <p className="mt-4 text-base text-muted-foreground">
-            {description}
-          </p>
-        )}
+        <p className="mt-4 text-base text-muted-foreground">
+          {description}
+        </p>
         <div className="mx-auto mt-9 h-2 w-48 overflow-hidden rounded-full bg-[#e8dfd0] dark:bg-white/10">
           <div
             className="h-full rounded-full bg-blue-500 transition-all duration-700 ease-out"
@@ -1424,7 +1265,7 @@ function FirstResponsePreparing({
 
 // 鈹€鈹€ Typing Indicator 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-function TypingIndicator({ summary, mode }: { summary: { title: string; details: string[] } | null; mode: 'warming' | 'stuck' | 'normal' }) {
+function TypingIndicator({ summary }: { summary: { title: string; details: string[] } | null }) {
   return (
     <div className="flex gap-3">
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full mt-1 bg-black/5 dark:bg-white/5 text-foreground">
@@ -1433,16 +1274,11 @@ function TypingIndicator({ summary, mode }: { summary: { title: string; details:
       <div className="bg-black/5 dark:bg-white/5 text-foreground rounded-2xl px-4 py-3" data-testid="chat-run-activity">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-          <span>{summary?.title ?? (mode === 'stuck' ? '运行时正在恢复，稍后继续' : '请求已发送，等待模型响应')}</span>
+          <span>{summary?.title ?? '璇锋眰宸插彂閫侊紝绛夊緟妯″瀷鍝嶅簲'}</span>
         </div>
         {summary && (
           <p className="mt-1 text-xs text-muted-foreground/75">
-            {summary.details.join(' | ')}
-          </p>
-        )}
-        {!summary && mode === 'stuck' && (
-          <p className="mt-1 text-xs text-muted-foreground/75">
-            OpenClaw 报告会话处于 processing 卡住状态，正在等待运行时恢复并重新产出输出。
+            {summary.details.join(' 路 ')}
           </p>
         )}
       </div>
@@ -1453,9 +1289,22 @@ function TypingIndicator({ summary, mode }: { summary: { title: string; details:
 // 鈹€鈹€ Activity Indicator (shown between tool cycles) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 function RunActivityStatus({ summary }: { summary: { title: string; details: string[] } }) {
-  void summary;
-  // Temporarily hidden while we refine the execution graph progress UI.
-  return null;
+  return (
+    <div
+      className="ml-10 rounded-lg border border-border/60 bg-muted/35 px-3 py-2 text-sm text-muted-foreground"
+      data-testid="chat-run-activity"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-2">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+        <span className="font-medium text-foreground/75">{summary.title}</span>
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground/80">
+        {summary.details.join(' 路 ')}
+      </div>
+    </div>
+  );
 }
 
 function RunTerminationNotice({ summary }: { summary: { title: string; detail: string } }) {
@@ -1489,7 +1338,7 @@ function ActivityIndicator({ summary }: { summary: { title: string; details: str
           <span>{summary.title}</span>
         </div>
         <p className="mt-1 text-xs text-muted-foreground/75">
-          {summary.details.join(' | ')}
+          {summary.details.join(' 路 ')}
         </p>
       </div>
     </div>

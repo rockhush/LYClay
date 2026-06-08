@@ -1,4 +1,5 @@
 export const DEFAULT_OPENCLAW_DM_SCOPE = 'per-account-channel-peer';
+export const DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT = 8;
 
 export type OpenClawDmScope =
   | 'main'
@@ -30,4 +31,22 @@ export function ensureOpenClawSessionDefaults(config: Record<string, unknown>): 
   config.session = session;
 
   return !isRecord(previousSession) || previousDmScope !== DEFAULT_OPENCLAW_DM_SCOPE;
+}
+
+export function ensureOpenClawAgentDefaults(config: Record<string, unknown>): boolean {
+  const previousAgents = config.agents;
+  const agents = isRecord(previousAgents) ? previousAgents : {};
+  const previousDefaults = agents.defaults;
+  const defaults = isRecord(previousDefaults) ? previousDefaults : {};
+  const previousMaxConcurrent = defaults.maxConcurrent;
+
+  if (previousMaxConcurrent === DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT) {
+    return false;
+  }
+
+  defaults.maxConcurrent = DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT;
+  agents.defaults = defaults;
+  config.agents = agents;
+
+  return true;
 }

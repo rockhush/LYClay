@@ -112,6 +112,8 @@ ClawXは公式の**OpenClaw**コアを直接ベースに構築されています
 ClawX には Tencent 公式の個人 WeChat チャンネルプラグインも同梱されており、Channels ページからアプリ内 QR フローで直接 WeChat を連携できます。
 ワークスペースに入る前に DingTalk ログインが必要です。起動時のログイン画面には、バンドル済み DWS CLI が開始した DingTalk の QR 認可フローが埋め込まれるため、同じ認可で DWS 自身の CLI ログイン状態も作成されます。設定画面でログアウトするとそのログイン画面に戻ります。開発ビルドには、DWS 以外の DingTalk API 呼び出し用に既定の企業アプリ設定が含まれています。AppKey、シークレット、コールバックポートを上書きする場合は `LYCLAW_DINGTALK_CLIENT_ID`、`LYCLAW_DINGTALK_CLIENT_SECRET`、`LYCLAW_DINGTALK_CALLBACK_PORT` を使用できます。
 
+デバイス入場制御: ClawX は既定で `https://lyclawtoken.lingyiitech.com/api/check-token` を組み込み Authorization 値で呼び出します。ローカルテストでのみ `CLAWX_DEVICE_ACCESS_URL` や `CLAWX_DEVICE_ACCESS_AUTH_TOKEN` を上書きします。Windows では、ClawX は起動時に同梱の `GetDeviceGUID.exe` helper を main process から実行し、macOS ではマシンのシリアル番号を読み取ります。setup、DingTalk ログイン、ワークスペース表示の前に main process が `POST { "token": "<device-token>", "os_type": "windows" | "mac" }` を送信します。`exists: true` なら許可、`exists: false` ならブロックします。デバイス入場制御のキャッシュは既定で無効です。ローカルテストでのみ `CLAWX_DEVICE_ACCESS_CACHE_TTL_MS` を正の値に設定します。API が利用できない場合は、`CLAWX_DEVICE_ACCESS_FAIL_OPEN=1` がない限り起動時にブロックします。ローカルテストでは `CLAWX_DEVICE_GUID_EXE_PATH` で helper exe を指定でき、`CLAWX_DEVICE_ACCESS_DEVICE_TOKEN` でデバイストークンを上書きでき、`CLAWX_DEVICE_ACCESS_OS_TYPE` で送信する OS 種別を上書きできます。
+
 単一テナント向けの任意自動連携: ログイン成功後、`LYCLAW_DINGTALK_CHANNEL_CLIENT_ID` / `LYCLAW_DINGTALK_CHANNEL_CLIENT_SECRET` があれば（未設定時は `LYCLAW_DINGTALK_CLIENT_*`、`DINGTALK_CLIENT_*` と OAuth 同名へフォールバック）OpenClaw の DingTalk チャンネルへ書き込みます。`LYCLAW_DINGTALK_BFF_BASE_URL` と `LYCLAW_DINGTALK_BFF_API_KEY` がある場合、**ポストログインのロード画面が終わりワークスペース表示の後**にスタッフ `userId` を Python BFF へ送り、BFF が DingTalk のシングルチャットへ能動的にメッセージを送れます。環境変数による DingTalk 自動プロビジョンが有効なときは、ゲートウェイ上の DingTalk が接続状態に見えるまで（最長約 90 秒）ロード画面で待ちます。これらの BFF 変数が未設定なら BFF は呼ばれません。
 
 ### ⏰ Cronベースの自動化

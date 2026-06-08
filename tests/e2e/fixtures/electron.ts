@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 
 type LaunchElectronOptions = {
   skipSetup?: boolean;
+  env?: Record<string, string>;
 };
 
 type IpcMockConfig = {
@@ -141,6 +142,7 @@ async function launchClawXElectron(
       CLAWX_USER_DATA_DIR: userDataDir,
       ...(options.skipSetup ? { CLAWX_E2E_SKIP_SETUP: '1' } : {}),
       CLAWX_PORT_CLAWX_HOST_API: String(hostApiPort),
+      ...(options.env ?? {}),
     },
     timeout: 90_000,
   });

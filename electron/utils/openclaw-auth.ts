@@ -27,7 +27,7 @@ import {
 } from './provider-keys';
 import { sanitizeLegacyMcpMetaFromOpenClawConfig } from './mcp-json';
 import { withConfigLock } from './config-mutex';
-import { ensureOpenClawSessionDefaults } from './openclaw-config-defaults';
+import { ensureOpenClawAgentDefaults, ensureOpenClawSessionDefaults } from './openclaw-config-defaults';
 
 const AUTH_STORE_VERSION = 1;
 const AUTH_PROFILE_FILENAME = 'auth-profiles.json';
@@ -426,6 +426,7 @@ async function writeOpenClawJson(config: Record<string, unknown>): Promise<void>
   normalizeAgentsDefaultsCompactionMode(config);
   ensureThinkingDefaultOff(config);
   ensureOpenClawSessionDefaults(config);
+  ensureOpenClawAgentDefaults(config);
   applyDingTalkMarkdownTableDefault(config);
 
   // Ensure SIGUSR1 graceful reload is authorized by OpenClaw config.
@@ -1308,6 +1309,7 @@ export async function syncSessionIdleMinutesToOpenClaw(): Promise<void> {
     ) as Record<string, unknown>;
 
     let modified = ensureOpenClawSessionDefaults(config);
+    modified = ensureOpenClawAgentDefaults(config) || modified;
 
     // Only set idleMinutes if the user has not configured it yet.
     if (session.idleMinutes === undefined) {
@@ -1418,6 +1420,7 @@ export async function batchSyncConfigFields(token: string): Promise<void> {
       modified = true;
     }
     modified = ensureOpenClawSessionDefaults(config) || modified;
+    modified = ensureOpenClawAgentDefaults(config) || modified;
 
     // ── Diagnostics defaults ────────────────────────────────────────
     // Increase stuck session abort threshold to 15 minutes for long-running tasks

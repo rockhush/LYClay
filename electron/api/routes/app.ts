@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
+import { checkDeviceAccess } from '../../utils/device-access';
 import { runOpenClawDoctor, runOpenClawDoctorFix } from '../../utils/openclaw-doctor';
 
 function getIconsDir(): string {
@@ -45,6 +46,12 @@ export async function handleAppRoutes(
     const body = await parseJsonBody<{ mode?: 'diagnose' | 'fix' }>(req);
     const mode = body.mode === 'fix' ? 'fix' : 'diagnose';
     sendJson(res, 200, mode === 'fix' ? await runOpenClawDoctorFix() : await runOpenClawDoctor());
+    return true;
+  }
+
+  if (url.pathname === '/api/app/device-access' && (req.method === 'GET' || req.method === 'POST')) {
+    const force = req.method === 'POST';
+    sendJson(res, 200, await checkDeviceAccess({ force }));
     return true;
   }
 

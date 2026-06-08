@@ -12,6 +12,7 @@ const getMessageErrorMessage = vi.fn((message: { errorMessage?: string; error_me
 const getToolCallFilePath = vi.fn(() => undefined);
 const hasErrorRecoveryTimer = vi.fn(() => false);
 const hasNonToolAssistantContent = vi.fn(() => true);
+const isAbortedChatRun = vi.fn(() => false);
 const isInternalMessage = vi.fn(() => false);
 const isInternalMessageText = vi.fn(() => false);
 const isTerminalAssistantErrorMessage = vi.fn((message: { role?: string; stopReason?: string; stop_reason?: string } | undefined) => {
@@ -45,6 +46,7 @@ vi.mock('@/stores/chat/helpers', () => ({
   getToolCallFilePath: (...args: unknown[]) => getToolCallFilePath(...args),
   hasErrorRecoveryTimer: (...args: unknown[]) => hasErrorRecoveryTimer(...args),
   hasNonToolAssistantContent: (...args: unknown[]) => hasNonToolAssistantContent(...args),
+  isAbortedChatRun: (...args: unknown[]) => isAbortedChatRun(...args),
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
   isInternalMessageText: (...args: unknown[]) => isInternalMessageText(...args),
   isTerminalAssistantErrorMessage: (...args: unknown[]) => isTerminalAssistantErrorMessage(...args),
@@ -154,14 +156,17 @@ describe('chat runtime event handlers', () => {
     expect(next.streamingTools).toEqual([{ name: 'tool-a', status: 'running', updatedAt: 1 }]);
   });
 
-  it('loads history when final event has no message', async () => {
+  it('finalizes when final event has no message and reloads history', async () => {
     const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
-    const h = makeHarness();
+    const h = makeHarness({ sending: true, activeRunId: 'run-3', pendingFinal: true, lastUserMessageAt: 123 });
 
     handleRuntimeEventState(h.set as never, h.get as never, {}, 'final', 'run-3');
     const next = h.read();
-    expect(next.pendingFinal).toBe(true);
+    expect(next.sending).toBe(false);
+    expect(next.activeRunId).toBeNull();
+    expect(next.pendingFinal).toBe(false);
     expect(next.streamingMessage).toBeNull();
+    expect(next.lastUserMessageAt).toBeNull();
     expect(h.read().loadHistory).toHaveBeenCalledTimes(1);
   });
 
@@ -240,8 +245,7 @@ describe('chat runtime event handlers', () => {
     }, 'final', 'run-err');
 
     const next = h.read();
-    expect(next.error).toBeNull();
-    expect(next.runError).toBe('404 Resource not found');
+    expect(next.error).toBe('404 Resource not found');
     expect(next.pendingFinal).toBe(false);
     expect(next.streamingMessage).toBeNull();
     expect(clearHistoryPoll).toHaveBeenCalledTimes(1);

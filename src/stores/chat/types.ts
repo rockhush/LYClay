@@ -76,6 +76,22 @@ export interface SessionStreamingState {
   messagesSnapshot: RawMessage[];
 }
 
+/** Compression state persisted per session */
+export interface CompressionStateEntry {
+  /** The generated summary text */
+  summaryText: string;
+  /** Number of messages that were compressed (the older ones sent for summarization) */
+  compressedCount: number;
+  /** Total message count at the time of compression */
+  totalMessagesAtCompression: number;
+  /** Estimated tokens of the compressed messages */
+  compressedTokens: number;
+  /** Timestamp when compression ran */
+  compressedAt: number;
+  /** Whether this was a truncation fallback (not LLM summarization) */
+  isTruncation: boolean;
+}
+
 export interface ChatState {
   // Messages
   messages: RawMessage[];
@@ -121,6 +137,8 @@ export interface ChatState {
   sessionPinnedAt: Record<string, number>;
   /** Streaming state per session, preserved when switching sessions */
   sessionStreamingStates: Record<string, SessionStreamingState>;
+  /** Compression state per session, persisted to disk and restored on reload/switch */
+  sessionCompressionState: Record<string, CompressionStateEntry | null>;
 
   // Thinking
   thinkingLevel: string | null;

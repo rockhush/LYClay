@@ -84,15 +84,16 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       } catch (tarError) {
         console.warn('[CompanyMarketplace] tar.exe extraction failed, falling back to non-admin PowerShell:', tarError);
         const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+        // Inline the paths directly into the PowerShell command to avoid
+        // $args[] binding issues when spawn uses shell:true on Windows.
+        const cmd = `Expand-Archive -LiteralPath "${tempZipPath}" -DestinationPath "${skillDir}" -Force`;
         await this.runArchiveCommand(powershell, [
           '-NoProfile',
           '-NonInteractive',
           '-ExecutionPolicy',
           'Bypass',
           '-Command',
-          'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
-          tempZipPath,
-          skillDir,
+          cmd,
         ]);
         return;
       }

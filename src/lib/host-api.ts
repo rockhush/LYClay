@@ -313,3 +313,23 @@ export async function getDingTalkChannelAutoFromEnv(): Promise<{ success: boolea
 export async function sendDingTalkWorkspaceWelcome(): Promise<{ success: boolean; skipped?: boolean }> {
   return hostApiFetch<{ success: boolean; skipped?: boolean }>('/api/dingtalk/welcome/send', { method: 'POST' });
 }
+
+export type DeviceAccessStatus = 'allowed' | 'blocked' | 'unconfigured' | 'error';
+
+export interface DeviceAccessResult {
+  success: boolean;
+  status: DeviceAccessStatus;
+  allowed: boolean;
+  deviceId?: string;
+  cached?: boolean;
+  checkedAt?: string;
+  expiresAt?: string;
+  reason?: string;
+  error?: string;
+}
+
+export async function checkDeviceAccess(force = false): Promise<DeviceAccessResult> {
+  return hostApiFetch<DeviceAccessResult>('/api/app/device-access', {
+    method: force ? 'POST' : 'GET',
+  });
+}

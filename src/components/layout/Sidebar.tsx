@@ -260,6 +260,37 @@ export function Sidebar() {
     return true;
   };
 
+  /**
+   * Whether a session has a real, user-meaningful title. Real conversations
+   * always resolve to a custom label, first-user-message preview, or a
+   * backend-provided display name. An "empty" session (e.g. the `:main`
+   * scratchpad or a never-sent new chat) only resolves to its raw key.
+   */
+  const sessionHasRealTitle = (session: ChatSession): boolean => {
+    const key = session.key;
+    if (customSessionLabels[key]?.trim()) return true;
+    if (sessionLabels[key]?.trim()) return true;
+    if (session.label?.trim()) return true;
+    if (session.firstUserMessagePreview?.trim()) return true;
+    if (session.displayName?.trim() && session.displayName !== key) return true;
+    return false;
+  };
+
+  /**
+   * Empty scratchpad/ghost sessions (no messages ever sent) must not pollute the
+   * history list. We key off the absence of a real title rather than activity
+   * timestamps, because the `:main` scratchpad can carry an `updatedAt` from
+   * warmup/visits while never holding actual conversation content.
+   */
+  const isEmptyGhostSession = (session: ChatSession): boolean => {
+    if (sessionHasRealTitle(session)) return false;
+    // Keep the active conversation visible while its label is still hydrating.
+    if (session.key === currentSessionKey && messages.length > 0) return false;
+    // Respect explicit user intent to keep a pinned session around.
+    if (Number.isFinite(sessionPinnedAt[session.key]) && sessionPinnedAt[session.key] > 0) return false;
+    return true;
+  };
+
   const isSessionListedUnderWorkspace = (sessionKey: string) => {
     const wid = sessionWorkspaceIds[sessionKey];
     return Boolean(wid && workspaceIdsKnown.has(wid));
@@ -268,7 +299,9 @@ export function Sidebar() {
   const stableSessionOrderRef = useRef<string[]>([]);
 
   const orderedSidebarSessions = useMemo(() => {
-    const eligible = sessions.filter((session) => !isPendingNewSession(session.key));
+    const eligible = sessions.filter(
+      (session) => !isPendingNewSession(session.key) && !isEmptyGhostSession(session),
+    );
     const nextOrder = buildStableSessionOrder(
       eligible,
       sessionLastActivity,

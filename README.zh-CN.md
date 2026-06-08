@@ -113,6 +113,8 @@ ClawX 直接基于官方 **OpenClaw** 核心构建。无需单独安装，我们
 ClawX 现在还内置了腾讯官方个人微信渠道插件，可直接在 Channels 页面通过内置二维码流程完成微信连接。
 ClawX 进入工作台前需要先完成钉钉登录。启动登录页会内嵌由内置 DWS CLI 发起的钉钉二维码授权流程，因此同一次授权也会生成 DWS 自己的 CLI 登录态；在设置页退出登录后，应用会回到该登录页。开发构建已内置默认企业应用配置，用于非 DWS 的钉钉 API 调用；如需覆盖应用 AppKey、应用密钥或回调端口，可设置 `LYCLAW_DINGTALK_CLIENT_ID`、`LYCLAW_DINGTALK_CLIENT_SECRET` 和 `LYCLAW_DINGTALK_CALLBACK_PORT`。
 
+设备准入：ClawX 默认调用 `https://lyclawtoken.lingyiitech.com/api/check-token`，并使用应用内置 Authorization 值；只有本地测试需要覆盖时才设置 `CLAWX_DEVICE_ACCESS_URL` 或 `CLAWX_DEVICE_ACCESS_AUTH_TOKEN`。Windows 上 ClawX 会在启动时由主进程运行随包内置的 `GetDeviceGUID.exe`，macOS 上会读取机器序列号，并在 setup、钉钉登录或工作台显示前调用接口：`POST { "token": "<device-token>", "os_type": "windows" | "mac" }`。接口返回 `exists: true` 时放行，返回 `exists: false` 时阻断。设备准入缓存默认关闭；只有本地测试需要时才把 `CLAWX_DEVICE_ACCESS_CACHE_TTL_MS` 设置为正数。接口不可用时默认拒绝进入，除非设置 `CLAWX_DEVICE_ACCESS_FAIL_OPEN=1`。本地测试可用 `CLAWX_DEVICE_GUID_EXE_PATH` 指向本地 helper exe，也可用 `CLAWX_DEVICE_ACCESS_DEVICE_TOKEN` 覆盖设备 token，或用 `CLAWX_DEVICE_ACCESS_OS_TYPE` 覆盖提交的系统类型。
+
 单企业自动集成（可选）：钉钉登录成功后，若设置了 `LYCLAW_DINGTALK_CHANNEL_CLIENT_ID` / `LYCLAW_DINGTALK_CHANNEL_CLIENT_SECRET`（用于 OpenClaw 钉钉通道；未设置时会依次回退读取 `LYCLAW_DINGTALK_CLIENT_*`、`DINGTALK_CLIENT_*`，与 OAuth 同名即可），会自动写入 `openclaw.json` 的钉钉通道并触发网关重启；若同时设置 `LYCLAW_DINGTALK_BFF_BASE_URL` 与 `LYCLAW_DINGTALK_BFF_API_KEY`，则在**进入工作台（post-login 加载结束）之后**再按员工 `userId` 调用 Python BFF 推送钉钉单聊消息。当环境变量启用自动钉钉通道时，加载页会尽量等待网关侧钉钉就绪（最长约 90 秒）再进入工作台。未设置上述 BFF 变量时不会调用 BFF。
 
 ### ⏰ 定时任务自动化

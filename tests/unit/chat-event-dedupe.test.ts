@@ -144,7 +144,7 @@ describe('chat event dedupe', () => {
     expect(extractText(useChatStore.getState().streamingMessage)).toBe('first version');
   });
 
-  it('keeps processing final events without seq for tool results and the terminal reply', async () => {
+  it('clears current session execution state when final event has no message', async () => {
     const { useChatStore } = await import('@/stores/chat');
 
     useChatStore.setState({
@@ -154,14 +154,60 @@ describe('chat event dedupe', () => {
       messages: [],
       sessionLabels: {},
       sessionLastActivity: {},
+      sessionStreamingStates: {},
       sending: true,
-      activeRunId: 'run-final-no-seq',
+      activeRunId: 'run-empty-final',
       streamingText: '',
-      streamingMessage: {
-        role: 'assistant',
-        id: 'streaming-tool-call',
-        content: [{ type: 'tool_use', id: 'call-1', name: 'read', input: {} }],
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-empty-final',
+      sessionKey: 'agent:main:main',
+    });
+
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
+    expect(useChatStore.getState().pendingFinal).toBe(false);
+    expect(useChatStore.getState().lastUserMessageAt).toBeNull();
+  });
+
+  it('clears background session execution state when its final event arrives', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:session-b',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:session-a' }, { key: 'agent:main:session-b' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {
+        'agent:main:session-a': {
+          activeRunId: 'run-a',
+          streamingText: '',
+          streamingMessage: { role: 'assistant', content: [{ type: 'text', text: 'working' }] },
+          streamingTools: [],
+          pendingFinal: false,
+          lastUserMessageAt: 123,
+          pendingToolImages: [],
+          runAborted: false,
+          sending: true,
+          messagesSnapshot: [{ role: 'user', content: 'A task' }],
+        },
       },
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
       streamingTools: [],
       pendingFinal: false,
       lastUserMessageAt: null,
@@ -173,32 +219,23 @@ describe('chat event dedupe', () => {
 
     useChatStore.getState().handleChatEvent({
       state: 'final',
-      runId: 'run-final-no-seq',
-      sessionKey: 'agent:main:main',
-      message: {
-        role: 'toolResult',
-        toolCallId: 'call-1',
-        content: [{ type: 'text', text: 'tool output' }],
-      },
-    });
-
-    expect(useChatStore.getState().sending).toBe(true);
-    expect(useChatStore.getState().pendingFinal).toBe(true);
-
-    useChatStore.getState().handleChatEvent({
-      state: 'final',
-      runId: 'run-final-no-seq',
-      sessionKey: 'agent:main:main',
+      runId: 'run-a',
+      sessionKey: 'agent:main:session-a',
       message: {
         role: 'assistant',
-        id: 'terminal-reply',
+        id: 'final-a',
         stopReason: 'stop',
-        content: [{ type: 'text', text: 'Final answer after tool output.' }],
+        content: [{ type: 'text', text: 'A is done.' }],
       },
     });
 
+    const background = useChatStore.getState().sessionStreamingStates['agent:main:session-a'];
+    expect(background.sending).toBe(false);
+    expect(background.activeRunId).toBeNull();
+    expect(background.pendingFinal).toBe(false);
+    expect(background.streamingMessage).toBeNull();
+    expect(extractText(background.messagesSnapshot.at(-1))).toBe('A is done.');
+    expect(useChatStore.getState().currentSessionKey).toBe('agent:main:session-b');
     expect(useChatStore.getState().sending).toBe(false);
-    expect(useChatStore.getState().activeRunId).toBeNull();
-    expect(extractText(useChatStore.getState().messages.at(-1))).toBe('Final answer after tool output.');
   });
 });

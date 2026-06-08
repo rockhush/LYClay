@@ -3,12 +3,17 @@ import type { IncomingMessage, ServerResponse } from 'http';
 
 const runOpenClawDoctorMock = vi.fn();
 const runOpenClawDoctorFixMock = vi.fn();
+const checkDeviceAccessMock = vi.fn();
 const sendJsonMock = vi.fn();
 const sendNoContentMock = vi.fn();
 
 vi.mock('@electron/utils/openclaw-doctor', () => ({
   runOpenClawDoctor: (...args: unknown[]) => runOpenClawDoctorMock(...args),
   runOpenClawDoctorFix: (...args: unknown[]) => runOpenClawDoctorFixMock(...args),
+}));
+
+vi.mock('@electron/utils/device-access', () => ({
+  checkDeviceAccess: (...args: unknown[]) => checkDeviceAccessMock(...args),
 }));
 
 vi.mock('@electron/api/route-utils', () => ({
@@ -55,5 +60,50 @@ describe('handleAppRoutes', () => {
     expect(handled).toBe(true);
     expect(runOpenClawDoctorFixMock).toHaveBeenCalledTimes(1);
     expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, { success: false, exitCode: 1 });
+  });
+
+  it('checks device access through the host api', async () => {
+    checkDeviceAccessMock.mockResolvedValueOnce({
+      success: true,
+      status: 'allowed',
+      allowed: true,
+      deviceId: 'device-1',
+    });
+    const { handleAppRoutes } = await import('@electron/api/routes/app');
+
+    const handled = await handleAppRoutes(
+      { method: 'GET' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/app/device-access'),
+      {} as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(checkDeviceAccessMock).toHaveBeenCalledWith({ force: false });
+    expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, {
+      success: true,
+      status: 'allowed',
+      allowed: true,
+      deviceId: 'device-1',
+    });
+  });
+
+  it('forces a fresh device access check on POST', async () => {
+    checkDeviceAccessMock.mockResolvedValueOnce({
+      success: true,
+      status: 'blocked',
+      allowed: false,
+    });
+    const { handleAppRoutes } = await import('@electron/api/routes/app');
+
+    const handled = await handleAppRoutes(
+      { method: 'POST' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/app/device-access'),
+      {} as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(checkDeviceAccessMock).toHaveBeenCalledWith({ force: true });
   });
 });

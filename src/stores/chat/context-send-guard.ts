@@ -2,10 +2,9 @@ import i18n from '@/i18n';
 import { hostApiFetch } from '@/lib/host-api';
 import { estimateHistoryTokens, estimateMessageTokens } from '@/lib/token-estimator';
 import { useAgentsStore } from '@/stores/agents';
-import { useSettingsStore } from '@/stores/settings';
 import { compressHistory, type InvokeRpcFn } from './context-compactor';
 import { DEFAULT_CONTEXT_WINDOW, resolveContextBudget, type ContextBudget } from './context-budget';
-import type { RawMessage } from './types';
+import type { CompressionStateEntry, RawMessage } from './types';
 
 export type ContextSendGuardError = 'contextTooLarge' | 'currentMessageTooLarge';
 
@@ -15,6 +14,7 @@ export interface ContextSendGuardResult {
   budget: ContextBudget;
   error?: ContextSendGuardError;
   errorMessage?: string;
+  compressionMeta?: CompressionStateEntry;
 }
 
 export interface PrepareContextBeforeSendInput {
@@ -25,6 +25,7 @@ export interface PrepareContextBeforeSendInput {
   workspaceContext?: string;
   isInternalStagedExecution: boolean;
   invokeCompactorRpc: InvokeRpcFn;
+  persistedCompressionState?: CompressionStateEntry | null;
 }
 
 interface ModelContextResponse {
@@ -115,7 +116,6 @@ export async function prepareContextBeforeSend(input: PrepareContextBeforeSendIn
     return buildResult(input.messages, budget, false);
   }
 
-  const { contextCompressionEnabled } = useSettingsStore.getState();
   const pendingRuntimeMessage = buildPendingRuntimeMessage(input);
   const pendingMessageTokens = estimateMessageTokens(pendingRuntimeMessage.content);
 
@@ -125,9 +125,10 @@ export async function prepareContextBeforeSend(input: PrepareContextBeforeSendIn
 
   let nextMessages = input.messages;
   let compressed = false;
+  let compressionMeta: CompressionStateEntry | undefined;
   let estimatedTokens = estimateHistoryTokens([...nextMessages, pendingRuntimeMessage]);
 
-  if (contextCompressionEnabled && nextMessages.length >= 10 && estimatedTokens >= budget.compressionTriggerTokens) {
+  if (nextMessages.length >= 10 && estimatedTokens >= budget.compressionTriggerTokens) {
     const compression = await compressHistory(
       nextMessages,
       input.sessionKey,
@@ -138,11 +139,20 @@ export async function prepareContextBeforeSend(input: PrepareContextBeforeSendIn
         summaryTokens: budget.summaryTokens,
         hardLimitTokens: budget.hardLimitTokens,
       },
+      input.persistedCompressionState,
     );
 
     if (compression) {
       nextMessages = [compression.summaryMessage, ...compression.compressedMessages];
       compressed = true;
+      compressionMeta = {
+        summaryText: compression.summaryMessage.content as string,
+        compressedCount: compression.compressedCount,
+        totalMessagesAtCompression: compression.totalMessagesAtCompression,
+        compressedTokens: compression.compressedTokens,
+        compressedAt: Date.now(),
+        isTruncation: compression.isTruncation,
+      };
       estimatedTokens = estimateHistoryTokens([...nextMessages, pendingRuntimeMessage]);
       console.log('[context-send-guard] compressed context before send', {
         sessionKey: input.sessionKey,
@@ -155,8 +165,8 @@ export async function prepareContextBeforeSend(input: PrepareContextBeforeSendIn
   }
 
   if (estimatedTokens > budget.hardLimitTokens) {
-    return buildResult(nextMessages, budget, compressed, 'contextTooLarge');
+    return { ...buildResult(nextMessages, budget, compressed, 'contextTooLarge'), compressionMeta };
   }
 
-  return buildResult(nextMessages, budget, compressed);
+  return { ...buildResult(nextMessages, budget, compressed), compressionMeta };
 }

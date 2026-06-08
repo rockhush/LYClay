@@ -24,6 +24,7 @@ import {
 } from './history-startup-retry';
 import type { RawMessage } from './types';
 import type { ChatGet, ChatSet, SessionHistoryActions } from './store-api';
+import { applyTimeDecayStrategy, calculateHistoryLimits, type TimeDecayStats } from './history-time-decay';
 
 const foregroundHistoryLoadSeen = new Set<string>();
 
@@ -47,6 +48,9 @@ export function createHistoryActions(
   return {
     loadHistory: async (quiet = false) => {
       const { currentSessionKey } = get();
+      const { sessionLastActivity } = get();
+      const lastActivityMs = sessionLastActivity[currentSessionKey];
+      const limits = calculateHistoryLimits(lastActivityMs);
       const isInitialForegroundLoad = !quiet && !foregroundHistoryLoadSeen.has(currentSessionKey);
       const historyTimeoutOverride = getStartupHistoryTimeoutOverride(isInitialForegroundLoad);
       if (!quiet) set({ loading: true, error: null });
@@ -220,12 +224,17 @@ export function createHistoryActions(
               const rawMessages = response.messages;
               const thinkingLevel = null;
               console.log(`[History] ✅ Loaded ${rawMessages.length} messages from LOCAL filesystem`);
-              
-              const applied = applyLoadedMessages(rawMessages, thinkingLevel);
+
+              const { messages: decayedMessages, stats } = applyTimeDecayStrategy(rawMessages, lastActivityMs);
+              if (stats.finalCount < stats.originalCount) {
+                console.log(`[history-time-decay] ${currentSessionKey} (local): ${stats.originalCount}→${stats.finalCount} messages, ~${stats.estimatedTokens} tokens (${stats.hoursAgo.toFixed(1)}h ago)`);
+              }
+
+              const applied = applyLoadedMessages(decayedMessages, thinkingLevel);
               if (applied && isInitialForegroundLoad) {
                 foregroundHistoryLoadSeen.add(currentSessionKey);
               }
-              console.log(`[PERF] chat.history load COMPLETE (LOCAL), total=${Date.now() - loadHistoryStartTime}ms, messages=${rawMessages.length}`);
+              console.log(`[PERF] chat.history load COMPLETE (LOCAL), total=${Date.now() - loadHistoryStartTime}ms, messages=${decayedMessages.length}`);
               return;
             } else {
               console.warn(`[History] Local read failed or returned no messages, response:`, response);
@@ -246,7 +255,7 @@ export function createHistoryActions(
             result = await invokeIpc(
               'gateway:rpc',
               'chat.history',
-              { sessionKey: currentSessionKey, limit: 200 },
+              { sessionKey: currentSessionKey, limit: limits.messageLimit },
               ...(historyTimeoutOverride != null ? [historyTimeoutOverride] as const : []),
             ) as { success: boolean; result?: Record<string, unknown>; error?: string };
 
@@ -289,9 +298,15 @@ export function createHistoryActions(
           let rawMessages = Array.isArray(data.messages) ? data.messages as RawMessage[] : [];
           const thinkingLevel = data.thinkingLevel ? String(data.thinkingLevel) : null;
           if (rawMessages.length === 0 && isCronSessionKey(currentSessionKey)) {
-            rawMessages = await loadCronFallbackMessages(currentSessionKey, 200);
+            rawMessages = await loadCronFallbackMessages(currentSessionKey, limits.messageLimit);
           }
-          const applied = applyLoadedMessages(rawMessages, thinkingLevel);
+
+          const { messages: decayedMessages, stats } = applyTimeDecayStrategy(rawMessages, lastActivityMs);
+          if (stats.finalCount < stats.originalCount) {
+            console.log(`[history-time-decay] ${currentSessionKey}: ${stats.originalCount}→${stats.finalCount} messages, ~${stats.estimatedTokens} tokens (${stats.hoursAgo.toFixed(1)}h ago, limit=${stats.appliedMessageLimit})`);
+          }
+
+          const applied = applyLoadedMessages(decayedMessages, thinkingLevel);
           if (applied && isInitialForegroundLoad) {
             foregroundHistoryLoadSeen.add(currentSessionKey);
           }
@@ -308,7 +323,7 @@ export function createHistoryActions(
           });
         }
 
-        const fallbackMessages = await loadCronFallbackMessages(currentSessionKey, 200);
+        const fallbackMessages = await loadCronFallbackMessages(currentSessionKey, limits.messageLimit);
         if (fallbackMessages.length > 0) {
           const applied = applyLoadedMessages(fallbackMessages, null);
           if (applied && isInitialForegroundLoad) {
@@ -328,7 +343,7 @@ export function createHistoryActions(
         }
       } catch (err) {
         console.warn('Failed to load chat history:', err);
-        const fallbackMessages = await loadCronFallbackMessages(currentSessionKey, 200);
+        const fallbackMessages = await loadCronFallbackMessages(currentSessionKey, limits.messageLimit);
         if (fallbackMessages.length > 0) {
           const applied = applyLoadedMessages(fallbackMessages, null);
           if (applied && isInitialForegroundLoad) {

@@ -26,6 +26,7 @@ extraResources:
       - "**/*"
       - "!icons/**"
       - "!bin/**"
+      - "!device-guid/**"
       - "!screenshot/**"
   # OpenClaw package (node_modules copied separately by afterPack hook
   # because electron-builder respects .gitignore which excludes node_modules/)
@@ -136,6 +137,12 @@ win:
       to: bin
     - from: resources/cli/win32/
       to: cli/
+    - from: resources/device-guid/win32/
+      to: device-guid/win32/
+      filter:
+        - "*.exe"
+        - "*.dll"
+        - "*.config"
   icon: resources/icons/icon.ico
   target:
     - target: nsis

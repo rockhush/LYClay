@@ -220,8 +220,8 @@ function markPendingComplexTaskPlanningRun(sessionKey: string, runId: string): v
 function abortGatewayRun(sessionKey: string): void {
   void invokeIpc(
     'gateway:rpc',
-    'chat.abort',
-    { sessionKey },
+    'sessions.abort',
+    { key: sessionKey },
     8_000,
   ).catch((error) => {
     console.warn('[chat] Failed to abort stuck run:', error);
@@ -557,8 +557,34 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           clearHistoryPoll();
           set({ error: result.error || 'Failed to send message', sending: false });
         } else if (result.result?.runId) {
-          markPendingComplexTaskPlanningRun(currentSessionKey, result.result.runId);
-          set({ activeRunId: result.result.runId });
+          const runId = result.result.runId;
+          markPendingComplexTaskPlanningRun(currentSessionKey, runId);
+          set((s) => ({
+            activeRunId: runId,
+            sessionStreamingStates: {
+              ...s.sessionStreamingStates,
+              [currentSessionKey]: {
+                ...(s.sessionStreamingStates[currentSessionKey] ?? {
+                  activeRunId: null,
+                  streamingText: '',
+                  streamingMessage: null,
+                  streamingTools: [],
+                  pendingFinal: false,
+                  lastUserMessageAt: null,
+                  pendingToolImages: [],
+                  runAborted: false,
+                  sending: false,
+                  messagesSnapshot: [],
+                }),
+                activeRunId: runId,
+                sending: true,
+                runAborted: false,
+                messagesSnapshot: s.messages.length > 0
+                  ? [...s.messages]
+                  : (s.sessionStreamingStates[currentSessionKey]?.messagesSnapshot ?? []),
+              },
+            },
+          }));
         }
       } catch (err) {
         markChatRunRpcCompleted(idempotencyKey, {
@@ -603,11 +629,12 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       if (currentSessionKey) {
         invokeIpc(
           'gateway:rpc',
-          'chat.abort',
+          'sessions.abort',
           {
-            sessionKey: currentSessionKey,
+            key: currentSessionKey,
             ...(activeRunId ? { runId: activeRunId } : {}),
           },
+          10_000,
         ).catch((err) => {
           console.warn('[abortRun] Failed to abort run:', err);
         });

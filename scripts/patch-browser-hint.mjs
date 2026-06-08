@@ -86,10 +86,40 @@ const CHANNEL_PREWARM_REPLACEMENTS = [
   ],
 ];
 
+const LY_AUTO_SESSION_HEADER_REPLACEMENTS = [
+  [
+    [
+      'function createOpenAICompletionsClient(model, context, apiKey, optionHeaders) {',
+      '\tconst clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);',
+    ].join('\n'),
+    [
+      'function createOpenAICompletionsClient(model, context, apiKey, optionHeaders, turnHeaders) {',
+      '\tconst clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders, turnHeaders);',
+    ].join('\n'),
+  ],
+  [
+    [
+      'function buildOpenAICompletionsClientConfig(model, context, optionHeaders) {',
+      '\tconst headers = buildOpenAIClientHeaders(model, context, optionHeaders);',
+    ].join('\n'),
+    [
+      'function buildOpenAICompletionsClientConfig(model, context, optionHeaders, turnHeaders) {',
+      '\tconst headers = buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders);',
+    ].join('\n'),
+  ],
+  [
+    [
+      'const client = createOpenAICompletionsClient(model, context, options?.apiKey || getEnvApiKey(model.provider) || "", options?.headers);',
+      'const client = createOpenAICompletionsClient(model, context, options?.apiKey || getEnvApiKey(model.provider) || "", options?.headers, (() => { const sid = options?.sessionId; const ts = resolveProviderTransportTurnState(model, { sessionId: sid, turnId: randomUUID(), attempt: 1, transport: "stream" }); const lyHdrs = model.provider === "ly-auto" && sid ? { "X-LYClaw-Session-Id": sid } : {}; return { ...ts?.headers, ...lyHdrs }; })());',
+    ],
+  ],
+];
+
 const REPLACEMENTS = [
   ...BROWSER_HINT_REPLACEMENTS,
   ...PRICING_BOOTSTRAP_REPLACEMENTS,
   ...CHANNEL_PREWARM_REPLACEMENTS,
+  ...LY_AUTO_SESSION_HEADER_REPLACEMENTS,
 ];
 
 const distDir = join(process.cwd(), 'node_modules', 'openclaw', 'dist');

@@ -89,6 +89,7 @@ async function fetchLatestRelease() {
     protocol.get(DWS_CLI_API_URL, {
       headers: {
         'User-Agent': 'ClawX-Builder',
+        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
         'Accept': 'application/vnd.github.v3+json',
        // 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
       },

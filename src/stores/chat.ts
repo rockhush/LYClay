@@ -25,6 +25,7 @@ import {
   type AttachedFileMeta,
   type ChatSession,
   type ChatState,
+  type CompressionStateEntry,
   type ContentBlock,
   type ReasoningMode,
   type RawMessage,
@@ -42,6 +43,8 @@ import {
   markChatRunVisibleProgress,
 } from './chat/chat-run-perf';
 import { prepareContextBeforeSend } from './chat/context-send-guard';
+import { filterLargeToolResults, applyTimeDecayStrategy } from './chat/history-time-decay';
+import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { mergeDiscoveredSessionActivity } from '@/lib/session-sidebar-order';
 
 export type {
@@ -52,6 +55,36 @@ export type {
   RawMessage,
   ToolStatus,
 } from './chat/types';
+
+/**
+ * Reconstruct a compressed message view from cached compression state.
+ * When a session was previously compressed, this replaces the older messages
+ * with the summary, keeping only the recent messages that were retained.
+ */
+function reconstructCompressedView(
+  messages: RawMessage[],
+  state: CompressionStateEntry,
+): RawMessage[] {
+  const currentTotal = messages.length;
+  const keepCount = state.totalMessagesAtCompression - state.compressedCount;
+
+  // The "keep" messages are the last `keepCount` from the original set.
+  // If new messages were added since compression, they appear after.
+  const keepStart = Math.max(0, currentTotal - keepCount);
+  let keptMessages = messages.slice(keepStart);
+
+  // Filter large tool results (Layer 2) on kept messages
+  keptMessages = filterLargeToolResults(keptMessages);
+
+  const summaryMsg: RawMessage = {
+    role: 'system',
+    content: state.summaryText,
+    timestamp: state.compressedAt / 1000,
+    id: crypto.randomUUID(),
+  };
+
+  return [summaryMsg, ...keptMessages];
+}
 
 // Module-level timestamp tracking the last chat event received.
 // Used by the safety timeout to avoid false-positive "no response" errors
@@ -136,6 +169,38 @@ type InterruptedSendSessionState = {
 
 /** Preserves mid-send UI when switching sessions; cleared after resume or completion. */
 let _interruptedSendSession: InterruptedSendSessionState | null = null;
+
+// ── Silent tool stream error retry ──
+// When a model produces a tool-call-stream error (list index out of range, malformed
+// tool_calls, etc.), we retry ONCE silently without showing the error to the user.
+// The retry replays the last sendMessage call with the same params. If it fails again,
+// the user sees a friendly error message.
+let _lastSendParams: { text: string; attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>; targetAgentId?: string | null } | null = null;
+let _retriedRunIds = new Set<string>();
+
+function isToolStreamError(error: string): boolean {
+  const normalized = error.toLowerCase();
+  return (
+    normalized.includes('list index out of range')
+    || normalized.includes('tool call stream error')
+    || normalized.includes('malformed tool_call')
+    || normalized.includes('model did not return tool call')
+    || normalized.includes('tool_calls.arguments')
+  );
+}
+
+function normalizeRuntimeErrorMessage(error: string): string {
+  const trimmed = error.trim();
+  const normalized = trimmed.toLowerCase();
+
+  if (isToolStreamError(normalized)) {
+    console.warn('[chat.runtime] tool stream error, will trigger silent retry', { error: trimmed });
+    // Return the original error; the caller decides whether to retry or display
+    return trimmed;
+  }
+
+  return trimmed || 'An error occurred';
+}
 
 const SESSION_LOAD_MIN_INTERVAL_MS = 1_200;
 const REASONING_MODE_STORAGE_KEY = 'LYClaw:chat:reasoning-mode';
@@ -517,8 +582,8 @@ function normalizeComplexTaskControlUserMessages(messages: RawMessage[]): RawMes
 
 function abortGatewayRun(sessionKey: string): void {
   void useGatewayStore.getState().rpc(
-    'chat.abort',
-    { sessionKey },
+    'sessions.abort',
+    { key: sessionKey },
     8_000,
   ).catch((error) => {
     console.warn('[chat] Failed to abort stuck run:', error);
@@ -1081,6 +1146,121 @@ function createEmptySessionStreamingState(): SessionStreamingState {
     runAborted: false,
     sending: false,
     messagesSnapshot: [],
+  };
+}
+
+function snapshotCurrentStreamingState(state: ChatState): SessionStreamingState {
+  return {
+    activeRunId: state.activeRunId,
+    streamingText: state.streamingText,
+    streamingMessage: state.streamingMessage,
+    streamingTools: state.streamingTools,
+    pendingFinal: state.pendingFinal,
+    lastUserMessageAt: state.lastUserMessageAt,
+    pendingToolImages: state.pendingToolImages,
+    runAborted: state.runAborted,
+    sending: state.sending,
+    messagesSnapshot: state.messages.length > 0 ? [...state.messages] : (state.sessionStreamingStates[state.currentSessionKey]?.messagesSnapshot ?? []),
+  };
+}
+
+function appendMessageIfMissing(messages: RawMessage[], message: RawMessage): RawMessage[] {
+  if (message.id && messages.some((existing) => existing.id === message.id)) return messages;
+  return [...messages, message];
+}
+
+function applyBackgroundChatEvent(
+  state: ChatState,
+  sessionKey: string,
+  event: Record<string, unknown>,
+  resolvedState: string,
+  runId: string,
+): Record<string, SessionStreamingState> | null {
+  const existing = state.sessionStreamingStates[sessionKey] ?? createEmptySessionStreamingState();
+  if (existing.activeRunId && runId && runId !== existing.activeRunId) return null;
+
+  const next: SessionStreamingState = { ...existing };
+  if (runId && !next.activeRunId && (resolvedState === 'started' || resolvedState === 'delta')) {
+    next.activeRunId = runId;
+  }
+
+  switch (resolvedState) {
+    case 'started':
+      next.sending = true;
+      next.runAborted = false;
+      break;
+    case 'delta': {
+      if (event.message && typeof event.message === 'object') {
+        const msgObj = event.message as RawMessage;
+        if (!isToolResultRole(msgObj.role)) {
+          const msgContent = getMessageText(msgObj.content);
+          next.streamingMessage = msgContent.trim() && isInternalMessageText(msgContent)
+            ? null
+            : normalizeStreamingMessage(event.message ?? next.streamingMessage);
+        }
+      } else if (event.message) {
+        next.streamingMessage = normalizeStreamingMessage(event.message);
+      }
+      const updates = collectToolUpdates(event.message, resolvedState);
+      next.streamingTools = updates.length > 0 ? upsertToolStatuses(next.streamingTools, updates) : next.streamingTools;
+      next.sending = true;
+      next.runAborted = false;
+      break;
+    }
+    case 'final': {
+      const finalMsg = event.message as RawMessage | undefined;
+      if (finalMsg) {
+        const normalized = normalizeStreamingMessage(finalMsg) as RawMessage;
+        const content = getMessageText(normalized.content);
+        const isInternal = content.trim() && isInternalMessageText(content);
+        const toolOnly = isToolOnlyMessage(normalized);
+        const hasOutput = hasNonToolAssistantContent(normalized);
+        if (!isInternal && !isToolResultRole(normalized.role) && !toolOnly && hasOutput) {
+          const msgId = normalized.id || `run-${runId || Date.now()}`;
+          next.messagesSnapshot = appendMessageIfMissing(next.messagesSnapshot, {
+            ...normalized,
+            role: (normalized.role || 'assistant') as RawMessage['role'],
+            id: msgId,
+          });
+        }
+        if (isToolResultRole(normalized.role) || toolOnly) {
+          const updates = collectToolUpdates(normalized, resolvedState);
+          next.streamingTools = updates.length > 0 ? upsertToolStatuses(next.streamingTools, updates) : next.streamingTools;
+          next.pendingFinal = true;
+          next.sending = true;
+          break;
+        }
+      }
+      next.sending = false;
+      next.activeRunId = null;
+      next.streamingText = '';
+      next.streamingMessage = null;
+      next.streamingTools = [];
+      next.pendingFinal = false;
+      next.pendingToolImages = [];
+      next.lastUserMessageAt = null;
+      next.runAborted = false;
+      break;
+    }
+    case 'error':
+    case 'aborted':
+      next.sending = false;
+      next.activeRunId = null;
+      next.streamingText = '';
+      next.streamingMessage = null;
+      next.streamingTools = [];
+      next.pendingFinal = false;
+      next.pendingToolImages = [];
+      next.lastUserMessageAt = null;
+      next.runAborted = false;
+      break;
+    default:
+      return null;
+  }
+
+  return {
+    ...state.sessionStreamingStates,
+    [sessionKey]: next,
   };
 }
 
@@ -2547,6 +2727,91 @@ function resolveInterruptedSendResume(
   };
 }
 
+/**
+ * Decide whether a runtime event finishes the run for a session the user is NOT
+ * currently viewing. Mirrors the terminal cases handled inline for the current
+ * session (real assistant output `final`, `aborted`, and `error`) without
+ * touching the visible (current-session) streaming fields.
+ */
+function classifyBackgroundTermination(
+  event: Record<string, unknown>,
+  resolvedState: string,
+): { completed: boolean; aborted: boolean } {
+  if (resolvedState === 'aborted') {
+    return { completed: true, aborted: true };
+  }
+  if (resolvedState === 'error') {
+    const errorMsg = String(event.errorMessage || '').toLowerCase();
+    return { completed: true, aborted: errorMsg.includes('abort') };
+  }
+  if (resolvedState === 'final') {
+    const finalMsg = event.message as RawMessage | undefined;
+    if (!finalMsg) {
+      // A final without a message is itself a completion signal.
+      return { completed: true, aborted: false };
+    }
+    const normalized = normalizeStreamingMessage(finalMsg) as RawMessage;
+    const text = getMessageText(normalized.content);
+    const isInternal = Boolean(text.trim()) && isInternalMessageText(text);
+    // Tool steps and NO_REPLY/internal turns do not end the run; only a real
+    // assistant response does.
+    if (
+      !isToolResultRole(normalized.role)
+      && !isToolOnlyMessage(normalized)
+      && hasNonToolAssistantContent(normalized)
+      && !isInternal
+    ) {
+      return { completed: true, aborted: false };
+    }
+  }
+  return { completed: false, aborted: false };
+}
+
+/**
+ * Keep a background session's saved streaming state in sync when its run
+ * finishes while the user is viewing a different session. Without this, the
+ * stale `sending`/`activeRunId` snapshot leaves the session stuck on
+ * "thinking…" forever and blocks the switch-back `loadHistory` that would
+ * surface the completed answer.
+ */
+function finalizeBackgroundSessionRunIfCompleted(
+  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  get: () => ChatState,
+  eventSessionKey: string,
+  event: Record<string, unknown>,
+  resolvedState: string,
+  runId: string,
+): void {
+  const prev = get().sessionStreamingStates[eventSessionKey];
+  if (!prev || (!prev.sending && !prev.activeRunId)) return;
+  // Ignore events from a different run than the one tracked for this session.
+  if (prev.activeRunId && runId && prev.activeRunId !== runId) return;
+
+  const { completed, aborted } = classifyBackgroundTermination(event, resolvedState);
+  if (!completed) return;
+
+  set((s) => ({
+    sessionStreamingStates: {
+      ...s.sessionStreamingStates,
+      [eventSessionKey]: {
+        ...prev,
+        sending: false,
+        activeRunId: null,
+        streamingText: '',
+        streamingMessage: null,
+        streamingTools: [],
+        pendingFinal: false,
+        lastUserMessageAt: null,
+        pendingToolImages: [],
+        runAborted: aborted,
+        // Drop the snapshot so switching back triggers a fresh loadHistory()
+        // that surfaces the authoritative, completed transcript.
+        messagesSnapshot: [],
+      },
+    },
+  }));
+}
+
 // ── Store ────────────────────────────────────────────────────────
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -2573,6 +2838,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionWorkspaceIds: loadSessionWorkspaceIdsFromStorage(),
   sessionPinnedAt: loadSessionPinnedAtFromStorage(),
   sessionStreamingStates: {},
+  sessionCompressionState: {},
   thinkingLevel: null,
   reasoningMode: loadStoredReasoningMode(),
 
@@ -2921,6 +3187,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           sessionWorkspaceIds: Object.fromEntries(Object.entries(s.sessionWorkspaceIds).filter(([k]) => k !== key)),
           sessionPinnedAt: nextPinnedAt,
           sessionStreamingStates: Object.fromEntries(Object.entries(s.sessionStreamingStates).filter(([k]) => k !== key)),
+          sessionCompressionState: Object.fromEntries(Object.entries(s.sessionCompressionState).filter(([k]) => k !== key)),
           // Restore messages snapshot if there's an active stream, otherwise clear for loadHistory
           messages: preservedMessages,
           error: null,
@@ -3013,7 +3280,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ?? DEFAULT_CANONICAL_PREFIX;
     const newKey = `${prefix}:session-${Date.now()}`;
     const newSessionEntry: ChatSession = { key: newKey, displayName: newKey };
-    const currentWorkspaceId = useWorkspacesStore.getState().currentWorkspaceId;
     // Save messages snapshot if there's active streaming
     const hasActiveStreaming = activeRunId || sending;
     set((s) => {
@@ -3051,12 +3317,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionLastActivity: leavingEmpty
           ? Object.fromEntries(Object.entries(s.sessionLastActivity).filter(([k]) => k !== currentSessionKey))
           : s.sessionLastActivity,
-        sessionWorkspaceIds: (() => {
-          const next = { ...s.sessionWorkspaceIds };
-          if (leavingEmpty) delete next[currentSessionKey];
-          if (currentWorkspaceId) next[newKey] = currentWorkspaceId;
-          return next;
-        })(),
+        sessionWorkspaceIds: leavingEmpty
+          ? clearSessionEntryFromMap(s.sessionWorkspaceIds, currentSessionKey)
+          : s.sessionWorkspaceIds,
         sessionStreamingStates: finalStreamingStates,
         messages: [],
         error: null,
@@ -3072,6 +3335,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sending: false,
       };
     });
+    syncWorkspacePickerToSession(get().sessionWorkspaceIds, newKey);
     // Match switchSession: pull history for the new key immediately. Relying only on
     // Chat's useEffect can strand the UI if `loading` stayed true from a prior session
     // (effect guards on `!loading`) or if the user expects the same load path as a
@@ -3121,6 +3385,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessionPinnedAt: nextPinnedAt,
       sessionStreamingStates: Object.fromEntries(
         Object.entries(s.sessionStreamingStates).filter(([k]) => k !== currentSessionKey),
+      ),
+      sessionCompressionState: Object.fromEntries(
+        Object.entries(s.sessionCompressionState).filter(([k]) => k !== currentSessionKey),
       ),
       };
     });
@@ -3432,7 +3699,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
               } else {
                 console.debug(`[History] Loaded ${rawMessages.length} messages from LOCAL filesystem`);
 
-                const applied = applyLoadedMessages(rawMessages, thinkingLevel, response.promptErrors ?? []);
+                // Apply compression reconstruction or time decay
+                const compressionState = get().sessionCompressionState?.[currentSessionKey] ?? null;
+                const hasCachedCompression = compressionState && !compressionState.isTruncation
+                  && rawMessages.length >= compressionState.totalMessagesAtCompression;
+                const preMessages = hasCachedCompression
+                  ? reconstructCompressedView(rawMessages, compressionState!)
+                  : rawMessages;
+                const decayResult = applyTimeDecayStrategy(preMessages, get().sessionLastActivity[currentSessionKey], hasCachedCompression ?? false);
+
+                const applied = applyLoadedMessages(decayResult.messages, thinkingLevel, response.promptErrors ?? []);
+                if (decayResult.stats.finalCount < decayResult.stats.originalCount) {
+                  console.log(`[history-time-decay] ${currentSessionKey}: ${decayResult.stats.originalCount}→${decayResult.stats.finalCount} messages, ~${decayResult.stats.estimatedTokens} tokens (${decayResult.stats.hoursAgo.toFixed(1)}h ago)`);
+                }
                 if (!applied) {
                   _historyApplyDiscardedForKey.add(currentSessionKey);
                 }
@@ -3501,7 +3780,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             rawMessages = await loadCronFallbackMessages(currentSessionKey, 200);
           }
 
-          const applied = applyLoadedMessages(rawMessages, thinkingLevel);
+          // Apply compression reconstruction or time decay
+          const compressionState = get().sessionCompressionState?.[currentSessionKey] ?? null;
+          const hasCachedCompression = compressionState && !compressionState.isTruncation
+            && rawMessages.length >= compressionState.totalMessagesAtCompression;
+          const preMessages = hasCachedCompression
+            ? reconstructCompressedView(rawMessages, compressionState!)
+            : rawMessages;
+          const decayResult = applyTimeDecayStrategy(preMessages, get().sessionLastActivity[currentSessionKey], hasCachedCompression ?? false);
+
+          const applied = applyLoadedMessages(decayResult.messages, thinkingLevel);
+          if (decayResult.stats.finalCount < decayResult.stats.originalCount) {
+            console.log(`[history-time-decay] ${currentSessionKey}: ${decayResult.stats.originalCount}→${decayResult.stats.finalCount} messages, ~${decayResult.stats.estimatedTokens} tokens (${decayResult.stats.hoursAgo.toFixed(1)}h ago)`);
+          }
           if (!applied) {
             _historyApplyDiscardedForKey.add(currentSessionKey);
           }
@@ -3670,6 +3961,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })),
     };
 
+    // Save send params for potential silent retry
+    _lastSendParams = { text, attachments, targetAgentId };
+    _retriedRunIds = new Set();
+
     const contextGuard = await prepareContextBeforeSend({
       sessionKey: currentSessionKey,
       messages: get().messages,
@@ -3678,6 +3973,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       workspaceContext,
       isInternalStagedExecution,
       invokeCompactorRpc: (method, params, timeoutMs) => useGatewayStore.getState().rpc(method, params as Record<string, unknown>, timeoutMs),
+      persistedCompressionState: get().sessionCompressionState?.[currentSessionKey] ?? null,
     });
 
     if (contextGuard.error) {
@@ -3686,7 +3982,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     if (contextGuard.compressed) {
-      set({ messages: contextGuard.messages });
+      const nextCompressionState = contextGuard.compressionMeta
+        ? { ...get().sessionCompressionState, [currentSessionKey]: contextGuard.compressionMeta }
+        : get().sessionCompressionState;
+      set({ messages: contextGuard.messages, sessionCompressionState: nextCompressionState });
+      scheduleUiStateSync();
     }
 
     const isFirstMessage = !get().messages.some((m) => m.role === 'user');
@@ -3930,18 +4230,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
           console.warn(`[sendMessage] Recoverable chat.send timeout, keeping poll alive: ${errorMsg}`);
         } else {
           clearHistoryPoll();
-        const normalizedError = normalizeAppError(new Error(errorMsg));
+          const normalizedError = normalizeAppError(new Error(errorMsg));
           set({ error: toUserMessage(normalizedError), sending: false });
         }
       } else if (result.result?.runId && get().sending) {
+        const runId = result.result.runId;
         const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
         if (pendingPlan) {
           _pendingComplexTaskPlans.set(currentSessionKey, {
             ...pendingPlan,
-            planningRunId: result.result.runId,
+            planningRunId: runId,
           });
         }
-        set({ activeRunId: result.result.runId });
+        set((s) => ({
+          activeRunId: runId,
+          sessionStreamingStates: {
+            ...s.sessionStreamingStates,
+            [currentSessionKey]: {
+              ...(s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState()),
+              activeRunId: runId,
+              sending: true,
+              runAborted: false,
+              messagesSnapshot: s.messages.length > 0
+                ? [...s.messages]
+                : (s.sessionStreamingStates[currentSessionKey]?.messagesSnapshot ?? []),
+            },
+          },
+        }));
       }
     } catch (err) {
       const errStr = String(err);
@@ -3998,11 +4313,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       await useGatewayStore.getState().rpc(
-        'chat.abort',
+        'sessions.abort',
         {
-          sessionKey: currentSessionKey,
+          key: currentSessionKey,
           ...(activeRunId ? { runId: activeRunId } : {}),
         },
+        10_000,
       );
     } catch (err) {
       // 忽略 abort 错误，因为用户主动终止会话时 RPC 可能被中止
@@ -4020,9 +4336,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const eventState = String(event.state || '');
     const eventSessionKey = event.sessionKey != null ? String(event.sessionKey) : null;
     const { activeRunId, currentSessionKey } = get();
+    const isCurrentSessionEvent = eventSessionKey == null || eventSessionKey === currentSessionKey;
 
-    // Only process events for the current session (when sessionKey is present)
-    if (eventSessionKey != null && eventSessionKey !== currentSessionKey) return;
+    if (!isCurrentSessionEvent) {
+      if (isDuplicateChatEvent(eventState, event)) return;
+      _lastChatEventAt = Date.now();
+
+      let backgroundState = eventState;
+      if (!backgroundState && event.message && typeof event.message === 'object') {
+        const msg = event.message as Record<string, unknown>;
+        const stopReason = msg.stopReason ?? msg.stop_reason;
+        if (stopReason) {
+          backgroundState = 'final';
+        } else if (msg.role || msg.content) {
+          backgroundState = 'delta';
+        }
+      }
+
+      if (runId && isAbortedChatRun(runId)) {
+        if (backgroundState === 'aborted' || backgroundState === 'final' || backgroundState === 'error') {
+          forgetAbortedChatRun(runId);
+        } else {
+          return;
+        }
+      }
+
+      const nextSessionStreamingStates = applyBackgroundChatEvent(get(), eventSessionKey, event, backgroundState, runId);
+      if (nextSessionStreamingStates) {
+        set({ sessionStreamingStates: nextSessionStreamingStates });
+      }
+      return;
+    }
 
     // Only process events for the active run (or if no active run set)
     if (activeRunId && runId && runId !== activeRunId) return;
@@ -4042,6 +4386,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
         resolvedState = 'delta';
       }
     }
+
+    // Events for a session the user isn't currently viewing must not mutate the
+    // visible streaming fields. We still finalize that background session's
+    // saved streaming state when its run completes, otherwise switching back
+    // strands it on a frozen "thinking…" indicator and blocks the loadHistory
+    // that would surface the finished answer.
+    if (eventSessionKey != null && eventSessionKey !== currentSessionKey) {
+      finalizeBackgroundSessionRunIfCompleted(set, get, eventSessionKey, event, resolvedState, runId);
+      return;
+    }
+
+    // Only process events for the active run (or if no active run set)
+    if (activeRunId && runId && runId !== activeRunId) return;
+
+    if (isDuplicateChatEvent(eventState, event)) return;
+
+    _lastChatEventAt = Date.now();
 
     if (runId && isAbortedChatRun(runId)) {
       if (resolvedState === 'aborted' || resolvedState === 'final' || resolvedState === 'error') {
@@ -4146,6 +4507,53 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const finalMsg = event.message as RawMessage | undefined;
         if (finalMsg) {
           const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
+
+          // ── Silent retry for tool stream errors ──
+          if (
+            normalizedFinalMessage.role === 'assistant'
+            && runId
+            && !_retriedRunIds.has(runId)
+          ) {
+            const stopReason = (normalizedFinalMessage as unknown as Record<string, unknown>).stopReason
+              ?? (normalizedFinalMessage as unknown as Record<string, unknown>).stop_reason;
+            if (stopReason === 'error') {
+              const errorMessage = (normalizedFinalMessage as unknown as Record<string, unknown>).errorMessage
+                ?? (normalizedFinalMessage as unknown as Record<string, unknown>).error_message;
+              const errorText = typeof errorMessage === 'string' ? errorMessage : '';
+              if (isToolStreamError(errorText) && _lastSendParams) {
+                console.warn('[chat.runtime] tool stream error, attempting silent retry once', {
+                  runId,
+                  error: errorText,
+                });
+                _retriedRunIds.add(runId);
+
+                // Clear streaming state silently, keep sending=true
+                set({
+                  streamingText: '',
+                  streamingMessage: null,
+                  streamingTools: [],
+                  pendingFinal: false,
+                  pendingToolImages: [],
+                  error: null,
+                });
+
+                // Abort the failed run on gateway
+                abortGatewayRun(currentSessionKey);
+
+                // Retry immediately (small delay so the abort RPC propagates)
+                setTimeout(() => {
+                  const state = get();
+                  if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
+                  const params = _lastSendParams!;
+                  void state.sendMessage(params.text, params.attachments, params.targetAgentId);
+                }, 100);
+
+                // Don't snapshot the failed message, don't set error, don't loadHistory
+                break;
+              }
+            }
+          }
+
           const finalMsgContent = getMessageText(normalizedFinalMessage.content);
           if (finalMsgContent.trim() && isInternalMessageText(finalMsgContent)) {
             set((s) => ({
@@ -4288,14 +4696,55 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
           }
         } else {
-          // No message in final event - reload history to get complete data
-          set({ streamingText: '', streamingMessage: null, pendingFinal: true });
+          set({
+            sending: false,
+            activeRunId: null,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            lastUserMessageAt: null,
+          });
           void get().loadHistory(true, { force: true });
         }
         break;
       }
       case 'error': {
-        const errorMsg = String(event.errorMessage || 'An error occurred');
+        const rawErrorMsg = String(event.errorMessage || 'An error occurred');
+
+        // ── Silent retry for tool stream errors ──
+        if (runId && !_retriedRunIds.has(runId) && isToolStreamError(rawErrorMsg) && _lastSendParams) {
+          console.warn('[chat.runtime] tool stream error event, attempting silent retry once', {
+            runId,
+            error: rawErrorMsg,
+          });
+          _retriedRunIds.add(runId);
+
+          // Clear failed state silently, keep sending=true
+          set({
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            error: null,
+          });
+
+          // Abort failed run
+          abortGatewayRun(currentSessionKey);
+
+          // Retry after short delay
+          setTimeout(() => {
+            const state = get();
+            if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
+            const params = _lastSendParams!;
+            void state.sendMessage(params.text, params.attachments, params.targetAgentId);
+          }, 100);
+          break;
+        }
+
+        const errorMsg = normalizeRuntimeErrorMessage(rawErrorMsg);
         const wasSending = get().sending;
 
         // Snapshot the current streaming message into messages[] so partial
@@ -4390,6 +4839,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
     }
+
+    set((s) => ({
+      sessionStreamingStates: {
+        ...s.sessionStreamingStates,
+        [s.currentSessionKey]: snapshotCurrentStreamingState(s),
+      },
+    }));
   },
   refresh: async () => {
     const { loadHistory, loadSessions } = get();
