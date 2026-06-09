@@ -430,7 +430,7 @@ export function extractToolUse(message: RawMessage | unknown): Array<{ id: strin
 }
 
 /**
- * Format a Unix timestamp (seconds) to relative time string.
+ * Format a Unix timestamp (seconds or milliseconds) to `YYYY-MM-DD HH:mm`.
  */
 export function formatTimestamp(timestamp: unknown): string {
   if (!timestamp) return '';
@@ -440,12 +440,13 @@ export function formatTimestamp(timestamp: unknown): string {
   // OpenClaw timestamps can be in seconds or milliseconds
   const ms = ts > 1e12 ? ts : ts * 1000;
   const date = new Date(ms);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
+  if (Number.isNaN(date.getTime())) return '';
 
-  if (diffMs < 60000) return 'just now';
-  if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}m ago`;
-  if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)}h ago`;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
 
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `${year}-${month}-${day} ${hour}:${minute}`;
 }

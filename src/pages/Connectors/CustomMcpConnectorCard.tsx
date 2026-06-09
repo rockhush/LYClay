@@ -113,19 +113,22 @@ export function CustomMcpConnectorCard({
                 </p>
               </div>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            <div className="flex shrink-0 flex-wrap items-center gap-1">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     type="button"
                     size="icon"
                     variant="ghost"
-                    className="h-9 w-9 rounded-full"
+                    className={cn(
+                      'h-8 w-8 rounded-lg transition-colors shadow-none',
+                      'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
+                    )}
                     title={t('customCard.refresh')}
                     onClick={() => void load()}
                     disabled={loading}
                   >
-                    <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                    <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent><p>{t('customCard.refresh')}</p></TooltipContent>
@@ -136,20 +139,24 @@ export function CustomMcpConnectorCard({
                     type="button"
                     size="icon"
                     variant="ghost"
-                    className="h-9 w-9 rounded-full text-destructive hover:text-destructive"
+                    className={cn(
+                      'h-8 w-8 rounded-lg transition-colors shadow-none',
+                      'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
+                    )}
                     title={t('customCard.deleteServer')}
                     onClick={() => setConfirmDelete(true)}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent><p>{t('customCard.deleteServer')}</p></TooltipContent>
               </Tooltip>
-              <div className="flex items-center gap-2 pl-1">
-                <span className="whitespace-nowrap text-xs text-muted-foreground">{t('customCard.toggle')}</span>
+              <div className="flex items-center pl-1">
                 <Switch
+                  className="origin-right scale-[0.75]"
                   checked={server.enabled}
                   disabled={toggleBusy}
+                  aria-label={t('customCard.toggle')}
                   onCheckedChange={(v) => void handleToggleServer(v)}
                 />
               </div>

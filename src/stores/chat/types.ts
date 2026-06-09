@@ -72,6 +72,7 @@ export interface SessionStreamingState {
   pendingToolImages: AttachedFileMeta[];
   runAborted: boolean;
   sending: boolean;
+  runError: string | null;
   /** Messages snapshot for recovery when switching back during active streaming */
   messagesSnapshot: RawMessage[];
 }
@@ -97,6 +98,7 @@ export interface ChatState {
   messages: RawMessage[];
   loading: boolean;
   error: string | null;
+  runError: string | null;
 
   // Pre-filled input text (for skill creation, etc.)
   prefilledInput: string | null;

@@ -243,7 +243,40 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
       const runId = String(event.runId || '');
       const eventState = String(event.state || '');
       const eventSessionKey = event.sessionKey != null ? String(event.sessionKey) : null;
-      const { activeRunId, currentSessionKey } = get();
+      const { activeRunId, currentSessionKey, sessionStreamingStates } = get();
+      const inferredSessionKey = (() => {
+        if (eventSessionKey != null) return eventSessionKey;
+        if (!runId) return null;
+        if (activeRunId && runId === activeRunId) return currentSessionKey;
+        for (const [sessionKey, state] of Object.entries(sessionStreamingStates)) {
+          if (state.activeRunId === runId) return sessionKey;
+        }
+        return null;
+      })();
+      const resolvedSessionKey = eventSessionKey ?? inferredSessionKey;
+      const isForegroundEvent = !resolvedSessionKey || resolvedSessionKey === currentSessionKey;
+      const backgroundSessionState = resolvedSessionKey ? sessionStreamingStates[resolvedSessionKey] : undefined;
+
+      // If the event targets a different session, only accept it if it belongs to
+      // a known background run or if it is the start of a new run in that session.
+      if (!isForegroundEvent) {
+        const isKnownBackgroundRun = !!backgroundSessionState && backgroundSessionState.activeRunId === runId;
+        const isPotentialStart = eventState === 'started';
+        if (!isKnownBackgroundRun && !isPotentialStart) {
+          return;
+        }
+      }
+
+      // Only process events for the active run on the foreground session,
+      // or for a matching known background run.
+      if (activeRunId && runId && runId !== activeRunId) {
+        const isCurrentRun = resolvedSessionKey == null || resolvedSessionKey === currentSessionKey;
+        const isKnownBackgroundRun = resolvedSessionKey != null
+          && sessionStreamingStates[resolvedSessionKey]?.activeRunId === runId;
+        if (isCurrentRun || !isKnownBackgroundRun) return;
+      }
+
+      setLastChatEventAt(Date.now());
       const isCurrentSessionEvent = eventSessionKey == null || eventSessionKey === currentSessionKey;
 
       // Defensive: if state is missing but we have a message, try to infer state.
@@ -300,9 +333,11 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
         || resolvedState === 'error' || resolvedState === 'aborted';
       if (hasUsefulData) {
         clearHistoryPoll();
-        const { sending } = get();
-        if (!sending && runId && !isAbortedChatRun(runId)) {
-          set({ sending: true, activeRunId: runId, error: null });
+        if (isForegroundEvent) {
+          const { sending } = get();
+          if (!sending && runId && !isAbortedChatRun(runId)) {
+            set({ sending: true, activeRunId: runId, error: null });
+          }
         }
       }
 

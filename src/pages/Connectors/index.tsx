@@ -63,7 +63,7 @@ export function Connectors() {
       data-testid="connectors-page"
       className="flex flex-col -m-6 bg-white dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden"
     >
-      <div className="w-full max-w-5xl mx-auto flex flex-col h-full pl-[2em] pt-[2em] pr-8 pb-8">
+      <div className="relative z-10 flex flex-col h-full w-full max-w-[1400px] mx-0 px-8 pt-[2em] pb-6">
         {/* Header */}
         <div className="flex flex-row items-start justify-between mb-5 shrink-0 gap-4">
           <div>
@@ -105,16 +105,6 @@ export function Connectors() {
                   className="rounded-2xl border border-dashed border-black/15 bg-black/[0.02] px-8 py-16 text-center dark:border-white/15 dark:bg-white/[0.03]"
                 >
                   <p className="text-[13px] text-muted-foreground">{t('custom.empty')}</p>
-                  <Button
-                    type="button"
-                    className="mt-4 h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
-                    onClick={() => {
-                      setConnectorPageTab('custom');
-                      setDialog('custom');
-                    }}
-                  >
-                    {t('custom.emptyCta')}
-                  </Button>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4">

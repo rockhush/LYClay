@@ -91,7 +91,6 @@ function sanitizeCompressionStateRecord(input: unknown): Record<string, unknown>
   }
   return out;
 }
-
 function sanitizeWorkspaceEntry(raw: unknown): UiStateWorkspaceEntry | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const entry = raw as Record<string, unknown>;

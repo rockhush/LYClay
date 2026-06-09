@@ -30,6 +30,7 @@ const makeAttachedFile = vi.fn((ref: { filePath: string; mimeType: string }, sou
   source,
 }));
 const normalizeStreamingMessage = vi.fn((message: unknown) => message);
+const isAbortedChatRun = vi.fn(() => false);
 const setErrorRecoveryTimer = vi.fn();
 const snapshotStreamingAssistantMessage = vi.fn((currentStream: unknown) => currentStream ? [currentStream] : []);
 const upsertToolStatuses = vi.fn((_current, updates) => updates);
@@ -63,6 +64,7 @@ type ChatLikeState = {
   sending: boolean;
   aborting: boolean;
   activeRunId: string | null;
+  currentSessionKey?: string | null;
   error: string | null;
   runError: string | null;
   streamingMessage: unknown | null;
@@ -73,6 +75,7 @@ type ChatLikeState = {
   lastUserMessageAt: number | null;
   streamingText: string;
   loadHistory: ReturnType<typeof vi.fn>;
+  sessionStreamingStates: Record<string, unknown>;
 };
 
 function makeHarness(initial?: Partial<ChatLikeState>) {
@@ -80,6 +83,7 @@ function makeHarness(initial?: Partial<ChatLikeState>) {
     sending: false,
     aborting: false,
     activeRunId: 'run-default',
+    currentSessionKey: null,
     error: 'stale error',
     runError: null,
     streamingMessage: null,
@@ -90,6 +94,7 @@ function makeHarness(initial?: Partial<ChatLikeState>) {
     lastUserMessageAt: null,
     streamingText: '',
     loadHistory: vi.fn(),
+    sessionStreamingStates: {},
     ...initial,
   };
 
@@ -469,5 +474,51 @@ describe('chat runtime event handlers', () => {
     // Should trigger history reload
     expect(clearHistoryPoll).toHaveBeenCalled();
     expect(next.loadHistory).toHaveBeenCalledWith(true);
+  });
+
+  it('infers background session from runId when sessionKey is missing', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    let state = {
+      currentSessionKey: 'session:current',
+      sessionStreamingStates: {
+        'session:background': {
+          activeRunId: 'background-run',
+          streamingText: '',
+          streamingMessage: null,
+          streamingTools: [],
+          pendingFinal: false,
+          lastUserMessageAt: null,
+          pendingToolImages: [],
+          runAborted: false,
+          sending: false,
+          messagesSnapshot: [],
+        },
+      },
+      sending: false,
+      activeRunId: 'current-run',
+      error: null,
+      streamingMessage: null,
+      streamingTools: [],
+      messages: [],
+      pendingToolImages: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      streamingText: '',
+      loadHistory: vi.fn(),
+    };
+    const set = (partial: Partial<typeof state> | ((s: typeof state) => Partial<typeof state>)) => {
+      const next = typeof partial === 'function' ? partial(state) : partial;
+      state = { ...state, ...next };
+    };
+
+    handleRuntimeEventState(
+      set as never,
+      () => state as any,
+      { runId: 'background-run', message: { role: 'assistant', content: 'hello' } },
+      'delta',
+      'background-run',
+    );
+
+    expect(state.sessionStreamingStates['session:background'].streamingMessage).toEqual({ role: 'assistant', content: 'hello' });
   });
 });

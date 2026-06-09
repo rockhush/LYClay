@@ -592,7 +592,6 @@ export function Skills() {
     searchResults,
     searchSkills,
     installSkill,
-    updateSkill,
     uninstallSkill,
     setSearchResults,
     searching,
@@ -929,12 +928,20 @@ export function Skills() {
     }
   }, [uninstallSkill, fetchSkills, t]);
 
-  const handleUpdate = useCallback(async (slug: string, latestVersion?: string) => {
+  const handleUpdate = useCallback(async (slug: string) => {
     setIsUpdating(true);
     try {
+      // 保存当前滚动位置
       const currentScroll = listRef.current?.scrollTop || 0;
+      
+      // 先卸载
+      await uninstallSkill(slug);
+      await hydrateUiStateFromDisk();
+      await flushUiStateSync().catch(() => undefined);
+      await fetchSkills();
 
-      const packageSlug = await updateSkill(slug, latestVersion);
+      // 再安装
+      const packageSlug = await installSkill(slug);
       await fetchSkills();
 
       if (packageSlug) {
@@ -955,20 +962,22 @@ export function Skills() {
         listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
       }, 0);
 
-      toast.success(t('toast.updated'));
+      toast.success(t('toast.installed'));
+      // 等待 toast 显示一段时间后再关闭遮罩
       await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       if (INSTALL_ERROR_CODES.has(errorMessage)) {
         toast.error(t(`toast.${errorMessage}`, { path: skillsDirPath }), { duration: 10000 });
       } else {
-        toast.error(t('toast.failedUpdate') + ': ' + errorMessage);
+        toast.error(t('toast.failedInstall') + ': ' + errorMessage);
       }
+      // 失败也等待一下再关闭遮罩
       await new Promise(resolve => setTimeout(resolve, 1000));
     } finally {
       setIsUpdating(false);
     }
-  }, [updateSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
+  }, [uninstallSkill, installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
 
   const showInitialLoading = loading && activeTab === 'mine' && safeSkills.length === 0;
   const showMineLoading = useMinLoading(showInitialLoading);
@@ -1349,7 +1358,7 @@ export function Skills() {
                         isLoading={isBusy}
                         onInstall={() => handleInstall(skill.slug)}
                         onUninstall={() => handleUninstall(skill.slug)}
-                        onUpdate={() => handleUpdate(skill.slug, skill.version)}
+                        onUpdate={() => handleUpdate(skill.slug)}
                         t={t}
                       />
                     );

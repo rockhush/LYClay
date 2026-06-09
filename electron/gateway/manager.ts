@@ -40,6 +40,7 @@ import {
   unloadLaunchctlGatewayService,
   waitForPortFree,
   warmupManagedPythonReadiness,
+  cleanupStaleSessionLocks,
 } from './supervisor';
 import { GatewayConnectionMonitor } from './connection-monitor';
 import { GatewayLifecycleController, LifecycleSupersededError } from './lifecycle-controller';
@@ -434,6 +435,7 @@ export class GatewayManager extends EventEmitter {
         delay: async (ms) => {
           await new Promise((resolve) => setTimeout(resolve, ms));
         },
+        cleanupStaleLocks: async () => await cleanupStaleSessionLocks(),
       });
     } catch (error) {
       if (error instanceof LifecycleSupersededError) {

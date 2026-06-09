@@ -4,6 +4,7 @@ const invokeIpcMock = vi.fn();
 const hostApiFetchMock = vi.fn();
 const gatewayStoreGetStateMock = vi.fn();
 const clearHistoryPoll = vi.fn();
+const clearErrorRecoveryTimer = vi.fn();
 const enrichWithCachedImages = vi.fn((messages) => messages);
 const enrichWithToolResultFiles = vi.fn((messages) => messages);
 const getMessageErrorMessage = vi.fn((message: { errorMessage?: string; error_message?: string } | undefined) => {
@@ -49,12 +50,14 @@ vi.mock('@/stores/chat/helpers', () => ({
   clearHistoryPoll: (...args: unknown[]) => clearHistoryPoll(...args),
   enrichWithCachedImages: (...args: unknown[]) => enrichWithCachedImages(...args),
   enrichWithToolResultFiles: (...args: unknown[]) => enrichWithToolResultFiles(...args),
+  normalizeComplexTaskControlUserMessages: (messages: unknown) => messages,
   getLatestOptimisticUserMessage: (messages: Array<{ role: string; timestamp?: number }>, userTimestampMs: number) =>
     [...messages].reverse().find(
       (message) => message.role === 'user'
         && (!message.timestamp || Math.abs(toMs(message.timestamp) - userTimestampMs) < 5000),
     ),
   getMessageText: (...args: unknown[]) => getMessageText(...args),
+  stripGatewayUserMetadata: (text: unknown) => typeof text === 'string' ? text : '',
   hasNonToolAssistantContent: (...args: unknown[]) => hasNonToolAssistantContent(...args),
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
   isToolResultRole: (...args: unknown[]) => isToolResultRole(...args),
@@ -83,6 +86,7 @@ vi.mock('@/stores/chat/helpers', () => ({
     if (candidateAttachments && optimisticAttachments && candidateAttachments === optimisticAttachments && (!hasCandidateTimestamp || timestampMatches)) return true;
     return false;
   },
+  clearErrorRecoveryTimer: (...args: unknown[]) => clearErrorRecoveryTimer(...args),
   getMessageErrorMessage: (...args: unknown[]) => getMessageErrorMessage(...args),
   getMessageStopReason: (...args: unknown[]) => getMessageStopReason(...args),
   toMs: (...args: unknown[]) => toMs(...args as Parameters<typeof toMs>),
@@ -134,9 +138,9 @@ describe('chat history actions', () => {
     vi.resetModules();
     vi.useRealTimers();
     invokeIpcMock.mockResolvedValue({ success: true, result: { messages: [] } });
-    hostApiFetchMock.mockResolvedValue({ messages: [] });
+    hostApiFetchMock.mockResolvedValue({ success: true, messages: [] });
     gatewayStoreGetStateMock.mockReturnValue({
-      status: { state: 'running', port: 18789, connectedAt: Date.now() },
+      status: { state: 'running', port: 18789, connectedAt: Date.now(), gatewayReady: true },
     });
   });
 
@@ -148,6 +152,7 @@ describe('chat history actions', () => {
     const actions = createHistoryActions(h.set as never, h.get as never);
 
     hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
       messages: [
         {
           id: 'cron-meta-job-1',
@@ -348,7 +353,7 @@ describe('chat history actions', () => {
     });
     const actions = createHistoryActions(h.set as never, h.get as never);
     gatewayStoreGetStateMock.mockReturnValue({
-      status: { state: 'running', port: 18789, connectedAt: Date.now() - 40_000 },
+      status: { state: 'running', port: 18789, connectedAt: Date.now() - 40_000, gatewayReady: true },
     });
 
     invokeIpcMock
@@ -371,14 +376,14 @@ describe('chat history actions', () => {
       'gateway:rpc',
       'chat.history',
       { sessionKey: 'agent:main:main', limit: 200 },
-      35_000,
+      30_000,
     );
     expect(invokeIpcMock).toHaveBeenNthCalledWith(
       2,
       'gateway:rpc',
       'chat.history',
       { sessionKey: 'agent:main:main', limit: 200 },
-      35_000,
+      30_000,
     );
     expect(h.read().messages.map((message) => message.content)).toEqual(['restored after retry']);
     expect(h.read().error).toBeNull();
@@ -439,7 +444,7 @@ describe('chat history actions', () => {
     await vi.runAllTimersAsync();
     await loadPromise;
 
-    expect(invokeIpcMock).toHaveBeenCalledTimes(5);
+    expect(invokeIpcMock).toHaveBeenCalledTimes(4);
     expect(h.read().messages).toEqual([]);
     expect(h.read().error).toBe('RPC timeout: chat.history');
     expect(warnSpy).toHaveBeenCalledWith(

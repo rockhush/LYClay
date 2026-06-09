@@ -1144,6 +1144,7 @@ function createEmptySessionStreamingState(): SessionStreamingState {
     lastUserMessageAt: null,
     pendingToolImages: [],
     runAborted: false,
+    runError: null,
     sending: false,
     messagesSnapshot: [],
   };
@@ -2113,6 +2114,7 @@ function buildSessionSwitchPatch(
     | 'lastUserMessageAt'
     | 'pendingToolImages'
     | 'runAborted'
+    | 'runError'
     | 'sending'
   >,
   nextSessionKey: string,
@@ -2130,9 +2132,11 @@ function buildSessionSwitchPatch(
     ? state.sessions.filter((session) => session.key !== state.currentSessionKey)
     : state.sessions;
 
-  // Save the current session's streaming state before switching
-  // Also save messages snapshot if there's an active run or sending is in progress
+  // Save the current session's streaming state before switching.
+  // Also preserve the current visible messages snapshot so completed sessions
+  // can restore immediately when switched back, even if no stream is active.
   const hasActiveStreaming = state.activeRunId || state.sending;
+  const shouldSnapshotMessages = hasActiveStreaming || state.messages.length > 0;
   const savedStreamingStates: Record<string, SessionStreamingState> = {
     ...state.sessionStreamingStates,
     [state.currentSessionKey]: {
@@ -2144,13 +2148,15 @@ function buildSessionSwitchPatch(
       lastUserMessageAt: state.lastUserMessageAt,
       pendingToolImages: state.pendingToolImages,
       runAborted: state.runAborted,
+      runError: state.runError,
       sending: state.sending,
-      messagesSnapshot: hasActiveStreaming ? [...state.messages] : [],
+      messagesSnapshot: shouldSnapshotMessages ? [...state.messages] : [],
     },
   };
 
-  // Remove streaming state if leaving an empty session
-  const finalStreamingStates = leavingEmpty
+  // Remove streaming state if leaving an empty session that has no active stream.
+  // Active streams must be preserved so background events can continue updating.
+  const finalStreamingStates = leavingEmpty && !hasActiveStreaming
     ? clearSessionEntryFromMap(savedStreamingStates, state.currentSessionKey)
     : savedStreamingStates;
 
@@ -2199,6 +2205,7 @@ function buildSessionSwitchPatch(
     lastUserMessageAt: nextSessionState.lastUserMessageAt,
     pendingToolImages: nextSessionState.pendingToolImages,
     runAborted: nextSessionState.runAborted,
+    runError: nextSessionState.runError ?? null,
     sending: nextSessionState.sending,
     loading: false,
  };
@@ -2818,6 +2825,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   loading: false,
   error: null,
+  runError: null,
   prefilledInput: null,
   sending: false,
   aborting: false,
@@ -3295,6 +3303,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           lastUserMessageAt,
           pendingToolImages,
           runAborted,
+          runError: s.runError,
           sending,
           messagesSnapshot: hasActiveStreaming ? [...messages] : [],
         },
@@ -3323,6 +3332,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionStreamingStates: finalStreamingStates,
         messages: [],
         error: null,
+        runError: null,
         // Reset streaming state for new session
         activeRunId: null,
         streamingText: '',
@@ -4029,6 +4039,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sending: true,
             lastUserMessageAt: nowMs,
             runAborted: false,
+            runError: null,
           },
         },
       };
@@ -4852,7 +4863,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await Promise.all([loadHistory(), loadSessions()]);
   },
 
-  clearError: () => set({ error: null }),
+  clearError: () => set({ error: null, runError: null }),
 }));
 
 useChatStore.subscribe((state) => {

@@ -22,6 +22,7 @@ type ChatLikeState = {
   pendingToolImages: unknown[];
   sending: boolean;
   loading: boolean;
+  sessionStreamingStates?: Record<string, unknown>;
   loadHistory: ReturnType<typeof vi.fn>;
 };
 
@@ -32,6 +33,7 @@ function makeHarness(initial?: Partial<ChatLikeState>) {
     messages: [],
     sessionLabels: {},
     sessionLastActivity: {},
+    sessionStreamingStates: {},
     streamingText: '',
     streamingMessage: null,
     streamingTools: [],

@@ -1,6 +1,8 @@
 import { utilityProcess } from 'electron';
 import path from 'path';
 import { existsSync } from 'fs';
+import { readdir, readFile, unlink } from 'fs/promises';
+import { homedir } from 'os';
 import { getOpenClawDir, getOpenClawEntryPath } from '../utils/paths';
 import { getUvMirrorEnv } from '../utils/uv-env';
 import { isPythonReady, setupManagedPython } from '../utils/uv-setup';
@@ -241,6 +243,64 @@ async function terminateOrphanedProcessIds(port: number, pids: string[]): Promis
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+}
+
+export async function cleanupStaleSessionLocks(): Promise<number> {
+  const openclawDir = path.join(homedir(), '.openclaw');
+  const agentsDir = path.join(openclawDir, 'agents');
+  let cleaned = 0;
+
+  let agentDirs: string[] = [];
+  try {
+    agentDirs = await readdir(agentsDir);
+  } catch {
+    return cleaned;
+  }
+
+  for (const agentDir of agentDirs) {
+    const sessionsDir = path.join(agentsDir, agentDir, 'sessions');
+    let sessionFiles: string[] = [];
+    try {
+      sessionFiles = await readdir(sessionsDir);
+    } catch {
+      continue;
+    }
+
+    for (const file of sessionFiles) {
+      if (!file.endsWith('.jsonl.lock')) continue;
+
+      const lockPath = path.join(sessionsDir, file);
+      try {
+        const raw = await readFile(lockPath, 'utf-8');
+        const lock = JSON.parse(raw);
+        const lockPid = lock.pid;
+        if (!lockPid || typeof lockPid !== 'number') continue;
+
+        // 检查 PID 是否存活
+        let alive = false;
+        try {
+          // process.kill(pid, 0) 不发信号，只检查进程是否存在
+          process.kill(lockPid, 0);
+          alive = true;
+        } catch {
+          alive = false;
+        }
+
+        if (!alive) {
+          await unlink(lockPath);
+          logger.info(`Cleaned up stale session lock (dead PID ${lockPid}): ${lockPath}`);
+          cleaned++;
+        }
+      } catch {
+        // 文件可能已被删除或损坏，跳过
+      }
+    }
+  }
+
+  if (cleaned > 0) {
+    logger.info(`Cleaned up ${cleaned} stale session lock(s)`);
+  }
+  return cleaned;
 }
 
 export async function findExistingGatewayProcess(options: {

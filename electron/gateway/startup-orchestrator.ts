@@ -27,6 +27,8 @@ type StartupHooks = {
   runDoctorRepair: () => Promise<boolean>;
   onDoctorRepairSuccess: () => void;
   delay: (ms: number) => Promise<void>;
+  /** Clean up stale .jsonl.lock files from dead PIDs before starting a new gateway. */
+  cleanupStaleLocks?: () => Promise<number>;
 };
 
 export async function runGatewayStartupSequence(hooks: StartupHooks): Promise<void> {
@@ -72,6 +74,11 @@ export async function runGatewayStartupSequence(hooks: StartupHooks): Promise<vo
       if (hooks.shouldWaitForPortFree) {
         await hooks.waitForPortFree(hooks.port);
         hooks.assertLifecycle('start/wait-port');
+      }
+
+      // 清理上次 gateway 崩溃遗留的 stale session 锁文件
+      if (hooks.cleanupStaleLocks) {
+        await hooks.cleanupStaleLocks();
       }
 
       await hooks.startProcess();

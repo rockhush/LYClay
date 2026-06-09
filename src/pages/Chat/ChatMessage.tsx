@@ -286,23 +286,14 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
-        {/* Hover row for user messages — timestamp + edit button */}
-        {isUser && message.timestamp && (
-          <div className="flex items-center justify-between w-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
-            <span className="text-xs text-muted-foreground">
-              {formatTimestamp(message.timestamp)}
-            </span>
-            {onEditMessage && showEditButton && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 -ml-5"
-                onClick={() => onEditMessage(text)}
-              >
-                <Edit3 className="h-3 w-3" />
-              </Button>
-            )}
-          </div>
+        {/* Hover row for user messages — timestamp + copy + edit */}
+        {isUser && hasText && (
+          <UserHoverBar
+            text={text}
+            timestamp={message.timestamp}
+            onEditMessage={onEditMessage}
+            showEditButton={showEditButton}
+          />
         )}
 
         {/* Hover row for assistant messages — only when there is real text content */}
@@ -376,6 +367,58 @@ function ToolStatusBar({
   );
 }
 
+// ── User hover bar (timestamp + copy + edit, shown on group hover) ─
+
+function UserHoverBar({
+  text,
+  timestamp,
+  onEditMessage,
+  showEditButton,
+}: {
+  text: string;
+  timestamp?: number;
+  onEditMessage?: (text: string) => void;
+  showEditButton?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copyContent = useCallback(() => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [text]);
+
+  return (
+    <div className="flex items-center justify-between w-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
+      <span className="text-xs text-muted-foreground">
+        {timestamp ? formatTimestamp(timestamp) : ''}
+      </span>
+      <div className="flex items-center gap-0.5 -ml-5">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 text-[#FF922B] hover:text-[#FE7B00] hover:bg-[#FFF2E5]/70"
+          onClick={copyContent}
+          title="复制"
+        >
+          {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+        </Button>
+        {onEditMessage && showEditButton && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-[#FF922B] hover:text-[#FE7B00] hover:bg-[#FFF2E5]/70"
+            onClick={() => onEditMessage(text)}
+            title="编辑"
+          >
+            <Edit3 className="h-3 w-3" />
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Assistant hover bar (timestamp + copy, shown on group hover) ─
 
 function AssistantHoverBar({ text, timestamp }: { text: string; timestamp?: number }) {
@@ -395,7 +438,7 @@ function AssistantHoverBar({ text, timestamp }: { text: string; timestamp?: numb
       <Button
         variant="ghost"
         size="icon"
-        className="h-6 w-6"
+        className="h-6 w-6 text-[#FF922B] hover:text-[#FE7B00] hover:bg-[#FFF2E5]/70"
         onClick={copyContent}
       >
         {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}

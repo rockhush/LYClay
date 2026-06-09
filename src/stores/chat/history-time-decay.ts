@@ -33,6 +33,18 @@ const THRESHOLDS: TimeDecayThreshold[] = [
 /** 工具结果过滤大小阈值（字节） */
 const TOOL_RESULT_SIZE_THRESHOLD = 5000;
 
+/**
+ * 判断是否为「问答」消息（用户提问 / 助手回答）。
+ *
+ * 这类消息构成用户可见的完整对话，必须在历史还原时一五一十地保留，
+ * 不能因为消息数限制或 token 预算而被截断。真正的上下文预算控制由
+ * 发送前的 prepareContextBeforeSend（压缩 + 硬上限）独立负责。
+ */
+function isConversationalMessage(msg: RawMessage): boolean {
+  const role = typeof msg.role === 'string' ? msg.role.toLowerCase() : '';
+  return role === 'user' || role === 'assistant';
+}
+
 // ── 核心函数 ─────────────────────────────────────────────
 
 /**
@@ -74,22 +86,56 @@ export function filterLargeToolResults(messages: RawMessage[]): RawMessage[] {
 }
 
 /**
+ * 应用消息数量限制：只裁剪非问答消息（如工具结果），
+ * 用户/助手的问答消息始终完整保留。
+ */
+function limitMessageCount(messages: RawMessage[], messageLimit: number): RawMessage[] {
+  if (messages.length <= messageLimit) return messages;
+
+  const conversationalCount = messages.filter(isConversationalMessage).length;
+  // 非问答消息可保留的额度（问答消息不占用、且永不裁剪）。
+  let nonConversationalBudget = Math.max(0, messageLimit - conversationalCount);
+
+  // 从最新往回保留非问答消息，问答消息始终保留。
+  const keep = new Array<boolean>(messages.length).fill(false);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isConversationalMessage(messages[i])) {
+      keep[i] = true;
+    } else if (nonConversationalBudget > 0) {
+      keep[i] = true;
+      nonConversationalBudget -= 1;
+    }
+  }
+
+  return messages.filter((_, i) => keep[i]);
+}
+
+/**
  * 从最新消息倒序累加 token 数，直到预算上限。
+ *
+ * 问答消息（用户/助手）始终保留，不受 token 预算约束，确保历史能完整还原；
+ * 只有非问答消息（工具结果等）在超出预算时才会被裁剪。
  */
 function truncateByTokenBudget(messages: RawMessage[], tokenBudget: number): RawMessage[] {
   if (messages.length === 0) return [];
 
   let accumulated = 0;
-  const result: RawMessage[] = [];
+  const keep = new Array<boolean>(messages.length).fill(false);
 
   for (let i = messages.length - 1; i >= 0; i--) {
     const msgTokens = estimateMessageTokens(messages[i].content);
-    if (accumulated + msgTokens > tokenBudget && result.length > 0) break;
+    if (isConversationalMessage(messages[i])) {
+      // 问答消息无条件保留，仍计入累计以便后续非问答消息正确判断预算。
+      keep[i] = true;
+      accumulated += msgTokens;
+      continue;
+    }
+    if (accumulated + msgTokens > tokenBudget) continue;
     accumulated += msgTokens;
-    result.unshift(messages[i]);
+    keep[i] = true;
   }
 
-  return result;
+  return messages.filter((_, i) => keep[i]);
 }
 
 /** 用于调试的统计信息 */
@@ -123,8 +169,8 @@ export function applyTimeDecayStrategy(
     // Only run L2 (filter large tool results).
     processed = messages;
   } else {
-    // Layer 1: message count limit
-    processed = messages.slice(-limits.messageLimit);
+    // Layer 1: message count limit —— 只裁剪非问答消息，问答消息完整保留
+    processed = limitMessageCount(messages, limits.messageLimit);
   }
 
   // 第二层：过滤大型工具结果

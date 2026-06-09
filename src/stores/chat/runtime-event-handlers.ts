@@ -130,19 +130,77 @@ export function handleRuntimeEventState(
         return;
       }
 
-      // 如果没有 activeRunId，说明没有正在运行的任务，忽略除 started 之外的所有事件
-      const { activeRunId } = get();
-      if (!activeRunId && resolvedState !== 'started') {
-        // 只有 started 事件可以在没有 activeRunId 的情况下启动新任务
-        return;
+      const { currentSessionKey, sessionStreamingStates } = get();
+      const evtSessionKey = event.sessionKey != null ? String(event.sessionKey) : null;
+      const inferredSessionKey = (() => {
+        if (evtSessionKey != null) return evtSessionKey;
+        if (!runId) return null;
+        if (runId === get().activeRunId) return currentSessionKey;
+        for (const [sessionKey, state] of Object.entries(sessionStreamingStates)) {
+          if (state.activeRunId === runId) return sessionKey;
+        }
+        return null;
+      })();
+      const targetSessionKey = inferredSessionKey ?? currentSessionKey;
+      const isForegroundEvent = targetSessionKey === currentSessionKey;
+      const getBackgroundSessionState = () => {
+        const stored = get().sessionStreamingStates[targetSessionKey];
+        return stored ?? {
+          activeRunId: null,
+          streamingText: '',
+          streamingMessage: null,
+          streamingTools: [],
+          pendingFinal: false,
+          lastUserMessageAt: null,
+          pendingToolImages: [],
+          runAborted: false,
+          sending: false,
+          messagesSnapshot: [],
+        };
+      };
+      const patchBackgroundSessionState = (patch: Record<string, unknown>) => {
+        set((s) => ({
+          sessionStreamingStates: {
+            ...s.sessionStreamingStates,
+            [targetSessionKey]: {
+              ...(s.sessionStreamingStates[targetSessionKey] ?? getBackgroundSessionState()),
+              ...patch,
+            },
+          },
+        }));
+      };
+
+      if (!isForegroundEvent && evtSessionKey) {
+        const backgroundState = getBackgroundSessionState();
+        const shouldProcessBackgroundEvent = Boolean(
+          runId && backgroundState.activeRunId === runId
+          || resolvedState === 'started'
+        );
+        if (!shouldProcessBackgroundEvent) {
+          return;
+        }
       }
+
+      const applyStreamingState = (patch: Record<string, unknown>) => {
+        if (isForegroundEvent) {
+          set(patch as any);
+        } else {
+          patchBackgroundSessionState(patch);
+        }
+      };
 
       switch (resolvedState) {
         case 'started': {
           // Run just started (e.g. from console); show loading immediately.
-          const { sending: currentSending } = get();
-          if (!currentSending && runId) {
-            set({ sending: true, activeRunId: runId, error: null });
+          if (runId) {
+            if (isForegroundEvent) {
+              const { sending: currentSending } = get();
+              if (!currentSending) {
+                set({ sending: true, activeRunId: runId, error: null });
+              }
+            } else {
+              applyStreamingState({ sending: true, activeRunId: runId, runAborted: false });
+            }
           }
           break;
         }
@@ -156,36 +214,35 @@ export function handleRuntimeEventState(
             set({ error: null });
           }
           const updates = collectToolUpdates(event.message, resolvedState);
-          set((s) => ({
-            streamingMessage: (() => {
-              if (event.message && typeof event.message === 'object') {
-                const msgRole = (event.message as RawMessage).role;
-                if (isToolResultRole(msgRole)) return s.streamingMessage;
-                // During multi-model fallback the Gateway may emit a delta with an
-                // empty or role-only message (e.g. `{}` or `{ role: 'assistant' }`)
-                // to signal a model switch.  Accepting such a value would silently
-                // discard all content accumulated so far in streamingMessage.
-                // Only replace when the incoming message carries actual payload.
-                const msgObj = event.message as RawMessage;
-                // During multi-model fallback the Gateway may emit an empty or
-                // role-only delta (e.g. `{}` or `{ role: 'assistant' }`) to signal
-                // a model switch.  If we already have accumulated streaming content,
-                // accepting such a message would silently discard it.  Only guard
-                // when there IS existing content to protect; when streamingMessage
-                // is still null, let any delta through so the UI can start showing
-                // the typing indicator immediately.
-                if (s.streamingMessage && msgObj.content === undefined) {
-                  return s.streamingMessage;
-                }
-                const msgContent = getMessageText(msgObj.content);
-                if (msgContent.trim() && isInternalMessageText(msgContent)) {
-                  return null;
-                }
+          const computeNewStreamingMessage = (currentStream: unknown | null) => {
+            if (event.message && typeof event.message === 'object') {
+              const msgRole = (event.message as RawMessage).role;
+              if (isToolResultRole(msgRole)) return currentStream;
+              const msgObj = event.message as RawMessage;
+              if (currentStream && msgObj.content === undefined) {
+                return currentStream;
               }
-              return normalizeStreamingMessage(event.message ?? s.streamingMessage);
-            })(),
-            streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
-          }));
+              const msgContent = getMessageText(msgObj.content);
+              if (msgContent.trim() && isInternalMessageText(msgContent)) {
+                return null;
+              }
+            }
+            return normalizeStreamingMessage(event.message ?? currentStream);
+          };
+          if (isForegroundEvent) {
+            set((s) => ({
+              streamingMessage: computeNewStreamingMessage(s.streamingMessage),
+              streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
+            }));
+          } else {
+            const prev = getBackgroundSessionState();
+            patchBackgroundSessionState({
+              streamingMessage: computeNewStreamingMessage(prev.streamingMessage),
+              streamingTools: updates.length > 0 ? upsertToolStatuses(prev.streamingTools, updates) : prev.streamingTools,
+              sending: true,
+              activeRunId: runId || prev.activeRunId,
+            });
+          }
           break;
         }
         case 'final': {
@@ -193,6 +250,74 @@ export function handleRuntimeEventState(
           if (get().error) set({ error: null });
           // Message complete - add to history and clear streaming
           const finalMsg = event.message as RawMessage | undefined;
+          if (!isForegroundEvent) {
+            const prev = getBackgroundSessionState();
+            if (!finalMsg) {
+              patchBackgroundSessionState({
+                streamingText: '',
+                streamingMessage: null,
+                pendingFinal: true,
+              });
+              break;
+            }
+
+            const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
+            if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
+              patchBackgroundSessionState({
+                streamingText: '',
+                streamingMessage: null,
+                sending: false,
+                activeRunId: null,
+                pendingFinal: false,
+                runError: getMessageErrorMessage(normalizedFinalMessage),
+              });
+              clearHistoryPoll();
+              break;
+            }
+
+            const finalMsgContent = getMessageText(normalizedFinalMessage.content);
+            if (finalMsgContent.trim() && isInternalMessageText(finalMsgContent)) {
+              patchBackgroundSessionState({
+                streamingText: '',
+                streamingMessage: prev.streamingMessage,
+                sending: false,
+                activeRunId: null,
+                pendingFinal: false,
+              });
+              clearHistoryPoll();
+              break;
+            }
+
+            const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
+            const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
+            const hasOutput = hasNonToolAssistantContent(normalizedFinalMessage);
+            const msgId = normalizedFinalMessage.id || (toolOnly ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
+            const pendingImgs = prev.pendingToolImages;
+            const msgWithImages: RawMessage = pendingImgs.length > 0
+              ? {
+                ...normalizedFinalMessage,
+                role: (normalizedFinalMessage.role || 'assistant') as RawMessage['role'],
+                id: msgId,
+                _attachedFiles: [...(normalizedFinalMessage._attachedFiles || []), ...pendingImgs],
+              }
+              : { ...normalizedFinalMessage, role: (normalizedFinalMessage.role || 'assistant') as RawMessage['role'], id: msgId };
+            const nextTools = updates.length > 0 ? upsertToolStatuses(prev.streamingTools, updates) : prev.streamingTools;
+            const streamingTools = hasOutput ? [] : nextTools;
+            const nextSnapshot = [...(prev.messagesSnapshot ?? []), msgWithImages];
+
+            patchBackgroundSessionState({
+              messagesSnapshot: nextSnapshot,
+              streamingText: '',
+              streamingMessage: null,
+              sending: hasOutput ? false : prev.sending,
+              activeRunId: hasOutput ? null : prev.activeRunId,
+              pendingFinal: hasOutput ? false : true,
+              streamingTools,
+              pendingToolImages: [],
+            });
+            break;
+          }
+
           if (finalMsg) {
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
@@ -202,7 +327,8 @@ export function handleRuntimeEventState(
                 sending: false,
                 activeRunId: null,
                 pendingFinal: false,
-                error: getMessageErrorMessage(normalizedFinalMessage),
+                error: null,
+                runError: getMessageErrorMessage(normalizedFinalMessage),
               });
               clearHistoryPoll();
               break;
@@ -217,6 +343,7 @@ export function handleRuntimeEventState(
                 sending: false,
                 activeRunId: null,
                 pendingFinal: false,
+                runError: null,
               }));
               // Reload history to surface intermediate tool-use turns (thinking +
               // tool blocks) from the Gateway's authoritative record, since
@@ -329,6 +456,7 @@ export function handleRuntimeEventState(
                 streamingMessage: null,
                 pendingFinal: true,
                 streamingTools,
+                runError: null,
                 ...clearPendingImages,
               } : {
                 messages: [...s.messages, msgWithImages],
@@ -338,6 +466,7 @@ export function handleRuntimeEventState(
                 activeRunId: hasOutput ? null : s.activeRunId,
                 pendingFinal: hasOutput ? false : true,
                 streamingTools,
+                runError: null,
                 ...clearPendingImages,
               };
             });
@@ -371,16 +500,8 @@ export function handleRuntimeEventState(
               }
             }
           } else {
-            set({
-              sending: false,
-              activeRunId: null,
-              streamingText: '',
-              streamingMessage: null,
-              streamingTools: [],
-              pendingFinal: false,
-              pendingToolImages: [],
-              lastUserMessageAt: null,
-            });
+            // No message in final event - reload history to get complete data
+            set({ streamingText: '', streamingMessage: null, pendingFinal: true, runError: null });
             get().loadHistory();
           }
           break;

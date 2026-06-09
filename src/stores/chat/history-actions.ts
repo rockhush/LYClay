@@ -2,6 +2,8 @@ import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
 import { useGatewayStore } from '@/stores/gateway';
 import {
+  clearErrorRecoveryTimer,
+  clearHistoryPoll,
   enrichWithCachedImages,
   enrichWithToolResultFiles,
   getLatestOptimisticUserMessage,
@@ -59,6 +61,13 @@ export function createHistoryActions(
       const getPreviewMergeKey = (message: RawMessage): string => (
         `${message.id ?? ''}|${message.role}|${message.timestamp ?? ''}|${getMessageText(message.content)}`
       );
+      const getRunErrorFromMessages = (messages: RawMessage[]): string | null => {
+        const latestAssistantMessage = [...messages].reverse().find((msg) => msg.role === 'assistant');
+        if (!latestAssistantMessage) return null;
+        const stopReason = (latestAssistantMessage as any).stopReason ?? (latestAssistantMessage as any).stop_reason;
+        if (stopReason !== 'error') return null;
+        return (latestAssistantMessage as any).errorMessage ?? (latestAssistantMessage as any).error_message ?? null;
+      };
       const mergeHydratedMessages = (
         currentMessages: RawMessage[],
         hydratedMessages: RawMessage[],
@@ -110,10 +119,8 @@ export function createHistoryActions(
           const optimistic = getLatestOptimisticUserMessage(get().messages, userMsMs);
           if (optimistic) {
             // 检查历史中是否已经有匹配的用户消息
-            const hasMatchingUser = enrichedMessages.some(
-              (message) => message.role === 'user'
-                && message.content === optimistic.content
-                && Math.abs(toMs(message.timestamp || 0) - userMsMs) < 10000
+            const hasMatchingUser = enrichedMessages.some((message) =>
+              matchesOptimisticUserMessage(message, optimistic, userMsMs),
             );
             // 如果没有匹配的，才添加乐观消息
             if (!hasMatchingUser) {
@@ -135,7 +142,20 @@ export function createHistoryActions(
           return true;
         });
 
-        set({ messages: deduplicatedMessages, thinkingLevel, loading: false });
+        const runError = getRunErrorFromMessages(deduplicatedMessages);
+        set({ messages: deduplicatedMessages, thinkingLevel, loading: false, runError });
+
+        const { pendingFinal, lastUserMessageAt, sending: isSendingNow } = get();
+        if (isSendingNow && runError) {
+          clearHistoryPoll();
+          clearErrorRecoveryTimer();
+          set({
+            sending: false,
+            activeRunId: null,
+            pendingFinal: false,
+            lastUserMessageAt: null,
+          });
+        }
 
         const firstUserMsg = finalMessages.find((m) => m.role === 'user');
         const lastMsg = finalMessages[finalMessages.length - 1];
@@ -168,7 +188,6 @@ export function createHistoryActions(
             }));
           }
         });
-        const { pendingFinal, lastUserMessageAt, sending: isSendingNow } = get();
 
         // If we're sending but haven't received streaming events, check
         // whether the loaded history reveals intermediate tool-call activity.
