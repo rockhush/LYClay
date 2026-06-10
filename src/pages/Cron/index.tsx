@@ -37,12 +37,12 @@ import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
 import { useChatStore } from '@/stores/chat';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
-import { formatRelativeTime, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { CronJob, CronJobCreateInput, ScheduleType } from '@/types/cron';
 import { CHANNEL_ICONS, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
 import { useTranslation } from 'react-i18next';
-import { translateCronError } from '@/lib/cron-error-i18n';
+import { formatCronRelativeTime, resolveCronAgentLabel, translateCronError } from '@/lib/cron-error-i18n';
 import type { TFunction } from 'i18next';
 
 // Common cron schedule presets
@@ -833,7 +833,7 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
   const { t } = useTranslation('cron');
   const [triggering, setTriggering] = useState(false);
   const agents = useAgentsStore((s) => s.agents);
-  const agentName = agents.find((a) => a.id === job.agentId)?.name ?? job.agentId;
+  const agentName = resolveCronAgentLabel(job.agentId, agents, t);
 
   const handleTrigger = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -935,7 +935,7 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
         {job.lastRun && (
           <span className="inline-flex items-center gap-1" title={t('card.last')}>
             <History className="h-3 w-3" />
-            {formatRelativeTime(job.lastRun.time)}
+            {formatCronRelativeTime(job.lastRun.time, t)}
             {job.lastRun.success ? (
               <CheckCircle2 className="h-3 w-3 text-green-500" />
             ) : (

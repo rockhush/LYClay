@@ -34,6 +34,10 @@ const CRON_ERROR_MATCHERS: CronErrorMatcher[] = [
     key: 'errors.isolatedAgentSetupTimeout',
   },
   {
+    test: (message) => /^job interrupted by gateway restart\.?$/i.test(message),
+    key: 'errors.jobInterruptedByGatewayRestart',
+  },
+  {
     test: (message) => /^channel is required\.?$/i.test(message),
     key: 'errors.channelRequired',
   },
@@ -126,4 +130,41 @@ export function translateCronError(
   }
 
   return t('errors.unknown', { detail: normalized, defaultValue: normalized });
+}
+
+export function formatCronRelativeTime(date: string | Date, t: TFunction<'cron'>): string {
+  const now = new Date();
+  const then = new Date(date);
+  const diffMs = now.getTime() - then.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffSec < 60) {
+    return t('relativeTime.justNow');
+  }
+  if (diffMin < 60) {
+    return t('relativeTime.minutesAgo', { count: diffMin });
+  }
+  if (diffHour < 24) {
+    return t('relativeTime.hoursAgo', { count: diffHour });
+  }
+  if (diffDay < 7) {
+    return t('relativeTime.daysAgo', { count: diffDay });
+  }
+  return then.toLocaleDateString();
+}
+
+export function resolveCronAgentLabel(
+  agentId: string | undefined,
+  agents: Array<{ id: string; name: string }>,
+  t: TFunction<'cron'>,
+): string {
+  const agent = agentId ? agents.find((item) => item.id === agentId) : undefined;
+  const name = agent?.name ?? agentId ?? '';
+  if (agentId === 'main' || name === 'Main Agent') {
+    return t('card.mainAgent');
+  }
+  return name;
 }

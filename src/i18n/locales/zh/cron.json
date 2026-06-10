@@ -19,7 +19,8 @@
         "runNow": "立即运行",
         "deleteConfirm": "确定要删除此任务吗？",
         "last": "上次运行",
-        "next": "下次运行"
+        "next": "下次运行",
+        "mainAgent": "主智能体"
     },
     "dialog": {
         "createTitle": "创建任务",
@@ -120,6 +121,7 @@
     },
     "errors": {
         "isolatedAgentSetupTimeout": "隔离智能体在运行器启动前初始化超时",
+        "jobInterruptedByGatewayRestart": "任务因网关重启被中断",
         "channelRequired": "需要配置消息通道",
         "scheduledTaskFailed": "定时任务执行失败",
         "runnerStartFailed": "运行器启动失败",
@@ -138,5 +140,11 @@
         "timeout": "操作超时：{{detail}}",
         "genericFailed": "执行失败：{{detail}}",
         "unknown": "定时任务出错：{{detail}}"
+    },
+    "relativeTime": {
+        "justNow": "刚刚",
+        "minutesAgo": "{{count}} 分钟前",
+        "hoursAgo": "{{count}} 小时前",
+        "daysAgo": "{{count}} 天前"
     }
 }
