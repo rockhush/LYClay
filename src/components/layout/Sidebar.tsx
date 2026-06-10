@@ -59,7 +59,9 @@ import i18n from '@/i18n';
 import { isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
 import {
   buildStableSessionOrder,
+  getSessionBucket,
   resolveSessionActivityMs,
+  type SessionBucketKey,
 } from '@/lib/session-sidebar-order';
 import logoSvg from '@/assets/1.png';
 
@@ -81,14 +83,6 @@ function blockSessionSwitchIfFirstResponsePreparing(): boolean {
   toast.info(i18n.t('chat:sidebar.sessionSwitchBlockedWhilePreparing'));
   return true;
 }
-
-type SessionBucketKey =
-  | 'today'
-  | 'yesterday'
-  | 'withinWeek'
-  | 'withinTwoWeeks'
-  | 'withinMonth'
-  | 'older';
 
 interface NavItemProps {
   to: string;
@@ -144,23 +138,6 @@ function NavItem({ to, icon, label, badge, collapsed, end, onClick, testId }: Na
       )}
     </NavLink>
   );
-}
-
-function getSessionBucket(activityMs: number, nowMs: number): SessionBucketKey {
-  if (!activityMs || activityMs <= 0) return 'older';
-
-  const now = new Date(nowMs);
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
-
-  if (activityMs >= startOfToday) return 'today';
-  if (activityMs >= startOfYesterday) return 'yesterday';
-
-  const daysAgo = (startOfToday - activityMs) / (24 * 60 * 60 * 1000);
-  if (daysAgo <= 7) return 'withinWeek';
-  if (daysAgo <= 14) return 'withinTwoWeeks';
-  if (daysAgo <= 30) return 'withinMonth';
-  return 'older';
 }
 
 const INITIAL_NOW_MS = Date.now();

@@ -3,13 +3,16 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const hostApiFetchMock = vi.fn();
 
-const { gatewayState, agentsState } = vi.hoisted(() => ({
+const { gatewayState, agentsState, chatScrollRef } = vi.hoisted(() => ({
   gatewayState: {
     status: { state: 'running', port: 18789 } as Record<string, unknown>,
   },
   agentsState: {
     agents: [{ id: 'main', name: 'main' }] as Array<Record<string, unknown>>,
     fetchAgents: vi.fn(),
+  },
+  chatScrollRef: {
+    current: null as HTMLElement | null,
   },
 }));
 
@@ -58,7 +61,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/hooks/use-stick-to-bottom-instant', () => ({
   useStickToBottomInstant: () => ({
     contentRef: { current: null },
-    scrollRef: { current: null },
+    scrollRef: chatScrollRef,
   }),
 }));
 
@@ -98,6 +101,7 @@ describe('Chat execution graph lifecycle', () => {
     hostApiFetchMock.mockResolvedValue({ success: true, messages: [] });
     agentsState.fetchAgents.mockReset();
     gatewayState.status = { state: 'running', port: 18789 };
+    chatScrollRef.current = null;
 
     const { useChatStore } = await import('@/stores/chat');
     useChatStore.setState({
@@ -160,6 +164,184 @@ describe('Chat execution graph lifecycle', () => {
 
     expect(screen.getByText('Here is the summary.')).toBeInTheDocument();
     expect(screen.queryByText('Checked X. Here is the summary.')).not.toBeInTheDocument();
+  });
+
+  it('renders no-tool assistant deltas as a progressively updating chat bubble', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'user',
+          content: 'Introduce Dongguan',
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: true,
+      activeRunId: 'run-text-stream',
+      streamingText: '',
+      streamingMessage: {
+        role: 'assistant',
+        id: 'text-stream',
+        content: [{ type: 'text', text: 'Dongguan is' }],
+      },
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Dongguan is')).toBeInTheDocument();
+    });
+
+    useChatStore.setState({
+      streamingMessage: {
+        role: 'assistant',
+        id: 'text-stream',
+        content: [{ type: 'text', text: 'Dongguan is a manufacturing center.' }],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Dongguan is a manufacturing center.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Dongguan is')).not.toBeInTheDocument();
+  });
+
+  it('keeps streaming the next assistant turn while the previous tool status is still running', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'user',
+          content: 'Build a presentation',
+        },
+        {
+          role: 'assistant',
+          id: 'tool-turn',
+          content: [
+            { type: 'text', text: 'Generating the slides.' },
+            { type: 'tool_use', id: 'ppt-export', name: 'exec', input: { command: 'export-ppt' } },
+          ],
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: true,
+      activeRunId: 'run-tool-followup-stream',
+      streamingText: '',
+      streamingMessage: {
+        role: 'assistant',
+        id: 'followup-stream',
+        content: [{ type: 'text', text: 'The presentation has' }],
+      },
+      streamingTools: [
+        {
+          toolCallId: 'ppt-export',
+          name: 'exec',
+          status: 'running',
+          updatedAt: Date.now(),
+        },
+      ],
+      pendingFinal: true,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    await waitFor(() => {
+      expect(screen.getByText('The presentation has')).toBeInTheDocument();
+    });
+
+    useChatStore.setState({
+      streamingMessage: {
+        role: 'assistant',
+        id: 'followup-stream',
+        content: [{ type: 'text', text: 'The presentation has been exported.' }],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('The presentation has been exported.')).toBeInTheDocument();
+    });
+  });
+
+  it('keeps the viewport pinned to new streamingMessage deltas', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'user',
+          content: 'Introduce Dongguan',
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: true,
+      activeRunId: 'run-scroll-stream',
+      streamingText: '',
+      streamingMessage: {
+        role: 'assistant',
+        id: 'scroll-stream',
+        content: [{ type: 'text', text: 'Dongguan is' }],
+      },
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    await waitFor(() => {
+      expect(chatScrollRef.current).not.toBeNull();
+    });
+
+    const scrollElement = chatScrollRef.current!;
+    Object.defineProperty(scrollElement, 'scrollHeight', {
+      configurable: true,
+      value: 1200,
+    });
+    scrollElement.scrollTop = 0;
+    useChatStore.setState({
+      streamingMessage: {
+        role: 'assistant',
+        id: 'scroll-stream',
+        content: [{ type: 'text', text: 'Dongguan is a manufacturing center.' }],
+      },
+    });
+
+    await waitFor(() => {
+      expect(scrollElement.scrollTop).toBe(1200);
+    });
   });
 
   it('renders the execution graph immediately for an active run before any stream content arrives', async () => {

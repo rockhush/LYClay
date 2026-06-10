@@ -114,7 +114,7 @@ function AgentCard({ agent, onToggle }: AgentCardProps) {
         <div className="flex-1 min-w-0">
           <div className="flex flex-col gap-0.5">
             <div className="flex items-center gap-1.5">
-              <h3 className="text-[14px] font-semibold text-foreground truncate">
+              <h3 className="text-[14px] font-normal text-foreground truncate">
                 {agent.name}
               </h3>
               {agent.isCore ? (
@@ -196,7 +196,7 @@ function MarketplaceAgentCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex flex-col gap-0.5">
-            <h3 className="text-[14px] font-semibold text-foreground truncate">{agent.name}</h3>
+            <h3 className="text-[14px] font-normal text-foreground truncate">{agent.name}</h3>
             <span className="text-[11px] font-mono text-muted-foreground/70 shrink-0">
               {versionLabel}
             </span>
@@ -297,8 +297,6 @@ export function DigitalEmployee() {
         );
       })
       .sort((a, b) => {
-        if (a.enabled && !b.enabled) return -1;
-        if (!a.enabled && b.enabled) return 1;
         if (a.isCore && !b.isCore) return -1;
         if (!a.isCore && b.isCore) return 1;
         return a.name.localeCompare(b.name);
@@ -444,7 +442,7 @@ export function DigitalEmployee() {
                           index === 0 && 'rounded-l',
                           index === 1 && 'rounded-r',
                           isSelected
-                            ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                            ? 'bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15'
                             : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
                         )}
                       >
@@ -477,7 +475,7 @@ export function DigitalEmployee() {
                           index === 0 && 'rounded-l',
                           index === 2 && 'rounded-r',
                           isSelected
-                            ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                            ? 'bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15'
                             : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
                         )}
                       >
@@ -531,7 +529,7 @@ export function DigitalEmployee() {
                   className={cn(
                     'px-3.5 py-1 rounded-full text-[13px] transition-all',
                     isActive
-                      ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                      ? 'bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15'
                       : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
                   )}
                 >

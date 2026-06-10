@@ -215,7 +215,11 @@ export function Chat() {
   const minLoading = useMinLoading(loading);
   const { contentRef, scrollRef } = useStickToBottomInstant(currentSessionKey);
 
-  // Auto scroll to bottom during sending/streaming, and when new messages arrive
+  // Auto scroll to bottom during sending/streaming, and when new messages arrive.
+  // Runtime deltas update `streamingMessage`; `streamingText` is only a legacy
+  // fallback and usually remains empty. Listening only to `streamingText`
+  // leaves the growing reply below the viewport until the final message is
+  // committed to history, which makes a healthy stream look like one batch.
   useEffect(() => {
     const scrollElement = scrollRef.current;
     if (!scrollElement) return;
@@ -234,7 +238,7 @@ export function Chat() {
         scrollElement.scrollTop = scrollElement.scrollHeight;
       }
     });
-  }, [sending, streamingText, streamingTools.length, messages.length, scrollRef]);
+  }, [sending, streamingMessage, streamingText, streamingTools.length, messages.length, scrollRef]);
 
   // Load data when gateway is running.
   // When the store already holds messages for this session (i.e. the user
@@ -524,40 +528,30 @@ export function Chat() {
       return builtSteps;
     };
 
-    // Show the streaming response as a separate bubble (not inside the
-    // execution graph) once tool activity has happened and the CURRENT stream
-    // chunk carries no tool_use block.
+    // Show a text-only stream as a normal assistant bubble while it arrives.
+    // If a later delta adds a tool call, the stream is demoted into the
+    // execution graph on the next render.
     //
     // We use an optimistic promotion strategy because the distinguishing
     // signal between "narration-before-next-tool" and "final reply" is not
     // available during early deltas 鈥?both are text-only, both arrive after
     // `hasToolActivity` has flipped true.  Any of these signals opens the
     // promotion gate:
-    //   1. `pendingFinal`       鈥?tool-result final just fired; next text is
-    //      (almost always) the final reply.
-    //   2. `allToolsCompleted`  鈥?every client-tracked tool entry reached
-    //      `completed` state.
-    //   3. `hasToolActivity`    鈥?at least one prior tool_use exists in the
-    //      segment, i.e. we're past the first tool round.
+    // This optimistic promotion also applies before the first tool call. That
+    // is required for ordinary no-tool answers: otherwise their cumulative
+    // deltas are classified as graph narration and the user sees the whole
+    // answer only when the final event moves it into message history.
     //
     // Demotion happens the moment a tool_use block appears in the streaming
-    // message (`streamTools.length > 0`) OR a tool transitions back to
-    // `running`.  When demoted, the stream re-renders inside the graph as a
-    // narration step.  A brief flicker when narration turns into the next
-    // tool round is inherent to optimistic promotion and is accepted.
+    // message (`streamTools.length > 0`). We deliberately do not gate this on
+    // `streamingTools`: a completed tool can remain marked `running` briefly
+    // while the next assistant turn is already streaming. Using that stale
+    // status here hides both process narration and the final reply until the
+    // terminal event arrives.
     //
-    // Earlier iterations tried restricting this gate to only
-    // `pendingFinal || allToolsCompleted` to protect the trailing
-    // "Thinking..." indicator.  That check is real, but belongs in the
-    // `suppressThinking` coupling below 鈥?not here.  With the coupling
-    // fixed, the three-signal gate gives the correct bubble placement for
-    // both narration and final reply.
-    const allToolsCompleted = streamingTools.length > 0 && !hasRunningStreamToolStatus;
     const rawStreamingReplyCandidate = isLatestOpenRun
-      && (pendingFinal || allToolsCompleted || hasToolActivity)
       && (hasStreamText || hasStreamImages)
-      && streamTools.length === 0
-      && !hasRunningStreamToolStatus;
+      && streamTools.length === 0;
 
     let steps = buildSteps(rawStreamingReplyCandidate);
     let streamingReplyText: string | null = null;

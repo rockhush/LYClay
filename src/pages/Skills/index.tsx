@@ -27,6 +27,8 @@ import {
   FileText,
   BookOpen,
   Tag,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -54,8 +56,8 @@ import {
   isMarketplaceSkillInstalledOnDisk,
   formatSkillVersionLabel,
   resolveSkillListVersionForDisplay,
+  resolveSkillListDescriptionForDisplay,
   isLyclawBuiltinSkill,
-  isPlaceholderSkillDescription,
   resolveSkillDisplayName,
   isCustomSkill,
   isMarketplaceInstalledSkill,
@@ -118,6 +120,45 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
   const [skillMdLoading, setSkillMdLoading] = useState(false);
   const [skillMdError, setSkillMdError] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState(false);
+  const [pathCopied, setPathCopied] = useState(false);
+
+  const handleCopySkillPath = useCallback(async () => {
+    if (!skill) return;
+
+    let directory = skill.baseDir?.trim() || '';
+    if (!directory) {
+      try {
+        const result = await hostApiFetch<{ success: boolean; path?: string; error?: string }>(
+          '/api/clawhub/resolve-skill-path',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              skillKey: skill.id,
+              slug: skill.slug,
+              baseDir: skill.baseDir,
+            }),
+          },
+        );
+        if (!result.success || !result.path) {
+          toast.error(t('detail.pathUnavailable'));
+          return;
+        }
+        directory = result.path;
+      } catch {
+        toast.error(t('toast.failedCopyPath'));
+        return;
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(directory);
+      setPathCopied(true);
+      setTimeout(() => setPathCopied(false), 2000);
+      toast.success(t('toast.copiedPath'));
+    } catch {
+      toast.error(t('toast.failedCopyPath'));
+    }
+  }, [skill, t]);
 
   useEffect(() => {
     if (!isOpen || !skill) {
@@ -125,6 +166,7 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
       setSkillMdFile('SKILL.md');
       setSkillMdError(null);
       setSkillMdLoading(false);
+      setPathCopied(false);
       return;
     }
 
@@ -193,9 +235,7 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
   const useInitialBadge = !skill.icon || ['⌛', '📦', '🔧'].includes(skill.icon);
   const authorLabel = (skill.author || marketplaceMatch?.author || '').trim()
     || t('card.authorFallback', { defaultValue: '未知作者' });
-  const description = isPlaceholderSkillDescription(skill.description)
-    ? (marketplaceMatch?.description?.trim() || skill.description || '')
-    : (skill.description || marketplaceMatch?.description?.trim() || '');
+  const description = resolveSkillListDescriptionForDisplay(skill, marketplaceMatch);
 
   const isBuiltin = isLyclawBuiltinSkill(skill);
 
@@ -232,6 +272,16 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
                   <UserIcon className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">{authorLabel}</span>
                 </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0 text-[#FF922B] hover:text-[#FE7B00] hover:bg-[#FFF2E5]/70"
+                  onClick={() => void handleCopySkillPath()}
+                  aria-label={t('detail.copyPath')}
+                >
+                  {pathCopied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                </Button>
               </div>
             </div>
           </div>
@@ -278,7 +328,7 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
           </section>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-black/[0.06] dark:border-white/10 flex justify-between items-center shrink-0">
+        <div className="mt-4 pt-4 flex justify-between items-center shrink-0">
           {/* 左下角：打开和卸载按钮 */}
           <div className="flex gap-2">
             {/* 打开文件夹按钮 */}
@@ -337,9 +387,7 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
   );
   const authorLabel = (skill.author || marketplaceMatch?.author || '').trim()
     || t('card.authorFallback', { defaultValue: '未知作者' });
-  const description = isPlaceholderSkillDescription(skill.description)
-    ? (marketplaceMatch?.description?.trim() || skill.description || '—')
-    : (skill.description || marketplaceMatch?.description?.trim() || '—');
+  const description = resolveSkillListDescriptionForDisplay(skill, marketplaceMatch, '—');
 
   return (
     <div
@@ -371,7 +419,7 @@ function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardP
         <div className="flex-1 min-w-0">
           <div className="flex flex-col gap-0.5">
             <div className="flex items-center gap-1.5">
-              <h3 className="text-[14px] font-semibold text-foreground truncate">
+              <h3 className="text-[14px] font-normal text-foreground truncate">
                 {displayName}
               </h3>
               {skill.isCore ? (
@@ -486,7 +534,7 @@ function MarketplaceSkillCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex flex-col gap-0.5">
-            <h3 className="text-[14px] font-semibold text-foreground truncate">{skill.name}</h3>
+            <h3 className="text-[14px] font-normal text-foreground truncate">{skill.name}</h3>
             <span className="text-[11px] font-mono text-muted-foreground/70 shrink-0">
               {versionLabel}
             </span>
@@ -702,8 +750,6 @@ export function Skills() {
 
       return matchesSearch && matchesSource;
     }).sort((a, b) => {
-      if (a.enabled && !b.enabled) return -1;
-      if (!a.enabled && b.enabled) return 1;
       if (a.isCore && !b.isCore) return -1;
       if (!a.isCore && b.isCore) return 1;
       return a.name.localeCompare(b.name);
@@ -1148,7 +1194,7 @@ export function Skills() {
                           index === 0 && 'rounded-l',
                           index === 1 && 'rounded-r',
                           isSelected
-                            ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                            ? 'bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15'
                             : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
                         )}
                       >
@@ -1180,7 +1226,7 @@ export function Skills() {
                           index === 0 && 'rounded-l',
                           index === 2 && 'rounded-r',
                           isSelected
-                            ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                            ? 'bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15'
                             : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
                         )}
                       >
@@ -1256,7 +1302,7 @@ export function Skills() {
                     className={cn(
                       'px-3.5 py-1 rounded-full text-[13px] transition-all',
                       isActive
-                        ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                        ? 'bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15'
                         : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
                     )}
                   >
@@ -1280,7 +1326,7 @@ export function Skills() {
                   className={cn(
                     'px-3.5 py-1 rounded-full text-[13px] transition-all',
                     isActive
-                      ? 'bg-[#FFF2E5] text-[#FF922B] font-medium dark:bg-[#FF922B]/15'
+                      ? 'bg-[#FFF2E5] text-[#FF922B] dark:bg-[#FF922B]/15'
                       : 'text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5',
                   )}
                 >

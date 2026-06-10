@@ -13,6 +13,11 @@ expectedUserBehavior:
   - After sending a chat message, the user's optimistic message remains visible immediately.
   - If no stream delta arrives quickly but OpenClaw has written intermediate thinking/tool messages to the transcript, the chat UI refreshes from the local transcript and shows that progress.
   - The fallback stops once stream data or a terminal event arrives and does not duplicate user messages.
+  - A final assistant report after tool use stops the thinking state once the transcript records a terminal stop reason.
+  - Transcript progress without an explicit stop reason cannot end a run, while final events carrying tool calls remain active.
+  - Text-only assistant deltas render progressively in the reply bubble instead of being hidden by an empty execution graph.
+  - The chat viewport follows `streamingMessage` deltas so growing process and final-response text remains visible before finalization.
+  - Current-session events carrying sequence numbers pass through one dedupe check, allowing each new cumulative delta to update the visible reply.
   - Console logs expose a timeline covering send start, RPC acceptance, local transcript progress, first runtime event/delta, and completion.
 requiredProfiles:
   - fast

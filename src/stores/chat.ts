@@ -45,7 +45,7 @@ import {
 import { prepareContextBeforeSend } from './chat/context-send-guard';
 import { filterLargeToolResults, applyTimeDecayStrategy } from './chat/history-time-decay';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
-import { mergeDiscoveredSessionActivity } from '@/lib/session-sidebar-order';
+import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
 
 export type {
   AttachedFileMeta,
@@ -1965,6 +1965,7 @@ function parseSessionRecord(record: Record<string, unknown>): ChatSession | null
     thinkingLevel: record.thinkingLevel ? String(record.thinkingLevel) : undefined,
     model: record.model ? String(record.model) : undefined,
     updatedAt: parseSessionUpdatedAtMs(record.updatedAt),
+    lastMessageAt: parseSessionUpdatedAtMs(record.lastMessageAt),
   };
 }
 
@@ -2001,6 +2002,7 @@ function mergeSessionSummariesWithLocalPreviews(
       label: localLabel || session.label,
       firstUserMessagePreview: local.firstUserMessagePreview || session.firstUserMessagePreview,
       updatedAt: session.updatedAt ?? local.updatedAt,
+      lastMessageAt: local.lastMessageAt ?? session.lastMessageAt,
     };
   });
 }
@@ -2964,8 +2966,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
               // 从 updatedAt 填充 sessionLastActivity，防止会话被误判为空会话
               const discoveredActivity = Object.fromEntries(
                 mergedLocal
-                  .filter((session) => typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt))
-                  .map((session) => [session.key, session.updatedAt!]),
+                  .map((session) => {
+                    const activity = resolveSessionListActivityMs(session);
+                    return activity ? [session.key, activity] as const : null;
+                  })
+                  .filter((entry): entry is readonly [string, number] => entry != null),
               );
               const discoveredLabels = getSessionLabelsFromSessions(mergedLocal);
               
@@ -3061,8 +3066,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           const discoveredActivity = Object.fromEntries(
             sessionsWithCurrent
-              .filter((session) => typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt))
-              .map((session) => [session.key, session.updatedAt!]),
+              .map((session) => {
+                const activity = resolveSessionListActivityMs(session);
+                return activity ? [session.key, activity] as const : null;
+              })
+              .filter((entry): entry is readonly [string, number] => entry != null),
           );
           const discoveredLabels = getSessionLabelsFromSessions(sessionsWithCurrent);
 
@@ -3559,8 +3567,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...(discoveredLabel && !s.sessionLabels[currentSessionKey]
             ? { sessionLabels: { ...s.sessionLabels, [currentSessionKey]: discoveredLabel } }
             : {}),
-          ...(discoveredActivity && !s.sessionLastActivity[currentSessionKey]
-            ? { sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: discoveredActivity } }
+          ...(discoveredActivity
+            ? {
+              sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: discoveredActivity },
+              sessions: s.sessions.map((session) => (
+                session.key === currentSessionKey
+                  ? { ...session, lastMessageAt: discoveredActivity }
+                  : session
+              )),
+            }
             : {}),
         }));
       }
@@ -4023,7 +4038,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isFirstMessageEver: _isFirstMessageEver, // Store flag in state for UI access
         runAborted: false,
         activeRunId: null,
-        sessions: ensureSessionEntry(s.sessions, currentSessionKey),
+        sessions: ensureSessionEntry(s.sessions, currentSessionKey).map((session) => (
+          session.key === currentSessionKey
+            ? { ...session, lastMessageAt: nowMs }
+            : session
+        )),
         sessionLabels: shouldSetLabel
           ? { ...s.sessionLabels, [currentSessionKey]: truncated }
           : s.sessionLabels,
@@ -4382,10 +4401,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Only process events for the active run (or if no active run set)
     if (activeRunId && runId && runId !== activeRunId) return;
 
-    if (isDuplicateChatEvent(eventState, event)) return;
-
-    _lastChatEventAt = Date.now();
-
     // Defensive: if state is missing but we have a message, try to infer state.
     let resolvedState = eventState;
     if (!resolvedState && event.message && typeof event.message === 'object') {
@@ -4407,9 +4422,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       finalizeBackgroundSessionRunIfCompleted(set, get, eventSessionKey, event, resolvedState, runId);
       return;
     }
-
-    // Only process events for the active run (or if no active run set)
-    if (activeRunId && runId && runId !== activeRunId) return;
 
     if (isDuplicateChatEvent(eventState, event)) return;
 

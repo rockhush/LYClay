@@ -15,6 +15,7 @@ import { hostApiFetch } from '@/lib/host-api';
 import { trackUiEvent } from '@/lib/telemetry';
 import { ProvidersSettings } from '@/components/settings/ProvidersSettings';
 import { FeedbackState } from '@/components/common/FeedbackState';
+import { CenteredLoader } from '@/components/common/LoadingSpinner';
 import {
   filterUsageHistoryByWindow,
   groupUsageHistory,
@@ -273,13 +274,14 @@ export function Models() {
   const pagedUsageHistory = filteredUsageHistory.slice((safeUsagePage - 1) * usagePageSize, safeUsagePage * usagePageSize);
   const usageLoading = isGatewayRunning && fetchState.status === 'loading' && visibleUsageHistory.length === 0;
   const usageRefreshing = isGatewayRunning && fetchState.status === 'loading' && visibleUsageHistory.length > 0;
+  const showUsagePagination = !usageLoading && visibleUsageHistory.length > 0 && filteredUsageHistory.length > 0;
 
   return (
     <div data-testid="models-page" className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
-      <div className="w-full max-w-6xl mx-auto flex flex-col h-full px-8 py-8">
+      <div className="relative z-10 w-full max-w-[1400px] mx-auto flex flex-col h-full px-8 pt-[2em] pb-6">
 
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 shrink-0 gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-5 shrink-0 gap-3">
           <div className="min-w-0">
             <h1 data-testid="models-page-title" className="text-[20px] font-bold text-foreground leading-tight">
               {t('dashboard:models.title')}
@@ -290,8 +292,9 @@ export function Models() {
           </div>
         </div>
 
-        {/* Content Area */}
-        <div className="flex-1 overflow-y-auto pr-2 pb-6 min-h-0 -mr-2 space-y-8">
+        <div className="flex-1 flex flex-col min-h-0">
+          {/* Content Area */}
+          <div className="flex-1 overflow-y-auto pr-2 min-h-0 -mr-2 space-y-8 pb-4">
 
           {/* AI Providers Section */}
           <ProvidersSettings />
@@ -303,9 +306,10 @@ export function Models() {
             </h2>
             <div>
               {usageLoading ? (
-                <div className="flex items-center justify-center py-12 text-muted-foreground bg-black/5 dark:bg-white/5 rounded-2xl border border-transparent border-dashed">
-                  <FeedbackState state="loading" title={t('dashboard:recentTokenHistory.loading')} />
-                </div>
+                <CenteredLoader
+                  message={t('dashboard:recentTokenHistory.loading')}
+                  testId="models-token-usage-loading"
+                />
               ) : visibleUsageHistory.length === 0 ? (
                 <div className="flex items-center justify-center py-12 text-muted-foreground bg-black/5 dark:bg-white/5 rounded-2xl border border-transparent border-dashed">
                   <FeedbackState state="empty" title={t('dashboard:recentTokenHistory.empty')} />
@@ -485,39 +489,42 @@ export function Models() {
                       </div>
                     ))}
                   </div>
-
-                  <div className="flex items-center justify-between gap-3 pt-2">
-                    <p className="text-[13px] font-medium text-muted-foreground">
-                      {t('dashboard:recentTokenHistory.page', { current: safeUsagePage, total: usageTotalPages })}
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setUsagePage((page) => Math.max(1, page - 1))}
-                        disabled={safeUsagePage <= 1}
-                        className="rounded-lg px-3 h-8 text-[13px] border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
-                      >
-                        <ChevronLeft className="h-4 w-4 mr-1" />
-                        {t('dashboard:recentTokenHistory.prev')}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setUsagePage((page) => Math.min(usageTotalPages, page + 1))}
-                        disabled={safeUsagePage >= usageTotalPages}
-                        className="rounded-lg px-3 h-8 text-[13px] border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
-                      >
-                        {t('dashboard:recentTokenHistory.next')}
-                        <ChevronRight className="h-4 w-4 ml-1" />
-                      </Button>
-                    </div>
-                  </div>
                 </div>
               )}
             </div>
           </div>
 
+          </div>
+
+          {showUsagePagination && (
+            <div className="shrink-0 flex w-full items-center justify-between gap-3 pt-3 pr-2 -mr-2">
+              <p className="text-[13px] font-medium text-muted-foreground">
+                {t('dashboard:recentTokenHistory.page', { current: safeUsagePage, total: usageTotalPages })}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setUsagePage((page) => Math.max(1, page - 1))}
+                  disabled={safeUsagePage <= 1}
+                  className="rounded-lg px-3 h-8 text-[13px] border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
+                >
+                  <ChevronLeft className="h-4 w-4 mr-1" />
+                  {t('dashboard:recentTokenHistory.prev')}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setUsagePage((page) => Math.min(usageTotalPages, page + 1))}
+                  disabled={safeUsagePage >= usageTotalPages}
+                  className="rounded-lg px-3 h-8 text-[13px] border-black/10 dark:border-white/10 bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
+                >
+                  {t('dashboard:recentTokenHistory.next')}
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
       {devModeUnlocked && selectedUsageEntry && (
@@ -592,7 +599,7 @@ function UsageBarChart({
   const maxTokens = Math.max(...groups.map((group) => group.totalTokens), 1);
 
   return (
-    <div className="space-y-4 bg-transparent p-5">
+    <div className="space-y-4 bg-transparent py-5">
       <div className="flex flex-wrap items-center justify-center gap-5 text-[12px] font-medium text-muted-foreground mb-2">
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-sky-500" />

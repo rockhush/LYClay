@@ -117,5 +117,26 @@
         "monthlyAtDay": "每月 {{day}} 日 {{time}}",
         "dailyAt": "每天 {{time}}",
         "unknown": "未知"
+    },
+    "errors": {
+        "isolatedAgentSetupTimeout": "隔离智能体在运行器启动前初始化超时",
+        "channelRequired": "需要配置消息通道",
+        "scheduledTaskFailed": "定时任务执行失败",
+        "runnerStartFailed": "运行器启动失败",
+        "runnerStartFailedDetail": "运行器启动失败：{{detail}}",
+        "agentTurnFailed": "智能体执行失败",
+        "agentTurnFailedDetail": "智能体执行失败：{{detail}}",
+        "deliveryFailed": "消息投递失败",
+        "deliveryFailedDetail": "消息投递失败：{{detail}}",
+        "jobDisabled": "任务已禁用",
+        "gatewayUnavailable": "网关不可用或未连接",
+        "requestTimeout": "网关请求超时",
+        "agentNotFound": "未找到智能体「{{detail}}」",
+        "noModelConfigured": "未配置可用模型",
+        "network": "网络连接失败",
+        "invalidSchedule": "调度计划无效",
+        "timeout": "操作超时：{{detail}}",
+        "genericFailed": "执行失败：{{detail}}",
+        "unknown": "定时任务出错：{{detail}}"
     }
 }

@@ -472,11 +472,13 @@ function MessageBubble({
       {isUser ? (
         <p className="whitespace-pre-wrap break-words overflow-wrap-anywhere text-sm max-w-full">{text}</p>
       ) : (
-        <div className="prose prose-sm dark:prose-invert max-w-none overflow-wrap-anywhere text-sm">
+        <div className="prose prose-sm dark:prose-invert max-w-none overflow-wrap-anywhere text-sm [&_strong]:font-semibold [&_b]:font-semibold">
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
             rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, output: 'html' }]]}
             components={{
+              strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+              b: ({ children }) => <b className="font-semibold">{children}</b>,
               code({ className, children, ...props }) {
                 const match = /language-(\w+)/.exec(className || '');
                 const isInline = !match && !className;

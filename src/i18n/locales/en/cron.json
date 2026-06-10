@@ -117,5 +117,26 @@
         "monthlyAtDay": "Monthly on day {{day}} at {{time}}",
         "dailyAt": "Daily at {{time}}",
         "unknown": "Unknown"
+    },
+    "errors": {
+        "isolatedAgentSetupTimeout": "Isolated agent setup timed out before runner start",
+        "channelRequired": "Channel is required",
+        "scheduledTaskFailed": "Scheduled task failed",
+        "runnerStartFailed": "Runner start failed",
+        "runnerStartFailedDetail": "Runner start failed: {{detail}}",
+        "agentTurnFailed": "Agent turn failed",
+        "agentTurnFailedDetail": "Agent turn failed: {{detail}}",
+        "deliveryFailed": "Delivery failed",
+        "deliveryFailedDetail": "Delivery failed: {{detail}}",
+        "jobDisabled": "Job is disabled",
+        "gatewayUnavailable": "Gateway is unavailable or not connected",
+        "requestTimeout": "Gateway request timed out",
+        "agentNotFound": "Agent \"{{detail}}\" not found",
+        "noModelConfigured": "No model configured",
+        "network": "Network connection failed",
+        "invalidSchedule": "Invalid schedule",
+        "timeout": "Timed out: {{detail}}",
+        "genericFailed": "Failed: {{detail}}",
+        "unknown": "Scheduled task error: {{detail}}"
     }
 }

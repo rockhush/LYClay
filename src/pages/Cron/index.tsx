@@ -42,6 +42,7 @@ import { toast } from 'sonner';
 import type { CronJob, CronJobCreateInput, ScheduleType } from '@/types/cron';
 import { CHANNEL_ICONS, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
 import { useTranslation } from 'react-i18next';
+import { translateCronError } from '@/lib/cron-error-i18n';
 import type { TFunction } from 'i18next';
 
 // Common cron schedule presets
@@ -842,7 +843,9 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
       toast.success(t('toast.triggered'));
     } catch (error) {
       console.error('Failed to trigger cron job:', error);
-      toast.error(t('toast.failedTrigger', { error: error instanceof Error ? error.message : String(error) }));
+      toast.error(t('toast.failedTrigger', {
+        error: translateCronError(error instanceof Error ? error.message : String(error), t),
+      }));
     } finally {
       setTriggering(false);
     }
@@ -951,7 +954,7 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
       {job.lastRun && !job.lastRun.success && job.lastRun.error && (
         <div className="mt-3 flex items-start gap-2 p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-[11.5px] text-destructive">
           <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
-          <span className="line-clamp-2">{job.lastRun.error}</span>
+          <span className="line-clamp-2">{translateCronError(job.lastRun.error, t)}</span>
         </div>
       )}
 
@@ -1062,7 +1065,7 @@ export function Cron() {
 
   return (
     <div className="flex flex-col -m-6 bg-white dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
-      <div className="w-full max-w-5xl mx-auto flex flex-col h-full pl-[2em] pt-[2em] pr-8 pb-8">
+      <div className="w-full max-w-[1400px] mx-auto flex flex-col h-full px-8 pt-[2em] pb-6">
         {/* Header */}
         <div className="flex flex-row items-start justify-between mb-5 shrink-0 gap-4">
           <div>
@@ -1117,7 +1120,7 @@ export function Cron() {
             <div className="mb-8 p-4 rounded-xl border border-destructive/50 bg-destructive/10 flex items-center gap-3">
               <AlertCircle className="h-5 w-5 text-destructive" />
               <span className="text-destructive text-sm font-medium">
-                {error}
+                {translateCronError(error, t)}
               </span>
             </div>
           )}

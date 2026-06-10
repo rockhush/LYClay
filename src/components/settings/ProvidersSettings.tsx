@@ -1684,46 +1684,31 @@ function AddProviderDialog({
                 )}
                 {/* Device OAuth Trigger — only shown when in OAuth mode */}
                 {useOAuthFlow && (
-                  <div className="space-y-4 pt-2">
-                    <div className="rounded-xl bg-blue-500/10 border border-blue-500/20 p-5 text-center">
-                      <p className="text-[13px] font-medium text-blue-600 dark:text-blue-400 mb-4 block">
-                        {t('aiProviders.oauth.loginPrompt')}
-                      </p>
-                      <Button
-                        onClick={handleStartOAuth}
-                        disabled={oauthFlowing}
-                        className="w-full rounded-full h-[42px] font-semibold bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm"
-                      >
-                        {oauthFlowing ? (
-                          <><Loader2 className="h-4 w-4 mr-2 animate-spin" />{t('aiProviders.oauth.waiting')}</>
-                        ) : (
-                          t('aiProviders.oauth.loginButton')
-                        )}
-                      </Button>
-                    </div>
+                  <div className="space-y-2.5">
+                    <p className="text-[12px] text-muted-foreground">
+                      {t('aiProviders.oauth.loginPrompt')}
+                    </p>
 
                     {/* OAuth Active State Modal / Inline View */}
                     {oauthFlowing && (
-                      <div className="mt-4 p-5 border border-black/10 dark:border-white/10 rounded-2xl bg-white dark:bg-card shadow-sm relative overflow-hidden">
-                        {/* Background pulse effect */}
-                        <div className="absolute inset-0 bg-blue-500/5 animate-pulse" />
-
-                        <div className="relative z-10 flex flex-col items-center justify-center text-center space-y-5">
-                          {oauthError ? (
-                            <div className="text-red-500 space-y-3">
-                              <XCircle className="h-10 w-10 mx-auto" />
-                              <p className="font-semibold text-[15px]">{t('aiProviders.oauth.authFailed')}</p>
-                              <p className="text-[13px] opacity-80">{oauthError}</p>
-                              <Button variant="outline" size="sm" onClick={handleCancelOAuth} className="mt-2 rounded-full px-6 h-9">
-                                Try Again
-                              </Button>
-                            </div>
-                          ) : !oauthData ? (
-                            <div className="space-y-4 py-6">
-                              <Loader2 className="h-10 w-10 animate-spin text-blue-500 mx-auto" />
-                              <p className="text-[13px] font-medium text-muted-foreground animate-pulse">{t('aiProviders.oauth.requestingCode')}</p>
-                            </div>
-                          ) : oauthData.mode === 'manual' ? (
+                      oauthError ? (
+                        <div className="mt-4 p-5 border border-black/10 dark:border-white/10 rounded-2xl bg-white dark:bg-card shadow-sm">
+                          <div className="flex flex-col items-center justify-center text-center space-y-3 text-red-500">
+                            <XCircle className="h-10 w-10 mx-auto" />
+                            <p className="font-semibold text-[15px]">{t('aiProviders.oauth.authFailed')}</p>
+                            <p className="text-[13px] opacity-80">{oauthError}</p>
+                            <Button variant="outline" size="sm" onClick={handleCancelOAuth} className="mt-2 rounded-full px-6 h-9">
+                              Try Again
+                            </Button>
+                          </div>
+                        </div>
+                      ) : !oauthData ? (
+                        <div className="flex justify-center py-2">
+                          <Loader2 className="h-10 w-10 animate-spin text-[#FF922B]" />
+                        </div>
+                      ) : (
+                        <div className="mt-4 p-5 border border-black/10 dark:border-white/10 rounded-2xl bg-white dark:bg-card shadow-sm">
+                          {oauthData.mode === 'manual' ? (
                             <div className="space-y-4 w-full">
                               <div className="space-y-2">
                                 <h3 className="font-semibold text-[16px] text-foreground">Complete OpenAI Login</h3>
@@ -1798,7 +1783,7 @@ function AddProviderDialog({
                               </Button>
 
                               <div className="flex items-center justify-center gap-2 text-[13px] font-medium text-muted-foreground pt-2">
-                                <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                                <Loader2 className="h-4 w-4 animate-spin text-[#FF922B]" />
                                 <span>{t('aiProviders.oauth.waitingApproval')}</span>
                               </div>
 
@@ -1808,25 +1793,33 @@ function AddProviderDialog({
                             </div>
                           )}
                         </div>
-                      </div>
+                      )
                     )}
                   </div>
                 )}
               </div>
 
               <div className="flex justify-end gap-2">
-                <Button
-                  data-testid="add-provider-submit-button"
-                  onClick={handleAdd}
-                  className={cn(
-                    'h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors',
-                    useOAuthFlow && 'hidden',
-                  )}
-                  disabled={!selectedType || saving || (showModelIdField && modelId.trim().length === 0)}
-                >
-                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
-                  {t('aiProviders.dialog.add')}
-                </Button>
+                {useOAuthFlow ? (
+                  !oauthFlowing && (
+                    <Button
+                      onClick={handleStartOAuth}
+                      className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+                    >
+                      {t('aiProviders.oauth.loginButton')}
+                    </Button>
+                  )
+                ) : (
+                  <Button
+                    data-testid="add-provider-submit-button"
+                    onClick={handleAdd}
+                    className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+                    disabled={!selectedType || saving || (showModelIdField && modelId.trim().length === 0)}
+                  >
+                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+                    {t('aiProviders.dialog.add')}
+                  </Button>
+                )}
               </div>
             </div>
           )}

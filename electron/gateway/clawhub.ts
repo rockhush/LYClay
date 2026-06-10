@@ -723,4 +723,11 @@ export class ClawHubService {
         }
         return true;
     }
+
+    /**
+     * Resolve the on-disk directory for a skill (for copy-path UI, etc.).
+     */
+    resolveSkillPath(skillKeyOrSlug: string, fallbackSlug?: string, preferredBaseDir?: string): string | null {
+        return this.resolveSkillDir(skillKeyOrSlug, fallbackSlug, preferredBaseDir);
+    }
 }

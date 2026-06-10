@@ -73,25 +73,9 @@ export function Settings() {
     setAutoDownloadUpdate,
     devModeUnlocked,
     setDevModeUnlocked,
-    telemetryEnabled,
-    setTelemetryEnabled,
   } = useSettingsStore();
 
   const { status: gatewayStatus, restart: restartGateway } = useGatewayStore();
-  const [currentVersion, setCurrentVersion] = useState('0.0.0');
-
-  useEffect(() => {
-    const fetchVersion = async () => {
-      try {
-        const { invokeIpc } = await import('@/lib/api-client');
-        const version = await invokeIpc<string>('app:version');
-        setCurrentVersion(version);
-      } catch (error) {
-        console.error('Failed to get version:', error);
-      }
-    };
-    fetchVersion();
-  }, []);
   const updateSetAutoDownload = useUpdateStore((state) => state.setAutoDownload);
   const [controlUiInfo, setControlUiInfo] = useState<ControlUiInfo | null>(null);
   const [openclawCliCommand, setOpenclawCliCommand] = useState('');
@@ -625,20 +609,6 @@ export function Settings() {
                 </div>
               )}
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-sm font-medium text-foreground/70">{t('advanced.telemetry')}</Label>
-                  <p className="text-sm text-muted-foreground mt-0.5">
-                    {t('advanced.telemetryDesc')}
-                  </p>
-                </div>
-                <Switch
-                  size="sm"
-                  checked={telemetryEnabled}
-                  onCheckedChange={setTelemetryEnabled}
-                />
-              </div>
-
             </div>
           </div>
 
@@ -1024,20 +994,6 @@ export function Settings() {
             </h2>
             <div className="space-y-2.5">
               <UpdateSettings />
-            </div>
-          </div>
-
-          {/* About */}
-          <div>
-            <h2 className="text-base font-semibold text-foreground mb-2">
-              {t('about.title')}
-            </h2>
-            <div className="space-y-1 text-sm text-muted-foreground">
-              <p>
-                <strong className="text-foreground font-semibold">{t('about.appName')}</strong> - {t('about.tagline')}
-              </p>
-              <p>{t('about.basedOn')}</p>
-              <p>{t('about.version', { version: currentVersion })}</p>
             </div>
           </div>
 

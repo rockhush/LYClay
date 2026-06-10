@@ -47,6 +47,8 @@ export interface ChatSession {
   thinkingLevel?: string;
   model?: string;
   updatedAt?: number;
+  /** Last message timestamp from the session transcript, when available. */
+  lastMessageAt?: number;
 }
 
 export type ReasoningMode = 'fast' | 'thinking' | 'expert';

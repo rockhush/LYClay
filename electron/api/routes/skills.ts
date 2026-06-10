@@ -273,5 +273,24 @@ export async function handleSkillRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/clawhub/resolve-skill-path' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{ slug?: string; skillKey?: string; baseDir?: string }>(req);
+      const path = ctx.clawHubService.resolveSkillPath(
+        body.skillKey || body.slug || '',
+        body.slug,
+        body.baseDir,
+      );
+      if (!path) {
+        sendJson(res, 404, { success: false, error: 'Skill directory not found' });
+        return true;
+      }
+      sendJson(res, 200, { success: true, path });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
   return false;
 }

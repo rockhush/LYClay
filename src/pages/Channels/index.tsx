@@ -534,8 +534,8 @@ export function Channels() {
 
   return (
     <div data-testid="channels-page" className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
-      <div className="w-full max-w-6xl mx-auto flex flex-col h-full px-8 py-8">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 shrink-0 gap-3">
+      <div className="relative z-10 w-full max-w-[1400px] mx-auto flex flex-col h-full px-8 pt-[2em] pb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-5 shrink-0 gap-3">
           <div className="min-w-0">
             <h1 className="text-[20px] font-bold text-foreground leading-tight">
               {t('title')}
@@ -790,31 +790,32 @@ export function Channels() {
                                 )}
                               </div>
                               <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-8 text-xs rounded-lg border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
-                                  onClick={() => {
-                                    void (async () => {
-                                      try {
-                                        const accountParam = `?accountId=${encodeURIComponent(account.accountId)}`;
-                                        const result = await hostApiFetch<{ success: boolean; values?: Record<string, string> }>(
-                                          `/api/channels/config/${encodeURIComponent(group.channelType)}${accountParam}`
-                                        );
-                                        setInitialConfigValuesForModal(result.success ? (result.values || {}) : undefined);
-                                      } catch {
-                                        // Fall back to modal-side loading when prefetch fails.
-                                        setInitialConfigValuesForModal(undefined);
-                                      }
-                                      setSelectedChannelType(group.channelType as ChannelType);
-                                      setSelectedAccountId(account.accountId);
-                                      setAllowExistingConfigInModal(true);
-                                      setAllowEditAccountIdInModal(false);
-                                      setExistingAccountIdsForModal([]);
-                                      setShowConfigModal(true);
-                                    })();
-                                  }}
-                                >
-                                {t('account.edit')}
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+                                title={t('account.edit')}
+                                onClick={() => {
+                                  void (async () => {
+                                    try {
+                                      const accountParam = `?accountId=${encodeURIComponent(account.accountId)}`;
+                                      const result = await hostApiFetch<{ success: boolean; values?: Record<string, string> }>(
+                                        `/api/channels/config/${encodeURIComponent(group.channelType)}${accountParam}`
+                                      );
+                                      setInitialConfigValuesForModal(result.success ? (result.values || {}) : undefined);
+                                    } catch {
+                                      // Fall back to modal-side loading when prefetch fails.
+                                      setInitialConfigValuesForModal(undefined);
+                                    }
+                                    setSelectedChannelType(group.channelType as ChannelType);
+                                    setSelectedAccountId(account.accountId);
+                                    setAllowExistingConfigInModal(true);
+                                    setAllowEditAccountIdInModal(false);
+                                    setExistingAccountIdsForModal([]);
+                                    setShowConfigModal(true);
+                                  })();
+                                }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
                               </Button>
                               <Button
                                 size="icon"
@@ -922,10 +923,10 @@ export function Channels() {
 
       <ConfirmDialog
         open={!!deleteTarget}
-        title={t('common.confirm', 'Confirm')}
+        title={t('common:actions.confirm')}
         message={deleteTarget?.accountId ? t('account.deleteConfirm') : t('deleteConfirm')}
-        confirmLabel={t('common.delete', 'Delete')}
-        cancelLabel={t('common.cancel', 'Cancel')}
+        confirmLabel={t('common:actions.delete')}
+        cancelLabel={t('common:actions.cancel')}
         variant="destructive"
         onConfirm={() => {
           void handleDelete();

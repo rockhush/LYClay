@@ -1,13 +1,53 @@
 import type { ChatSession } from '@/stores/chat';
 
+export type SessionBucketKey =
+  | 'today'
+  | 'yesterday'
+  | 'withinWeek'
+  | 'withinTwoWeeks'
+  | 'withinMonth'
+  | 'older';
+
+export function resolveSessionListActivityMs(session: ChatSession): number | undefined {
+  if (typeof session.lastMessageAt === 'number' && session.lastMessageAt > 0) {
+    return session.lastMessageAt;
+  }
+  if (typeof session.updatedAt === 'number' && session.updatedAt > 0) {
+    return session.updatedAt;
+  }
+  return undefined;
+}
+
 export function resolveSessionActivityMs(
   session: ChatSession,
   sessionLastActivity: Record<string, number>,
 ): number {
+  if (typeof session.lastMessageAt === 'number' && session.lastMessageAt > 0) {
+    return session.lastMessageAt;
+  }
+
   const stored = sessionLastActivity[session.key];
   if (typeof stored === 'number' && stored > 0) return stored;
+
   if (typeof session.updatedAt === 'number' && session.updatedAt > 0) return session.updatedAt;
   return 0;
+}
+
+export function getSessionBucket(activityMs: number, nowMs: number): SessionBucketKey {
+  if (!activityMs || activityMs <= 0) return 'older';
+
+  const now = new Date(nowMs);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+
+  if (activityMs >= startOfToday) return 'today';
+  if (activityMs >= startOfYesterday) return 'yesterday';
+
+  const daysAgo = (startOfToday - activityMs) / (24 * 60 * 60 * 1000);
+  if (daysAgo <= 7) return 'withinWeek';
+  if (daysAgo <= 14) return 'withinTwoWeeks';
+  if (daysAgo <= 30) return 'withinMonth';
+  return 'older';
 }
 
 export function compareSessionsByActivity(

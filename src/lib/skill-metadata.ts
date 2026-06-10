@@ -311,6 +311,26 @@ export function resolveSkillListVersionForDisplay(
   return skill.version;
 }
 
+/** Description source for installed cards/detail: prefer skill-list API over local SKILL.md. */
+export function resolveSkillListDescriptionForDisplay(
+  skill: Pick<Skill, 'description' | 'isBundled' | 'isCore' | 'id' | 'slug' | 'name'>,
+  marketplace?: Pick<MarketplaceSkill, 'description'>,
+  fallback = '',
+): string {
+  if (isLyclawBuiltinSkill(skill)) {
+    return skill.description?.trim() || fallback;
+  }
+  const listDescription = marketplace?.description?.trim();
+  if (listDescription) {
+    return listDescription;
+  }
+  const local = skill.description?.trim();
+  if (local && !isPlaceholderSkillDescription(local)) {
+    return local;
+  }
+  return local || fallback;
+}
+
 export function mergeSkillWithMarketplaceMetadata(
   skill: Skill,
   marketplace?: MarketplaceSkill,
@@ -323,7 +343,7 @@ export function mergeSkillWithMarketplaceMetadata(
     next.name = marketplace.name.trim();
   }
 
-  if (marketplace.description?.trim() && isPlaceholderSkillDescription(skill.description)) {
+  if (marketplace.description?.trim() && !skill.isBundled && !skill.isCore) {
     next.description = marketplace.description.trim();
   }
 

@@ -1,5 +1,6 @@
 import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
+import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
 import { useGatewayStore } from '@/stores/gateway';
 import { getCanonicalPrefixFromSessions, toMs } from './helpers';
 import { DEFAULT_CANONICAL_PREFIX, DEFAULT_SESSION_KEY, type ChatSession } from './types';
@@ -44,6 +45,7 @@ function parseSessionRecord(record: Record<string, unknown>): ChatSession | null
     thinkingLevel: record.thinkingLevel ? String(record.thinkingLevel) : undefined,
     model: record.model ? String(record.model) : undefined,
     updatedAt: parseSessionUpdatedAtMs(record.updatedAt),
+    lastMessageAt: parseSessionUpdatedAtMs(record.lastMessageAt),
   };
 }
 
@@ -80,6 +82,7 @@ function mergeSessionSummariesWithLocalPreviews(
       label: localLabel || session.label,
       firstUserMessagePreview: local.firstUserMessagePreview || session.firstUserMessagePreview,
       updatedAt: session.updatedAt ?? local.updatedAt,
+      lastMessageAt: local.lastMessageAt ?? session.lastMessageAt,
     };
   });
 }
@@ -121,8 +124,11 @@ export function createSessionActions(
             
             const discoveredActivity = Object.fromEntries(
               sessions
-                .filter((session) => typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt))
-                .map((session) => [session.key, session.updatedAt!]),
+                .map((session) => {
+                  const activity = resolveSessionListActivityMs(session);
+                  return activity ? [session.key, activity] as const : null;
+                })
+                .filter((entry): entry is readonly [string, number] => entry != null),
             );
             const discoveredLabels = getSessionLabelsFromSessions(sessions);
 
@@ -134,10 +140,10 @@ export function createSessionActions(
                 ...state.sessionLabels,
                 ...discoveredLabels,
               },
-              sessionLastActivity: {
-                ...state.sessionLastActivity,
-                ...discoveredActivity,
-              },
+              sessionLastActivity: mergeDiscoveredSessionActivity(
+                state.sessionLastActivity,
+                discoveredActivity,
+              ),
             }));
             
             console.log(`[Sessions] ✅ Loaded ${sessions.length} sessions from LOCAL in ${(performance.now() - loadStart).toFixed(2)}ms`);
@@ -217,8 +223,11 @@ export function createSessionActions(
 
           const discoveredActivity = Object.fromEntries(
             sessionsWithCurrent
-              .filter((session) => typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt))
-              .map((session) => [session.key, session.updatedAt!]),
+              .map((session) => {
+                const activity = resolveSessionListActivityMs(session);
+                return activity ? [session.key, activity] as const : null;
+              })
+              .filter((entry): entry is readonly [string, number] => entry != null),
           );
           const discoveredLabels = getSessionLabelsFromSessions(sessionsWithCurrent);
 
@@ -230,10 +239,10 @@ export function createSessionActions(
               ...state.sessionLabels,
               ...discoveredLabels,
             },
-            sessionLastActivity: {
-              ...state.sessionLastActivity,
-              ...discoveredActivity,
-            },
+            sessionLastActivity: mergeDiscoveredSessionActivity(
+              state.sessionLastActivity,
+              discoveredActivity,
+            ),
           }));
 
           if (currentSessionKey !== nextSessionKey) {

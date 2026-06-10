@@ -144,6 +144,54 @@ describe('chat event dedupe', () => {
     expect(extractText(useChatStore.getState().streamingMessage)).toBe('first version');
   });
 
+  it('progressively applies cumulative text deltas with increasing seq values', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'Write an essay about my alma mater' }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-essay-stream',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'delta',
+      runId: 'run-essay-stream',
+      sessionKey: 'agent:main:main',
+      seq: 1,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'My alma mater' }],
+      },
+    });
+    expect(extractText(useChatStore.getState().streamingMessage)).toBe('My alma mater');
+
+    useChatStore.getState().handleChatEvent({
+      state: 'delta',
+      runId: 'run-essay-stream',
+      sessionKey: 'agent:main:main',
+      seq: 2,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'My alma mater holds many memories.' }],
+      },
+    });
+    expect(extractText(useChatStore.getState().streamingMessage)).toBe('My alma mater holds many memories.');
+  });
+
   it('clears current session execution state when final event has no message', async () => {
     const { useChatStore } = await import('@/stores/chat');
 

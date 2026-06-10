@@ -233,6 +233,45 @@ function resolveSessionFilePath(entry: Record<string, unknown>, sessionsDir: str
   return join(sessionsDir, idValue.endsWith('.jsonl') ? idValue : `${idValue}.jsonl`);
 }
 
+function parseTranscriptMessageTimestamp(message: unknown): number | undefined {
+  if (!message || typeof message !== 'object') return undefined;
+  const timestamp = (message as { timestamp?: unknown }).timestamp;
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+    return timestamp < 1e12 ? timestamp * 1000 : timestamp;
+  }
+  if (typeof timestamp === 'string' && timestamp.trim()) {
+    const parsed = Date.parse(timestamp);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+async function readLastMessageTimestamp(filePath: string): Promise<number | undefined> {
+  const stream = createReadStream(filePath, { encoding: 'utf8' });
+  const reader = createInterface({ input: stream, crlfDelay: Infinity });
+  let lastTimestamp: number | undefined;
+
+  try {
+    for await (const line of reader) {
+      if (!line.trim()) continue;
+
+      try {
+        const entry = JSON.parse(line) as { type?: string; message?: unknown };
+        if (entry.type !== 'message' || !entry.message) continue;
+        const timestamp = parseTranscriptMessageTimestamp(entry.message);
+        if (timestamp) lastTimestamp = timestamp;
+      } catch {
+        // Ignore malformed transcript lines; history loading has its own parser/logs.
+      }
+    }
+  } finally {
+    reader.close();
+    stream.destroy();
+  }
+
+  return lastTimestamp;
+}
+
 async function readFirstUserPreview(filePath: string): Promise<string | undefined> {
   const stream = createReadStream(filePath, { encoding: 'utf8' });
   const reader = createInterface({ input: stream, crlfDelay: Infinity });
@@ -291,6 +330,7 @@ function toPublicSessionListItem(session: Record<string, unknown>, defaultModel?
     thinkingLevel: session.thinkingLevel,
     model: session.model ?? defaultModel,
     updatedAt: session.updatedAt,
+    lastMessageAt: session.lastMessageAt,
   };
 }
 
@@ -353,12 +393,20 @@ export async function handleSessionRoutes(
             if (!sessionFilePath) return session;
 
             try {
-              const firstUserMessagePreview = await readFirstUserPreview(sessionFilePath);
-              if (!firstUserMessagePreview) return session;
+              const [firstUserMessagePreview, lastMessageAt] = await Promise.all([
+                readFirstUserPreview(sessionFilePath),
+                readLastMessageTimestamp(sessionFilePath),
+              ]);
+              if (!firstUserMessagePreview && !lastMessageAt) return session;
               return {
                 ...session,
-                firstUserMessagePreview,
-                label: session.label || firstUserMessagePreview,
+                ...(firstUserMessagePreview
+                  ? {
+                    firstUserMessagePreview,
+                    label: session.label || firstUserMessagePreview,
+                  }
+                  : {}),
+                ...(lastMessageAt ? { lastMessageAt } : {}),
               };
             } catch {
               return session;

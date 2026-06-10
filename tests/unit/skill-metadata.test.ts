@@ -18,6 +18,7 @@ import {
   normalizeSkillLookupKey,
   resolveSkillDisplayName,
   resolveSkillListVersionForDisplay,
+  resolveSkillListDescriptionForDisplay,
   shouldIncludeInMySkills,
 } from '@/lib/skill-metadata';
 import type { MarketplaceSkill, Skill } from '@/types/skill';
@@ -141,10 +142,11 @@ describe('skill metadata helpers', () => {
     );
 
     expect(merged.name).toBe('translate');
+    expect(merged.description).toBe('Translation tool');
     expect(resolveSkillDisplayName(merged, { name: 'translate' })).toBe('translate');
   });
 
-  it('keeps bundled skill names when marketplace metadata is present', () => {
+  it('keeps bundled skill descriptions when marketplace metadata is present', () => {
     const merged = mergeSkillWithMarketplaceMetadata(
       {
         id: 'pdf',
@@ -163,6 +165,36 @@ describe('skill metadata helpers', () => {
     );
 
     expect(merged.name).toBe('pdf');
+    expect(merged.description).toBe('PDF tools');
+  });
+
+  it('prefers marketplace list description over local SKILL.md for installed skills', () => {
+    expect(
+      resolveSkillListDescriptionForDisplay(
+        {
+          id: 'dws',
+          slug: 'dws',
+          name: '办公助手',
+          description: 'Long YAML description from SKILL.md frontmatter...',
+        },
+        { description: 'Short plaza list description' },
+      ),
+    ).toBe('Short plaza list description');
+  });
+
+  it('keeps bundled skill descriptions for display when marketplace metadata is present', () => {
+    expect(
+      resolveSkillListDescriptionForDisplay(
+        {
+          id: 'pdf',
+          slug: 'pdf',
+          name: 'pdf',
+          description: 'PDF tools',
+          isBundled: true,
+        },
+        { description: 'Marketplace PDF' },
+      ),
+    ).toBe('PDF tools');
   });
 
   it('replaces placeholder descriptions with marketplace metadata', () => {

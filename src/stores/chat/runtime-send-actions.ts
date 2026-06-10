@@ -407,7 +407,14 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       }
 
       // Mark this session as most recently active
-      set((s) => ({ sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: nowMs } }));
+      set((s) => ({
+        sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: nowMs },
+        sessions: s.sessions.map((session) => (
+          session.key === currentSessionKey
+            ? { ...session, lastMessageAt: nowMs }
+            : session
+        )),
+      }));
 
       // Reset tracking for error recovery and safety timeout
       setLastChatEventAt(Date.now());

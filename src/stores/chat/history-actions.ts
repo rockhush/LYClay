@@ -173,8 +173,15 @@ export function createHistoryActions(
             ...(discoveredLabel && !s.sessionLabels[currentSessionKey]
               ? { sessionLabels: { ...s.sessionLabels, [currentSessionKey]: discoveredLabel } }
               : {}),
-            ...(discoveredActivity && !s.sessionLastActivity[currentSessionKey]
-              ? { sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: discoveredActivity } }
+            ...(discoveredActivity
+              ? {
+                sessionLastActivity: { ...s.sessionLastActivity, [currentSessionKey]: discoveredActivity },
+                sessions: s.sessions.map((session) => (
+                  session.key === currentSessionKey
+                    ? { ...session, lastMessageAt: discoveredActivity }
+                    : session
+                )),
+              }
               : {}),
           }));
         }
