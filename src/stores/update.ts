@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { useSettingsStore } from './settings';
 import { invokeIpc } from '@/lib/api-client';
+import { formatUpdateFriendlyError } from '@/lib/update-errors';
 
 export interface UpdateInfo {
   version: string;
@@ -113,9 +114,13 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       };
       set((state) => ({
         status: payload.status ?? state.status,
-        updateInfo: 'info' in payload ? (payload.info ?? null) : state.updateInfo,
+        updateInfo: payload.status === 'error'
+          ? null
+          : ('info' in payload ? (payload.info ?? null) : state.updateInfo),
         progress: 'progress' in payload ? (payload.progress ?? null) : state.progress,
-        error: 'error' in payload ? (payload.error ?? null) : state.error,
+        error: 'error' in payload
+          ? (payload.error ? formatUpdateFriendlyError(payload.error) : null)
+          : state.error,
         autoInstallCountdown: payload.status === 'error' ? null : state.autoInstallCountdown,
       }));
     });
@@ -149,7 +154,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       return;
     }
 
-    set({ status: 'checking', error: null });
+    set({ status: 'checking', error: null, updateInfo: null, progress: null });
     
     try {
       const result = await Promise.race([
@@ -169,31 +174,25 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       if (result.status) {
         set({
           status: result.status.status,
-          updateInfo: result.status.info || null,
+          updateInfo: result.status.status === 'error' ? null : (result.status.info || null),
           progress: result.status.progress || null,
-          error: result.status.error || null,
+          error: result.status.error ? formatUpdateFriendlyError(result.status.error) : null,
         });
       } else if (!result.success) {
-        // 检查是否为 JSON 解析错误，如果是则显示友好提示
         const errorMsg = result.error || 'Failed to check for updates';
-        const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
-          ? '检测失败：请使用内网'
-          : errorMsg;
-        set({ status: 'error', error: friendlyError });
+        set({ status: 'error', updateInfo: null, error: formatUpdateFriendlyError(errorMsg) });
       }
     } catch (error) {
-      // 检查是否为 JSON 解析错误，如果是则显示友好提示
       const errorMsg = String(error);
-      const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
-        ? '检测失败：请使用内网'
-        : errorMsg;
-      set({ status: 'error', error: friendlyError });
+      set({ status: 'error', updateInfo: null, error: formatUpdateFriendlyError(errorMsg) });
     } finally {
-      // In dev mode autoUpdater skips without emitting events, so the
-      // status may still be 'checking' or even 'idle'. Catch both.
       const currentStatus = get().status;
-      if (currentStatus === 'checking' || currentStatus === 'idle') {
-        set({ status: 'error', error: 'Update check completed without a result. This usually means the app is running in dev mode.' });
+      if (currentStatus === 'checking') {
+        set({
+          status: 'error',
+          updateInfo: null,
+          error: formatUpdateFriendlyError('Update check completed without a result'),
+        });
       }
     }
   },
@@ -212,6 +211,17 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   },
 
   downloadUpdate: async () => {
+    const { status, updateInfo } = get();
+    if (status !== 'available' || !updateInfo?.version) {
+      set({
+        status: 'error',
+        updateInfo: null,
+        error: formatUpdateFriendlyError('Check update failed'),
+        autoInstallCountdown: null,
+      });
+      return;
+    }
+
     await get().cancelAutoInstall();
 
     set({
@@ -252,14 +262,14 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       if (!result.success) {
         set({
           status: 'error',
-          error: result.error || 'Failed to download update',
+          error: formatUpdateFriendlyError(result.error || 'Failed to download update'),
           autoInstallCountdown: null,
         });
       }
     } catch (error) {
       set({
         status: 'error',
-        error: String(error),
+        error: formatUpdateFriendlyError(String(error)),
         autoInstallCountdown: null,
       });
     }

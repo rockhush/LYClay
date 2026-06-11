@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { normalizeUiState, readUiState, writeUiState, type LyclawUiState } from '../../utils/ui-state';
+import { mergeUiState, normalizeUiState, readUiState, writeUiState, type LyclawUiState } from '../../utils/ui-state';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -18,7 +18,8 @@ export async function handleUiStateRoutes(
     try {
       const body = await parseJsonBody<Partial<LyclawUiState> & { state?: Partial<LyclawUiState> }>(req);
       const patch = body.state ?? body;
-      const saved = writeUiState(normalizeUiState(patch));
+      const existing = readUiState();
+      const saved = writeUiState(mergeUiState(existing, normalizeUiState({ ...existing, ...patch })));
       sendJson(res, 200, { success: true, state: saved });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });

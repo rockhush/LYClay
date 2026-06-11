@@ -1,4 +1,9 @@
 import { hostApiFetch } from '@/lib/host-api';
+import {
+  getSkillDisplayCacheSnapshot,
+  loadSkillDisplayCacheLegacy,
+} from '@/lib/skill-display-cache';
+import type { CachedSkillDisplayMetadata } from '@/lib/skill-display-cache';
 import { useChatStore } from '@/stores/chat';
 import type { CompressionStateEntry } from '@/stores/chat/types';
 import { useWorkspacesStore } from '@/stores/workspaces';
@@ -18,6 +23,10 @@ export interface LyclawUiState {
     sessionPinnedAt: Record<string, number>;
     sessionLastActivity: Record<string, number>;
     sessionCompressionState: Record<string, unknown>;
+  };
+  skills: {
+    cachedDisplayMetadata: Record<string, CachedSkillDisplayMetadata>;
+    cachedDisplayVersions?: Record<string, string>;
   };
 }
 
@@ -133,9 +142,14 @@ function readLocalChatState(): LyclawUiState['chat'] {
   return { sessionWorkspaceIds, customSessionLabels, sessionPinnedAt, sessionLastActivity, sessionCompressionState: {} };
 }
 
+function readLocalSkillsState(): LyclawUiState['skills'] {
+  return getSkillDisplayCacheSnapshot();
+}
+
 function readLocalUiState(): LyclawUiState {
   const workspaces = readLocalWorkspaceState();
   const chat = readLocalChatState();
+  const skills = readLocalSkillsState();
   return {
     version: 1,
     updatedAt: Date.now(),
@@ -145,6 +159,7 @@ function readLocalUiState(): LyclawUiState {
       temporaryWorkspaces: [],
     },
     chat,
+    skills,
   };
 }
 
@@ -171,6 +186,10 @@ export function isNonEmptyChatState(chat: LyclawUiState['chat']): boolean {
     || Object.keys(chat.sessionPinnedAt).length > 0
     || Object.keys(chat.sessionLastActivity).length > 0
     || Object.keys(chat.sessionCompressionState).length > 0;
+}
+
+export function isNonEmptySkillsState(skills: LyclawUiState['skills']): boolean {
+  return Object.keys(skills.cachedDisplayMetadata).length > 0;
 }
 
 /** Pure merge used on startup; exported for unit tests. */
@@ -225,6 +244,9 @@ export function mergeHydratedUiState(
     updatedAt: Date.now(),
     workspaces,
     chat,
+    skills: disk?.skills && isNonEmptySkillsState(disk.skills)
+      ? disk.skills
+      : local.skills,
   };
 }
 
@@ -273,6 +295,7 @@ function buildUiStateFromStores(): LyclawUiState {
       sessionLastActivity: chat.sessionLastActivity,
       sessionCompressionState: chat.sessionCompressionState as unknown as Record<string, unknown>,
     },
+    skills: getSkillDisplayCacheSnapshot(),
   };
 }
 
@@ -352,6 +375,7 @@ export async function hydrateUiStateFromDisk(): Promise<void> {
     }
 
     const merged = mergeUiState(disk, local);
+    loadSkillDisplayCacheLegacy(merged.skills.cachedDisplayMetadata, merged.skills.cachedDisplayVersions);
     applyUiStateToStores(merged);
 
     startUiStateSync();

@@ -13,6 +13,7 @@ import type {
 import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
+import { setLastCompanyListApiTrace } from '../../utils/company-list-api-trace';
 import { spawn } from 'child_process';
 import { getOpenClawConfigDir, prepareWinSpawn } from '../../utils/paths';
 import {
@@ -181,7 +182,8 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       }
 
       const data = await response.json();
-      
+      setLastCompanyListApiTrace(url, data);
+
       // 检查返回的数据结构
       if (!data || typeof data !== 'object' || !Array.isArray(data.skills)) {
         console.error('[CompanyMarketplace] API returned invalid data format:', typeof data, data);
@@ -288,6 +290,7 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       }
 
       const data = await skillsResponse.json();
+      setLastCompanyListApiTrace(skillsUrl, data);
       if (!data || typeof data !== 'object' || !Array.isArray(data.skills)) {
         console.error('[CompanyMarketplace] API returned invalid data format:', typeof data, data);
         throw new Error('Invalid response format: expected object with skills array');

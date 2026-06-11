@@ -391,10 +391,13 @@ export async function readOpenClawConfig(): Promise<OpenClawConfig> {
 
     try {
         const content = await readFile(CONFIG_FILE, 'utf-8');
+        if (!content.trim()) {
+            logger.warn('[OpenClaw] Config file is empty; using defaults');
+            return {};
+        }
         return JSON.parse(content) as OpenClawConfig;
     } catch (error) {
-        logger.error('Failed to read OpenClaw config', error);
-        console.error('Failed to read OpenClaw config:', error);
+        logger.error('Failed to read OpenClaw config (using defaults)', error);
         return {};
     }
 }

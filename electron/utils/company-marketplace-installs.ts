@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { setLastCompanyListApiTrace } from './company-list-api-trace';
 import { getOpenClawConfigDir } from './paths';
 
 export const COMPANY_MARKETPLACE_SIDECAR = '.lyclaw-marketplace.json';
@@ -78,7 +79,8 @@ function normalizeRegistry(raw: unknown): CompanyMarketplaceInstallRegistry {
 }
 
 export async function fetchCompanyMarketplaceSkills(): Promise<CompanyMarketplaceApiSkill[]> {
-  const response = await fetch(`${COMPANY_API_BASE}/list/`, {
+  const listUrl = `${COMPANY_API_BASE}/list/`;
+  const response = await fetch(listUrl, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' },
   });
@@ -87,6 +89,7 @@ export async function fetchCompanyMarketplaceSkills(): Promise<CompanyMarketplac
   }
 
   const data = await response.json();
+  setLastCompanyListApiTrace(listUrl, data);
   if (!data || typeof data !== 'object' || !Array.isArray((data as { skills?: unknown }).skills)) {
     throw new Error('Invalid company marketplace response');
   }

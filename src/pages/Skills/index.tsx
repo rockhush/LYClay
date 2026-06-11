@@ -52,20 +52,35 @@ import {
   buildMarketplaceLookupMaps,
   companyInstallEntriesToMarketplaceSkills,
   findMarketplaceSkillMatch,
+  findInstalledSkillForMarketplace,
   getMarketplaceSkillKey,
   isMarketplaceSkillInstalledOnDisk,
   formatSkillVersionLabel,
   resolveSkillListVersionForDisplay,
   resolveSkillListDescriptionForDisplay,
+  resolveSkillDisplayNameForInstalled,
+  resolveSkillAuthorForInstalled,
   isLyclawBuiltinSkill,
-  resolveSkillDisplayName,
   isCustomSkill,
   isMarketplaceInstalledSkill,
+  normalizeSkillVersionForUpdateCheck,
 } from '@/lib/skill-metadata';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { flushUiStateSync, hydrateUiStateFromDisk } from '@/lib/ui-state-persistence';
+import { flushUiStateSync, scheduleUiStateSync } from '@/lib/ui-state-persistence';
+import {
+  backfillSkillDisplayCacheAliases,
+  commitCachedSkillDisplayMetadata,
+  parseCompanyListSkillMetadata,
+  resolveCachedSkillDisplayMetadata,
+  purgeCachedSkillDisplayMetadataBySlug,
+  resolveInstalledMarketplaceSkillForDisplay,
+  seedCachedSkillDisplayMetadata,
+  type CachedSkillDisplayMetadata,
+} from '@/lib/skill-display-cache';
 import { UploadSkillDialog } from '@/components/skills/UploadSkillDialog';
+import { BatchUpdateSkillsDialog } from '@/components/skills/BatchUpdateSkillsDialog';
+import { BatchToggleSkillsDialog } from '@/components/skills/BatchToggleSkillsDialog';
 
 const INSTALL_ERROR_CODES = new Set(['installTimeoutError', 'installRateLimitError']);
 const FETCH_ERROR_CODES = new Set(['fetchTimeoutError', 'fetchRateLimitError', 'timeoutError', 'rateLimitError']);
@@ -107,13 +122,14 @@ function getSkillColor(name: string): string {
 interface SkillDetailDialogProps {
   skill: Skill | null;
   marketplaceMatch?: MarketplaceSkill;
+  cachedDisplayMetadata?: CachedSkillDisplayMetadata;
   isOpen: boolean;
   onClose: () => void;
   onOpenFolder?: (skill: Skill) => Promise<void> | void;
   onUninstall?: (slug: string) => Promise<void>;
 }
 
-function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFolder, onUninstall }: SkillDetailDialogProps) {
+function SkillDetailDialog({ skill, marketplaceMatch, cachedDisplayMetadata, isOpen, onClose, onOpenFolder, onUninstall }: SkillDetailDialogProps) {
   const { t } = useTranslation('skills');
   const [skillMd, setSkillMd] = useState('');
   const [skillMdFile, setSkillMdFile] = useState('SKILL.md');
@@ -224,18 +240,23 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
 
   if (!skill || !isOpen) return null;
 
-  const displayName = resolveSkillDisplayName(skill, marketplaceMatch);
+  const displayName = resolveSkillDisplayNameForInstalled(skill, marketplaceMatch, cachedDisplayMetadata?.name);
   const initial = getSkillInitial(displayName);
   const colorClass = getSkillColor(displayName);
   const displayVersion = formatSkillVersionLabel(
-    resolveSkillListVersionForDisplay(skill, marketplaceMatch),
+    resolveSkillListVersionForDisplay(skill, marketplaceMatch, cachedDisplayMetadata?.version),
     t('card.versionUnknown', { defaultValue: '未知' }),
     { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
   const useInitialBadge = !skill.icon || ['⌛', '📦', '🔧'].includes(skill.icon);
-  const authorLabel = (skill.author || marketplaceMatch?.author || '').trim()
+  const authorLabel = resolveSkillAuthorForInstalled(skill, marketplaceMatch, cachedDisplayMetadata?.author)
     || t('card.authorFallback', { defaultValue: '未知作者' });
-  const description = resolveSkillListDescriptionForDisplay(skill, marketplaceMatch);
+  const description = resolveSkillListDescriptionForDisplay(
+    skill,
+    marketplaceMatch,
+    '',
+    cachedDisplayMetadata?.description,
+  );
 
   const isBuiltin = isLyclawBuiltinSkill(skill);
 
@@ -342,9 +363,10 @@ function SkillDetailDialog({ skill, marketplaceMatch, isOpen, onClose, onOpenFol
             {/* 卸载按钮 */}
             <Button
               type="button"
+              variant="ghost"
               onClick={handleUninstall}
               disabled={uninstalling}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-red-600 hover:bg-red-700 text-white shadow-sm transition-colors"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-destructive/10 border border-destructive/20 text-destructive hover:bg-destructive/15 hover:text-destructive transition-colors"
             >
               {uninstalling ? (
                 <><LoadingSpinner size="sm" className="mr-1.5" /> 卸载中...</>
@@ -374,20 +396,26 @@ interface SkillCardProps {
   onToggle: (enabled: boolean) => void;
   t: TFunction<'skills'>;
   marketplaceMatch?: MarketplaceSkill;
+  cachedDisplayMetadata?: CachedSkillDisplayMetadata;
 }
 
-function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch }: SkillCardProps) {
-  const displayName = resolveSkillDisplayName(skill, marketplaceMatch);
+function SkillCard({ skill, onClick, onToggle, t, marketplaceMatch, cachedDisplayMetadata }: SkillCardProps) {
+  const displayName = resolveSkillDisplayNameForInstalled(skill, marketplaceMatch, cachedDisplayMetadata?.name);
   const initial = getSkillInitial(displayName);
   const colorClass = getSkillColor(displayName);
   const versionLabel = formatSkillVersionLabel(
-    resolveSkillListVersionForDisplay(skill, marketplaceMatch),
+    resolveSkillListVersionForDisplay(skill, marketplaceMatch, cachedDisplayMetadata?.version),
     t('card.versionUnknown', { defaultValue: '未知' }),
     { treatAsBuiltin: isLyclawBuiltinSkill(skill) },
   );
-  const authorLabel = (skill.author || marketplaceMatch?.author || '').trim()
+  const authorLabel = resolveSkillAuthorForInstalled(skill, marketplaceMatch, cachedDisplayMetadata?.author)
     || t('card.authorFallback', { defaultValue: '未知作者' });
-  const description = resolveSkillListDescriptionForDisplay(skill, marketplaceMatch, '—');
+  const description = resolveSkillListDescriptionForDisplay(
+    skill,
+    marketplaceMatch,
+    '—',
+    cachedDisplayMetadata?.description,
+  );
 
   return (
     <div
@@ -475,6 +503,8 @@ interface MarketplaceSkillCardProps {
   onUninstall: () => void;
   onUpdate: () => void;
   t: TFunction<'skills'>;
+  cachedDisplayMetadata?: CachedSkillDisplayMetadata;
+  installedSkill?: Skill;
 }
 
 function MarketplaceSkillCard({
@@ -485,15 +515,20 @@ function MarketplaceSkillCard({
   onUninstall,
   onUpdate,
   t,
+  cachedDisplayMetadata,
+  installedSkill,
 }: MarketplaceSkillCardProps) {
-  const initial = getSkillInitial(skill.name);
-  const colorClass = getSkillColor(skill.name);
+  const displaySkill = isInstalled
+    ? resolveInstalledMarketplaceSkillForDisplay(skill, cachedDisplayMetadata, installedSkill)
+    : skill;
+  const initial = getSkillInitial(displaySkill.name);
+  const colorClass = getSkillColor(displaySkill.name);
   const versionLabel = formatSkillVersionLabel(
-    skill.version,
+    displaySkill.version,
     t('card.versionUnknown', { defaultValue: '未知' }),
   );
   const author =
-    (skill.author || '').trim() ||
+    (displaySkill.author || '').trim() ||
     t('card.authorFallback', { defaultValue: '未知作者' });
   const downloads =
     typeof skill.downloads === 'number' && Number.isFinite(skill.downloads)
@@ -513,7 +548,7 @@ function MarketplaceSkillCard({
       return '';
     }
   };
-  const createTime = skill.update_time ? formatCreateTime(skill.update_time) : null;
+  const createTime = displaySkill.update_time ? formatCreateTime(displaySkill.update_time) : null;
 
   return (
     <div
@@ -534,7 +569,7 @@ function MarketplaceSkillCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex flex-col gap-0.5">
-            <h3 className="text-[14px] font-normal text-foreground truncate">{skill.name}</h3>
+            <h3 className="text-[14px] font-normal text-foreground truncate">{displaySkill.name}</h3>
             <span className="text-[11px] font-mono text-muted-foreground/70 shrink-0">
               {versionLabel}
             </span>
@@ -594,11 +629,11 @@ function MarketplaceSkillCard({
       <Tooltip>
         <TooltipTrigger asChild>
           <p className="mt-3 text-[12.5px] text-muted-foreground leading-[1.55] line-clamp-2 break-words min-h-[3.1em]">
-            {skill.description || '—'}
+            {displaySkill.description || '—'}
           </p>
         </TooltipTrigger>
         <TooltipContent side="top" className="max-w-xs whitespace-normal break-words">
-          {skill.description || '—'}
+          {displaySkill.description || '—'}
         </TooltipContent>
       </Tooltip>
 
@@ -640,6 +675,7 @@ export function Skills() {
     searchResults,
     searchSkills,
     installSkill,
+    updateSkill,
     uninstallSkill,
     setSearchResults,
     searching,
@@ -660,9 +696,15 @@ export function Skills() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [scrollPosition, setScrollPosition] = useState(0);
   const [uploadSkillOpen, setUploadSkillOpen] = useState(false);
+  const [batchUpdateOpen, setBatchUpdateOpen] = useState(false);
+  const [batchUpdateProgress, setBatchUpdateProgress] = useState<{ current: number; total: number } | null>(null);
+  const [batchToggleMode, setBatchToggleMode] = useState<'enable' | 'disable' | null>(null);
+  const [batchToggleProgress, setBatchToggleProgress] = useState<{ current: number; total: number } | null>(null);
+  const [batchToggleSkillSnapshot, setBatchToggleSkillSnapshot] = useState<Skill[]>([]);
   const [activeTab, setActiveTab] = useState<'mine' | 'market'>('mine');
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [displayCacheRevision, setDisplayCacheRevision] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -776,6 +818,131 @@ export function Skills() {
     [safeSkills, companyInstallMap],
   );
 
+  const resolveInstalledDisplayMetadata = useCallback((
+    marketplaceSkill: MarketplaceSkill,
+    installedSkill?: Skill,
+  ): CachedSkillDisplayMetadata | undefined => (
+    resolveCachedSkillDisplayMetadata({
+      installedSkill,
+      marketplaceSkill,
+    })
+  ), [displayCacheRevision]);
+
+  const commitMarketplaceDisplayCache = useCallback(async (
+    slug: string,
+    overrideMetadata?: Partial<CachedSkillDisplayMetadata>,
+  ) => {
+    const findMarketplaceSkill = () => useSkillsStore.getState().searchResults.find(
+      (item) => item.slug === slug || String(item.id) === slug,
+    );
+    let marketplaceSkill = findMarketplaceSkill();
+    if (!marketplaceSkill) {
+      await useSkillsStore.getState().searchSkills('', '', '-download_count');
+      marketplaceSkill = findMarketplaceSkill();
+    }
+    if (!marketplaceSkill) return;
+
+    const { skills, companyInstallMap } = useSkillsStore.getState();
+    const installedSkill = findInstalledSkillForMarketplace(marketplaceSkill, skills, companyInstallMap);
+    const metadata: CachedSkillDisplayMetadata = {
+      version: overrideMetadata?.version ?? marketplaceSkill.version,
+      name: overrideMetadata?.name ?? marketplaceSkill.name,
+      author: overrideMetadata?.author ?? marketplaceSkill.author,
+      description: overrideMetadata?.description ?? marketplaceSkill.description,
+      update_time: overrideMetadata?.update_time ?? marketplaceSkill.update_time,
+    };
+    if (commitCachedSkillDisplayMetadata(marketplaceSkill, marketplaceSkill, metadata, installedSkill)) {
+      setDisplayCacheRevision((value) => value + 1);
+      await flushUiStateSync().catch(() => undefined);
+    }
+  }, []);
+
+  const resolveMarketplaceSkillBySlug = useCallback((slug: string): MarketplaceSkill | undefined => {
+    const { searchResults, companyInstallEntries } = useSkillsStore.getState();
+    const fromSearch = searchResults.find(
+      (item) => item.slug === slug || String(item.id) === slug,
+    );
+    if (fromSearch) return fromSearch;
+
+    if (/^\d+$/.test(slug)) {
+      const entry = companyInstallEntries[slug];
+      if (entry) {
+        return companyInstallEntriesToMarketplaceSkills({ [slug]: entry })[0];
+      }
+    }
+
+    for (const [marketplaceId, entry] of Object.entries(companyInstallEntries)) {
+      if (entry.packageSlug === slug) {
+        return companyInstallEntriesToMarketplaceSkills({ [marketplaceId]: entry })[0];
+      }
+    }
+
+    return undefined;
+  }, []);
+
+  const syncDisplayCacheFromMarketplace = useCallback(async (
+    slug: string,
+    options?: {
+      versionOverride?: string;
+      listApiResponse?: unknown;
+      marketplaceId?: string;
+    },
+  ) => {
+    const resolvedSkill = resolveMarketplaceSkillBySlug(slug);
+    const marketplaceId = options?.marketplaceId?.trim()
+      || (resolvedSkill?.id != null ? String(resolvedSkill.id).trim() : slug.trim());
+    const fromList = parseCompanyListSkillMetadata(options?.listApiResponse, marketplaceId);
+    const freshFromSearch = useSkillsStore.getState().searchResults.find(
+      (item) => item.slug === slug || String(item.id) === slug || String(item.id) === marketplaceId,
+    );
+
+    const metadata: Partial<CachedSkillDisplayMetadata> = {
+      version: options?.versionOverride?.trim()
+        || fromList?.version
+        || freshFromSearch?.version,
+      name: fromList?.name || freshFromSearch?.name,
+      author: fromList?.author || freshFromSearch?.author,
+      description: fromList?.description || freshFromSearch?.description,
+      update_time: fromList?.update_time || freshFromSearch?.update_time,
+    };
+
+    await commitMarketplaceDisplayCache(slug, metadata);
+  }, [commitMarketplaceDisplayCache, resolveMarketplaceSkillBySlug]);
+
+  useEffect(() => {
+    let dirty = false;
+    for (const skill of safeSkills) {
+      if (!isMarketplaceInstalledSkill(skill, marketplaceLookup)) continue;
+      const match = findMarketplaceSkillMatch(skill, marketplaceLookup);
+      const seedMetadata: CachedSkillDisplayMetadata = {
+        version: skill.version,
+        name: match?.name ?? skill.name,
+        author: match?.author ?? skill.author,
+        description: match?.description ?? skill.description,
+        update_time: match?.update_time,
+      };
+      if (seedCachedSkillDisplayMetadata(skill, match, seedMetadata, skill)) dirty = true;
+      if (backfillSkillDisplayCacheAliases({ installedSkill: skill, marketplaceSkill: match })) dirty = true;
+    }
+    for (const skill of searchResults) {
+      if (!isMarketplaceSkillInstalledOnDisk(skill, safeSkills, companyInstallMap)) continue;
+      const installedSkill = findInstalledSkillForMarketplace(skill, safeSkills, companyInstallMap);
+      const seedMetadata: CachedSkillDisplayMetadata = {
+        version: installedSkill?.version ?? skill.version,
+        name: skill.name,
+        author: skill.author,
+        description: skill.description,
+        update_time: skill.update_time,
+      };
+      if (seedCachedSkillDisplayMetadata(skill, skill, seedMetadata, installedSkill)) dirty = true;
+      if (backfillSkillDisplayCacheAliases({ installedSkill, marketplaceSkill: skill })) dirty = true;
+    }
+    if (dirty) {
+      setDisplayCacheRevision((value) => value + 1);
+      scheduleUiStateSync();
+    }
+  }, [safeSkills, searchResults, marketplaceLookup, companyInstallMap]);
+
   const installedMarketplaceCount = searchResults.filter(isMarketplaceSkillInstalled).length;
   const uninstalledMarketplaceCount = searchResults.length - installedMarketplaceCount;
   const visibleMarketplaceSkills = searchResults.filter((skill) => {
@@ -785,34 +952,96 @@ export function Skills() {
     return true;
   });
 
-  const bulkToggleVisible = useCallback(async (enable: boolean) => {
-    const candidates = filteredSkills.filter((skill) => !skill.isCore && skill.enabled !== enable);
-    if (candidates.length === 0) {
-      toast.info(enable ? t('toast.noBatchEnableTargets') : t('toast.noBatchDisableTargets'));
-      return;
+  const installedForBatchUpdate = useMemo(() => {
+    const byKey = new Map<string, MarketplaceSkill>();
+    for (const skill of searchResults) {
+      byKey.set(getMarketplaceSkillKey(skill), skill);
     }
-
-    let succeeded = 0;
-    for (const skill of candidates) {
-      try {
-        if (enable) {
-          await enableSkill(skill.id);
-        } else {
-          await disableSkill(skill.id);
-        }
-        succeeded += 1;
-      } catch {
-        // Continue to next skill and report final summary.
+    for (const skill of companyInstallEntriesToMarketplaceSkills(companyInstallEntries)) {
+      const key = getMarketplaceSkillKey(skill);
+      if (!byKey.has(key)) {
+        byKey.set(key, skill);
       }
     }
+    return Array.from(byKey.values()).filter((skill) =>
+      isMarketplaceSkillInstalledOnDisk(skill, safeSkills, companyInstallMap),
+    );
+  }, [searchResults, companyInstallEntries, safeSkills, companyInstallMap]);
 
-    trackUiEvent('skills.batch_toggle', { enable, total: candidates.length, succeeded });
-    if (succeeded === candidates.length) {
-      toast.success(enable ? t('toast.batchEnabled', { count: succeeded }) : t('toast.batchDisabled', { count: succeeded }));
+  const skillsForBatchEnable = useMemo(
+    () => safeSkills.filter((skill) => !skill.isCore && !skill.enabled),
+    [safeSkills],
+  );
+
+  const skillsForBatchDisable = useMemo(
+    () => safeSkills.filter((skill) => !skill.isCore && skill.enabled),
+    [safeSkills],
+  );
+
+  const handleOpenBatchToggle = useCallback((enable: boolean) => {
+    setAddMenuOpen(false);
+    const targets = enable ? skillsForBatchEnable : skillsForBatchDisable;
+    if (targets.length === 0) {
+      toast.warning(enable ? t('toast.noBatchEnableTargets') : t('toast.noBatchDisableTargets'));
       return;
     }
-    toast.warning(t('toast.batchPartial', { success: succeeded, total: candidates.length }));
-  }, [disableSkill, enableSkill, filteredSkills, t]);
+    setBatchToggleSkillSnapshot(targets);
+    setBatchToggleMode(enable ? 'enable' : 'disable');
+  }, [skillsForBatchEnable, skillsForBatchDisable, t]);
+
+  const handleBatchToggleConfirm = useCallback(async (selectedSkills: Skill[]) => {
+    if (!batchToggleMode || selectedSkills.length === 0) {
+      toast.error(t(batchToggleMode === 'enable'
+        ? 'toast.batchEnableSelectRequired'
+        : 'toast.batchDisableSelectRequired'));
+      return;
+    }
+
+    const enable = batchToggleMode === 'enable';
+    setIsUpdating(true);
+    setBatchToggleProgress({ current: 0, total: selectedSkills.length });
+    let succeeded = 0;
+    let failed = 0;
+
+    try {
+      for (let index = 0; index < selectedSkills.length; index += 1) {
+        const skill = selectedSkills[index];
+        setBatchToggleProgress({ current: index + 1, total: selectedSkills.length });
+        try {
+          if (enable) {
+            await enableSkill(skill.id);
+          } else {
+            await disableSkill(skill.id);
+          }
+          succeeded += 1;
+        } catch (error) {
+          console.error('[Skills] Batch toggle failed for', skill.id, error);
+          failed += 1;
+        }
+      }
+
+      trackUiEvent('skills.batch_toggle', {
+        enable,
+        total: selectedSkills.length,
+        succeeded,
+        failed,
+      });
+
+      const summaryMessage = enable
+        ? t('toast.batchEnableSummary', { succeeded, failed })
+        : t('toast.batchDisableSummary', { succeeded, failed });
+      if (failed > 0) {
+        toast.warning(summaryMessage);
+      } else {
+        toast.success(summaryMessage);
+      }
+    } finally {
+      setIsUpdating(false);
+      setBatchToggleProgress(null);
+      setBatchToggleMode(null);
+      setBatchToggleSkillSnapshot([]);
+    }
+  }, [batchToggleMode, disableSkill, enableSkill, t]);
 
   const handleToggle = useCallback(async (skillId: string, enable: boolean) => {
     try {
@@ -922,16 +1151,26 @@ export function Skills() {
         await enableSkill(slug);
       }
 
-      if (activeTab === 'market') {
-        const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
-        await searchSkills(installQuery.trim(), selectedType, sort);
-      }
+      const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+      await searchSkills(installQuery.trim(), selectedType, sort);
+      await fetchSkills();
 
       setTimeout(() => {
         listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
       }, 0);
 
       toast.success(t('toast.installed'));
+
+      const listTrace = await hostApiFetch<{
+        success: boolean;
+        listApiResponse?: unknown;
+      }>('/api/clawhub/last-list-response').catch(() => ({ success: false as const }));
+      const marketplaceSkill = resolveMarketplaceSkillBySlug(slug);
+      await syncDisplayCacheFromMarketplace(slug, {
+        listApiResponse: listTrace.listApiResponse,
+        marketplaceId: marketplaceSkill?.id != null ? String(marketplaceSkill.id) : undefined,
+      });
+
       // 等待 toast 显示一段时间后再关闭遮罩
       await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (err) {
@@ -946,7 +1185,7 @@ export function Skills() {
     } finally {
       setIsUpdating(false);
     }
-  }, [installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
+  }, [installSkill, enableSkill, fetchSkills, searchSkills, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath, resolveMarketplaceSkillBySlug, syncDisplayCacheFromMarketplace]);
 
   const handleUninstall = useCallback(async (slug: string) => {
     try {
@@ -954,7 +1193,9 @@ export function Skills() {
       const currentScroll = listRef.current?.scrollTop || 0;
       
       await uninstallSkill(slug);
-      await hydrateUiStateFromDisk();
+      if (purgeCachedSkillDisplayMetadataBySlug(slug)) {
+        setDisplayCacheRevision((value) => value + 1);
+      }
       await flushUiStateSync().catch(() => undefined);
       await fetchSkills();
 
@@ -974,43 +1215,127 @@ export function Skills() {
     }
   }, [uninstallSkill, fetchSkills, t]);
 
+  const performSkillUpdate = useCallback(async (slug: string, latestVersion?: string) => {
+    const packageSlug = await updateSkill(slug, latestVersion);
+    await fetchSkills();
+
+    if (packageSlug) {
+      const installed = useSkillsStore.getState().skills.find(
+        (skill) => skill.slug === packageSlug || skill.id === packageSlug,
+      );
+      await enableSkill(installed?.id || packageSlug);
+    } else {
+      await enableSkill(slug);
+    }
+  }, [updateSkill, enableSkill, fetchSkills]);
+
+  const checkSkillUpdateForMarketplace = useCallback(async (
+    skill: MarketplaceSkill,
+  ): Promise<
+    | { status: 'updatable'; latestVersion: string; marketplaceId: string }
+    | { status: 'skipped' }
+    | { status: 'failed' }
+  > => {
+    const marketplaceId = skill.id != null ? String(skill.id).trim() : '';
+    if (!marketplaceId || !/^\d+$/.test(marketplaceId)) {
+      return { status: 'failed' };
+    }
+
+    const installedRecord = findInstalledSkillForMarketplace(skill, safeSkills, companyInstallMap);
+    const registryVersion = useSkillsStore.getState().companyInstallEntries[marketplaceId]?.version;
+    const installedVersion = normalizeSkillVersionForUpdateCheck(
+      installedRecord?.version ?? registryVersion,
+    );
+
+    const params = new URLSearchParams({ skill_ids: marketplaceId });
+    if (installedVersion) {
+      params.set('current_version', installedVersion);
+    }
+
+    try {
+      const check = await hostApiFetch<{
+        success: boolean;
+        error?: string;
+        results?: Array<{
+          skill_id: number;
+          has_update: boolean;
+          latest_version: string;
+          error?: string;
+        }>;
+      }>(`/api/clawhub/check-updates?${params.toString()}`);
+
+      const item = check.results?.[0];
+      if (!check.success || item?.error) {
+        return { status: 'failed' };
+      }
+      if (!item?.has_update) {
+        return { status: 'skipped' };
+      }
+      return {
+        status: 'updatable',
+        latestVersion: item.latest_version?.trim() || '',
+        marketplaceId,
+      };
+    } catch (error) {
+      console.error('[Skills] check_update failed', { skill: skill.slug, error });
+      return { status: 'failed' };
+    }
+  }, [safeSkills, companyInstallMap]);
+
   const handleUpdate = useCallback(async (slug: string) => {
+    const marketplaceSkill = resolveMarketplaceSkillBySlug(slug);
+    if (!marketplaceSkill) {
+      toast.error(t('toast.intranetRequired'));
+      return;
+    }
+
+    let latestVersion = '';
+    const checkResult = await checkSkillUpdateForMarketplace(marketplaceSkill);
+    if (checkResult.status === 'failed') {
+      toast.error(t('toast.intranetRequired'));
+      return;
+    }
+    if (checkResult.status === 'skipped') {
+      toast.success(t('toast.alreadyLatestVersion'));
+      return;
+    }
+    latestVersion = checkResult.latestVersion;
+
     setIsUpdating(true);
     try {
-      // 保存当前滚动位置
       const currentScroll = listRef.current?.scrollTop || 0;
-      
-      // 先卸载
-      await uninstallSkill(slug);
-      await hydrateUiStateFromDisk();
-      await flushUiStateSync().catch(() => undefined);
+
+      await performSkillUpdate(slug, latestVersion);
+
+      const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+      await searchSkills(installQuery.trim(), selectedType, sort);
       await fetchSkills();
 
-      // 再安装
-      const packageSlug = await installSkill(slug);
-      await fetchSkills();
+      const listTrace = await hostApiFetch<{
+        success: boolean;
+        url?: string | null;
+        listApiResponse?: unknown;
+      }>('/api/clawhub/last-list-response');
+      console.log('[Skills] skill/list after update', {
+        slug,
+        called: Boolean(listTrace.url),
+        requestUrl: listTrace.url,
+        response: listTrace.listApiResponse,
+      });
 
-      if (packageSlug) {
-        const installed = useSkillsStore.getState().skills.find(
-          (skill) => skill.slug === packageSlug || skill.id === packageSlug,
-        );
-        await enableSkill(installed?.id || packageSlug);
-      } else {
-        await enableSkill(slug);
-      }
-
-      if (activeTab === 'market') {
-        const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
-        await searchSkills(installQuery.trim(), selectedType, sort);
-      }
+      const marketplaceSkill = resolveMarketplaceSkillBySlug(slug);
+      await syncDisplayCacheFromMarketplace(slug, {
+        versionOverride: latestVersion,
+        listApiResponse: listTrace.listApiResponse,
+        marketplaceId: marketplaceSkill?.id != null ? String(marketplaceSkill.id) : undefined,
+      });
 
       setTimeout(() => {
         listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
       }, 0);
 
       toast.success(t('toast.installed'));
-      // 等待 toast 显示一段时间后再关闭遮罩
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       if (INSTALL_ERROR_CODES.has(errorMessage)) {
@@ -1018,12 +1343,132 @@ export function Skills() {
       } else {
         toast.error(t('toast.failedInstall') + ': ' + errorMessage);
       }
-      // 失败也等待一下再关闭遮罩
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     } finally {
       setIsUpdating(false);
     }
-  }, [uninstallSkill, installSkill, enableSkill, fetchSkills, searchSkills, activeTab, installQuery, selectedType, sortBy, sortOrder, t, skillsDirPath]);
+  }, [
+    resolveMarketplaceSkillBySlug,
+    checkSkillUpdateForMarketplace,
+    performSkillUpdate,
+    syncDisplayCacheFromMarketplace,
+    searchSkills,
+    fetchSkills,
+    installQuery,
+    selectedType,
+    sortBy,
+    sortOrder,
+    t,
+    skillsDirPath,
+  ]);
+
+  const handleOpenBatchUpdate = useCallback(() => {
+    setAddMenuOpen(false);
+    if (installedForBatchUpdate.length === 0) {
+      toast.warning(t('toast.noBatchUpdateTargets'));
+      return;
+    }
+    setBatchUpdateOpen(true);
+  }, [installedForBatchUpdate.length, t]);
+
+  const handleBatchUpdateConfirm = useCallback(async (selectedSkills: MarketplaceSkill[]) => {
+    if (selectedSkills.length === 0) {
+      toast.error(t('toast.batchUpdateSelectRequired'));
+      return;
+    }
+
+    setIsUpdating(true);
+    setBatchUpdateProgress({ current: 0, total: selectedSkills.length });
+    const currentScroll = listRef.current?.scrollTop || 0;
+    const summary = { updated: 0, skipped: 0, failed: 0 };
+    const updatedSkills: Array<{
+      slug: string;
+      latestVersion: string;
+      marketplaceId: string;
+    }> = [];
+
+    try {
+      for (let index = 0; index < selectedSkills.length; index += 1) {
+        const skill = selectedSkills[index];
+        setBatchUpdateProgress({ current: index + 1, total: selectedSkills.length });
+
+        const checkResult = await checkSkillUpdateForMarketplace(skill);
+        if (checkResult.status === 'failed') {
+          summary.failed += 1;
+          continue;
+        }
+        if (checkResult.status === 'skipped') {
+          summary.skipped += 1;
+          continue;
+        }
+
+        try {
+          await performSkillUpdate(skill.slug, checkResult.latestVersion);
+          updatedSkills.push({
+            slug: skill.slug,
+            latestVersion: checkResult.latestVersion,
+            marketplaceId: checkResult.marketplaceId,
+          });
+          summary.updated += 1;
+        } catch (error) {
+          console.error('[Skills] Batch update failed for', skill.slug, error);
+          summary.failed += 1;
+        }
+      }
+
+      if (updatedSkills.length > 0) {
+        const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+        await searchSkills(installQuery.trim(), selectedType, sort);
+        await fetchSkills();
+
+        const listTrace = await hostApiFetch<{
+          success: boolean;
+          listApiResponse?: unknown;
+        }>('/api/clawhub/last-list-response').catch(() => ({ success: false as const }));
+
+        for (const item of updatedSkills) {
+          await syncDisplayCacheFromMarketplace(item.slug, {
+            versionOverride: item.latestVersion,
+            listApiResponse: listTrace.listApiResponse,
+            marketplaceId: item.marketplaceId,
+          });
+        }
+      }
+
+      setTimeout(() => {
+        listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
+      }, 0);
+
+      trackUiEvent('skills.batch_update', {
+        total: selectedSkills.length,
+        updated: summary.updated,
+        skipped: summary.skipped,
+        failed: summary.failed,
+      });
+
+      const summaryMessage = t('toast.batchUpdateSummary', summary);
+      if (summary.failed > 0) {
+        toast.warning(summaryMessage);
+      } else {
+        toast.success(summaryMessage);
+      }
+    } finally {
+      setIsUpdating(false);
+      setBatchUpdateProgress(null);
+      setBatchUpdateOpen(false);
+    }
+  }, [
+    checkSkillUpdateForMarketplace,
+    performSkillUpdate,
+    syncDisplayCacheFromMarketplace,
+    searchSkills,
+    fetchSkills,
+    installQuery,
+    selectedType,
+    sortBy,
+    sortOrder,
+    t,
+  ]);
 
   const showInitialLoading = loading && activeTab === 'mine' && safeSkills.length === 0;
   const showMineLoading = useMinLoading(showInitialLoading);
@@ -1090,20 +1535,30 @@ export function Skills() {
                 <div className="my-1 mx-3 h-px bg-black/5 dark:bg-white/10" />
                 <button
                   onClick={() => {
-                    void bulkToggleVisible(true);
-                    setAddMenuOpen(false);
+                    handleOpenBatchUpdate();
                   }}
-                  className="group w-full flex items-center gap-2 px-3.5 py-2 text-[13px] text-foreground hover:bg-[#FFF2E5] hover:text-[#FF922B] dark:hover:bg-[#FF922B]/15 transition-colors text-left"
+                  disabled={isUpdating}
+                  className="group w-full flex items-center gap-2 px-3.5 py-2 text-[13px] text-foreground hover:bg-[#FFF2E5] hover:text-[#FF922B] dark:hover:bg-[#FF922B]/15 transition-colors text-left disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  <RefreshCw className="h-3.5 w-3.5 text-muted-foreground group-hover:text-[#FF922B] shrink-0 transition-colors" />
+                  {t('actions.batchUpdateAll')}
+                </button>
+                <button
+                  onClick={() => {
+                    handleOpenBatchToggle(true);
+                  }}
+                  disabled={isUpdating}
+                  className="group w-full flex items-center gap-2 px-3.5 py-2 text-[13px] text-foreground hover:bg-[#FFF2E5] hover:text-[#FF922B] dark:hover:bg-[#FF922B]/15 transition-colors text-left disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground group-hover:text-[#FF922B] shrink-0 transition-colors" />
                   {t('actions.enableVisible')}
                 </button>
                 <button
                   onClick={() => {
-                    void bulkToggleVisible(false);
-                    setAddMenuOpen(false);
+                    handleOpenBatchToggle(false);
                   }}
-                  className="group w-full flex items-center gap-2 px-3.5 py-2 text-[13px] text-foreground hover:bg-[#FFF2E5] hover:text-[#FF922B] dark:hover:bg-[#FF922B]/15 transition-colors text-left"
+                  disabled={isUpdating}
+                  className="group w-full flex items-center gap-2 px-3.5 py-2 text-[13px] text-foreground hover:bg-[#FFF2E5] hover:text-[#FF922B] dark:hover:bg-[#FF922B]/15 transition-colors text-left disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <Ban className="h-3.5 w-3.5 text-muted-foreground group-hover:text-[#FF922B] shrink-0 transition-colors" />
                   {t('actions.disableVisible')}
@@ -1360,16 +1815,24 @@ export function Skills() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                {filteredSkills.map((skill) => (
+                {filteredSkills.map((skill) => {
+                  const marketplaceMatch = findMarketplaceSkillMatch(skill, marketplaceLookup);
+                  return (
                   <SkillCard
                     key={skill.baseDir || skill.slug || skill.id}
                     skill={skill}
                     onClick={() => setSelectedSkill(skill)}
                     onToggle={(checked) => handleToggle(skill.id, checked)}
                     t={t}
-                    marketplaceMatch={findMarketplaceSkillMatch(skill, marketplaceLookup)}
+                    marketplaceMatch={marketplaceMatch}
+                    cachedDisplayMetadata={
+                      marketplaceMatch
+                        ? resolveInstalledDisplayMetadata(marketplaceMatch, skill)
+                        : resolveCachedSkillDisplayMetadata({ installedSkill: skill })
+                    }
                   />
-                ))}
+                  );
+                })}
               </div>
             )
           ) : (
@@ -1393,6 +1856,9 @@ export function Skills() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   {visibleMarketplaceSkills.map((skill) => {
                     const isInstalled = isMarketplaceSkillInstalled(skill);
+                    const installedRecord = isInstalled
+                      ? findInstalledSkillForMarketplace(skill, safeSkills, companyInstallMap)
+                      : undefined;
                     const marketplaceKey = getMarketplaceSkillKey(skill);
                     const actionKey = skill.slug;
                     const isBusy = !!installing[actionKey] && !isUpdating;
@@ -1406,6 +1872,10 @@ export function Skills() {
                         onUninstall={() => handleUninstall(skill.slug)}
                         onUpdate={() => handleUpdate(skill.slug)}
                         t={t}
+                        cachedDisplayMetadata={isInstalled
+                          ? resolveInstalledDisplayMetadata(skill, installedRecord)
+                          : undefined}
+                        installedSkill={installedRecord}
                       />
                     );
                   })}
@@ -1427,6 +1897,18 @@ export function Skills() {
       <SkillDetailDialog
         skill={selectedSkill}
         marketplaceMatch={selectedSkill ? findMarketplaceSkillMatch(selectedSkill, marketplaceLookup) : undefined}
+        cachedDisplayMetadata={selectedSkill
+          ? resolveInstalledDisplayMetadata(
+            findMarketplaceSkillMatch(selectedSkill, marketplaceLookup) ?? {
+              id: selectedSkill.id,
+              slug: selectedSkill.slug ?? selectedSkill.id,
+              name: selectedSkill.name,
+              description: selectedSkill.description,
+              version: selectedSkill.version ?? 'unknown',
+            },
+            selectedSkill,
+          )
+          : undefined}
         isOpen={!!selectedSkill}
         onClose={() => setSelectedSkill(null)}
         onOpenFolder={handleOpenSkillFolder}
@@ -1440,6 +1922,35 @@ export function Skills() {
         onUploadComplete={() => {
           // Refresh skills after upload
           void fetchSkills();
+        }}
+      />
+
+      <BatchUpdateSkillsDialog
+        open={batchUpdateOpen}
+        onOpenChange={setBatchUpdateOpen}
+        skills={installedForBatchUpdate}
+        busy={isUpdating && batchUpdateOpen}
+        progress={batchUpdateProgress}
+        onConfirm={(selectedSkills) => {
+          void handleBatchUpdateConfirm(selectedSkills);
+        }}
+      />
+
+      <BatchToggleSkillsDialog
+        open={batchToggleMode != null}
+        mode={batchToggleMode ?? 'enable'}
+        onOpenChange={(open) => {
+          if (!open && !isUpdating) {
+            setBatchToggleMode(null);
+            setBatchToggleSkillSnapshot([]);
+          }
+        }}
+        skills={batchToggleSkillSnapshot}
+        marketplaceLookup={marketplaceLookup}
+        busy={isUpdating && batchToggleMode != null}
+        progress={batchToggleProgress}
+        onConfirm={(selectedSkills) => {
+          void handleBatchToggleConfirm(selectedSkills);
         }}
       />
 

@@ -27,7 +27,8 @@
         "checkUpdates": "检查更新",
         "addSkill": "技能操作",
         "uploadSkill": "上传技能",
-        "createSkill": "创建技能"
+        "createSkill": "创建技能",
+        "batchUpdateAll": "批量更新"
     },
     "card": {
         "downloads": "{{count}}",
@@ -128,7 +129,47 @@
         "noBatchDisableTargets": "当前可见技能都已禁用。",
         "batchEnabled": "已启用 {{count}} 个技能。",
         "batchDisabled": "已禁用 {{count}} 个技能。",
-        "batchPartial": "已更新 {{success}} / {{total}} 个技能，部分操作失败。"
+        "batchPartial": "已更新 {{success}} / {{total}} 个技能，部分操作失败。",
+        "batchUpdateComplete": "技能已全部更新完毕",
+        "batchUpdateSummary": "技能更新完毕，{{updated}}个更新成功，{{skipped}}个无需更新，{{failed}}个更新失败",
+        "noBatchUpdateTargets": "暂无已安装的技能需要更新",
+        "batchUpdateSelectRequired": "请勾选需要更新的 skill",
+        "batchEnableSelectRequired": "请勾选需要启用的技能",
+        "batchDisableSelectRequired": "请勾选需要禁用的技能",
+        "batchEnableSummary": "批量启用完毕，{{succeeded}}个启用成功，{{failed}}个失败",
+        "batchDisableSummary": "批量禁用完毕，{{succeeded}}个禁用成功，{{failed}}个失败",
+        "alreadyLatestVersion": "当前版本已是最新版本",
+        "intranetRequired": "请连接内网"
+    },
+    "batchUpdate": {
+        "title": "批量更新",
+        "subtitle": "已安装 {{count}} 个技能，请选择需要更新的项目",
+        "selectAll": "全选",
+        "selectAllLabel": "全选：",
+        "deselectAll": "全不选",
+        "cancel": "取消",
+        "confirm": "更新",
+        "progress": "正在更新 ({{current}}/{{total}})..."
+    },
+    "batchEnable": {
+        "title": "批量启用",
+        "subtitle": "共 {{count}} 个技能，请选择需要启用的项目",
+        "selectAll": "全选",
+        "selectAllLabel": "全选：",
+        "deselectAll": "全不选",
+        "cancel": "取消",
+        "confirm": "启用",
+        "progress": "正在启用 ({{current}}/{{total}})..."
+    },
+    "batchDisable": {
+        "title": "批量禁用",
+        "subtitle": "共 {{count}} 个技能，请选择需要禁用的项目",
+        "selectAll": "全选",
+        "selectAllLabel": "全选：",
+        "deselectAll": "全不选",
+        "cancel": "取消",
+        "confirm": "禁用",
+        "progress": "正在禁用 ({{current}}/{{total}})..."
     },
     "marketplace": {
         "title": "领益市场",

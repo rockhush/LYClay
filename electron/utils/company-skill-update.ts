@@ -201,18 +201,21 @@ function resolveInstalledSkillMdVersion(packageSlug: string | undefined): string
 
 export async function checkCompanySkillUpdateForInstalled(
   skillId: number | string,
-  options?: { skillName?: string },
+  options?: { skillName?: string; currentVersion?: string },
 ): Promise<SkillCheckUpdateResult> {
   const marketplaceId = String(skillId).trim();
   const packageSlug = await resolveCompanyMarketplacePackageSlug(marketplaceId);
   const registry = await readCompanyMarketplaceInstallRegistry();
   const registryEntry = registry.byMarketplaceId[marketplaceId];
   const resolvedSkillName = options?.skillName?.trim() || registryEntry?.name?.trim() || '';
-  const skillMdVersion = resolveInstalledSkillMdVersion(packageSlug);
+  const skillMdVersion = options?.currentVersion?.trim()
+    ? normalizeSkillMdVersionForUpdateCheck(options.currentVersion)
+    : resolveInstalledSkillMdVersion(packageSlug);
 
   logCheckUpdateTrace(marketplaceId, '入参', {
     skill_id: Number(marketplaceId),
     current_version: skillMdVersion,
+    current_version_source: options?.currentVersion?.trim() ? 'override' : 'skill_md',
   });
 
   const result = await checkCompanySkillUpdate(skillId, skillMdVersion, {
@@ -263,7 +266,9 @@ export async function checkCompanySkillUpdate(
     const data = unwrapCompanyCheckUpdatePayload(raw);
 
     const latestVersion = data.latest_version?.trim() || undefined;
-    const hasUpdate = resolveSkillHasUpdate(version, latestVersion);
+    const hasUpdate = typeof data.has_update === 'boolean'
+      ? data.has_update
+      : resolveSkillHasUpdate(version, latestVersion);
 
     if (CHECK_UPDATE_DEBUG_SKILL_ID != null && Number(skillId) === CHECK_UPDATE_DEBUG_SKILL_ID) {
       console.log(`[检查更新] skill_id=${CHECK_UPDATE_DEBUG_SKILL_ID} 公司 API 完整响应:`, {

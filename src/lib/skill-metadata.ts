@@ -296,33 +296,62 @@ export function resolveSkillDisplayName(
   return skill.name?.trim() || '';
 }
 
-/** Version label source for installed cards: prefer skill-list API version over local SKILL.md. */
+/** Version label for installed cards: prefer locally cached version over live API or SKILL.md. */
 export function resolveSkillListVersionForDisplay(
   skill: Pick<Skill, 'version' | 'isBundled' | 'isCore' | 'id' | 'slug' | 'name'>,
   marketplace?: Pick<MarketplaceSkill, 'version'>,
+  cachedVersion?: string,
 ): string | undefined {
   if (isLyclawBuiltinSkill(skill)) {
     return skill.version;
   }
-  const listVersion = marketplace?.version?.trim();
-  if (listVersion) {
-    return listVersion;
+  const cached = cachedVersion?.trim();
+  if (cached) {
+    return cached;
   }
   return skill.version;
 }
 
-/** Description source for installed cards/detail: prefer skill-list API over local SKILL.md. */
+export function resolveSkillDisplayNameForInstalled(
+  skill: Pick<Skill, 'name' | 'isBundled' | 'isCore'>,
+  marketplace?: Pick<MarketplaceSkill, 'name'>,
+  cachedName?: string,
+): string {
+  if (isLyclawBuiltinSkill(skill)) {
+    return skill.name?.trim() || '';
+  }
+  const cached = cachedName?.trim();
+  if (cached) {
+    return cached;
+  }
+  return resolveSkillDisplayName(skill, marketplace);
+}
+
+export function resolveSkillAuthorForInstalled(
+  skill: Pick<Skill, 'author'>,
+  marketplace?: Pick<MarketplaceSkill, 'author'>,
+  cachedAuthor?: string,
+): string {
+  const cached = cachedAuthor?.trim();
+  if (cached) {
+    return cached;
+  }
+  return (skill.author || marketplace?.author || '').trim();
+}
+
+/** Description for installed cards/detail: prefer locally cached metadata over live API. */
 export function resolveSkillListDescriptionForDisplay(
   skill: Pick<Skill, 'description' | 'isBundled' | 'isCore' | 'id' | 'slug' | 'name'>,
   marketplace?: Pick<MarketplaceSkill, 'description'>,
   fallback = '',
+  cachedDescription?: string,
 ): string {
   if (isLyclawBuiltinSkill(skill)) {
     return skill.description?.trim() || fallback;
   }
-  const listDescription = marketplace?.description?.trim();
-  if (listDescription) {
-    return listDescription;
+  const cached = cachedDescription?.trim();
+  if (cached) {
+    return cached;
   }
   const local = skill.description?.trim();
   if (local && !isPlaceholderSkillDescription(local)) {

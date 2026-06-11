@@ -27,7 +27,8 @@
         "checkUpdates": "Check for updates",
         "addSkill": "Skill Actions",
         "uploadSkill": "Upload Skill",
-        "createSkill": "Create Skill"
+        "createSkill": "Create Skill",
+        "batchUpdateAll": "Update All Installed"
     },
     "card": {
         "downloads": "{{count}}",
@@ -128,7 +129,47 @@
         "noBatchDisableTargets": "All visible skills are already disabled.",
         "batchEnabled": "{{count}} skills enabled.",
         "batchDisabled": "{{count}} skills disabled.",
-        "batchPartial": "Updated {{success}} / {{total}} skills. Some items failed."
+        "batchPartial": "Updated {{success}} / {{total}} skills. Some items failed.",
+        "batchUpdateComplete": "All installed skills have been updated",
+        "batchUpdateSummary": "Update complete: {{updated}} updated, {{skipped}} already up to date, {{failed}} failed",
+        "noBatchUpdateTargets": "No installed skills to update",
+        "batchUpdateSelectRequired": "Please select at least one skill to update",
+        "batchEnableSelectRequired": "Please select at least one skill to enable",
+        "batchDisableSelectRequired": "Please select at least one skill to disable",
+        "batchEnableSummary": "Batch enable complete: {{succeeded}} enabled, {{failed}} failed",
+        "batchDisableSummary": "Batch disable complete: {{succeeded}} disabled, {{failed}} failed",
+        "alreadyLatestVersion": "This skill is already on the latest version",
+        "intranetRequired": "Please connect to the intranet"
+    },
+    "batchUpdate": {
+        "title": "Batch Update",
+        "subtitle": "{{count}} installed skill(s). Select items to update.",
+        "selectAll": "Select all",
+        "selectAllLabel": "Select all:",
+        "deselectAll": "Deselect all",
+        "cancel": "Cancel",
+        "confirm": "Update",
+        "progress": "Updating ({{current}}/{{total}})..."
+    },
+    "batchEnable": {
+        "title": "Batch Enable",
+        "subtitle": "{{count}} skill(s). Select items to enable.",
+        "selectAll": "Select all",
+        "selectAllLabel": "Select all:",
+        "deselectAll": "Deselect all",
+        "cancel": "Cancel",
+        "confirm": "Enable",
+        "progress": "Enabling ({{current}}/{{total}})..."
+    },
+    "batchDisable": {
+        "title": "Batch Disable",
+        "subtitle": "{{count}} skill(s). Select items to disable.",
+        "selectAll": "Select all",
+        "selectAllLabel": "Select all:",
+        "deselectAll": "Deselect all",
+        "cancel": "Cancel",
+        "confirm": "Disable",
+        "progress": "Disabling ({{current}}/{{total}})..."
     },
     "marketplace": {
         "title": "Marketplace",

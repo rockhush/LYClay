@@ -720,7 +720,7 @@ export function Channels() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+                          className="h-7 w-7 rounded-md text-destructive hover:text-destructive hover:bg-destructive/10 transition-colors"
                           onClick={() => setDeleteTarget({ channelType: group.channelType })}
                           title={t('account.deleteChannel')}
                         >
@@ -820,7 +820,7 @@ export function Channels() {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                className="h-7 w-7 rounded-md text-[#FE7B00] hover:bg-[#FF922B]/10 hover:text-[#FE7B00] dark:text-primary dark:hover:bg-primary/15 transition-colors"
+                                className="h-7 w-7 rounded-md text-destructive hover:text-destructive hover:bg-destructive/10 transition-colors"
                                 onClick={() => setDeleteTarget({ channelType: group.channelType, accountId: account.accountId })}
                                 title={t('account.delete')}
                               >

@@ -8,8 +8,8 @@ import { version } from '@/../package.json';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Network,
-  // Bot,
-  Briefcase,
+  Bot,
+  // Briefcase,
   Puzzle,
   Link2,
   Clock,
@@ -822,8 +822,8 @@ export function Sidebar() {
   const coreNavItems = [
     { to: '/cron', icon: <Clock className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.cronTasks'), testId: 'sidebar-nav-cron', end: true },
     { to: '/models', icon: <Cpu className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
-    { to: '/cron/digital-employee', icon: <Briefcase className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.digitalEmployee'), testId: 'sidebar-nav-digital-employee', end: true },
-    // { to: '/agents', icon: <Bot className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.agents'), testId: 'sidebar-nav-agents' },
+    // { to: '/cron/digital-employee', icon: <Briefcase className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.digitalEmployee'), testId: 'sidebar-nav-digital-employee', end: true },
+    { to: '/agents', icon: <Bot className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.agents'), testId: 'sidebar-nav-agents' },
     { to: '/skills', icon: <Puzzle className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
     { to: '/channels', icon: <Network className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
     { to: '/connectors', icon: <Link2 className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.connectors'), testId: 'sidebar-nav-connectors' },

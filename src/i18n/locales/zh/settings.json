@@ -172,6 +172,8 @@
       "downloaded": "已下载",
       "autoInstalling": "将在 {{seconds}} 秒后启动安装程序...",
       "failed": "检查更新失败",
+      "downloadFailed": "下载更新失败",
+      "intranetRequired": "请使用内网",
       "latest": "您已拥有最新版本",
       "check": "检查更新以获取最新功能"
     },
@@ -195,6 +197,7 @@
     "help": "开启自动更新后，更新将自动下载并安装。",
     "dialog": {
       "title": "新版本可用",
+      "checkFailedTitle": "检查更新失败",
       "close": "关闭",
       "remindLater": "稍后更新",
       "experienceNow": "立即体验",

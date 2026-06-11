@@ -1,7 +1,7 @@
 /**
  * Global "new version available" dialog shown after startup update check.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpFromLine,
   Loader2,
@@ -18,6 +18,7 @@ import {
   parseReleaseNotes,
   type ReleaseNoteSectionKey,
 } from '@/lib/update-release-notes';
+import { UPDATE_INTRANET_REQUIRED_MESSAGE } from '@/lib/update-errors';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -56,6 +57,7 @@ export function UpdateAvailableDialog() {
     isInitialized,
     init,
     downloadUpdate,
+    checkForUpdates,
     cancelAutoInstall,
     cancelDownload,
   } = useUpdateStore();
@@ -63,6 +65,8 @@ export function UpdateAvailableDialog() {
   const [open, setOpen] = useState(false);
   /** Dismissed for the current app session only — resets on next launch. */
   const [sessionDismissed, setSessionDismissed] = useState(false);
+  /** True once the user has entered the update flow (available/download). */
+  const enteredUpdateFlowRef = useRef(false);
 
   useEffect(() => {
     void init();
@@ -70,18 +74,24 @@ export function UpdateAvailableDialog() {
 
   const version = updateInfo?.version;
 
-  // Open when update is available; keep open while downloading/installing/errors.
+  // Open when update is available, while downloading/installing, or when check/download fails.
   useEffect(() => {
     if (!isInitialized || sessionDismissed) return;
     if (status === 'available' && version) {
+      enteredUpdateFlowRef.current = true;
       void cancelAutoInstall();
       setOpen(true);
       return;
     }
-    if (status === 'downloading' || status === 'downloaded' || status === 'error') {
+    if (status === 'downloading' || status === 'downloaded') {
+      enteredUpdateFlowRef.current = true;
+      setOpen(true);
+      return;
+    }
+    if (status === 'error' && error) {
       setOpen(true);
     }
-  }, [isInitialized, status, version, sessionDismissed, cancelAutoInstall]);
+  }, [isInitialized, status, version, error, sessionDismissed, cancelAutoInstall]);
 
   const sections = useMemo(
     () => parseReleaseNotes(updateInfo?.releaseNotes ?? ''),
@@ -89,14 +99,13 @@ export function UpdateAvailableDialog() {
   );
 
   const isWindows = window.electron?.platform === 'win32';
-  const isInstallCountdownActive = autoInstallCountdown != null && autoInstallCountdown > 0;
+  const isChecking = status === 'checking';
   const isDownloading = status === 'downloading';
-  // Only show install countdown after a successful download — stale countdown ticks
-  // must not override the downloading/error panels during retry.
   const isInstalling = status === 'downloaded';
-  const isDownloadError = status === 'error' && open;
-  const showProgressPanel = isDownloading || isInstalling || isDownloadError;
-  const isBusy = isDownloading || isInstalling;
+  const isCheckError = status === 'error' && open && !enteredUpdateFlowRef.current;
+  const isDownloadError = status === 'error' && open && enteredUpdateFlowRef.current;
+  const showProgressPanel = isChecking || isDownloading || isInstalling || isCheckError || isDownloadError;
+  const isBusy = isChecking || isDownloading || isInstalling;
 
   const handleRemindLater = useCallback(async () => {
     if (status === 'downloading') {
@@ -104,20 +113,43 @@ export function UpdateAvailableDialog() {
     } else {
       await cancelAutoInstall();
     }
+    enteredUpdateFlowRef.current = false;
     setSessionDismissed(true);
     setOpen(false);
   }, [status, cancelDownload, cancelAutoInstall]);
+
+  const handleRetryCheck = useCallback(async () => {
+    if (isBusy) return;
+    await cancelAutoInstall();
+    setOpen(true);
+    await checkForUpdates();
+  }, [cancelAutoInstall, checkForUpdates, isBusy]);
 
   const handleRetryDownload = useCallback(async () => {
     if (isBusy) return;
     await cancelAutoInstall();
     setOpen(true);
-    await downloadUpdate();
-  }, [cancelAutoInstall, downloadUpdate, isBusy]);
+    if (status === 'available' && version) {
+      await downloadUpdate();
+      return;
+    }
+    enteredUpdateFlowRef.current = false;
+    await checkForUpdates();
+  }, [cancelAutoInstall, checkForUpdates, downloadUpdate, isBusy, status, version]);
 
   const handleExperienceNow = useCallback(async () => {
-    await handleRetryDownload();
-  }, [handleRetryDownload]);
+    if (status !== 'available' || !version) {
+      await handleRetryCheck();
+      return;
+    }
+    enteredUpdateFlowRef.current = true;
+    await downloadUpdate();
+  }, [downloadUpdate, handleRetryCheck, status, version]);
+
+  const dialogTitle = isCheckError
+    ? t('updates.dialog.checkFailedTitle')
+    : t('updates.dialog.title');
+  const checkErrorMessage = error || t('updates.status.intranetRequired');
 
   if (!open) return null;
 
@@ -146,9 +178,9 @@ export function UpdateAvailableDialog() {
               id="update-available-dialog-title"
               className="truncate text-[16px] font-semibold text-foreground"
             >
-              {t('updates.dialog.title')}
+              {dialogTitle}
             </h2>
-            {version ? (
+            {version && !isCheckError ? (
               <span
                 data-testid="update-available-dialog-version"
                 className="shrink-0 rounded-md bg-[#FFF2E5] px-2 py-0.5 text-[13px] font-semibold text-[#FF922B] dark:bg-[#FF922B]/15"
@@ -166,12 +198,46 @@ export function UpdateAvailableDialog() {
             showProgressPanel ? 'px-5 py-6' : 'max-h-[min(52vh,420px)] overflow-y-auto px-5 py-4',
           )}
         >
-          {isDownloadError ? (
+          {isCheckError ? (
+            <div
+              data-testid="update-available-dialog-check-error"
+              className="flex flex-col items-center justify-center py-4 text-center"
+            >
+              <p className="text-[14px] font-medium text-destructive">
+                {t('updates.status.failed')}
+              </p>
+              <p className="mt-2 max-w-full text-[13px] text-muted-foreground">
+                {checkErrorMessage === UPDATE_INTRANET_REQUIRED_MESSAGE
+                  ? t('updates.status.intranetRequired')
+                  : checkErrorMessage}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-5 h-8 rounded-lg"
+                onClick={() => void handleRetryCheck()}
+              >
+                {t('updates.action.retry')}
+              </Button>
+            </div>
+          ) : isChecking ? (
+            <div
+              data-testid="update-available-dialog-checking"
+              className="flex flex-col items-center justify-center gap-3 py-8 text-center"
+            >
+              <Loader2 className="h-8 w-8 animate-spin text-[#FF922B]" />
+              <p className="text-[14px] font-medium text-foreground">
+                {t('updates.status.checking')}
+              </p>
+            </div>
+          ) : isDownloadError ? (
             <div
               data-testid="update-available-dialog-progress"
               className="flex flex-col items-center justify-center py-4 text-center"
             >
-              <p className="text-[14px] font-medium text-destructive">{t('updates.status.failed')}</p>
+              <p className="text-[14px] font-medium text-destructive">
+                {t('updates.status.downloadFailed')}
+              </p>
               <p className="mt-2 max-w-full text-[12px] text-muted-foreground">{error}</p>
               <Button
                 type="button"
@@ -269,9 +335,9 @@ export function UpdateAvailableDialog() {
           </Button>
           <Button
             type="button"
-            disabled={isBusy}
+            disabled={isBusy || isCheckError || isChecking || status !== 'available' || !version}
             onClick={() => void handleExperienceNow()}
-            className="h-9 min-w-[108px] rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FE7B00]"
+            className="h-9 min-w-[108px] rounded-lg bg-[#FF922B] px-4 text-[13px] font-medium text-white shadow-sm shadow-[#FF922B]/25 hover:bg-[#FE7B00] disabled:opacity-50 disabled:shadow-none"
           >
             {t('updates.dialog.experienceNow')}
           </Button>

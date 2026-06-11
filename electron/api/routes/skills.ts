@@ -8,6 +8,7 @@ import {
   logSkillCheckUpdateResultsSummary,
   toHostCheckUpdateResult,
 } from '../../utils/company-skill-update';
+import { getLastCompanyListApiTrace } from '../../utils/company-list-api-trace';
 import { isCompanyPortalReachable } from '../../utils/company-portal-reachability';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
@@ -93,6 +94,16 @@ export async function handleSkillRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/clawhub/last-list-response' && req.method === 'GET') {
+    const trace = getLastCompanyListApiTrace();
+    sendJson(res, 200, {
+      success: true,
+      url: trace.url,
+      listApiResponse: trace.response,
+    });
+    return true;
+  }
+
   if (url.pathname === '/api/clawhub/install' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{ slug?: string; version?: string; force?: boolean }>(req);
@@ -153,6 +164,23 @@ export async function handleSkillRoutes(
   if (url.pathname === '/api/clawhub/check-updates' && req.method === 'GET') {
     try {
       const skillIdsParam = url.searchParams.get('skill_ids');
+      const currentVersionParam = url.searchParams.get('current_version')?.trim() || '';
+      const currentVersionsParam = url.searchParams.get('current_versions')?.trim() || '';
+      let currentVersionBySkillId: Record<string, string> = {};
+      if (currentVersionsParam) {
+        try {
+          const parsed = JSON.parse(currentVersionsParam) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+              if (typeof value === 'string' && value.trim()) {
+                currentVersionBySkillId[String(key).trim()] = value.trim();
+              }
+            }
+          }
+        } catch {
+          // Ignore malformed current_versions payload.
+        }
+      }
       const requested = skillIdsParam
         ? skillIdsParam
           .split(',')
@@ -162,7 +190,14 @@ export async function handleSkillRoutes(
         : null;
       const results = requested != null
         ? await Promise.all(
-            requested.map((skill) => checkCompanySkillUpdateForInstalled(skill.skill_id)),
+            requested.map((skill) => {
+              const skillId = String(skill.skill_id).trim();
+              const currentVersion = currentVersionBySkillId[skillId]
+                || (requested.length === 1 ? currentVersionParam : undefined);
+              return checkCompanySkillUpdateForInstalled(skill.skill_id, {
+                currentVersion: currentVersion || undefined,
+              });
+            }),
           )
         : await checkInstalledCompanySkillUpdates();
 

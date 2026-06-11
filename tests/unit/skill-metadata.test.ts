@@ -168,7 +168,7 @@ describe('skill metadata helpers', () => {
     expect(merged.description).toBe('PDF tools');
   });
 
-  it('prefers marketplace list description over local SKILL.md for installed skills', () => {
+  it('prefers cached description over local SKILL.md for installed skills', () => {
     expect(
       resolveSkillListDescriptionForDisplay(
         {
@@ -178,8 +178,10 @@ describe('skill metadata helpers', () => {
           description: 'Long YAML description from SKILL.md frontmatter...',
         },
         { description: 'Short plaza list description' },
+        '',
+        'Cached plaza description',
       ),
-    ).toBe('Short plaza list description');
+    ).toBe('Cached plaza description');
   });
 
   it('keeps bundled skill descriptions for display when marketplace metadata is present', () => {
@@ -250,7 +252,20 @@ describe('skill metadata helpers', () => {
     expect(enriched[0]?.version).toBe('unknown');
   });
 
-  it('prefers skill-list version over local unknown version for display', () => {
+  it('prefers cached version over local unknown version for display', () => {
+    expect(
+      resolveSkillListVersionForDisplay(
+        {
+          id: 'attendance',
+          slug: 'attendance',
+          name: '考勤查询',
+          version: 'unknown',
+        },
+        { version: '1.0.6' },
+        '1.0.2',
+      ),
+    ).toBe('1.0.2');
+
     expect(
       resolveSkillListVersionForDisplay(
         {
@@ -261,7 +276,7 @@ describe('skill metadata helpers', () => {
         },
         { version: '1.0.6' },
       ),
-    ).toBe('1.0.6');
+    ).toBe('unknown');
 
     expect(
       resolveSkillListVersionForDisplay(
@@ -273,6 +288,7 @@ describe('skill metadata helpers', () => {
           isBundled: true,
         },
         { version: '9.9.9' },
+        '1.0.2',
       ),
     ).toBe('unknown');
   });

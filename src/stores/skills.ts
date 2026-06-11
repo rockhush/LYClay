@@ -1060,27 +1060,17 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       console.log('[Skills Store] Startup skill refresh: reinstalling', installedSnapshot.length, 'skills');
 
       for (const [marketplaceId, entry] of installedSnapshot) {
-        const uninstallKey = entry.packageSlug || marketplaceId;
         try {
-          await get().uninstallSkill(uninstallKey);
-          console.log(`[Skills Store] Startup skill refresh uninstalled: ${entry.name || marketplaceId}`);
-        } catch (error) {
-          console.error(`[Skills Store] Startup skill refresh uninstall failed for ${entry.name || marketplaceId}:`, error);
-        }
-      }
-
-      for (const [marketplaceId, entry] of installedSnapshot) {
-        try {
-          const packageSlug = await get().installSkill(marketplaceId);
+          const packageSlug = await get().updateSkill(marketplaceId);
           if (packageSlug) {
             const installed = get().skills.find(
               (skill) => skill.slug === packageSlug || skill.id === packageSlug,
             );
             await get().enableSkill(installed?.id || packageSlug);
           }
-          console.log(`[Skills Store] Startup skill refresh installed: ${entry.name || marketplaceId}`);
+          console.log(`[Skills Store] Startup skill refresh updated: ${entry.name || marketplaceId}`);
         } catch (error) {
-          console.error(`[Skills Store] Startup skill refresh install failed for ${entry.name || marketplaceId}:`, error);
+          console.error(`[Skills Store] Startup skill refresh update failed for ${entry.name || marketplaceId}:`, error);
         }
       }
 

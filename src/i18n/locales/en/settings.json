@@ -172,6 +172,8 @@
       "downloaded": "Downloaded",
       "autoInstalling": "Launching installer in {{seconds}}s...",
       "failed": "Update check failed",
+      "downloadFailed": "Download failed",
+      "intranetRequired": "Please connect to the intranet",
       "latest": "You have the latest version",
       "check": "Check for updates to get the latest features"
     },
@@ -195,6 +197,7 @@
     "help": "When auto-update is enabled, updates are downloaded and installed automatically.",
     "dialog": {
       "title": "New Version Available",
+      "checkFailedTitle": "Update Check Failed",
       "close": "Close",
       "remindLater": "Update Later",
       "experienceNow": "Update Now",

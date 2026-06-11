@@ -14,6 +14,10 @@ import { buildUpdateInstallerArgs } from '../utils/update-installer-args';
 import { launchMacDmgUpdateInstall } from '../utils/mac-update-installer';
 import { EventEmitter } from 'events';
 import { setQuitting } from './app-state';
+import {
+  formatUpdateFriendlyError,
+  parseCheckUpdateResponseBody,
+} from '../utils/update-errors';
 
 // Use native fetch API (available in Node.js 18+ / Electron)
 const fetch = globalThis.fetch;
@@ -270,11 +274,19 @@ export class AppUpdater extends EventEmitter {
    * Check for updates using internal API.
    */
   async checkForUpdates(): Promise<UpdateInfo | null> {
+    this.resolvedUpdateOS = null;
     try {
       const currentVersion = app.getVersion();
       const osCandidates = this.getOSCandidates();
       let lastError: Error | null = null;
       let firstNotAvailableInfo: UpdateInfo | null = null;
+
+      this.updateStatus({
+        status: 'checking',
+        info: undefined,
+        progress: undefined,
+        error: undefined,
+      });
 
       logger.info('[Updater] ========== Update check started ==========');
       logger.info(
@@ -304,12 +316,24 @@ export class AppUpdater extends EventEmitter {
             continue;
           }
 
-          const data = (await response.json()) as CheckUpdateResponse;
+          const responseText = await response.text();
           logger.info(
-            `[Updater] Response body (os=${os || '(empty)'}): ${JSON.stringify(data)}`,
+            `[Updater] Response body (os=${os || '(empty)'}): ${responseText}`,
           );
 
+          const data = parseCheckUpdateResponseBody(responseText) as CheckUpdateResponse;
+
           if (data.need_update && data.latest_version) {
+            if (data.latest_version.trim() === currentVersion) {
+              logger.warn('[Updater] need_update=true but latest_version equals current version; treating as no update');
+              if (!firstNotAvailableInfo) {
+                firstNotAvailableInfo = {
+                  version: currentVersion,
+                } as unknown as UpdateInfo;
+              }
+              continue;
+            }
+
             const updateInfo = {
               version: data.latest_version,
               releaseNotes: data.changelog || undefined,
@@ -361,13 +385,14 @@ export class AppUpdater extends EventEmitter {
         `[Updater] Update check result: failed -> ${(error as Error).message || String(error)}`,
       );
       logger.error('[Updater] Check for updates failed:', error);
-      // 检查是否为 JSON 解析错误（通常是断网或外网导致返回 HTML 页面）
-      const errorMsg = (error as Error).message || String(error);
-      const friendlyError = errorMsg.includes('Unexpected token') || errorMsg.includes('is not valid JSON')
-        ? '请使用内网检测'
-        : errorMsg;
+      const friendlyError = formatUpdateFriendlyError((error as Error).message || String(error));
       this.cancelAutoInstall();
-      this.updateStatus({ status: 'error', error: friendlyError });
+      this.updateStatus({
+        status: 'error',
+        error: friendlyError,
+        info: undefined,
+        progress: undefined,
+      });
       throw error;
     } finally {
       logger.info('[Updater] ========== Update check finished ==========');
@@ -378,6 +403,17 @@ export class AppUpdater extends EventEmitter {
    * Download available update using internal API
    */
   async downloadUpdate(): Promise<void> {
+    if (this.status.status !== 'available' || !this.status.info?.version) {
+      const friendlyError = formatUpdateFriendlyError('Check update failed');
+      this.updateStatus({
+        status: 'error',
+        error: friendlyError,
+        info: undefined,
+        progress: undefined,
+      });
+      throw new Error(friendlyError);
+    }
+
     const task = this.performDownload();
     this.activeDownloadPromise = task;
     try {
@@ -501,7 +537,12 @@ export class AppUpdater extends EventEmitter {
         await unlink(filePath).catch(() => {});
       }
       this.cancelAutoInstall();
-      this.updateStatus({ status: 'error', error: (error as Error).message || String(error) });
+      const friendlyError = formatUpdateFriendlyError((error as Error).message || String(error));
+      this.updateStatus({
+        status: 'error',
+        error: friendlyError,
+        progress: undefined,
+      });
       throw error;
     } finally {
       this.downloadAbortController = null;
