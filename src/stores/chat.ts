@@ -3909,12 +3909,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
     attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>,
     targetAgentId?: string | null,
   ) => {
+    let _deIsDigital = false;
+    let _deAgentId = targetAgentId;
+    if (targetAgentId) {
+      try {
+        const checkResult = await hostApiFetch<{ success: boolean; isDigitalEmployee: boolean }>(
+          `/api/agents/is-digital-employee?agentId=${encodeURIComponent(targetAgentId)}`
+        );
+        if (checkResult.success && checkResult.isDigitalEmployee) {
+          _deIsDigital = true;
+          _deAgentId = null;
+        }
+      } catch { /* fall through to normal session routing */ }
+    }
     const trimmed = text.trim();
     if (!trimmed && (!attachments || attachments.length === 0)) return;
 
     clearAbortedChatRuns();
 
-    const targetSessionKey = resolveMainSessionKeyForAgent(targetAgentId) ?? get().currentSessionKey;
+    const targetSessionKey = resolveMainSessionKeyForAgent(_deAgentId) ?? get().currentSessionKey;
 
     if (targetSessionKey !== get().currentSessionKey) {
       set((s) => buildSessionSwitchPatch(s, targetSessionKey));
@@ -3958,6 +3971,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const runtimeMessage = usePlanningPhase
       ? buildComplexTaskPlanningRequest(originalRuntimeMessage)
       : withComplexTaskExecutionGuide(originalRuntimeMessage, attachmentCount);
+    const _deExtraSystemPrompt = _deIsDigital
+      ? `你现在只有一个任务：立即调用 sessions_spawn 工具。agentId="${_deAgentId || targetAgentId}"。task="${originalRuntimeMessage}"。不要回复任何文字，直接调用工具。`
+      : void 0;
     if (usePlanningPhase) {
       _pendingComplexTaskPlans.set(currentSessionKey, {
         originalMessage: originalRuntimeMessage,
@@ -3977,6 +3993,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content: trimmed || (attachments?.length ? '(file attached)' : ''),
       timestamp: nowMs / 1000,
       id: crypto.randomUUID(),
+      _agentMention: targetAgentId || void 0,
       _attachedFiles: attachments?.map(a => ({
         fileName: a.fileName,
         mimeType: a.mimeType,
@@ -4206,7 +4223,60 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       // Longer timeout for chat sends to tolerate high-latency networks (avoids connect error)
       const CHAT_SEND_TIMEOUT_MS = 120_000;
+      const DIGITAL_EMPLOYEE_RUN_TIMEOUT_SECONDS = 900;
+      const DIGITAL_EMPLOYEE_RPC_TIMEOUT_MS = DIGITAL_EMPLOYEE_RUN_TIMEOUT_SECONDS * 1000 + 30_000;
       markChatRunRpcStarted(idempotencyKey);
+
+      // Digital employee: use tools.invoke to directly execute sessions_spawn
+      if (_deIsDigital && targetAgentId) {
+        const deInvokeResult = await useGatewayStore.getState().rpc<{
+          ok: boolean;
+          toolName?: string;
+          output?: any;
+          error?: { message: string };
+          source?: string;
+        }>(
+          'tools.invoke',
+          {
+            name: 'sessions_spawn',
+            args: {
+              task: originalRuntimeMessage,
+              agentId: targetAgentId,
+              mode: 'run',
+              expectsCompletionMessage: true,
+              runTimeoutSeconds: DIGITAL_EMPLOYEE_RUN_TIMEOUT_SECONDS,
+            },
+            sessionKey: currentSessionKey,
+            idempotencyKey,
+          },
+          DIGITAL_EMPLOYEE_RPC_TIMEOUT_MS,
+        );
+
+        let deText = '';
+        const raw = deInvokeResult?.output;
+        if (typeof raw === 'string') {
+          deText = raw;
+        } else if (raw?.content && Array.isArray(raw.content)) {
+          deText = raw.content.map((c: any) => c?.text || '').join('\n');
+        }
+        if (!deText && deInvokeResult?.error?.message) {
+          deText = '执行失败：' + deInvokeResult.error.message;
+        }
+        if (!deText) {
+          deText = '任务完成。';
+        }
+
+        const deMsg: RawMessage = {
+          role: 'assistant',
+          content: deText,
+          timestamp: Date.now() / 1000,
+          id: crypto.randomUUID(),
+        };
+
+        set((s) => ({ messages: [...s.messages, deMsg], sending: false }));
+        markChatRunRpcCompleted(idempotencyKey, { success: true, runId: idempotencyKey });
+        return;
+      }
 
       if (hasMedia) {
         result = await hostApiFetch<{ success: boolean; result?: { runId?: string }; error?: string }>(
@@ -4218,7 +4288,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               message: withThinkingDirective(runtimeMessage + workspaceContext, effectiveReasoningMode),
               deliver: false,
               idempotencyKey,
-              media: (attachments ?? []).map((a) => ({
+              ...(_deExtraSystemPrompt ? { extraSystemPrompt: _deExtraSystemPrompt } : {}),
+               media: (attachments ?? []).map((a) => ({
                 filePath: a.stagedPath,
                 mimeType: a.mimeType,
                 fileName: a.fileName,
@@ -4232,6 +4303,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           message: withThinkingDirective(runtimeMessage + workspaceContext, effectiveReasoningMode),
           deliver: false,
           idempotencyKey,
+          ...(_deExtraSystemPrompt ? { extraSystemPrompt: _deExtraSystemPrompt } : {}),
         };
         const rpcResult = await useGatewayStore.getState().rpc<{ runId?: string }>(
           'chat.send',

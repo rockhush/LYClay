@@ -59,4 +59,11 @@ describe('translateCronError', () => {
       '定时任务出错：some unexpected backend error',
     );
   });
+
+  it('does not recurse infinitely on generic failed errors', () => {
+    const t = i18n.getFixedT('zh', 'cron');
+    expect(translateCronError('background sync failed', t)).toBe(
+      '执行失败：background sync failed',
+    );
+  });
 });

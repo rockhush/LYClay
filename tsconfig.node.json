@@ -30,5 +30,5 @@
       "@electron/*": ["electron/*"]
     }
   },
-  "include": ["electron", "vite.config.ts"]
+  "include": ["electron", "shared/**/*.ts", "vite.config.ts"]
 }

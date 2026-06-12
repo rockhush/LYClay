@@ -58,6 +58,8 @@
         "comms:replay": "node scripts/comms/replay.mjs",
         "comms:baseline": "node scripts/comms/baseline.mjs",
         "comms:compare": "node scripts/comms/compare.mjs",
+        "employee:install:manual": "node --import tsx scripts/manual-install-digital-employee.ts",
+        "employee:update:manual": "node --import tsx scripts/manual-update-digital-employee.ts",
         "uv:download": "zx scripts/download-bundled-uv.mjs",
         "uv:download:mac": "zx scripts/download-bundled-uv.mjs --platform=mac",
         "uv:download:win": "zx scripts/download-bundled-uv.mjs --platform=win",

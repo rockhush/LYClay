@@ -227,6 +227,13 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
+        {/* @agent mention tag for user messages */}
+        {isUser && message._agentMention && (
+          <span className="text-[11px] text-[#FF922B] font-medium bg-[#FFF2E5] dark:bg-white/10 px-2 py-0.5 rounded-full">
+            @{message._agentMention}
+          </span>
+        )}
+
         {/* Main text bubble */}
         {hasText && (
           <MessageBubble

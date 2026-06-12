@@ -1,27 +1,32 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Search,
   Lock,
   Package,
   X,
   RefreshCw,
-  Trash2,
   Download,
+  Trash2,
+  Loader2,
   User as UserIcon,
+  AlertCircle,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { LoaderBadge, LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { cn } from '@/lib/utils';
+import { hostApiFetch } from '@/lib/host-api';
+import { useDigitalEmployeesStore } from '@/stores/digital-employees';
 import {
   MARKETPLACE_CATEGORY_OPTIONS,
-  MOCK_MARKETPLACE_AGENTS,
-  MOCK_MY_AGENTS,
-  type MockAgent,
-  type MockMarketplaceAgent,
+  type MyAgent,
+  type MarketplaceAgent,
 } from './mock-data';
 
 const AGENT_COLOR = 'bg-[#FF922B]';
+const MARKETPLACE_SEARCH_ERROR_MESSAGE = '数字员工广场搜索失败，请使用公司内网连接';
 const MAX_TAG_COUNT = 3;
 const MAX_TAG_CHARS = 5;
 
@@ -59,10 +64,10 @@ function AgentTagRow({ tags }: { tags: string[] }) {
 }
 
 function getAgentInitial(name: string): string {
-  if (!name) return '智';
+  if (!name) return '数';
   const trimmed = name.trim();
   const firstChar = trimmed.charAt(0).toUpperCase();
-  return firstChar.match(/[A-Za-z一-龥]/) ? firstChar : '智';
+  return firstChar.match(/[A-Za-z一-龥]/) ? firstChar : '数';
 }
 
 function formatVersion(version: string): string {
@@ -85,11 +90,12 @@ function formatCreateTime(time: string): string {
 }
 
 interface AgentCardProps {
-  agent: MockAgent;
+  agent: MyAgent;
   onToggle: (enabled: boolean) => void;
+  onUninstall: () => void;
 }
 
-function AgentCard({ agent, onToggle }: AgentCardProps) {
+function AgentCard({ agent, onToggle, onUninstall }: AgentCardProps) {
   const initial = getAgentInitial(agent.name);
   const versionLabel = formatVersion(agent.version);
   const authorLabel = agent.author.trim() || '未知作者';
@@ -131,7 +137,26 @@ function AgentCard({ agent, onToggle }: AgentCardProps) {
             </div>
           </div>
         </div>
-        <div className="shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
+          {!agent.isCore && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={(event) => {
+                event.stopPropagation();
+                onUninstall();
+              }}
+              data-testid={`digital-employee-my-uninstall-${agent.marketEmployeeId}`}
+              className={cn(
+                'h-8 w-8 rounded-lg transition-colors shadow-none',
+                'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
+              )}
+              title="卸载"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
           <Switch
             className="origin-right scale-[0.75]"
             checked={agent.enabled}
@@ -158,7 +183,7 @@ function AgentCard({ agent, onToggle }: AgentCardProps) {
 }
 
 interface MarketplaceAgentCardProps {
-  agent: MockMarketplaceAgent;
+  agent: MarketplaceAgent;
   isLoading?: boolean;
   onInstall: () => void;
   onUninstall: () => void;
@@ -210,28 +235,42 @@ function MarketplaceAgentCard({
               variant="ghost"
               onClick={onUpdate}
               disabled={isLoading}
+              data-testid={`digital-employee-update-${agent.slug}`}
               className={cn(
                 'h-8 w-8 rounded-lg transition-colors shadow-none',
                 'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
               )}
               title="更新"
             >
-              <RefreshCw className="h-3.5 w-3.5" />
+              {isLoading ? (
+                <LoadingSpinner size="sm" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
             </Button>
           )}
           <Button
             type="button"
             size="icon"
             variant="ghost"
-            onClick={agent.installed ? onUninstall : onInstall}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (agent.installed) onUninstall();
+              else onInstall();
+            }}
             disabled={isLoading}
+            data-testid={agent.installed
+              ? `digital-employee-uninstall-${agent.slug}`
+              : `digital-employee-install-${agent.slug}`}
             className={cn(
               'h-8 w-8 rounded-lg transition-colors shadow-none',
               'bg-[#FFF2E5] text-[#FF922B] hover:bg-[#FF922B] hover:text-white',
             )}
             title={agent.installed ? '卸载' : '安装'}
           >
-            {agent.installed ? (
+            {isLoading ? (
+              <LoadingSpinner size="sm" />
+            ) : agent.installed ? (
               <Trash2 className="h-3.5 w-3.5" />
             ) : (
               <Download className="h-3.5 w-3.5" />
@@ -275,15 +314,135 @@ function MarketplaceAgentCard({
   );
 }
 
+function mapInstalledEmployeeToMyAgent(
+  employee: {
+    instanceId: string;
+    marketEmployeeId: string;
+    packageVersion: string;
+    name: string;
+    description: string;
+    tags: string[];
+    status: string;
+  },
+  marketplace?: MarketplaceAgent,
+): MyAgent {
+  return {
+    id: employee.instanceId,
+    marketEmployeeId: employee.marketEmployeeId,
+    name: marketplace?.name ?? employee.name,
+    description: marketplace?.description ?? employee.description,
+    version: marketplace?.version ?? employee.packageVersion,
+    author: marketplace?.author ?? '',
+    enabled: employee.status === 'active' || employee.status === 'degraded',
+    tags: marketplace?.tags?.length ? marketplace.tags : employee.tags,
+  };
+}
+
 export function DigitalEmployee() {
   const [activeTab, setActiveTab] = useState<'mine' | 'market'>('mine');
   const [searchQuery, setSearchQuery] = useState('');
   const [marketQuery, setMarketQuery] = useState('');
-  const [myAgents, setMyAgents] = useState<MockAgent[]>(() => [...MOCK_MY_AGENTS]);
-  const [marketAgents, setMarketAgents] = useState<MockMarketplaceAgent[]>(() => [...MOCK_MARKETPLACE_AGENTS]);
+  const [myAgentEnabledOverrides, setMyAgentEnabledOverrides] = useState<Record<string, boolean>>({});
+  const [marketplaceCatalog, setMarketplaceCatalog] = useState<MarketplaceAgent[]>([]);
+  const [marketAgents, setMarketAgents] = useState<MarketplaceAgent[]>([]);
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [marketSearchError, setMarketSearchError] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('');
   const [installFilter, setInstallFilter] = useState<'all' | 'installed' | 'uninstalled'>('all');
   const [sortBy, setSortBy] = useState<'download_count' | 'update_time'>('download_count');
+  const [isUpdating, setIsUpdating] = useState(false);
+  const {
+    employees,
+    loading: employeesLoading,
+    installingMarketEmployeeId,
+    updatingInstanceId,
+    fetchEmployees,
+    installMarketplaceEmployee,
+    uninstallMarketplaceEmployee,
+    updateEmployee,
+  } = useDigitalEmployeesStore();
+
+  useEffect(() => {
+    void fetchEmployees();
+  }, [fetchEmployees]);
+
+  const fetchMarketplaceCatalog = useCallback(async () => {
+    try {
+      const result = await hostApiFetch<{
+        success: boolean;
+        results?: MarketplaceAgent[];
+        error?: string;
+      }>('/api/digital-employee/marketplace/list', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: '',
+          category: '',
+          sort: '-download_count',
+        }),
+      });
+      if (!result.success) {
+        throw new Error(result.error || MARKETPLACE_SEARCH_ERROR_MESSAGE);
+      }
+      setMarketplaceCatalog(result.results || []);
+    } catch {
+      setMarketplaceCatalog([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchMarketplaceCatalog();
+  }, [fetchMarketplaceCatalog]);
+
+  const fetchMarketAgents = useCallback(async () => {
+    setMarketLoading(true);
+    setMarketSearchError(false);
+    try {
+      const sort = `-${sortBy}`;
+      const result = await hostApiFetch<{
+        success: boolean;
+        results?: MarketplaceAgent[];
+        error?: string;
+      }>('/api/digital-employee/marketplace/list', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: marketQuery.trim(),
+          category: selectedCategory,
+          sort,
+        }),
+      });
+      if (!result.success) {
+        throw new Error(result.error || MARKETPLACE_SEARCH_ERROR_MESSAGE);
+      }
+      setMarketAgents(result.results || []);
+    } catch {
+      setMarketAgents([]);
+      setMarketSearchError(true);
+    } finally {
+      setMarketLoading(false);
+    }
+  }, [marketQuery, selectedCategory, sortBy]);
+
+  useEffect(() => {
+    if (activeTab !== 'market') return;
+    void fetchMarketAgents();
+  }, [activeTab, fetchMarketAgents]);
+
+  const installedEmployeesByMarketId = useMemo(() => new Map(
+    employees.map((employee) => [employee.marketEmployeeId, employee]),
+  ), [employees]);
+
+  const marketplaceCatalogBySlug = useMemo(() => new Map(
+    marketplaceCatalog.map((agent) => [agent.slug, agent]),
+  ), [marketplaceCatalog]);
+
+  const myAgents = useMemo(() => employees.map((employee) => {
+    const marketplace = marketplaceCatalogBySlug.get(employee.marketEmployeeId);
+    const mapped = mapInstalledEmployeeToMyAgent(employee, marketplace);
+    const enabledOverride = myAgentEnabledOverrides[mapped.id];
+    return enabledOverride === undefined
+      ? mapped
+      : { ...mapped, enabled: enabledOverride };
+  }), [employees, marketplaceCatalogBySlug, myAgentEnabledOverrides]);
 
   const filteredMyAgents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -303,48 +462,93 @@ export function DigitalEmployee() {
       });
   }, [myAgents, searchQuery]);
 
-  const installedMarketCount = marketAgents.filter((agent) => agent.installed).length;
-  const uninstalledMarketCount = marketAgents.length - installedMarketCount;
+  const resolvedMarketAgents = useMemo(() => marketAgents.map((agent) => ({
+    ...agent,
+    installed: installedEmployeesByMarketId.has(agent.slug),
+  })), [installedEmployeesByMarketId, marketAgents]);
+
+  const installedMarketCount = resolvedMarketAgents.filter((agent) => agent.installed).length;
+  const uninstalledMarketCount = resolvedMarketAgents.length - installedMarketCount;
 
   const filteredMarketAgents = useMemo(() => {
-    const q = marketQuery.trim().toLowerCase();
-    return marketAgents
-      .filter((agent) => {
-        if (selectedCategory && agent.category !== selectedCategory) return false;
-        if (installFilter === 'installed' && !agent.installed) return false;
-        if (installFilter === 'uninstalled' && agent.installed) return false;
-        if (!q) return true;
-        return (
-          agent.name.toLowerCase().includes(q)
-          || agent.description.toLowerCase().includes(q)
-          || agent.author.toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => {
-        if (sortBy === 'download_count') {
-          return b.downloads - a.downloads;
-        }
-        return new Date(b.updateTime).getTime() - new Date(a.updateTime).getTime();
-      });
-  }, [marketAgents, marketQuery, selectedCategory, installFilter, sortBy]);
+    return resolvedMarketAgents.filter((agent) => {
+      if (installFilter === 'installed' && !agent.installed) return false;
+      if (installFilter === 'uninstalled' && agent.installed) return false;
+      return true;
+    });
+  }, [resolvedMarketAgents, installFilter]);
 
   const handleToggleAgent = useCallback((agentId: string, enabled: boolean) => {
-    setMyAgents((prev) => prev.map((agent) => (
-      agent.id === agentId ? { ...agent, enabled } : agent
-    )));
+    setMyAgentEnabledOverrides((prev) => ({ ...prev, [agentId]: enabled }));
   }, []);
 
-  const handleInstallMarketAgent = useCallback((slug: string) => {
-    setMarketAgents((prev) => prev.map((agent) => (
-      agent.slug === slug ? { ...agent, installed: true } : agent
-    )));
-  }, []);
+  const refreshMyDigitalEmployees = useCallback(async () => {
+    await Promise.all([
+      fetchEmployees(),
+      fetchMarketplaceCatalog(),
+    ]);
+  }, [fetchEmployees, fetchMarketplaceCatalog]);
 
-  const handleUninstallMarketAgent = useCallback((slug: string) => {
-    setMarketAgents((prev) => prev.map((agent) => (
-      agent.slug === slug ? { ...agent, installed: false } : agent
-    )));
-  }, []);
+  const handleInstallMarketAgent = useCallback(async (agent: MarketplaceAgent) => {
+    setIsUpdating(true);
+    try {
+      await installMarketplaceEmployee({ marketEmployeeId: agent.slug });
+      await fetchMarketplaceCatalog();
+      toast.success(`“${agent.name}”安装成功`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    } catch (error) {
+      toast.error(`安装失败：${error instanceof Error ? error.message : String(error)}`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [installMarketplaceEmployee, fetchMarketplaceCatalog]);
+
+  const handleUninstallByMarketEmployeeId = useCallback(async (
+    marketEmployeeId: string,
+    displayName: string,
+  ) => {
+    const installedEmployee = installedEmployeesByMarketId.get(marketEmployeeId);
+    try {
+      await uninstallMarketplaceEmployee({ marketEmployeeId });
+      await fetchMarketplaceCatalog();
+      if (installedEmployee) {
+        setMyAgentEnabledOverrides((prev) => {
+          const next = { ...prev };
+          delete next[installedEmployee.instanceId];
+          return next;
+        });
+      }
+      toast.success(`“${displayName}”已卸载`);
+    } catch (error) {
+      toast.error(`卸载失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [uninstallMarketplaceEmployee, fetchMarketplaceCatalog, installedEmployeesByMarketId]);
+
+  const handleUninstallMarketAgent = useCallback(async (agent: MarketplaceAgent) => {
+    await handleUninstallByMarketEmployeeId(agent.slug, agent.name);
+  }, [handleUninstallByMarketEmployeeId]);
+
+  const handleUninstallMyAgent = useCallback(async (agent: MyAgent) => {
+    await handleUninstallByMarketEmployeeId(agent.marketEmployeeId, agent.name);
+  }, [handleUninstallByMarketEmployeeId]);
+
+  const handleUpdateMarketAgent = useCallback(async (agent: MarketplaceAgent) => {
+    const installedEmployee = installedEmployeesByMarketId.get(agent.slug);
+    if (!installedEmployee) return;
+    setIsUpdating(true);
+    try {
+      await updateEmployee(installedEmployee.instanceId, {});
+      await fetchMarketplaceCatalog();
+      toast.success(`“${agent.name}”升级成功`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    } catch (error) {
+      toast.error(`升级失败：${error instanceof Error ? error.message : String(error)}`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [installedEmployeesByMarketId, updateEmployee, fetchMarketplaceCatalog]);
 
   return (
     <div className="relative flex flex-col -m-6 h-[calc(100vh-2.5rem)] overflow-hidden bg-background">
@@ -360,16 +564,16 @@ export function DigitalEmployee() {
       <div className="relative z-10 flex flex-col h-full w-full max-w-[1400px] mx-auto px-8 pt-[2em] pb-6">
         <div className="flex flex-row items-start justify-between mb-5 shrink-0 gap-4">
           <div>
-            <h1 className="text-[20px] font-bold text-foreground leading-tight">智能体</h1>
-            <p className="text-[13px] text-muted-foreground mt-1">发现、启用并管理面向你工作的智能体</p>
+            <h1 className="text-[20px] font-bold text-foreground leading-tight">数字员工</h1>
+            <p className="text-[13px] text-muted-foreground mt-1">发现、启用并管理面向你工作的数字员工</p>
           </div>
         </div>
 
         <div className="flex items-center justify-between gap-6 mb-4 shrink-0">
           <div className="flex items-center gap-6">
             {([
-              { key: 'mine', label: '我的智能体' },
-              { key: 'market', label: '智能体广场' },
+              { key: 'mine', label: '我的数字员工' },
+              { key: 'market', label: '数字员工广场' },
             ] as const).map(({ key, label }) => {
               const isActive = activeTab === key;
               return (
@@ -398,7 +602,7 @@ export function DigitalEmployee() {
               <div className="relative flex items-center bg-[#FFF2E5] dark:bg-[#FF922B]/15 rounded-full px-3 py-1.5 border border-transparent focus-within:border-[#FF922B]/40 transition-colors w-64 -translate-y-[2px]">
                 <Search className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
                 <input
-                  placeholder="搜索智能体"
+                  placeholder="搜索数字员工"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="ml-2 bg-transparent outline-none w-full text-[13px] text-foreground placeholder:text-[#FF922B]/80"
@@ -418,8 +622,10 @@ export function DigitalEmployee() {
                 size="icon"
                 className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
                 title="刷新"
+                disabled={employeesLoading || isUpdating}
+                onClick={() => void refreshMyDigitalEmployees()}
               >
-                <RefreshCw className="h-3.5 w-3.5" />
+                <RefreshCw className={cn('h-3.5 w-3.5', employeesLoading && 'animate-spin')} />
               </Button>
             </div>
           ) : (
@@ -455,7 +661,7 @@ export function DigitalEmployee() {
                 <div className="flex items-center gap-0 rounded">
                   {(['all', 'installed', 'uninstalled'] as const).map((filter, index) => {
                     const counts = {
-                      all: marketAgents.length,
+                      all: resolvedMarketAgents.length,
                       installed: installedMarketCount,
                       uninstalled: uninstalledMarketCount,
                     };
@@ -488,7 +694,7 @@ export function DigitalEmployee() {
                 <div className="relative flex items-center bg-[#FFF2E5] dark:bg-[#FF922B]/15 rounded-full px-3 py-1.5 border border-transparent focus-within:border-[#FF922B]/40 transition-colors w-64">
                   <Search className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
                   <input
-                    placeholder="搜索智能体"
+                    placeholder="搜索数字员工"
                     value={marketQuery}
                     onChange={(e) => setMarketQuery(e.target.value)}
                     className="ml-2 bg-transparent outline-none w-full text-[13px] text-foreground placeholder:text-[#FF922B]/80"
@@ -508,9 +714,11 @@ export function DigitalEmployee() {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
-                  title="搜索"
+                  title="刷新"
+                  disabled={marketLoading || isUpdating}
+                  onClick={() => void Promise.all([fetchMarketAgents(), fetchMarketplaceCatalog()])}
                 >
-                  <RefreshCw className="h-3.5 w-3.5" />
+                  <RefreshCw className={cn('h-3.5 w-3.5', marketLoading && 'animate-spin')} />
                 </Button>
               </div>
             </div>
@@ -542,10 +750,15 @@ export function DigitalEmployee() {
 
         <div className="flex-1 overflow-y-auto pr-2 pb-10 min-h-0 -mr-2">
           {activeTab === 'mine' ? (
-            filteredMyAgents.length === 0 ? (
+            employeesLoading && myAgents.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                <Loader2 className="h-8 w-8 mb-4 animate-spin opacity-50" />
+                <p>加载中...</p>
+              </div>
+            ) : filteredMyAgents.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Package className="h-10 w-10 mb-4 opacity-50" />
-                <p>{searchQuery.trim() ? '尝试不同的搜索词' : '暂无可用智能体'}</p>
+                <p>{searchQuery.trim() ? '尝试不同的搜索词' : '暂无可用数字员工'}</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -554,30 +767,63 @@ export function DigitalEmployee() {
                     key={agent.id}
                     agent={agent}
                     onToggle={(enabled) => handleToggleAgent(agent.id, enabled)}
+                    onUninstall={() => void handleUninstallMyAgent(agent)}
                   />
                 ))}
               </div>
             )
-          ) : filteredMarketAgents.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-              <Package className="h-10 w-10 mb-4 opacity-50" />
-              <p>{marketQuery.trim() ? '未找到匹配的智能体' : '暂无智能体'}</p>
-            </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {filteredMarketAgents.map((agent) => (
-                <MarketplaceAgentCard
-                  key={agent.slug}
-                  agent={agent}
-                  onInstall={() => handleInstallMarketAgent(agent.slug)}
-                  onUninstall={() => handleUninstallMarketAgent(agent.slug)}
-                  onUpdate={() => handleInstallMarketAgent(agent.slug)}
-                />
-              ))}
-            </div>
+            <>
+              {marketSearchError && (
+                <div className="mb-4 p-4 rounded-xl border border-destructive/50 bg-destructive/10 text-destructive text-sm font-medium flex items-center gap-2">
+                  <AlertCircle className="h-5 w-5 shrink-0" />
+                  <span>{MARKETPLACE_SEARCH_ERROR_MESSAGE}</span>
+                </div>
+              )}
+
+              {marketLoading && marketAgents.length === 0 && !isUpdating && (
+                <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                  <RefreshCw className="h-8 w-8 mb-4 animate-spin opacity-50" />
+                  <p>加载中...</p>
+                </div>
+              )}
+
+              {!marketLoading && filteredMarketAgents.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {filteredMarketAgents.map((agent) => (
+                    <MarketplaceAgentCard
+                      key={agent.slug}
+                      agent={agent}
+                      isLoading={
+                        !isUpdating && (
+                          installingMarketEmployeeId === agent.slug
+                          || updatingInstanceId === installedEmployeesByMarketId.get(agent.slug)?.instanceId
+                        )
+                      }
+                      onInstall={() => void handleInstallMarketAgent(agent)}
+                      onUninstall={() => void handleUninstallMarketAgent(agent)}
+                      onUpdate={() => void handleUpdateMarketAgent(agent)}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {!marketLoading && filteredMarketAgents.length === 0 && !marketSearchError && (
+                <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                  <Package className="h-10 w-10 mb-4 opacity-50" />
+                  <p>{marketQuery.trim() ? '未找到匹配的数字员工' : '暂无数字员工'}</p>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
+
+      {isUpdating && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-[2px] pointer-events-auto">
+          <LoaderBadge />
+        </div>
+      )}
     </div>
   );
 }

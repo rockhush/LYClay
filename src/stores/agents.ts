@@ -12,7 +12,7 @@ interface AgentsState {
   channelAccountOwners: Record<string, string>;
   loading: boolean;
   error: string | null;
-  fetchAgents: () => Promise<void>;
+  fetchAgents: (options?: { force?: boolean }) => Promise<void>;
   createAgent: (name: string, options?: { inheritWorkspace?: boolean }) => Promise<void>;
   updateAgent: (agentId: string, name: string) => Promise<void>;
   updateAgentModel: (agentId: string, modelRef: string | null) => Promise<void>;
@@ -47,12 +47,12 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   loading: false,
   error: null,
 
-  fetchAgents: async () => {
+  fetchAgents: async (options) => {
     if (fetchAgentsPromise) {
       return fetchAgentsPromise;
     }
     const now = Date.now();
-    if (get().agents.length > 0 && now - lastFetchAgentsAt < FETCH_AGENTS_DEDUPE_MS) {
+    if (!options?.force && get().agents.length > 0 && now - lastFetchAgentsAt < FETCH_AGENTS_DEDUPE_MS) {
       return;
     }
 

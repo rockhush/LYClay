@@ -182,7 +182,7 @@
         "searching": "正在搜索技能广场...",
         "noResults": "未找到匹配的技能。",
         "emptyPrompt": "暂无数据",
-        "searchError": "技能广场搜索失败。请使用公司内网连接",
+        "searchError": "技能广场搜索失败，请使用公司内网连接",
         "installing": "安装中..."
     },
     "upload": {
