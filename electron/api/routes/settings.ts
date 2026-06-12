@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { applyProxySettings } from '../../main/proxy';
 import { syncLaunchAtStartupSettingFromStore } from '../../main/launch-at-startup';
 import { syncProxyConfigToOpenClaw } from '../../utils/openclaw-proxy';
+import { initTelemetry, shutdownTelemetry } from '../../utils/telemetry';
 import { getAllSettings, getSetting, resetSettings, setSetting, type AppSettings } from '../../utils/store';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
@@ -30,6 +31,14 @@ function patchTouchesLaunchAtStartup(patch: Partial<AppSettings>): boolean {
   return Object.prototype.hasOwnProperty.call(patch, 'launchAtStartup');
 }
 
+async function syncTelemetrySetting(enabled: boolean): Promise<void> {
+  if (enabled) {
+    await initTelemetry();
+    return;
+  }
+  await shutdownTelemetry();
+}
+
 export async function handleSettingsRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -53,6 +62,9 @@ export async function handleSettingsRoutes(
       }
       if (patchTouchesLaunchAtStartup(patch)) {
         await syncLaunchAtStartupSettingFromStore();
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'telemetryEnabled')) {
+        await syncTelemetrySetting(Boolean(patch.telemetryEnabled));
       }
       sendJson(res, 200, { success: true });
     } catch (error) {
@@ -88,6 +100,9 @@ export async function handleSettingsRoutes(
       }
       if (key === 'launchAtStartup') {
         await syncLaunchAtStartupSettingFromStore();
+      }
+      if (key === 'telemetryEnabled') {
+        await syncTelemetrySetting(Boolean(body.value));
       }
       sendJson(res, 200, { success: true });
     } catch (error) {

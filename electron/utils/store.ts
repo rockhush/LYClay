@@ -11,6 +11,32 @@ import { resolveSupportedLanguage } from '../../shared/language';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let settingsStoreInstance: any = null;
 
+const INTERNAL_MIGRATIONS_KEY = '_internalMigrations';
+
+interface InternalSettingsMigrations {
+  telemetryOptOutV202606?: boolean;
+}
+
+/** One-time migration: disable legacy PostHog telemetry for existing installs. */
+export function applySettingsMigrations(store: {
+  get: (key: string) => unknown;
+  set: (key: string, value: unknown) => void;
+}): void {
+  const migrations = (store.get(INTERNAL_MIGRATIONS_KEY) as InternalSettingsMigrations | undefined) ?? {};
+  if (migrations.telemetryOptOutV202606) {
+    return;
+  }
+
+  if (store.get('telemetryEnabled') === true) {
+    store.set('telemetryEnabled', false);
+  }
+
+  store.set(INTERNAL_MIGRATIONS_KEY, {
+    ...migrations,
+    telemetryOptOutV202606: true,
+  });
+}
+
 /**
  * Generate a random token for gateway authentication
  */
@@ -166,7 +192,7 @@ function createDefaultSettings(): AppSettings {
     language: resolveSupportedLanguage(getSystemLocale()),
     startMinimized: false,
     launchAtStartup: false,
-    telemetryEnabled: true,
+    telemetryEnabled: false,
     machineId: '',
     hasReportedInstall: false,
 
@@ -225,6 +251,7 @@ async function getSettingsStore() {
       name: 'settings',
       defaults: createDefaultSettings(),
     });
+    applySettingsMigrations(settingsStoreInstance);
   }
   return settingsStoreInstance;
 }

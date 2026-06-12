@@ -13,7 +13,7 @@ import { createMenu } from './menu';
 import { appUpdater, registerUpdateHandlers } from './updater';
 import { logger } from '../utils/logger';
 import { warmupNetworkOptimization } from '../utils/uv-env';
-import { initTelemetry } from '../utils/telemetry';
+import { initTelemetry, shutdownTelemetry } from '../utils/telemetry';
 
 import { ClawHubService } from '../gateway/clawhub';
 import { extensionRegistry } from '../extensions/registry';
@@ -340,7 +340,8 @@ async function initialize(): Promise<void> {
     // Warm up network optimization (non-blocking)
     void warmupNetworkOptimization();
 
-    // Initialize Telemetry early
+    // Telemetry is opt-in only; flush any stale client before checking settings.
+    await shutdownTelemetry();
     await initTelemetry();
 
     // Apply persisted proxy settings before creating windows or network requests.

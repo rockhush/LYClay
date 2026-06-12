@@ -1282,7 +1282,7 @@ function WelcomeScreen() {
     const text = buildQuickActionComposerText(skill, fallbackName, action.defaultPrompt);
     setPrefilledInput(text);
     if (!skill) {
-      toast.message(t('welcome.skillNotInstalled', { name: fallbackName }));
+      toast.warning(t('welcome.skillNotInstalled', { name: fallbackName }));
     }
   }, [skills, setPrefilledInput, t]);
 

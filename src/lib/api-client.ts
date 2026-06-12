@@ -184,15 +184,7 @@ function mapUnifiedErrorCode(code?: string): AppErrorCode {
   return mapBackendErrorCode(code);
 }
 
-function shouldLogApiRequests(): boolean {
-  try {
-    return import.meta.env.DEV || window.localStorage.getItem('LYClaw:api-log') === '1';
-  } catch {
-    return !!import.meta.env.DEV;
-  }
-}
-
-function logApiAttempt(entry: {
+function logApiAttempt(_entry: {
   requestId: string;
   channel: string;
   transport: TransportKind;
@@ -201,13 +193,14 @@ function logApiAttempt(entry: {
   ok: boolean;
   error?: unknown;
 }): void {
-  if (!shouldLogApiRequests()) return;
-  const base = `[api-client] id=${entry.requestId} channel=${entry.channel} transport=${entry.transport} attempt=${entry.attempt} durationMs=${entry.durationMs}`;
-  if (entry.ok) {
-    console.info(`${base} result=ok`);
-  } else {
-    console.warn(`${base} result=error`, entry.error);
-  }
+  // Dev IPC/API tracing disabled to reduce console noise.
+  // if (!shouldLogApiRequests()) return;
+  // const base = `[api-client] id=${entry.requestId} channel=${entry.channel} transport=${entry.transport} attempt=${entry.attempt} durationMs=${entry.durationMs}`;
+  // if (entry.ok) {
+  //   console.info(`${base} result=ok`);
+  // } else {
+  //   console.warn(`${base} result=error`, entry.error);
+  // }
 }
 
 function isRuleMatch(matcher: string | RegExp, channel: string): boolean {

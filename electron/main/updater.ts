@@ -18,6 +18,11 @@ import {
   formatUpdateFriendlyError,
   parseCheckUpdateResponseBody,
 } from '../utils/update-errors';
+import {
+  resolveInstallerExtension,
+  resolveUpdateOSCandidates,
+  resolveUpdateOSParam,
+} from '../utils/update-os';
 
 // Use native fetch API (available in Node.js 18+ / Electron)
 const fetch = globalThis.fetch;
@@ -191,11 +196,7 @@ export class AppUpdater extends EventEmitter {
     }
 
     const appDir = app.getPath('userData');
-    const expectedExt = this.getOS() === 'windows'
-      ? '.exe'
-      : this.getOS() === 'macos'
-        ? '.dmg'
-        : '.tar.gz';
+    const expectedExt = resolveInstallerExtension(process.platform);
 
     let entries: string[];
     try {
@@ -233,30 +234,14 @@ export class AppUpdater extends EventEmitter {
   }
 
   /**
-   * Get current OS type
+   * Get current OS type for update API (`os` query param).
    */
   private getOS(): string {
-    switch (process.platform) {
-      case 'darwin':
-        return 'macos';
-      case 'linux':
-        return 'linux';
-      case 'win32':
-      default:
-        return 'windows';
-    }
+    return resolveUpdateOSParam(process.platform, process.arch);
   }
 
   private getOSCandidates(): string[] {
-    switch (process.platform) {
-      case 'darwin':
-        return ['macos'];
-      case 'linux':
-        return ['linux'];
-      case 'win32':
-      default:
-        return ['windows', 'win'];
-    }
+    return resolveUpdateOSCandidates(process.platform, process.arch);
   }
 
   private buildCheckUrl(currentVersion: string, os: string): string {
@@ -462,7 +447,7 @@ export class AppUpdater extends EventEmitter {
       const contentLength = parseInt(response.headers.get('content-length') || '0');
       
       const appDir = app.getPath('userData');
-      const ext = this.getOS() === 'windows' ? '.exe' : this.getOS() === 'macos' ? '.dmg' : '.tar.gz';
+      const ext = resolveInstallerExtension(process.platform);
       const fileName = `update_${Date.now()}${ext}`;
       filePath = path.join(appDir, fileName);
       

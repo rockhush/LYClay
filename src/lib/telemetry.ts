@@ -13,14 +13,6 @@ const listeners = new Set<(entry: UiTelemetryEntry) => void>();
 let nextEntryId = 1;
 const MAX_HISTORY = 500;
 
-function safeStringify(payload: TelemetryPayload): string {
-  try {
-    return JSON.stringify(payload);
-  } catch {
-    return '{}';
-  }
-}
-
 export function trackUiEvent(event: string, payload: TelemetryPayload = {}): void {
   const count = (counters.get(event) ?? 0) + 1;
   counters.set(event, count);
@@ -43,15 +35,6 @@ export function trackUiEvent(event: string, payload: TelemetryPayload = {}): voi
     history.splice(0, history.length - MAX_HISTORY);
   }
   listeners.forEach((listener) => listener(entry));
-
-  const logPayload = {
-    ...normalizedPayload,
-    count,
-    ts,
-  };
-
-  // Local-only telemetry for UX diagnostics.
-  console.info(`[ui-metric] ${event} ${safeStringify(logPayload)}`);
 }
 
 export function getUiCounter(event: string): number {

@@ -69,6 +69,20 @@ describe('main telemetry shutdown', () => {
     captureMock.mockReturnValue(undefined);
   });
 
+  it('does not initialize PostHog when telemetry is disabled', async () => {
+    getSettingMock.mockImplementation(async (key: string) => {
+      if (key === 'telemetryEnabled') return false;
+      return undefined;
+    });
+
+    const { PostHog } = await import('posthog-node');
+    const { initTelemetry } = await import('@electron/utils/telemetry');
+    await initTelemetry();
+
+    expect(PostHog).not.toHaveBeenCalled();
+    expect(captureMock).not.toHaveBeenCalled();
+  });
+
   it('ignores PostHog network timeout errors during shutdown', async () => {
     shutdownMock.mockRejectedValueOnce(
       Object.assign(new Error('Network error while fetching PostHog'), {
