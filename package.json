@@ -1,6 +1,6 @@
 {
     "name": "lyclaw",
-    "version": "1.1.5",
+    "version": "1.1.7",
     "pnpm": {
         "onlyBuiltDependencies": [
             "@discordjs/opus",
