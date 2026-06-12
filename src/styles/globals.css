@@ -1,0 +1,252 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    /* White theme */
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 25 92% 52%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 28 45% 95%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 28 45% 95%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 28 55% 90%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 28 45% 86%;
+    --input: 28 45% 86%;
+    --ring: 25 92% 52%;
+    --radius: 0.5rem;
+  }
+
+  /* Neutral deep-gray dark palette */
+  .dark {
+    color-scheme: dark;
+    --background: 240 4% 11%;
+    --foreground: 210 20% 96%;
+    --card: 240 3% 14%;
+    --card-foreground: 210 20% 96%;
+    --popover: 240 3% 14%;
+    --popover-foreground: 210 20% 96%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 240 3% 18%;
+    --secondary-foreground: 210 20% 96%;
+    --muted: 240 3% 18%;
+    --muted-foreground: 220 8% 72%;
+    --accent: 240 3% 22%;
+    --accent-foreground: 210 20% 96%;
+    --destructive: 0 65% 42%;
+    --destructive-foreground: 210 20% 96%;
+    --border: 240 3% 24%;
+    --input: 240 3% 18%;
+    --ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Native <select> dropdown options: ensure readable colors in both themes.
+     Without this, Chromium falls back to OS defaults (white popup) and
+     options become unreadable in dark mode. */
+  select option {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+  }
+
+  /* Custom selected option style - light orange background */
+  select option:checked,
+  select option:hover {
+    background-color: #FFF2E5 !important;
+    color: #FF922B !important;
+    background-image: none !important;
+  }
+
+  /* For WebKit browsers */
+  select:-webkit-any(option):checked {
+    background-color: #FFF2E5;
+    color: #FF922B;
+  }
+
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']):not([type='hidden']),
+  textarea,
+  select {
+    @apply focus:outline-none focus-visible:outline-none focus-visible:ring-0;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/30;
+}
+
+/* macOS traffic light spacing */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Smooth transitions */
+.transition-theme {
+  @apply transition-colors duration-200;
+}
+
+/* Focus ring */
+.focus-ring {
+  @apply focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2;
+}
+
+/* Prose styling for markdown */
+.prose {
+  line-height: 1.6;
+}
+
+.prose p {
+  margin-top: 0;
+  margin-bottom: 0.75em;
+}
+
+.prose p:last-child {
+  margin-bottom: 0;
+}
+
+.prose ul,
+.prose ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+  padding-left: 1.5em;
+}
+
+.prose li {
+  margin-bottom: 0.25em;
+}
+
+.prose pre {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+.prose blockquote {
+  border-left: 3px solid hsl(var(--border));
+  padding-left: 1em;
+  margin: 0.5em 0;
+  color: hsl(var(--muted-foreground));
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+}
+
+.prose th,
+.prose td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.5em;
+  text-align: left;
+}
+
+.prose th {
+  background: transparent;
+  font-weight: 700;
+}
+
+.dark .prose th {
+  background: hsl(var(--muted));
+}
+
+/* Ensure proper text wrapping for all prose elements */
+.prose {
+  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.prose a {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+.prose code {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.prose pre {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.prose p {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.prose ul,
+.prose ol {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.prose table {
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.prose blockquote {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* Typing indicator animation */
+@keyframes bounce {
+
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+
+  30% {
+    transform: translateY(-4px);
+  }
+}

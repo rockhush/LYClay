@@ -1,0 +1,33 @@
+diff --git a/dist/pi-embedded-D4aXX24b.js b/dist/pi-embedded-D4aXX24b.js
+index d7bcd7ca041d1bb94c58f8693ef57c766b54aaa0..6e360ed8b0a68772774a8379be919c2d765f51db 100644
+--- a/dist/pi-embedded-D4aXX24b.js
++++ b/dist/pi-embedded-D4aXX24b.js
+@@ -2651,13 +2651,27 @@ async function runEmbeddedPiAgent(params) {
+ 							} else log$1.warn(`[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to normal handling`);
+ 						}
+ 					}
+-					const contextOverflowError = !aborted ? (() => {
++					const contextOverflowError = (!aborted || !externalAbort) ? (() => {
+ 						if (promptError) {
+ 							const errorText = formatErrorMessage(promptError);
+ 							if (isLikelyContextOverflowError(errorText)) return {
+ 								text: errorText,
+ 								source: "promptError"
+ 							};
++							// Provider-initiated abort with input tokens far exceeding
++							// the model's context window is treated as a context overflow,
++							// even when the error message text is not recognized by
++							// the standard regex patterns (e.g. "This operation was aborted").
++							if (aborted && !externalAbort) {
++								const inputTokens = attemptUsage?.input;
++								const ctxTokens = ctxInfo.tokens;
++								if (typeof inputTokens === "number" && typeof ctxTokens === "number" && inputTokens > ctxTokens * 0.7) {
++									return {
++										text: "Context overflow: " + inputTokens.toLocaleString() + " input tokens exceeds model window of " + ctxTokens.toLocaleString() + " tokens.",
++										source: "promptError"
++									};
++								}
++							}
+ 							return null;
+ 						}
+ 						if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) return {

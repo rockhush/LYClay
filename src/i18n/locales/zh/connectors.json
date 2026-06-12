@@ -1,0 +1,95 @@
+{
+  "title": "连接器",
+  "subtitle": "连接外部服务，扩展 AI 能力。",
+  "customConnector": "自定义连接器",
+  "tabs": {
+    "builtIn": "内置",
+    "custom": "自定义"
+  },
+  "builtIn": {
+    "notion": {
+      "title": "Notion",
+      "desc": "访问 Notion 中的页面、数据库与协作内容。"
+    },
+    "github": {
+      "title": "GitHub",
+      "desc": "通过官方 GitHub MCP 在仓库、Issue 与 PR 上协作。"
+    }
+  },
+  "custom": {
+    "empty": "暂无自定义 MCP。使用右上角按钮添加，或直接编辑 OpenClaw mcp.servers。",
+    "emptyCta": "添加自定义 MCP"
+  },
+  "card": {
+    "install": "安装或配置",
+    "open": "查看详情",
+    "addAnother": "再添加一个"
+  },
+  "toast": {
+    "installed": "已写入 mcp.servers",
+    "customSaved": "已添加 MCP 服务"
+  },
+  "dialog": {
+    "cancel": "取消",
+    "save": "保存",
+    "install": "安装",
+    "github": {
+      "title": "安装 GitHub MCP",
+      "token": "GitHub Personal Access Token"
+    },
+    "notion": {
+      "title": "安装 Notion MCP",
+      "key": "Notion API Key（集成密钥）"
+    },
+    "custom": {
+      "title": "添加 MCP 服务",
+      "name": "服务名称（mcp.servers 中的键）",
+      "type": "传输类型",
+      "command": "命令",
+      "args": "参数（逗号分隔）",
+      "url": "HTTPS 地址",
+      "env": "环境变量（每行 KEY=value）",
+      "headers": "请求头（每行 KEY: value）",
+      "disabled": "初始禁用",
+      "badEnv": "环境变量每行需为 KEY=value 格式",
+      "badHeaders": "请求头每行需为 KEY: value 格式",
+      "reservedName": "名称 notion 与 github 预留给内置连接器。"
+    }
+  },
+  "mcp": {
+    "title": "MCP 服务管理",
+    "subtitle": "来自 OpenClaw mcp.servers 的 MCP 服务列表。",
+    "editJson": "配置 MCP（JSON）",
+    "searchPlaceholder": "搜索服务器…",
+    "summary": "共 {{count}} 个服务 · {{enabled}} 个已启用",
+    "none": "没有匹配的服务。",
+    "toolsLine": "已上报工具 {{used}} / {{total}}",
+    "toolsUnknown": "工具数量依赖 Gateway 上报",
+    "openJson": "编辑 JSON 配置"
+  },
+  "editor": {
+    "title": "MCP 配置",
+    "back": "返回列表",
+    "save": "保存",
+    "revert": "还原",
+    "saved": "配置已保存",
+    "invalidJson": "JSON 语法无效，请先修正。"
+  },
+  "customCard": {
+    "add": "新增",
+    "refresh": "刷新",
+    "deleteServer": "删除",
+    "toggle": "开启 / 关闭",
+    "loadingTools": "正在加载工具…",
+    "toolsUnknownShort": "暂无工具列表",
+    "toolsEnabledLine": "{{enabled}} / {{total}} 个工具已启用",
+    "emptyToolsHint": "请先启动 Gateway 并点击「刷新」从目录拉取工具；也可在 mcp.servers 中配置 tools.allow / tools.deny。",
+    "toolClickDisable": "点击即禁用该工具；不会重新拉取列表",
+    "toolClickRestore": "再次点击即可恢复启用",
+    "deleteConfirmTitle": "删除「{{name}}」？",
+    "deleteConfirmMessage": "将从 mcp.servers 中移除此 MCP 服务条目。",
+    "deleteConfirm": "删除",
+    "cancel": "取消",
+    "deletedServer": "已删除该 MCP 服务"
+  }
+}

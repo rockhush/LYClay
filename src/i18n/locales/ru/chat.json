@@ -1,0 +1,108 @@
+{
+    "gatewayNotRunning": "Шлюз не запущен",
+    "gatewayRequired": "Для использования чата требуется запущенный шлюз OpenClaw. Он запустится автоматически, или вы можете запустить его в Настройках.",
+    "welcome": {
+        "title": "Чат LYClaw",
+        "subtitle": "Чем могу помочь",
+        "greeting": "Привет, {{name}}~",
+        "greetingFallback": "Привет~",
+        "canHelpPrefix": "Я могу",
+        "knowledgeQa": "База знаний",
+        "groupSummary": "Сводка чата",
+        "pptGeneration": "Создание PPT",
+        "smartTranslation": "Перевод",
+        "skillNotInstalled": "Навык «{{name}}» не установлен. Сначала установите его в Skill Plaza."
+    },
+    "noLogs": "(Журналы ещё недоступны)",
+    "toolbar": {
+        "refresh": "Обновить чат",
+        "currentAgent": "Общение с {{agent}}"
+    },
+    "taskPanel": {
+        "eyebrow": "Вид выполнения",
+        "title": "Структура задачи",
+        "emptyTitle": "Пока нет структурированных шагов",
+        "emptyBody": "Когда начнётся выполнение, LYClaw покажет размышления, вызовы инструментов и состояния передачи здесь.",
+        "status": {
+            "idle": "Бездействует",
+            "running_one": "1 активный шаг",
+            "running_other": "{{count}} активных шагов"
+        },
+        "stepStatus": {
+            "running": "Выполняется",
+            "completed": "Готово",
+            "error": "Ошибка"
+        }
+    },
+    "executionGraph": {
+        "title": "Граф выполнения",
+        "branchLabel": "ветвь",
+        "thinkingLabel": "Думаю",
+        "agentRun": "Выполнение {{agent}}",
+        "collapsedSummary": "Вызовов инструментов: {{toolCount}} · Промежуточных сообщений: {{processCount}}",
+        "collapseAction": "Свернуть граф выполнения"
+    },
+    "composer": {
+        "attachFiles": "Прикрепить файлы",
+        "pickSkill": "Выбрать навык",
+        "skillPickerTitle": "Выбрать навыки для использования",
+        "pickAgent": "Выбрать агента",
+        "clearTarget": "Очистить целевого агента",
+        "targetChip": "@{{agent}}",
+        "agentPickerTitle": "Направить следующее сообщение другому агенту",
+        "gatewayDisconnectedPlaceholder": "Шлюз не подключён...",
+        "gatewayInitializingPlaceholder": "Шлюз инициализируется...",
+        "gatewayWarmingPlaceholder": "AI-модель прогревается...",
+        "gatewayPreparingPlaceholder": "Шлюз подготавливается...",
+        "send": "Отправить",
+        "stop": "Остановить",
+        "gatewayConnected": "подключён",
+        "gatewayStatus": "шлюз {{state}} | порт: {{port}} {{pid}}",
+        "retryFailedAttachments": "Повторить неудавшиеся вложения",
+        "modelCatalog": {
+            "featuresTitle": "Доступные функции",
+            "featureImageInput": "Ввод изображений",
+            "featureReasoning": "Модель рассуждений",
+            "featureLongContext": "Длинный контекст ({{context}})",
+            "lyAuto": {
+                "title": "Auto",
+                "description": "Автоматический выбор лучшей модели, включая DeepSeek, Qwen и MiniMax."
+            }
+        },
+        "reasoning": {
+            "title": "Режим рассуждений",
+            "fast": "Быстро",
+            "fastDesc": "Подходит для большинства ситуаций",
+            "thinking": "Размышление",
+            "thinkingDesc": "Лучше для сложных задач",
+            "expert": "Эксперт",
+            "expertDesc": "Интеллект исследовательского уровня"
+        }
+    },
+    "firstMessage": {
+        "preparingTitle": "Подготовка к выполнению...",
+        "preparingDescriptionWarmup": "Агент принимает управление и переходит в рабочий режим.",
+        "preparingDescription": "Агент принимает управление и переходит в рабочий режим.",
+        "progressTitle": "Подготовка первого ответа {{progress}}%",
+        "progressDescription": "Ожидание: {{seconds}} с. Первый запрос инициализирует модель; прогресс является оценочным, результат появится сразу после первого ответа."
+    },
+    "sidebar": {
+        "sessionSwitchBlockedWhilePreparing": "Агент готовит первый ответ. Подождите, прежде чем переключать чат или начинать новый.",
+        "workspaceChats": "Чаты в этой папке",
+        "expandWorkspaceChats": "Показать чаты в этой рабочей области",
+        "collapseWorkspaceChats": "Скрыть чаты в этой рабочей области"
+    },
+    "historyBuckets": {
+        "pinned": "Закреплённые",
+        "today": "Сегодня",
+        "yesterday": "Вчера",
+        "withinWeek": "В течение недели",
+        "withinTwoWeeks": "В течение 2 недель",
+        "withinMonth": "В течение месяца",
+        "older": "Старее месяца"
+    },
+    "errors": {
+        "modelResponseTimeout": "Около 90 секунд прошло без ответа ассистента. Запрос может ещё выполняться в фоне, либо провайдер медленный, недоступен, ограничивает частоту или настроен неверно. Проверьте «Настройки → AI‑провайдеры» и попробуйте снова.",
+        "modelResponseTimeoutLong": "Прошло много времени без ответа ассистента. Возможны недоступность провайдера, лимиты или прогрев. Проверьте «Настройки → AI‑провайдеры» и попробуйте снова."
+    }
+}
