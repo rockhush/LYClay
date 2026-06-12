@@ -20,7 +20,9 @@ import 'zx/globals';
 import { EXTRA_BUNDLED_PACKAGES } from './openclaw-bundle-config.mjs';
 
 const ROOT = path.resolve(__dirname, '..');
-const OUTPUT = path.join(ROOT, 'build', 'openclaw');
+const OUTPUT = process.env.OPENCLAW_BUNDLE_OUTPUT
+  ? path.resolve(process.env.OPENCLAW_BUNDLE_OUTPUT)
+  : path.join(ROOT, 'build', 'openclaw');
 const NODE_MODULES = path.join(ROOT, 'node_modules');
 
 // On Windows, pnpm virtual store paths can exceed MAX_PATH (260 chars).
@@ -589,11 +591,82 @@ function patchBundledOpenClawOpenAITransport(outputDir) {
   return false;
 }
 
+function patchBundledOpenClawSessionId(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return;
+
+  const selectionFiles = fs.readdirSync(distDir).filter((name) => /^selection-.*\.js$/.test(name));
+  if (selectionFiles.length === 0) return;
+
+  let patched = false;
+
+  for (const selFile of selectionFiles) {
+    const filePath = path.join(distDir, selFile);
+    let source = fs.readFileSync(filePath, 'utf8');
+
+    const alreadyPatched = source.includes('sessionId: params.sessionId\n\t\t});') &&
+      source.includes('sessionId: params.sessionId,\n\t\ttransformContext:');
+    if (alreadyPatched) continue;
+
+    // Path 3: boundaryAware – add sessionId before closing });
+    const boundarySearch = 'providerId: params.model.provider\n\t\t});';
+    if (source.includes(boundarySearch)) {
+      source = source.replace(boundarySearch, 'providerId: params.model.provider,\n\t\tsessionId: params.sessionId\n\t\t});');
+      patched = true;
+    }
+
+    // Path 1: providerStreamFn – add sessionId before transformContext
+    const providerSearch = 'providerId: params.model.provider,\n\t\ttransformContext:';
+    if (source.includes(providerSearch)) {
+      source = source.replace(providerSearch, 'providerId: params.model.provider,\n\t\tsessionId: params.sessionId,\n\t\ttransformContext:');
+      patched = true;
+    }
+
+    if (patched) {
+      fs.writeFileSync(filePath, source, 'utf8');
+      echo`   🩹 Patched ${selFile} for sessionId (all paths)`;
+    }
+  }
+
+  if (!patched) {
+    echo`   ✓ selection files already patched for sessionId`;
+  }
+}
+
+function patchBundledOpenClawPromptCache(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return;
+
+  const transportFiles = fs.readdirSync(distDir).filter((name) => /^openai-transport-stream-.*\.js$/.test(name));
+  if (transportFiles.length === 0) return;
+
+  const filePath = path.join(distDir, transportFiles[0]);
+  let source = fs.readFileSync(filePath, 'utf8');
+
+  const alreadyPatched = source.includes('(compat.supportsPromptCacheKey || model.provider === "ly-auto")');
+  if (alreadyPatched) {
+    echo`   ✓ openai-transport already patched for ly-auto prompt cache key`;
+    return;
+  }
+
+  const search = 'if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) params.prompt_cache_key = options.sessionId;';
+  if (!source.includes(search)) {
+    echo`   ⚠️ Could not find prompt_cache_key target in openai-transport file`;
+    return;
+  }
+
+  source = source.replace(search, 'if ((compat.supportsPromptCacheKey || model.provider === "ly-auto") && cacheRetention !== "none" && options?.sessionId) params.prompt_cache_key = options.sessionId;');
+  fs.writeFileSync(filePath, source, 'utf8');
+  echo`   🩹 Patched openai-transport for ly-auto prompt cache key`;
+}
+
 if (!patchBundledOpenClawAnthropicTransport(OUTPUT)) {
   echo`❌ Failed to patch Anthropic transport for model params`;
   process.exit(1);
 }
 patchBundledOpenClawOpenAITransport(OUTPUT);
+patchBundledOpenClawSessionId(OUTPUT);
+patchBundledOpenClawPromptCache(OUTPUT);
 patchBundledExtensionPackageJsons(extensionsDir);
 
 // 6. Clean up the bundle to reduce package size
@@ -969,6 +1042,34 @@ function findFilesByName(rootDir, matcher) {
   return matches;
 }
 
+function verifyBundledDigitalEmployeeIsolation(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  const subagentFile = findFirstFileByName(distDir, /^subagent-spawn-.*\.js$/);
+  const workspaceFiles = findFilesByName(distDir, /^workspace-.*\.js$/);
+
+  if (!subagentFile || workspaceFiles.length === 0) {
+    return false;
+  }
+
+  const subagentSource = fs.readFileSync(subagentFile, 'utf8');
+  const workspaceSourceHasEmployeeOnly = workspaceFiles.some((workspaceFile) => {
+    const workspaceSource = fs.readFileSync(workspaceFile, 'utf8');
+    return (
+      workspaceSource.includes('__digitalEmployeeOnly') &&
+      workspaceSource.includes('mergedEmployeeSkills')
+    );
+  });
+
+  return (
+    subagentSource.includes('buildEmployeeMcpConfig') &&
+    subagentSource.includes('servers: buildEmployeeMcpConfig(employeeDir)') &&
+    subagentSource.includes('__digitalEmployeeOnly') &&
+    subagentSource.includes('buildWorkspaceSkillSnapshot(spawnedWorkspaceDir') &&
+    subagentSource.includes('skillsSnapshot: employeeSkillsSnapshot') &&
+    workspaceSourceHasEmployeeOnly
+  );
+}
+
 function patchBundledRuntime(outputDir) {
   const replacePatches = [
     {
@@ -1196,6 +1297,7 @@ patchBundledRuntime(OUTPUT);
 // 8. Verify the bundle
 const entryExists = fs.existsSync(path.join(OUTPUT, 'openclaw.mjs'));
 const distExists = fs.existsSync(path.join(OUTPUT, 'dist', 'entry.js'));
+const digitalEmployeeIsolationVerified = distExists && verifyBundledDigitalEmployeeIsolation(OUTPUT);
 
 echo``;
 echo`✅ Bundle complete: ${OUTPUT}`;
@@ -1205,8 +1307,9 @@ echo`   Duplicate versions skipped: ${skippedDupes}`;
 echo`   Total discovered: ${collected.size}`;
 echo`   openclaw.mjs: ${entryExists ? '✓' : '✗'}`;
 echo`   dist/entry.js: ${distExists ? '✓' : '✗'}`;
+echo`   digital employee isolated skills/MCP: ${digitalEmployeeIsolationVerified ? '✓' : '✗'}`;
 
-if (!entryExists || !distExists) {
+if (!entryExists || !distExists || !digitalEmployeeIsolationVerified) {
   echo`❌ Bundle verification failed!`;
   process.exit(1);
 }

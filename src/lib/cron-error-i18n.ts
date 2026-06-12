@@ -104,8 +104,10 @@ const CRON_ERROR_MATCHERS: CronErrorMatcher[] = [
 export function translateCronError(
   error: string | undefined | null,
   t: TFunction<'cron'>,
+  depth = 0,
 ): string {
   if (!error?.trim()) return '';
+  if (depth > 8) return error.trim();
 
   const normalized = stripCronErrorPrefixes(error);
   for (const matcher of CRON_ERROR_MATCHERS) {
@@ -113,9 +115,13 @@ export function translateCronError(
 
     const detail = matcher.detail?.(normalized);
     if (detail) {
+      const translatedDetail = detail !== normalized
+        ? translateCronError(detail, t, depth + 1)
+        : detail;
+
       if (detail !== normalized) {
         return t(`${matcher.key}Detail` as 'errors.runnerStartFailedDetail', {
-          detail: translateCronError(detail, t),
+          detail: translatedDetail,
           defaultValue: normalized,
         });
       }

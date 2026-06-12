@@ -263,8 +263,8 @@ export function DigitalEmployeeDrawer({ open, onOpenChange, employee = null, onS
   const handleSave = () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
-      setNameError('请输入智能体名称');
-      toast.warning('请输入智能体名称');
+      setNameError('请输入数字员工名称');
+      toast.warning('请输入数字员工名称');
       return;
     }
 
@@ -281,9 +281,9 @@ export function DigitalEmployeeDrawer({ open, onOpenChange, employee = null, onS
         <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
           <SheetHeader className="flex-row items-center justify-between space-y-0 border-b border-black/[0.06] px-6 py-4 dark:border-white/10">
             <SheetTitle className="!text-[16px] font-sans font-bold text-foreground leading-tight tracking-normal">
-              智能体
+              数字员工
             </SheetTitle>
-            <SheetDescription className="sr-only">配置智能体</SheetDescription>
+            <SheetDescription className="sr-only">配置数字员工</SheetDescription>
             <Button
               type="button"
               variant="ghost"
@@ -298,7 +298,7 @@ export function DigitalEmployeeDrawer({ open, onOpenChange, employee = null, onS
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 min-h-0">
           <div className="space-y-2">
             <Label htmlFor="digital-employee-name" className="text-[13px] font-medium text-foreground">
-              智能体名称
+              数字员工名称
             </Label>
             <Input
               id="digital-employee-name"
@@ -307,7 +307,7 @@ export function DigitalEmployeeDrawer({ open, onOpenChange, employee = null, onS
                 setName(e.target.value);
                 if (nameError) setNameError('');
               }}
-              placeholder="请输入智能体名称"
+              placeholder="请输入数字员工名称"
               className={cn(
                 'h-10 rounded-xl border-black/10 bg-white text-[13px] dark:border-white/10',
                 nameError && 'border-yellow-500 focus-visible:ring-yellow-500/30',
@@ -326,7 +326,7 @@ export function DigitalEmployeeDrawer({ open, onOpenChange, employee = null, onS
               id="digital-employee-prompt"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="描述智能体的角色、工作流程、注意事项等..."
+              placeholder="描述数字员工的角色、工作流程、注意事项等..."
               className="min-h-[120px] rounded-xl border-black/10 bg-white text-[13px] leading-relaxed dark:border-white/10"
             />
           </div>

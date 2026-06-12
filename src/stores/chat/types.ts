@@ -20,6 +20,8 @@ export interface RawMessage {
   isError?: boolean;
   /** Local-only: file metadata for user-uploaded attachments (not sent to/from Gateway) */
   _attachedFiles?: AttachedFileMeta[];
+  /** Local-only: @mention agent ID when user targets a specific agent */
+  _agentMention?: string;
 }
 
 /** Content block inside a message */
