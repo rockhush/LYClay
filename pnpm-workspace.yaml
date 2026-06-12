@@ -1,7 +1,0 @@
-packages:
-  - '.'
-  - 'harness'
-
-ignoredBuiltDependencies:
-  - electron
-  - esbuild
