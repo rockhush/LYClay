@@ -59,4 +59,14 @@ describe('translateCronError', () => {
       '定时任务出错：some unexpected backend error',
     );
   });
+
+  it('does not recurse on generic failed messages', () => {
+    const t = i18n.getFixedT('zh', 'cron');
+    expect(translateCronError('something failed', t)).toBe('执行失败：something failed');
+  });
+
+  it('does not recurse on generic timeout messages', () => {
+    const t = i18n.getFixedT('zh', 'cron');
+    expect(translateCronError('operation timed out', t)).toBe('操作超时：operation timed out');
+  });
 });

@@ -120,8 +120,10 @@ export function translateCronError(
         });
       }
 
+      // detail === normalized: the matcher already consumed the full message (e.g. generic
+      // "failed"/"timed out" patterns). Recursing would match the same matcher forever.
       return t(matcher.key, {
-        detail: translateCronError(detail, t),
+        detail: normalized,
         defaultValue: normalized,
       });
     }
