@@ -5,7 +5,6 @@ import { Agents } from '../../src/pages/Agents/index';
 
 const hostApiFetchMock = vi.fn();
 const subscribeHostEventMock = vi.fn();
-const fetchAgentsMock = vi.fn();
 const updateAgentMock = vi.fn();
 const updateAgentModelMock = vi.fn();
 const refreshProviderSnapshotMock = vi.fn();
@@ -15,9 +14,7 @@ const { gatewayState, agentsState, providersState } = vi.hoisted(() => ({
     status: { state: 'running', port: 18789 },
   },
   agentsState: {
-    agents: [] as Array<Record<string, unknown>>,
     defaultModelRef: null as string | null,
-    loading: false,
     error: null as string | null,
   },
   providersState: {
@@ -28,13 +25,26 @@ const { gatewayState, agentsState, providersState } = vi.hoisted(() => ({
   },
 }));
 
+let managedAgents: Array<Record<string, unknown>> = [];
+
+function mockHostApiFetch(): void {
+  hostApiFetchMock.mockImplementation(async (path: string) => {
+    if (path === '/api/agents?scope=managed') {
+      return { success: true, agents: managedAgents };
+    }
+    if (path === '/api/channels/accounts') {
+      return { success: true, channels: [] };
+    }
+    throw new Error(`Unexpected Host API path: ${path}`);
+  });
+}
+
 vi.mock('@/stores/gateway', () => ({
   useGatewayStore: (selector: (state: typeof gatewayState) => unknown) => selector(gatewayState),
 }));
 
 vi.mock('@/stores/agents', () => ({
   useAgentsStore: (selector?: (state: typeof agentsState & {
-    fetchAgents: typeof fetchAgentsMock;
     updateAgent: typeof updateAgentMock;
     updateAgentModel: typeof updateAgentModelMock;
     createAgent: ReturnType<typeof vi.fn>;
@@ -42,7 +52,6 @@ vi.mock('@/stores/agents', () => ({
   }) => unknown) => {
     const state = {
       ...agentsState,
-      fetchAgents: fetchAgentsMock,
       updateAgent: updateAgentMock,
       updateAgentModel: updateAgentModelMock,
       createAgent: vi.fn(),
@@ -90,20 +99,26 @@ describe('Agents page status refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     gatewayState.status = { state: 'running', port: 18789 };
-    agentsState.agents = [];
+    managedAgents = [];
     agentsState.defaultModelRef = null;
+    agentsState.error = null;
     providersState.accounts = [];
     providersState.statuses = [];
     providersState.vendors = [];
     providersState.defaultAccountId = '';
-    fetchAgentsMock.mockResolvedValue(undefined);
     updateAgentMock.mockResolvedValue(undefined);
     updateAgentModelMock.mockResolvedValue(undefined);
     refreshProviderSnapshotMock.mockResolvedValue(undefined);
-    hostApiFetchMock.mockResolvedValue({
-      success: true,
-      channels: [],
+    mockHostApiFetch();
+  });
+
+  it('loads managed agents without calling the digital employee list API', async () => {
+    render(<Agents />);
+
+    await waitFor(() => {
+      expect(hostApiFetchMock).toHaveBeenCalledWith('/api/agents?scope=managed');
     });
+    expect(hostApiFetchMock).not.toHaveBeenCalledWith('/api/digital-employees');
   });
 
   it('refetches channel accounts when gateway channel-status events arrive', async () => {
@@ -118,7 +133,7 @@ describe('Agents page status refresh', () => {
     render(<Agents />);
 
     await waitFor(() => {
-      expect(fetchAgentsMock).toHaveBeenCalledTimes(1);
+      expect(hostApiFetchMock).toHaveBeenCalledWith('/api/agents?scope=managed');
       expect(hostApiFetchMock).toHaveBeenCalledWith('/api/channels/accounts');
     });
     expect(subscribeHostEventMock).toHaveBeenCalledWith('gateway:channel-status', expect.any(Function));
@@ -139,7 +154,7 @@ describe('Agents page status refresh', () => {
     const { rerender } = render(<Agents />);
 
     await waitFor(() => {
-      expect(fetchAgentsMock).toHaveBeenCalledTimes(1);
+      expect(hostApiFetchMock).toHaveBeenCalledWith('/api/agents?scope=managed');
       expect(hostApiFetchMock).toHaveBeenCalledWith('/api/channels/accounts');
     });
 
@@ -155,7 +170,7 @@ describe('Agents page status refresh', () => {
   });
 
   it('uses "Use default model" as form fill only and disables it when already default', async () => {
-    agentsState.agents = [
+    managedAgents = [
       {
         id: 'main',
         name: 'Main',
@@ -192,7 +207,7 @@ describe('Agents page status refresh', () => {
     render(<Agents />);
 
     await waitFor(() => {
-      expect(fetchAgentsMock).toHaveBeenCalledTimes(1);
+      expect(hostApiFetchMock).toHaveBeenCalledWith('/api/agents?scope=managed');
     });
 
     fireEvent.click(screen.getByTitle('settings'));
@@ -216,7 +231,7 @@ describe('Agents page status refresh', () => {
   });
 
   it('closes the model modal on cancel without prompting when the form was not edited', async () => {
-    agentsState.agents = [
+    managedAgents = [
       {
         id: 'dingtalk-bot',
         name: 'dingtalk',
@@ -253,7 +268,7 @@ describe('Agents page status refresh', () => {
     render(<Agents />);
 
     await waitFor(() => {
-      expect(fetchAgentsMock).toHaveBeenCalledTimes(1);
+      expect(hostApiFetchMock).toHaveBeenCalledWith('/api/agents?scope=managed');
     });
 
     fireEvent.click(screen.getByTitle('settings'));
@@ -270,7 +285,7 @@ describe('Agents page status refresh', () => {
   });
 
   it('keeps the last agent snapshot visible while a refresh is in flight', async () => {
-    agentsState.agents = [
+    managedAgents = [
       {
         id: 'main',
         name: 'Main',
@@ -286,22 +301,38 @@ describe('Agents page status refresh', () => {
       },
     ];
 
-    const { rerender } = render(<Agents />);
+    render(<Agents />);
 
     expect(await screen.findByText('Main')).toBeInTheDocument();
 
-    agentsState.loading = true;
+    let resolveManagedFetch: ((value: unknown) => void) | undefined;
+    hostApiFetchMock.mockImplementation(async (path: string) => {
+      if (path === '/api/agents?scope=managed') {
+        await new Promise((resolve) => {
+          resolveManagedFetch = resolve;
+        });
+        return { success: true, agents: managedAgents };
+      }
+      if (path === '/api/channels/accounts') {
+        return { success: true, channels: [] };
+      }
+      throw new Error(`Unexpected Host API path: ${path}`);
+    });
+
     await act(async () => {
-      rerender(<Agents />);
+      const refreshButton = screen.getByText('refresh');
+      fireEvent.click(refreshButton);
     });
 
     expect(screen.getByText('Main')).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveManagedFetch?.(undefined);
+    });
   });
 
   it('keeps the blocking spinner during the initial load before any stable snapshot exists', async () => {
-    agentsState.loading = true;
-    fetchAgentsMock.mockImplementation(() => new Promise(() => {}));
     refreshProviderSnapshotMock.mockImplementation(() => new Promise(() => {}));
     hostApiFetchMock.mockImplementation(() => new Promise(() => {}));
 

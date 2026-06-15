@@ -12,6 +12,7 @@ import { getLastCompanyListApiTrace } from '../../utils/company-list-api-trace';
 import { isCompanyPortalReachable } from '../../utils/company-portal-reachability';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
+import { revokeSkillGrantsForSkill } from '../../security/permission-store';
 
 export async function handleSkillRoutes(
   req: IncomingMessage,
@@ -239,8 +240,11 @@ export async function handleSkillRoutes(
 
   if (url.pathname === '/api/clawhub/uninstall' && req.method === 'POST') {
     try {
-      const body = await parseJsonBody<Record<string, unknown>>(req);
+      const body = await parseJsonBody<{ slug: string }>(req);
       await ctx.clawHubService.uninstall(body);
+      if (typeof body.slug === 'string' && body.slug.trim()) {
+        await revokeSkillGrantsForSkill(body.slug.trim());
+      }
       sendJson(res, 200, { success: true });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });

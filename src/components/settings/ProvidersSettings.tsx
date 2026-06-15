@@ -158,7 +158,12 @@ function getAuthModeLabel(
   }
 }
 
-export function ProvidersSettings() {
+interface ProvidersSettingsProps {
+  /** When set, the add-provider dialog opens directly on this provider form instead of the picker grid. */
+  addDialogInitialProvider?: ProviderType | null;
+}
+
+export function ProvidersSettings({ addDialogInitialProvider = null }: ProvidersSettingsProps = {}) {
   const { t } = useTranslation('settings');
   const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
   const {
@@ -373,6 +378,7 @@ export function ProvidersSettings() {
       {/* Add Provider Dialog */}
       {showAddDialog && (
         <AddProviderDialog
+          initialSelectedType={addDialogInitialProvider}
           existingVendorIds={existingVendorIds}
           vendors={vendors}
           onClose={() => setShowAddDialog(false)}
@@ -975,6 +981,7 @@ function ProviderCard({
 }
 
 interface AddProviderDialogProps {
+  initialSelectedType?: ProviderType | null;
   existingVendorIds: Set<string>;
   vendors: ProviderVendorInfo[];
   onClose: () => void;
@@ -999,6 +1006,7 @@ interface AddProviderDialogProps {
 }
 
 function AddProviderDialog({
+  initialSelectedType = null,
   existingVendorIds,
   vendors,
   onClose,
@@ -1007,7 +1015,7 @@ function AddProviderDialog({
   devModeUnlocked,
 }: AddProviderDialogProps) {
   const { t, i18n } = useTranslation('settings');
-  const [selectedType, setSelectedType] = useState<ProviderType | null>(null);
+  const [selectedType, setSelectedType] = useState<ProviderType | null>(initialSelectedType);
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -1038,6 +1046,12 @@ function AddProviderDialog({
   // For providers that support both OAuth and API key, let the user choose.
   // Default to the vendor's declared auth mode instead of hard-coding OAuth.
   const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>('apikey');
+
+  useEffect(() => {
+    if (initialSelectedType === 'custom') {
+      setName(t('aiProviders.custom'));
+    }
+  }, [initialSelectedType, t]);
 
   const typeInfo = PROVIDER_TYPE_INFO.find((t) => t.id === selectedType);
   const providerDocsUrl = getProviderDocsUrl(typeInfo, i18n.language);
@@ -1377,46 +1391,49 @@ function AddProviderDialog({
             </div>
           ) : (
             <div className="space-y-5">
-              <div className="flex items-center gap-3 p-3.5 rounded-lg bg-white dark:bg-card border border-black/[0.06] dark:border-white/10">
-                <div className="h-10 w-10 shrink-0 flex items-center justify-center rounded-md">
-                  {getProviderIconUrl(selectedType!) ? (
-                    <img src={getProviderIconUrl(selectedType!)} alt={typeInfo?.name} className={getProviderIconClassName(selectedType!, 'md')} />
-                  ) : (
-                    <span className="text-xl">{typeInfo?.icon}</span>
-                  )}
+              {selectedType !== 'custom' && (
+                <div className="flex items-center gap-3 p-3.5 rounded-lg bg-white dark:bg-card border border-black/[0.06] dark:border-white/10">
+                  <div className="h-10 w-10 shrink-0 flex items-center justify-center rounded-md">
+                    {getProviderIconUrl(selectedType!) ? (
+                      <img src={getProviderIconUrl(selectedType!)} alt={typeInfo?.name} className={getProviderIconClassName(selectedType!, 'md')} />
+                    ) : (
+                      <span className="text-xl">{typeInfo?.icon}</span>
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-semibold text-[14px]">{typeInfo?.name}</p>
+                    <button
+                      data-testid="add-provider-change-provider-button"
+                      onClick={() => {
+                        setSelectedType(null);
+                        setValidationError(null);
+                        setBaseUrl('');
+                        setModelId('');
+                        setUserAgent('');
+                        setShowAdvancedConfig(false);
+                        setArkMode('apikey');
+                      }}
+                      className="text-[12px] text-[#FE7B00] hover:text-[#FE7B00] hover:underline font-medium dark:text-primary"
+                    >
+                      {t('aiProviders.dialog.change')}
+                    </button>
+                    {effectiveDocsUrl && (
+                      <>
+                        <span className="mx-2 text-foreground/20">|</span>
+                        <a
+                          href={effectiveDocsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[12px] text-[#FE7B00] hover:text-[#FE7B00] hover:underline font-medium inline-flex items-center gap-1 dark:text-primary"
+                        >
+                          {t('aiProviders.dialog.customDoc')}
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <p className="font-semibold text-[14px]">{typeInfo?.id === 'custom' ? t('aiProviders.custom') : typeInfo?.name}</p>
-                  <button
-                  onClick={() => {
-                    setSelectedType(null);
-                    setValidationError(null);
-                    setBaseUrl('');
-                    setModelId('');
-                    setUserAgent('');
-                    setShowAdvancedConfig(false);
-                    setArkMode('apikey');
-                  }}
-                  className="text-[12px] text-[#FE7B00] hover:text-[#FE7B00] hover:underline font-medium dark:text-primary"
-                >
-                    {t('aiProviders.dialog.change')}
-                  </button>
-                  {effectiveDocsUrl && (
-                    <>
-                      <span className="mx-2 text-foreground/20">|</span>
-                      <a
-                        href={effectiveDocsUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[12px] text-[#FE7B00] hover:text-[#FE7B00] hover:underline font-medium inline-flex items-center gap-1 dark:text-primary"
-                      >
-                        {t('aiProviders.dialog.customDoc')}
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </>
-                  )}
-                </div>
-              </div>
+              )}
 
               <div className="space-y-6 bg-transparent p-0">
                 <div className="space-y-2.5">

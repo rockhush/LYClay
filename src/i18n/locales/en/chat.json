@@ -1,4 +1,8 @@
 {
+    "notices": {
+        "securityCancelled": "Cancelled: you declined the security confirmation.",
+        "fileAccessCancelled": "Cancelled: you declined access to \"{{path}}\", so it was not read."
+    },
     "gatewayNotRunning": "Gateway Not Running",
     "gatewayRequired": "The OpenClaw Gateway needs to be running to use chat. It will start automatically, or you can start it from Settings.",
     "welcome": {
@@ -59,6 +63,7 @@
         "gatewayConnected": "connected",
         "gatewayStatus": "gateway {{state}} | port: {{port}} {{pid}}",
         "retryFailedAttachments": "Retry failed attachments",
+        "removeFailedAttachments": "Remove failed attachments",
         "switchModel": "Switch Model",
         "modelPickerTitle": "Select AI Provider",
         "modelSwitched": "Switched to {{name}}",

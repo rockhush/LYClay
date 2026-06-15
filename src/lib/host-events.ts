@@ -3,6 +3,7 @@ import { createHostEventSource } from './host-api';
 let eventSource: EventSource | null = null;
 
 const HOST_EVENT_TO_IPC_CHANNEL: Record<string, string> = {
+  'app:navigate': 'navigate',
   'gateway:status': 'gateway:status-changed',
   'gateway:error': 'gateway:error',
   'gateway:notification': 'gateway:notification',
@@ -18,6 +19,10 @@ const HOST_EVENT_TO_IPC_CHANNEL: Record<string, string> = {
   'channel:wechat-qr': 'channel:wechat-qr',
   'channel:wechat-success': 'channel:wechat-success',
   'channel:wechat-error': 'channel:wechat-error',
+  'openclaw:cli-installed': 'openclaw:cli-installed',
+  'update:status-changed': 'update:status-changed',
+  'update:auto-install-countdown': 'update:auto-install-countdown',
+  'security:confirmation-request': 'security:confirmation-request',
 };
 
 function getEventSource(): EventSource {
@@ -29,7 +34,8 @@ function getEventSource(): EventSource {
 
 function allowSseFallback(): boolean {
   try {
-    return window.localStorage.getItem('LYClaw:allow-sse-fallback') === '1';
+    return window.localStorage.getItem('LYClaw:allow-sse-fallback') === '1'
+      || window.localStorage.getItem('clawx:allow-sse-fallback') === '1';
   } catch {
     return false;
   }
@@ -41,7 +47,7 @@ export function subscribeHostEvent<T = unknown>(
 ): () => void {
   const ipc = window.electron?.ipcRenderer;
   const ipcChannel = HOST_EVENT_TO_IPC_CHANNEL[eventName];
-  if (ipcChannel && ipc?.on && ipc?.off) {
+  if (ipcChannel && ipc?.on) {
     const listener = (payload: unknown) => {
       handler(payload as T);
     };
@@ -56,7 +62,7 @@ export function subscribeHostEvent<T = unknown>(
     }
     // Fallback for environments where on() doesn't return cleanup
     return () => {
-      ipc.off(ipcChannel, listener);
+      ipc.off?.(ipcChannel, listener);
     };
   }
 

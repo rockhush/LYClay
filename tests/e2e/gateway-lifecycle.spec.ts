@@ -11,8 +11,11 @@ test.describe('ClawX gateway lifecycle resilience', () => {
     await page.getByTestId('sidebar-nav-models').click();
     await expect(page.getByTestId('models-page')).toBeVisible();
 
-    await page.getByTestId('sidebar-nav-agents').click();
-    await expect(page.getByTestId('agents-page')).toBeVisible();
+    await page.getByTestId('sidebar-nav-digital-employee').click();
+    await expect(page.getByRole('heading', { name: '数字员工' })).toBeVisible();
+
+    await page.getByTestId('sidebar-nav-skills').click();
+    await expect(page.getByTestId('skills-actions-button')).toBeVisible();
 
     await page.getByTestId('sidebar-nav-channels').click();
     await expect(page.getByTestId('channels-page')).toBeVisible();
@@ -77,8 +80,8 @@ test.describe('ClawX gateway lifecycle resilience', () => {
     await page.waitForTimeout(500);
 
     // App should still be functional in error state
-    await page.getByTestId('sidebar-nav-agents').click();
-    await expect(page.getByTestId('agents-page')).toBeVisible();
+    await page.getByTestId('sidebar-nav-digital-employee').click();
+    await expect(page.getByRole('heading', { name: '数字员工' })).toBeVisible();
 
     // Transition 4: error → reconnecting → running (the recovery path)
     await electronApp.evaluate(({ BrowserWindow }) => {

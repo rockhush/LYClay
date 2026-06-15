@@ -2,6 +2,9 @@ export interface AgentSummary {
   id: string;
   name: string;
   isDefault: boolean;
+  isDigitalEmployee?: boolean;
+  digitalEmployeeInstanceId?: string | null;
+  digitalEmployeeInstallPath?: string | null;
   modelDisplay: string;
   modelRef?: string | null;
   overrideModelRef?: string | null;

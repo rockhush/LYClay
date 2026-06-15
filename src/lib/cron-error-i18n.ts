@@ -104,8 +104,10 @@ const CRON_ERROR_MATCHERS: CronErrorMatcher[] = [
 export function translateCronError(
   error: string | undefined | null,
   t: TFunction<'cron'>,
+  depth = 0,
 ): string {
   if (!error?.trim()) return '';
+  if (depth > 8) return error.trim();
 
   const normalized = stripCronErrorPrefixes(error);
   for (const matcher of CRON_ERROR_MATCHERS) {

@@ -15,6 +15,9 @@ const hasNonToolAssistantContent = vi.fn(() => true);
 const isAbortedChatRun = vi.fn(() => false);
 const isInternalMessage = vi.fn(() => false);
 const isInternalMessageText = vi.fn(() => false);
+const isUserSecurityDenialMessage = vi.fn((message: unknown) =>
+  typeof message === 'string' && /NETWORK_ACCESS_DENIED_BY_USER|Network access denied:/i.test(message));
+const buildSecurityCancelNotice = vi.fn(() => 'Cancelled: you declined the security confirmation.');
 const isTerminalAssistantErrorMessage = vi.fn((message: { role?: string; stopReason?: string; stop_reason?: string } | undefined) => {
   const stopReason = message?.stopReason ?? message?.stop_reason;
   return message?.role === 'assistant' && stopReason === 'error';
@@ -50,6 +53,8 @@ vi.mock('@/stores/chat/helpers', () => ({
   isAbortedChatRun: (...args: unknown[]) => isAbortedChatRun(...args),
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
   isInternalMessageText: (...args: unknown[]) => isInternalMessageText(...args),
+  isUserSecurityDenialMessage: (...args: unknown[]) => isUserSecurityDenialMessage(...args),
+  buildSecurityCancelNotice: (...args: unknown[]) => buildSecurityCancelNotice(...args),
   isTerminalAssistantErrorMessage: (...args: unknown[]) => isTerminalAssistantErrorMessage(...args),
   isToolOnlyMessage: (...args: unknown[]) => isToolOnlyMessage(...args),
   isToolResultRole: (...args: unknown[]) => isToolResultRole(...args),
@@ -124,6 +129,8 @@ describe('chat runtime event handlers', () => {
       return '';
     });
     isInternalMessageText.mockImplementation((text: unknown) => /^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(String(text).trim()));
+    isUserSecurityDenialMessage.mockImplementation((message: unknown) =>
+      typeof message === 'string' && /NETWORK_ACCESS_DENIED_BY_USER|Network access denied:/i.test(message));
     normalizeStreamingMessage.mockImplementation((message: unknown) => message);
     snapshotStreamingAssistantMessage.mockImplementation((currentStream: unknown) => currentStream ? [currentStream as Record<string, unknown>] : []);
     upsertToolStatuses.mockImplementation((_current, updates) => updates);
@@ -235,6 +242,31 @@ describe('chat runtime event handlers', () => {
     expect(next.streamingTools).toEqual([]);
   });
 
+  it('treats user-denied security confirmations as cancellation instead of chat errors', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({
+      sending: true,
+      activeRunId: 'r1',
+      lastUserMessageAt: 123,
+      streamingMessage: { role: 'assistant', content: 'partial' },
+      streamingTools: [{ id: 'tool-1' }],
+    });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      errorMessage: 'Error: Network access denied: 10.0.1.83',
+    }, 'error', 'r1');
+
+    const next = h.read();
+    expect(next.error).toBeNull();
+    expect(next.runError).toBeNull();
+    expect(next.sending).toBe(false);
+    expect(next.activeRunId).toBeNull();
+    expect(next.lastUserMessageAt).toBeNull();
+    expect(next.streamingMessage).toBeNull();
+    expect(next.streamingTools).toEqual([]);
+    expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
+  });
+
   it('treats stopReason=error assistant finals as runtime errors', async () => {
     const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
     const h = makeHarness({ sending: true, activeRunId: 'run-err', lastUserMessageAt: 123 });
@@ -255,6 +287,29 @@ describe('chat runtime event handlers', () => {
     expect(next.streamingMessage).toBeNull();
     expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
     expect(setErrorRecoveryTimer).not.toHaveBeenCalled();
+  });
+
+  it('does not show Run ended for assistant final errors caused by user denial', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({ sending: true, activeRunId: 'run-denied', lastUserMessageAt: 123 });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      message: {
+        role: 'assistant',
+        id: 'assistant-denied',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'Error: Network access denied: 10.0.1.83',
+      },
+    }, 'final', 'run-denied');
+
+    const next = h.read();
+    expect(next.error).toBeNull();
+    expect(next.runError).toBeNull();
+    expect(next.pendingFinal).toBe(false);
+    expect(next.sending).toBe(false);
+    expect(next.activeRunId).toBeNull();
+    expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
   });
 
   it('delta with empty object does not overwrite existing streamingMessage', async () => {

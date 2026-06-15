@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { useSettingsStore } from './settings';
 import { invokeIpc } from '@/lib/api-client';
 import { formatUpdateFriendlyError } from '@/lib/update-errors';
+import { subscribeHostEvent } from '@/lib/host-events';
 
 export interface UpdateInfo {
   version: string;
@@ -105,7 +106,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     // Listen for update events
     // Single source of truth: listen only to update:status-changed
     // (sent by AppUpdater.updateStatus() in the main process)
-    window.electron.ipcRenderer.on('update:status-changed', (data) => {
+    subscribeHostEvent('update:status-changed', (data) => {
       const payload = data as {
         status: UpdateStatus;
         info?: UpdateInfo;
@@ -125,7 +126,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       }));
     });
 
-    window.electron.ipcRenderer.on('update:auto-install-countdown', (data) => {
+    subscribeHostEvent('update:auto-install-countdown', (data) => {
       const { seconds, cancelled } = data as { seconds: number; cancelled?: boolean };
       set({ autoInstallCountdown: cancelled || seconds < 0 ? null : seconds });
     });

@@ -102,9 +102,9 @@ When Developer Mode is enabled, the sidebar also provides a native Dreams page f
 Complete the entire setup—from installation to your first AI interaction—through an intuitive graphical interface. No terminal commands, no YAML files, no environment variable hunting.
 
 ### 💬 Intelligent Chat Interface
-Communicate with AI agents through a modern chat experience. Support for multiple conversation contexts, message history, rich content rendering with Markdown (including GitHub-flavored tables and KaTeX-powered LaTeX math: `$inline$`, `$$block$$`, `\(inline\)`, and `\[block\]`), and direct `@agent` routing in the main composer for multi-agent setups.
+Communicate with AI agents through a modern chat experience. Support for multiple conversation contexts, message history, rich content rendering with Markdown (including GitHub-flavored tables and KaTeX-powered LaTeX math: `$inline$`, `$$block$$`, `\(inline\)`, and `\[block\]`), and direct `@agent` execution for installed digital employees in the main composer.
 The composer also exposes Fast, Thinking, and Expert reasoning modes, written to the current OpenClaw session via `sessions.patch` as `off`, `medium`, or `high` thinking overrides.
-When you target another agent with `@agent`, ClawX switches into that agent's own conversation context directly instead of relaying through the default agent. Workspaces are opt-in: ClawX does not mount a default folder automatically, and stronger isolation depends on OpenClaw sandbox settings. When a workspace folder is selected for a chat session, that session appears nested under the matching workspace in the left sidebar (other sessions stay in the time-bucketed chat list below).
+When you target an installed digital employee with `@agent`, ClawX keeps the current conversation and streams that employee's execution back into the same chat instead of switching sessions or spawning a child agent. The run uses the current chat model, the target employee workspace (`~/.openclaw/workspace-{agentId}`), and employee-scoped prompts, Skills, workflows, and MCP servers from `digital-employee/{agentId}/` or the installed digital employee directory; global Skill/MCP fallback is not used for that execution. Workspaces are opt-in for normal chat sessions: ClawX does not mount a default folder automatically, and stronger isolation depends on OpenClaw sandbox settings. When a workspace folder is selected for a chat session, that session appears nested under the matching workspace in the left sidebar (other sessions stay in the time-bucketed chat list below).
 Each agent can also override its own `provider/model` runtime setting; agents without overrides continue inheriting the global default model.
 
 ### 📡 Multi-Channel Management
@@ -133,7 +133,24 @@ Environment variables for bundled search skills:
 - `find-skills` and `self-improving-agent` do not require API keys
 
 ### 🔌 MCP connectors
-Manage Model Context Protocol servers from the sidebar **Connectors** page (built-in Notion and GitHub setup flows, plus custom entries). You can also open **MCP services** at `#/settings/mcp` and **Edit MCP JSON** at `#/settings/mcp/config`. Configuration is stored in `~/.openclaw/mcp.json`; saving changes asks the local OpenClaw Gateway to reload when possible.
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/dev_limit
+Manage Model Context Protocol servers from the sidebar **Connectors** page (built-in Notion and GitHub setup flows, plus custom entries). You can also open **MCP services** at `#/settings/mcp` and **Edit MCP JSON** at `#/settings/mcp/config`. Configuration is stored in `~/.openclaw/openclaw.json#mcp.servers`; saving changes asks the local OpenClaw Gateway to reload when possible.
+
+Marketplace digital employee packages can be installed through the Host API. The renderer passes the marketplace list item id, and the main process downloads the package from `https://ai.lingyiitech.com/management/agents/download/<id>/`; renderer-controlled package URLs are not accepted. Downloads are limited to 512 MiB and extracted content to 1 GiB. LYClaw validates and extracts each package under `~/.openclaw/digital-employees/<package-slug>--<short-id>`, creates one exclusive local OpenClaw Agent with a readable `employee-<package-slug>-<short-id>` id, safely applies its Agent template, copies portable Agent workspace descriptions, and preserves employee-scoped Skills and MCP configuration inside the installed package. Installation does not register packaged MCP servers in global `openclaw.json`; employee runtime usage reads the configuration from the selected employee directory. Installation state and resource ownership are recorded in `install.json`; SQLite is not required.
+The Digital Employee marketplace page invokes this installation flow directly from each card, displays progress and success or failure feedback, and derives installed status from local employee records.
+When a package explicitly sets `"allowMultipleInstances": false`, LYClaw rejects another installation with the same `packageId` before creating an Agent. Missing or `true` values allow multiple instances.
+
+Installed employees can be updated in place through the Host API. Updates preserve the `instanceId`, `agentId`, session key, and runtime paths, require the same `packageId` and a newer version, and synchronize the package, bundled Skills, packaged MCP configuration, workflows, resources, and managed Agent workspace files. Managed files removed by the new package are removed locally, while `USER.md`, sessions, memory, credentials, and user outputs are preserved. Any failure restores the previous package, workspace, and Agent definition.
+<<<<<<< HEAD
+=======
+Manage Model Context Protocol servers from the sidebar **Connectors** page (built-in Notion and GitHub setup flows, plus custom entries). You can also open **MCP services** at `#/settings/mcp` and **Edit MCP JSON** at `#/settings/mcp/config`. Configuration is stored in `~/.openclaw/mcp.json`; saving changes asks the local OpenClaw Gateway to reload when possible. Enabling a new or changed MCP server requires explicit authorization; stdio servers are treated as high risk because they start a local process.
+>>>>>>> origin/dev
+=======
+Manage Model Context Protocol servers from the sidebar **Connectors** page (built-in Notion and GitHub setup flows, plus custom entries). You can also open **MCP services** at `#/settings/mcp` and **Edit MCP JSON** at `#/settings/mcp/config`. Configuration is stored in `~/.openclaw/mcp.json`; saving changes asks the local OpenClaw Gateway to reload when possible. Enabling a new or changed MCP server requires explicit authorization; stdio servers are treated as high risk because they start a local process.
+>>>>>>> origin/dev_limit
 
 ### 🔐 Secure Provider Integration
 Connect to multiple AI providers (OpenAI, Anthropic, and more) with credentials stored securely in your system's native keychain. OpenAI supports both API key and browser OAuth (Codex subscription) sign-in.
@@ -276,6 +293,13 @@ ClawX employs a **dual-process architecture** with a unified host API layer. The
 - **Graceful Recovery**: Built-in reconnect, timeout, and backoff logic handles transient failures automatically
 - **Secure Storage**: API keys and sensitive data leverage the operating system's native secure storage mechanisms
 - **CORS-Safe by Design**: Local HTTP access is proxied by Main, preventing renderer-side CORS issues
+- **Memory Output Protection**: Main-controlled Memory RPC responses are recursively redacted and scanned before reaching Renderer; OpenClaw runtime-internal Memory persistence remains a separate follow-up boundary
+- **Skill / Plugin Permission Declarations**: Skills inherit metadata/read/write access inside the already-authorized Workspace; manifests declare elevated filesystem, network, command, and secret capabilities. Sensitive paths and paths outside the Workspace remain protected, plugins receive no implicit permissions, and runtime enforcement remains a follow-up boundary
+- **Skill Upload Permission Review**: Local ZIP installs accept `SKILL.md` at the archive root or inside one top-level folder. Skills with Workspace base permissions install directly, while newly requested elevated permissions are shown before writing files and require a short-lived Main-issued confirmation token
+- **Skill Permission Grants**: Confirmed local ZIP Skill permissions are persisted with a manifest digest. Changed manifests invalidate old grants, uninstall revokes active grants, and Settings can display or revoke Skill grants. Runtime identity enforcement remains a follow-up boundary
+- **Skill Runtime Policy Foundation**: Main now exposes grant-bound file, network, and command checks for identified Skills. Runtime exec commands are preflighted through a LYClaw-owned OpenClaw hook before execution, applying Skill command gates when command paths identify a Skill; the legacy Gateway exec approval bridge remains as a compatibility fallback
+- **Trusted Internal Command Boundary**: Fixed LYClaw maintenance commands such as Gateway launch, port cleanup, and background doctor repair are validated by a Main-owned operation registry and audited without showing Agent command prompts. Dynamic Agent, Skill, MCP, and Renderer commands still use the normal command policy and confirmation flow
+- **Shell IPC Entry Point Cleanup**: Agent deletion now delegates Gateway process and port cleanup to the supervised Gateway lifecycle layer instead of issuing route-level shell commands. Remaining runtime process launchers are tracked as explicit security follow-ups
 
 ### Process Model & Gateway Troubleshooting
 

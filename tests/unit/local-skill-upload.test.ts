@@ -3,9 +3,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  extractZipToDir,
   installLocalSkillFromExtractedContent,
   resolveLocalUploadPackageDirName,
 } from '../../electron/utils/local-skill-upload';
+import { resolveDigitalEmployeePackageRoot } from '../../electron/utils/digital-employee-package';
 
 describe('local-skill-upload', () => {
   it('uses zip basename as package directory name', () => {
@@ -71,5 +73,20 @@ description: nested
     expect(fs.existsSync(path.join(result.skillDir, 'inner', 'SKILL.md'))).toBe(false);
 
     await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform === 'win32')('extracts a ZIP archive on Windows', async () => {
+    const destination = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lyclaw-zip-extract-'));
+    try {
+      await extractZipToDir(
+        path.resolve('artifacts/digital-employee-package-example2/document-analyst-1.0.0.zip'),
+        destination,
+      );
+      const packageRoot = await resolveDigitalEmployeePackageRoot(destination);
+      const manifest = await fs.promises.readFile(path.join(packageRoot, 'employee.json'), 'utf8');
+      expect(manifest).toContain('com.lyclaw.employee.document-analyst');
+    } finally {
+      await fs.promises.rm(destination, { recursive: true, force: true });
+    }
   });
 });

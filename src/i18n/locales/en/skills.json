@@ -207,6 +207,28 @@
         "securityBlocked": "Security Check Failed",
         "securityBlockedDesc": "The skill package has been blocked due to security concerns.",
         "securityWarning": "Security Advisory",
+        "permissions": {
+            "reviewTitle": "Review Skill Permissions",
+            "risk": "Risk: {{risk}}",
+            "riskLevels": {
+                "low": "Low",
+                "medium": "Medium",
+                "high": "High",
+                "critical": "Critical"
+            },
+            "added": "Requested permissions",
+            "unchanged": "Basic or existing permissions",
+            "none": "This Skill does not request additional permissions.",
+            "workspaceMetadata": "View Workspace file information",
+            "workspaceRead": "Read Workspace files",
+            "workspaceWrite": "Write Workspace files",
+            "workspaceDelete": "Delete Workspace files",
+            "workspaceExecute": "Execute files from Workspace",
+            "networkDomain": "Access domain: {{domain}}",
+            "command": "Execute command: {{command}}",
+            "back": "Back",
+            "confirm": "Confirm Installation"
+        },
         "securityCategories": {
             "path-traversal": "Path traversal attempt",
             "file-type": "Blocked file type",

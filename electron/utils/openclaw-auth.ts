@@ -31,6 +31,8 @@ import { ensureOpenClawAgentDefaults, ensureOpenClawSessionDefaults } from './op
 
 const AUTH_STORE_VERSION = 1;
 const AUTH_PROFILE_FILENAME = 'auth-profiles.json';
+const EXEC_APPROVALS_FILENAME = 'exec-approvals.json';
+const LYCLAW_COMMAND_POLICY_PLUGIN_ID = 'lyclaw-command-policy';
 
 function isAbsolutePluginPath(candidate: string): boolean {
   if (isAbsolute(candidate)) return true;
@@ -225,6 +227,7 @@ async function discoverAgentIds(): Promise<string[]> {
 // ── OpenClaw Config Helpers ──────────────────────────────────────
 
 const OPENCLAW_CONFIG_PATH = join(homedir(), '.openclaw', 'openclaw.json');
+const OPENCLAW_EXEC_APPROVALS_PATH = join(homedir(), '.openclaw', EXEC_APPROVALS_FILENAME);
 const FEISHU_PLUGIN_ID_CANDIDATES = ['openclaw-lark', 'feishu-openclaw-plugin'] as const;
 const VALID_COMPACTION_MODES = new Set(['default', 'safeguard']);
 const BUILTIN_CHANNEL_IDS = new Set([
@@ -903,6 +906,95 @@ function removeLegacyMoonshotProviderEntry(
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function sanitizeOpenClawExecApprovalsPolicy(): Promise<boolean> {
+  const existing = await readJsonFile<Record<string, unknown>>(OPENCLAW_EXEC_APPROVALS_PATH);
+  const policy = existing && isPlainRecord(existing) ? existing : {};
+  let modified = existing === null;
+
+  if (policy.version !== 1) {
+    policy.version = 1;
+    modified = true;
+  }
+
+  const defaults = isPlainRecord(policy.defaults) ? policy.defaults : {};
+  if (!isPlainRecord(policy.defaults)) {
+    policy.defaults = defaults;
+    modified = true;
+  }
+
+  // LYClaw 在 Main/IPC 边界做命令安全判定。用 ask="always" 让 OpenClaw 对每条 exec 发出 gateway
+  // 审批事件，由 Main 进程的 exec-approval-bridge → command-policy 处理：低风险静默放行，危险命令弹
+  // 原生确认框。审批走 gateway 事件而非 native 频道转发，模型看不到 /approve 文本。
+  if (defaults.security !== 'full') {
+    defaults.security = 'full';
+    modified = true;
+  }
+  if (defaults.ask !== 'off') {
+    defaults.ask = 'off';
+    modified = true;
+  }
+  if (defaults.askFallback !== 'full') {
+    defaults.askFallback = 'full';
+    modified = true;
+  }
+  if (defaults.autoAllowSkills !== true) {
+    defaults.autoAllowSkills = true;
+    modified = true;
+  }
+
+  if (isPlainRecord(policy.agents)) {
+    for (const [agentId, agentPolicy] of Object.entries(policy.agents)) {
+      if (!isPlainRecord(agentPolicy)) continue;
+      if (agentPolicy.ask !== 'off') {
+        agentPolicy.ask = 'off';
+        modified = true;
+        console.log(`[sanitize] Disabled redundant OpenClaw exec approval for agent "${agentId}"`);
+      }
+      if (agentPolicy.askFallback === 'deny') {
+        agentPolicy.askFallback = 'full';
+        modified = true;
+      }
+      if (agentPolicy.autoAllowSkills !== true) {
+        agentPolicy.autoAllowSkills = true;
+        modified = true;
+      }
+    }
+  }
+
+  if (modified) {
+    await writeJsonFile(OPENCLAW_EXEC_APPROVALS_PATH, policy);
+    console.log('[sanitize] Normalized exec-approvals.json for LYClaw pre-exec command policy');
+  }
+
+  return modified;
+}
+
+function ensureLyclawCommandPolicyPluginConfig(config: Record<string, unknown>): boolean {
+  const plugins = isPlainRecord(config.plugins)
+    ? config.plugins
+    : (Array.isArray(config.plugins) ? { load: [...config.plugins] } : {});
+  const entries = isPlainRecord(plugins.entries) ? plugins.entries : {};
+  const currentEntry = isPlainRecord(entries[LYCLAW_COMMAND_POLICY_PLUGIN_ID])
+    ? entries[LYCLAW_COMMAND_POLICY_PLUGIN_ID] as Record<string, unknown>
+    : {};
+  let modified = !isPlainRecord(config.plugins) || !isPlainRecord(plugins.entries);
+
+  if (currentEntry.enabled !== true) {
+    currentEntry.enabled = true;
+    modified = true;
+  }
+  entries[LYCLAW_COMMAND_POLICY_PLUGIN_ID] = currentEntry;
+  plugins.entries = entries;
+
+  if (Array.isArray(plugins.allow) && !plugins.allow.includes(LYCLAW_COMMAND_POLICY_PLUGIN_ID)) {
+    plugins.allow = [...plugins.allow, LYCLAW_COMMAND_POLICY_PLUGIN_ID];
+    modified = true;
+  }
+
+  config.plugins = plugins;
+  return modified;
 }
 
 function removeLegacyMoonshotKimiSearchConfig(config: Record<string, unknown>): boolean {
@@ -1738,19 +1830,19 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
       toolsModified = true;
     }
 
-    // ── tools.exec approvals (OpenClaw 3.28+) ──────────────────────
-    // LYClaw is a local desktop app where the user is the trusted operator.
-    // Exec approval prompts add unnecessary friction in this context, so we
-    // set security="full" (allow all commands) and ask="off" (never prompt).
-    // If a user has manually configured a stricter ~/.openclaw/exec-approvals.json,
-    // OpenClaw's minSecurity/maxAsk merge will still respect their intent.
+    // LYClaw owns runtime exec security in Main. A before_tool_call hook
+    // preflights exec commands through Host API before OpenClaw creates its
+    // own approval request. Keep OpenClaw ask=off so allowed commands do not
+    // create exec approval follow-up runs; exec-approval-bridge remains as a
+    // compatibility fallback for approvals emitted by OpenClaw itself.
     const execConfig = (toolsConfig.exec as Record<string, unknown> | undefined) || {};
-    if (execConfig.security !== 'full' || execConfig.ask !== 'off') {
+    if (execConfig.security !== 'full' || execConfig.ask !== 'off' || 'askFallback' in execConfig) {
       execConfig.security = 'full';
       execConfig.ask = 'off';
+      delete execConfig.askFallback;
       toolsConfig.exec = execConfig;
       toolsModified = true;
-      console.log('[sanitize] Set tools.exec.security="full" and tools.exec.ask="off" to disable exec approvals for LYClaw desktop');
+      console.log('[sanitize] Set tools.exec.security="full" and ask="off" for LYClaw pre-exec command policy');
     }
 
     if (toolsModified) {
@@ -1773,6 +1865,8 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
       modified = true;
       console.log('[sanitize] Set diagnostics.stuckSessionAbortMs=900000 (15 minutes)');
     }
+
+    await sanitizeOpenClawExecApprovalsPolicy();
 
     // ── plugins.entries.feishu cleanup ──────────────────────────────
     // Normalize feishu plugin ids dynamically based on installed manifest.
@@ -2181,6 +2275,11 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
           console.log(`[sanitize] Mirrored ${channelType} default account credentials to top-level channels.${channelType}`);
         }
       }
+    }
+
+    if (ensureLyclawCommandPolicyPluginConfig(config)) {
+      modified = true;
+      console.log('[sanitize] Enabled LYClaw command policy hook plugin');
     }
 
     if (modified) {

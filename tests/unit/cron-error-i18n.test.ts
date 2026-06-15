@@ -42,6 +42,25 @@ describe('translateCronError', () => {
     ).toBe('任务因网关重启被中断');
   });
 
+  it('does not recurse on generic failed or timeout details', () => {
+    const t = i18n.getFixedT('en', 'cron');
+
+    expect(translateCronError('backend operation failed unexpectedly', t)).toBe(
+      'Failed: backend operation failed unexpectedly',
+    );
+    expect(translateCronError('backend operation timed out after 8 seconds', t)).toBe(
+      'Timed out: backend operation timed out after 8 seconds',
+    );
+  });
+
+  it('still translates nested failure details', () => {
+    const t = i18n.getFixedT('en', 'cron');
+
+    expect(translateCronError('runner start failed: Channel is required', t)).toBe(
+      'Runner start failed: Channel is required',
+    );
+  });
+
   it('formats relative time in Chinese', () => {
     const t = i18n.getFixedT('zh', 'cron');
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
@@ -57,6 +76,13 @@ describe('translateCronError', () => {
     const t = i18n.getFixedT('zh', 'cron');
     expect(translateCronError('some unexpected backend error', t)).toBe(
       '定时任务出错：some unexpected backend error',
+    );
+  });
+
+  it('does not recurse infinitely on generic failed errors', () => {
+    const t = i18n.getFixedT('zh', 'cron');
+    expect(translateCronError('background sync failed', t)).toBe(
+      '执行失败：background sync failed',
     );
   });
 });

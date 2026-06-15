@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 import { PORTS } from '../utils/config';
 import { JsonRpcNotification, isNotification, isResponse } from './protocol';
 import { logger } from '../utils/logger';
+import { protectMemoryRpcOutput } from '../security/memory-content-policy';
 import { captureTelemetryEvent, trackMetric } from '../utils/telemetry';
 import {
   loadOrCreateDeviceIdentity,
@@ -61,6 +62,8 @@ import {
 } from './startup-stderr';
 import { runGatewayStartupSequence } from './startup-orchestrator';
 import { isInvalidConfigSignal } from './startup-recovery';
+import { handleGatewayExecApprovalRequested } from './exec-approval-bridge';
+import { recoverOrphanedSessionTranscriptLock } from './session-lock-recovery';
 
 export interface GatewayStatus {
   state: GatewayLifecycleState;
@@ -1520,6 +1523,14 @@ export class GatewayManager extends EventEmitter {
     }
 
     if (state === 'final' || state === 'error' || state === 'aborted') {
+      if (state === 'final' && metrics.kind === 'user' && !event.message) {
+        logger.warn('[gateway:session-lock-recovery] user chat run completed without a message', {
+          runId,
+          sessionKey: metrics.sessionKey,
+          totalSinceAcceptedMs: now - metrics.acceptedAt,
+        });
+        void this.recoverSessionTranscriptLock(metrics.sessionKey, 'empty-user-chat-final');
+      }
       if (metrics.kind === 'warmup') {
         this.resolveWarmupCompletion(runId, state);
       }
@@ -1556,6 +1567,8 @@ export class GatewayManager extends EventEmitter {
     if (!this.isUserChatSend(method, params)) {
       return;
     }
+
+    await this.recoverSessionTranscriptLockForChatSend(params, 'before-user-chat-send');
 
     if (this.warmupTimer) {
       this.clearWarmupTimer();
@@ -1604,6 +1617,50 @@ export class GatewayManager extends EventEmitter {
       maxWaitMs,
       warmupReady: this.isWarmedUp,
     });
+  }
+
+  private async recoverSessionTranscriptLockForChatSend(params: unknown, reason: string): Promise<void> {
+    const sessionKey = this.getChatSendSessionKey(params);
+    await this.recoverSessionTranscriptLock(sessionKey, reason);
+  }
+
+  private async recoverSessionTranscriptLock(sessionKey: string | undefined, reason: string): Promise<void> {
+    if (!sessionKey) return;
+    const hasTrackedActiveRun = [...this.chatRunMetrics.values()].some(
+      (run) => run.kind === 'user' && run.sessionKey === sessionKey,
+    );
+    if (hasTrackedActiveRun) {
+      logger.info('[gateway:session-lock-recovery] skipped', {
+        reason,
+        sessionKey,
+        skipReason: 'tracked-active-run',
+      });
+      return;
+    }
+    try {
+      const result = await recoverOrphanedSessionTranscriptLock({
+        sessionKey,
+        openclawDir: path.join(homedir(), '.openclaw'),
+        currentPid: process.pid,
+        reason,
+        logger,
+      });
+      if (!result.recovered && result.reason !== 'lock-missing') {
+        logger.info('[gateway:session-lock-recovery] skipped', {
+          reason,
+          sessionKey,
+          skipReason: result.reason,
+          lockPath: result.lockPath,
+          lockAgeMs: result.lockAgeMs,
+        });
+      }
+    } catch (error) {
+      logger.warn('[gateway:session-lock-recovery] failed', {
+        reason,
+        sessionKey,
+        error: String(error),
+      });
+    }
   }
 
   /**
@@ -1686,7 +1743,9 @@ export class GatewayManager extends EventEmitter {
         rpcDurationMs: duration,
       });
       this.recordRpcSuccess();
-      return result;
+      // Memory Doctor 返回值可能包含长期记忆正文。所有 Main 可控的 RPC
+      // 出口统一二次净化，避免旧 Memory 或 Runtime 侧写入绕过最新规则。
+      return protectMemoryRpcOutput(method, result);
     }).catch((error) => {
       const duration = Date.now() - rpcStart;
       logger.warn(`[rpc] ${method} failed after ${duration}ms: ${String(error)}`);
@@ -1938,6 +1997,13 @@ export class GatewayManager extends EventEmitter {
     if (msg.type === 'event' && typeof msg.event === 'string') {
       if (msg.event === 'chat') {
         this.recordChatEventTiming(msg.payload);
+      }
+      if (msg.event === 'exec.approval.requested') {
+        void handleGatewayExecApprovalRequested(msg.payload, {
+          request: this.rpc.bind(this),
+        }).catch((error) => {
+          logger.warn(`[security:gateway-exec] Approval bridge failed: ${String(error)}`);
+        });
       }
       dispatchProtocolEvent(this, msg.event, msg.payload);
       return;

@@ -12,6 +12,8 @@ import {
   isToolOnlyMessage,
   isToolResultRole,
   isInternalMessageText,
+  isUserSecurityDenialMessage,
+  buildSecurityCancelNotice,
   makeAttachedFile,
   attachmentFileNameFromPath,
   normalizeStreamingMessage,
@@ -321,6 +323,22 @@ export function handleRuntimeEventState(
           if (finalMsg) {
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
+              const messageError = getMessageErrorMessage(normalizedFinalMessage);
+              if (isUserSecurityDenialMessage(messageError)) {
+                set({
+                  streamingText: '',
+                  streamingMessage: null,
+                  sending: false,
+                  activeRunId: null,
+                  pendingFinal: false,
+                  runError: null,
+                  error: null,
+                  securityCancelNotice: buildSecurityCancelNotice(messageError),
+                  streamingTools: [],
+                });
+                clearHistoryPoll();
+                break;
+              }
               set({
                 streamingText: '',
                 streamingMessage: null,
@@ -529,6 +547,25 @@ export function handleRuntimeEventState(
           }
 
           const wasSending = get().sending;
+          if (isUserSecurityDenialMessage(errorMsg)) {
+            clearErrorRecoveryTimer();
+            clearHistoryPoll();
+            finishFirstSessionPerf('cancelled', runId);
+            set({
+              error: null,
+              runError: null,
+              securityCancelNotice: buildSecurityCancelNotice(errorMsg),
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
+              sending: false,
+              activeRunId: null,
+              lastUserMessageAt: null,
+            });
+            break;
+          }
 
           // Snapshot the current streaming message into messages[] so partial
           // content ("Let me get that written down...") is preserved in the UI

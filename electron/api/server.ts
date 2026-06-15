@@ -22,7 +22,16 @@ import { handleDingTalkRoutes } from './routes/dingtalk';
 import { handleMcpRoutes } from './routes/mcp';
 import { handleConnectorRoutes } from './routes/connectors';
 import { handleUiStateRoutes } from './routes/ui-state';
+import { handleSecurityRoutes } from './routes/security';
+import { handleDigitalEmployeeRoutes } from './routes/digital-employees';
+import { handleSecurityRoutes } from './routes/security';
 import { sendJson, setCorsHeaders, requireJsonContentType } from './route-utils';
+import {
+  getCommandPolicyPreflightToken,
+  getHostApiToken,
+  setCommandPolicyPreflightToken,
+  setHostApiToken,
+} from './auth-token';
 
 type RouteHandler = (
   req: IncomingMessage,
@@ -37,6 +46,7 @@ const coreRouteHandlers: RouteHandler[] = [
   handleSettingsRoutes,
   handleProviderRoutes,
   handleAgentRoutes,
+  handleDigitalEmployeeRoutes,
   handleChannelRoutes,
   handleSkillRoutes,
   handleFileRoutes,
@@ -50,6 +60,9 @@ const coreRouteHandlers: RouteHandler[] = [
   handleConnectorRoutes,
   handleMcpRoutes,
   handleUiStateRoutes,
+  handleDigitalEmployeeRoutes,
+  handleSecurityRoutes,
+
 ];
 
 function buildRouteHandlers(): RouteHandler[] {
@@ -64,16 +77,12 @@ function buildRouteHandlers(): RouteHandler[] {
  * if they can reach 127.0.0.1:13210 (the CORS wildcard alone is not
  * sufficient because browsers attach the Origin header but not a secret).
  */
-let hostApiToken: string = '';
-
-/** Retrieve the current Host API auth token (for use by IPC proxy). */
-export function getHostApiToken(): string {
-  return hostApiToken;
-}
+export { getHostApiToken } from './auth-token';
 
 export function startHostApiServer(ctx: HostApiContext, port = getPort('CLAWX_HOST_API')): Server {
   // Generate a cryptographically random token for this session.
-  hostApiToken = randomBytes(32).toString('hex');
+  setHostApiToken(randomBytes(32).toString('hex'));
+  setCommandPolicyPreflightToken(randomBytes(32).toString('hex'));
 
   const server = createServer(async (req, res) => {
     try {
@@ -99,7 +108,10 @@ export function startHostApiServer(ctx: HostApiContext, port = getPort('CLAWX_HO
       const bearerToken = authHeader.startsWith('Bearer ')
         ? authHeader.slice(7)
         : (requestUrl.searchParams.get('token') || '');
-      if (bearerToken !== hostApiToken) {
+      const isCommandPolicyPreflight = requestUrl.pathname === '/api/security/command-policy/preflight';
+      const isAuthorized = bearerToken === getHostApiToken()
+        || (isCommandPolicyPreflight && bearerToken === getCommandPolicyPreflightToken());
+      if (!isAuthorized) {
         sendJson(res, 401, { success: false, error: 'Unauthorized' });
         return;
       }

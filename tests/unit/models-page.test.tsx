@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Models } from '@/pages/Models/index';
 
@@ -47,19 +47,23 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-function createUsageEntry(totalTokens: number) {
+function createUsageEntry(index: number) {
   return {
     timestamp: '2026-04-01T12:00:00.000Z',
-    sessionId: `session-${totalTokens}`,
+    sessionId: `session-${index}`,
     agentId: 'main',
     model: 'gpt-5',
     provider: 'openai',
-    inputTokens: totalTokens,
+    inputTokens: index,
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
-    totalTokens,
+    totalTokens: index,
   };
+}
+
+function createUsageHistory(count: number) {
+  return Array.from({ length: count }, (_, index) => createUsageEntry(index + 1));
 }
 
 describe('Models page auto refresh', () => {
@@ -92,5 +96,35 @@ describe('Models page auto refresh', () => {
     });
 
     expect(hostApiFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the current usage page after auto refresh', async () => {
+    hostApiFetchMock.mockResolvedValue(createUsageHistory(10));
+
+    render(<Models />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getAllByTestId('token-usage-entry')).toHaveLength(5);
+    expect(screen.queryByText('session-6')).not.toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'dashboard:recentTokenHistory.next' }).click();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('session-6')).toBeInTheDocument();
+    expect(screen.queryByText('session-1')).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(15_000);
+      await Promise.resolve();
+    });
+
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('session-6')).toBeInTheDocument();
+    expect(screen.queryByText('session-1')).not.toBeInTheDocument();
   });
 });

@@ -111,6 +111,21 @@ const LY_AUTO_SESSION_HEADER_REPLACEMENTS = [
     'const client = createOpenAICompletionsClient(model, context, options?.apiKey || getEnvApiKey(model.provider) || "", options?.headers);',
     'const client = createOpenAICompletionsClient(model, context, options?.apiKey || getEnvApiKey(model.provider) || "", options?.headers, (() => { const sid = options?.sessionId; resolveProviderTransportTurnState(model, { sessionId: sid, turnId: randomUUID(), attempt: 1, transport: "stream" }); return model.provider === "ly-auto" && sid ? { "X-LYClaw-Session-Id": sid } : {}; })());',
   ],
+  [
+    'providerId: params.model.provider\n\t\t});',
+    'providerId: params.model.provider,\n\t\tsessionId: params.sessionId\n\t\t});',
+  ],
+  [
+    'providerId: params.model.provider,\n\t\ttransformContext:',
+    'providerId: params.model.provider,\n\t\tsessionId: params.sessionId,\n\t\ttransformContext:',
+  ],
+];
+
+const LY_AUTO_PROMPT_CACHE_REPLACEMENTS = [
+  [
+    'if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) params.prompt_cache_key = options.sessionId;',
+    'if ((compat.supportsPromptCacheKey || model.provider === "ly-auto") && cacheRetention !== "none" && options?.sessionId) params.prompt_cache_key = options.sessionId;',
+  ],
 ];
 
 const REPLACEMENTS = [
@@ -118,6 +133,7 @@ const REPLACEMENTS = [
   ...PRICING_BOOTSTRAP_REPLACEMENTS,
   ...CHANNEL_PREWARM_REPLACEMENTS,
   ...LY_AUTO_SESSION_HEADER_REPLACEMENTS,
+  ...LY_AUTO_PROMPT_CACHE_REPLACEMENTS,
 ];
 
 const distDir = join(process.cwd(), 'node_modules', 'openclaw', 'dist');

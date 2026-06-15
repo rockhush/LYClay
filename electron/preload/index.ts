@@ -24,6 +24,7 @@ const electronAPI = {
         'gateway:httpProxy',
         'hostapi:fetch',
         'hostapi:token',
+        'security:confirmation-response',
         'gateway:health',
         'gateway:getControlUiUrl',
         // OpenClaw
@@ -189,6 +190,7 @@ const electronAPI = {
         'oauth:success',
         'oauth:error',
         'openclaw:cli-installed',
+        'security:confirmation-request',
       ];
 
       if (validChannels.includes(channel) || channel.startsWith('ext:')) {
@@ -236,6 +238,7 @@ const electronAPI = {
         'oauth:code',
         'oauth:success',
         'oauth:error',
+        'security:confirmation-request',
       ];
 
       if (validChannels.includes(channel) || channel.startsWith('ext:')) {

@@ -187,7 +187,6 @@ export function Models() {
         if (usageFetchGenerationRef.current !== generation) return;
 
         const normalized = Array.isArray(entries) ? entries : [];
-        setUsagePage(1);
         trackUiEvent('models.token_usage_fetch_succeeded', {
           generation,
           attempt,
@@ -297,7 +296,7 @@ export function Models() {
           <div className="flex-1 overflow-y-auto pr-2 min-h-0 -mr-2 space-y-8 pb-4">
 
           {/* AI Providers Section */}
-          <ProvidersSettings />
+          <ProvidersSettings addDialogInitialProvider="custom" />
 
           {/* Token Usage History Section */}
           <div>

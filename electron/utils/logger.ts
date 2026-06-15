@@ -11,6 +11,7 @@ import { app } from 'electron';
 import { join } from 'path';
 import { existsSync, mkdirSync, appendFileSync } from 'fs';
 import { appendFile, open, readdir, stat } from 'fs/promises';
+import { inspectRedacted, redactSecrets, redactUnknown } from '../security/secret-scanner';
 
 /**
  * Log levels
@@ -132,19 +133,19 @@ function formatMessage(level: string, message: string, ...args: unknown[]): stri
   const timestamp = new Date().toISOString();
   const formattedArgs = args.length > 0 ? ' ' + args.map(arg => {
     if (arg instanceof Error) {
-      return `${arg.message}\n${arg.stack || ''}`;
+      return redactSecrets(`${arg.message}\n${arg.stack || ''}`);
     }
     if (typeof arg === 'object') {
       try {
-        return JSON.stringify(arg, null, 2);
+        return JSON.stringify(redactUnknown(arg), null, 2);
       } catch {
-        return String(arg);
+        return inspectRedacted(arg);
       }
     }
-    return String(arg);
+    return redactSecrets(String(arg));
   }).join(' ') : '';
 
-  return `[${timestamp}] [${level.padEnd(5)}] ${message}${formattedArgs}`;
+  return `[${timestamp}] [${level.padEnd(5)}] ${redactSecrets(message)}${formattedArgs}`;
 }
 
 // ── Core write ───────────────────────────────────────────────────
@@ -252,13 +253,13 @@ export async function readLogFile(tailLines = 200): Promise<string> {
       }
 
       const lines = content.split('\n');
-      if (lines.length <= safeTailLines) return content;
-      return lines.slice(-safeTailLines).join('\n');
+      const tail = lines.length <= safeTailLines ? content : lines.slice(-safeTailLines).join('\n');
+      return redactSecrets(tail);
     } finally {
       await file.close();
     }
   } catch (err) {
-    return `(Failed to read log file: ${err})`;
+    return redactSecrets(`(Failed to read log file: ${err})`);
   }
 }
 

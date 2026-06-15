@@ -1,16 +1,139 @@
 import { execFile } from 'child_process';
+import crypto from 'node:crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
 import { locateSkillContentDir, parseSkillManifestFields, resolveLocalUploadSkillMetadata } from './company-skill-package';
 import { restorePreservedSkillDirectory } from './skill-workspace-preserve';
+import { findSkillGrant, grantSkillAccess } from '../security/permission-store';
+import {
+  DEFAULT_SKILL_WORKSPACE_PERMISSIONS,
+  diffSkillManifestPermissions,
+  requiresSkillPermissionConfirmation,
+  type SkillManifestPermissionDiff,
+  type SkillManifestPermissions,
+} from '../security/skill-permission-policy';
+import type { SkillUploadConfirmationStore } from '../security/skill-upload-confirmation';
 import {
   readZipEntries,
   validateZipStructure,
   validateExtractedSkill,
+  type ExtractedValidationResult,
 } from './skill-validator';
 
 const execFileAsync = promisify(execFile);
+
+type UploadValidationStage = 'pre-extraction' | 'post-extraction' | 'preview';
+
+type UploadValidationResult = Pick<ExtractedValidationResult, 'riskLevel' | 'findings' | 'summary'> & {
+  stage: UploadValidationStage;
+};
+
+export type InstalledLocalSkillUploadResult = {
+  skillName: string;
+  skillVersion: string;
+  skillDir: string;
+  preview?: false;
+};
+
+export type LocalSkillPermissionPreviewResult = {
+  preview: true;
+  skillName: string;
+  confirmationToken: string;
+  permissions: SkillManifestPermissions;
+  permissionDiff: SkillManifestPermissionDiff;
+  validationResult: UploadValidationResult;
+};
+
+export type LocalSkillUploadResult = InstalledLocalSkillUploadResult | LocalSkillPermissionPreviewResult;
+
+type PermissionConfirmationOptions = {
+  autoInstall?: boolean;
+  confirmationToken?: string;
+  confirmationStore?: SkillUploadConfirmationStore;
+  fileDigest?: string;
+  source?: string;
+};
+
+function defaultSkillPermissions(): SkillManifestPermissions {
+  return {
+    filesystem: [...DEFAULT_SKILL_WORKSPACE_PERMISSIONS],
+    network: [],
+    commands: [],
+    secrets: [],
+  };
+}
+
+function buildValidationResult(
+  validation: Pick<ExtractedValidationResult, 'riskLevel' | 'findings' | 'summary'>,
+  stage: UploadValidationStage,
+): UploadValidationResult {
+  return {
+    riskLevel: validation.riskLevel,
+    findings: validation.findings,
+    summary: validation.summary,
+    stage,
+  };
+}
+
+async function getExistingManifestDigest(skillDir: string): Promise<string | null> {
+  const existingManifestPath = path.join(skillDir, 'SKILL.md');
+  if (!fs.existsSync(existingManifestPath)) return null;
+  return crypto.createHash('sha256')
+    .update(await fs.promises.readFile(existingManifestPath))
+    .digest('hex');
+}
+
+async function buildPermissionGate(params: {
+  fileName: string;
+  fileDigest?: string;
+  skillId: string;
+  skillDir: string;
+  manifestRaw: Buffer | string;
+  permissions: SkillManifestPermissions;
+  validation: Pick<ExtractedValidationResult, 'riskLevel' | 'findings' | 'summary'>;
+  options?: PermissionConfirmationOptions;
+}): Promise<{ manifestDigest: string; preview?: LocalSkillUploadResult }> {
+  const manifestDigest = crypto.createHash('sha256').update(params.manifestRaw).digest('hex');
+  const existingManifestDigest = await getExistingManifestDigest(params.skillDir);
+  const existingGrant = existingManifestDigest
+    ? await findSkillGrant(params.skillId, existingManifestDigest)
+    : null;
+  const permissionDiff = diffSkillManifestPermissions(existingGrant?.permissions, params.permissions);
+  const requiresConfirmation = requiresSkillPermissionConfirmation(permissionDiff);
+
+  if (!requiresConfirmation) {
+    return { manifestDigest };
+  }
+
+  const options = params.options ?? {};
+  const fileDigest = params.fileDigest ?? options.fileDigest;
+
+  if (!options.autoInstall) {
+    if (!options.confirmationStore || !fileDigest) {
+      throw new Error('Skill installation requires a permission confirmation store');
+    }
+    return {
+      manifestDigest,
+      preview: {
+        preview: true,
+        skillName: params.skillId,
+        confirmationToken: options.confirmationStore.create(params.fileName, fileDigest),
+        permissions: params.permissions,
+        permissionDiff,
+        validationResult: buildValidationResult(params.validation, 'preview'),
+      },
+    };
+  }
+
+  if (!options.confirmationStore?.consume(options.confirmationToken, params.fileName, fileDigest ?? '')) {
+    const err = new Error('Skill installation requires a fresh permission confirmation');
+    (err as any).errorCode = 'SKILL_PERMISSION_CONFIRMATION_REQUIRED';
+    throw err;
+  }
+
+  return { manifestDigest };
+}
 
 export function resolveLocalUploadPackageDirName(fileName: string): string {
   const trimmed = fileName.trim();
@@ -22,11 +145,15 @@ export function resolveLocalUploadPackageDirName(fileName: string): string {
   return withoutExt;
 }
 
-async function runArchiveCommand(command: string, args: string[]): Promise<void> {
-  await execFileAsync(command, args, { windowsHide: true });
+async function runArchiveCommand(
+  command: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<void> {
+  await execFileAsync(command, args, { windowsHide: true, env });
 }
 
-async function extractZipToDir(zipPath: string, destDir: string): Promise<void> {
+export async function extractZipToDir(zipPath: string, destDir: string): Promise<void> {
   await fs.promises.mkdir(destDir, { recursive: true });
 
   if (process.platform === 'win32') {
@@ -41,10 +168,12 @@ async function extractZipToDir(zipPath: string, destDir: string): Promise<void> 
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
-        zipPath,
-        destDir,
-      ]);
+        'Expand-Archive -LiteralPath $env:CLAWX_ARCHIVE_PATH -DestinationPath $env:CLAWX_ARCHIVE_DEST -Force',
+      ], {
+        ...process.env,
+        CLAWX_ARCHIVE_PATH: zipPath,
+        CLAWX_ARCHIVE_DEST: destDir,
+      });
       return;
     }
   }
@@ -52,21 +181,39 @@ async function extractZipToDir(zipPath: string, destDir: string): Promise<void> 
   await runArchiveCommand('unzip', ['-o', zipPath, '-d', destDir]);
 }
 
-export async function installLocalSkillFromExtractedContent(params: {
+type InstallLocalSkillFromExtractedContentParams = {
   extractDir: string;
   fileName: string;
   skillsDir: string;
-}): Promise<{ skillName: string; skillVersion: string; skillDir: string }> {
+  permissionConfirmation?: PermissionConfirmationOptions;
+};
+
+
+export async function installLocalSkillFromExtractedContent(params: InstallLocalSkillFromExtractedContentParams): Promise<LocalSkillUploadResult> {
   const packageDirName = resolveLocalUploadPackageDirName(params.fileName);
   const skillDir = path.join(params.skillsDir, packageDirName);
 
   if (await restorePreservedSkillDirectory(packageDirName, skillDir)) {
     const manifestPath = path.join(skillDir, 'SKILL.md');
-    const manifestRaw = await fs.promises.readFile(manifestPath, 'utf8');
+    const manifestRaw = await fs.promises.readFile(manifestPath);
     const metadata = resolveLocalUploadSkillMetadata(
-      parseSkillManifestFields(manifestRaw),
+      parseSkillManifestFields(manifestRaw.toString('utf8')),
       packageDirName,
     );
+    const validation = validateExtractedSkill(skillDir);
+    const permissions = validation.permissionResult?.permissions ?? defaultSkillPermissions();
+    const { manifestDigest } = await buildPermissionGate({
+      fileName: params.fileName,
+      skillId: metadata.name,
+      skillDir,
+      manifestRaw,
+      permissions,
+      validation,
+      options: params.permissionConfirmation,
+    });
+    await grantSkillAccess(metadata.name, manifestDigest, permissions, {
+      source: params.permissionConfirmation?.source ?? 'skill:uploadZip',
+    });
     return {
       skillName: metadata.name,
       skillVersion: metadata.version,
@@ -81,20 +228,36 @@ export async function installLocalSkillFromExtractedContent(params: {
   if (!postValidationResult.allowed) {
     const err = new Error(postValidationResult.blockReason || 'Content security check failed');
     (err as any).errorCode = 'CONTENT_BLOCKED';
-    (err as any).validationResult = postValidationResult;
+    (err as any).validationResult = buildValidationResult(postValidationResult, 'post-extraction');
     throw err;
   }
 
-  await fs.promises.mkdir(params.skillsDir, { recursive: true });
-  await fs.promises.rm(skillDir, { recursive: true, force: true });
-  await fs.promises.cp(contentDir, skillDir, { recursive: true, force: true });
+  const manifestPath = path.join(contentDir, 'SKILL.md');
+  const manifestRaw = await fs.promises.readFile(manifestPath);
+  const permissions = postValidationResult.permissionResult?.permissions ?? defaultSkillPermissions();
 
-  const manifestPath = path.join(skillDir, 'SKILL.md');
-  const manifestRaw = await fs.promises.readFile(manifestPath, 'utf8');
+  await fs.promises.mkdir(params.skillsDir, { recursive: true });
   const metadata = resolveLocalUploadSkillMetadata(
-    parseSkillManifestFields(manifestRaw),
+    parseSkillManifestFields(manifestRaw.toString('utf8')),
     packageDirName,
   );
+  const gate = await buildPermissionGate({
+    fileName: params.fileName,
+    fileDigest: params.permissionConfirmation?.fileDigest,
+    skillId: metadata.name,
+    skillDir,
+    manifestRaw,
+    permissions,
+    validation: postValidationResult,
+    options: params.permissionConfirmation,
+  });
+  if (gate.preview) return gate.preview;
+
+  await fs.promises.rm(skillDir, { recursive: true, force: true });
+  await fs.promises.cp(contentDir, skillDir, { recursive: true, force: true });
+  await grantSkillAccess(metadata.name, gate.manifestDigest, permissions, {
+    source: params.permissionConfirmation?.source ?? 'skill:uploadZip',
+  });
 
   return {
     skillName: metadata.name,
@@ -108,9 +271,13 @@ export async function installLocalSkillZip(params: {
   buffer: Buffer;
   skillsDir: string;
   tempRoot: string;
-}): Promise<{ skillName: string; skillVersion: string; skillDir: string }> {
+  autoInstall?: boolean;
+  confirmationToken?: string;
+  confirmationStore?: SkillUploadConfirmationStore;
+}): Promise<LocalSkillUploadResult> {
   const tempExtractDir = path.join(params.tempRoot, `lyclaw-upload-${Date.now()}`);
   const tempZipPath = path.join(params.tempRoot, `.upload_${Date.now()}.zip`);
+  const fileDigest = crypto.createHash('sha256').update(params.buffer).digest('hex');
 
   await fs.promises.mkdir(tempExtractDir, { recursive: true });
 
@@ -122,18 +289,23 @@ export async function installLocalSkillZip(params: {
     try {
       entries = readZipEntries(tempZipPath);
     } catch (zipReadError) {
-      throw new Error('ZIP 文件读取失败，文件可能已损坏或不是有效的格式');
+      throw new Error('ZIP file read failed; the archive may be damaged or invalid');
     }
 
     if (entries.length === 0) {
-      throw new Error('ZIP 文件为空，请检查文件是否正确');
+      throw new Error('ZIP file is empty');
     }
 
     const preValidationResult = validateZipStructure(entries, tempZipPath);
     if (!preValidationResult.allowed) {
       const err = new Error(preValidationResult.blockReason || 'Security check failed');
       (err as any).errorCode = 'SECURITY_BLOCKED';
-      (err as any).validationResult = preValidationResult;
+      (err as any).validationResult = {
+        riskLevel: preValidationResult.riskLevel,
+        findings: preValidationResult.findings,
+        summary: preValidationResult.summary,
+        stage: 'pre-extraction',
+      };
       throw err;
     }
 
@@ -143,6 +315,13 @@ export async function installLocalSkillZip(params: {
       extractDir: tempExtractDir,
       fileName: params.fileName,
       skillsDir: params.skillsDir,
+      permissionConfirmation: {
+        autoInstall: params.autoInstall,
+        confirmationToken: params.confirmationToken,
+        confirmationStore: params.confirmationStore,
+        fileDigest,
+        source: 'skill:uploadZip',
+      },
     });
   } finally {
     await fs.promises.rm(tempZipPath, { force: true }).catch(() => undefined);

@@ -29,6 +29,20 @@ describe('ChatMessage attachment dedupe', () => {
 
     expect(screen.getByAltText('artifact.png')).toBeInTheDocument();
   });
+
+  it('shows the digital employee display name on executed assistant replies', () => {
+    const message: RawMessage = {
+      role: 'assistant',
+      content: 'Report complete',
+      executedByAgentId: 'employee-report-abc',
+      executedByAgentName: '报告助手',
+    };
+
+    render(<ChatMessage message={message} />);
+
+    expect(screen.getByText('报告助手')).toBeInTheDocument();
+    expect(screen.queryByText('employee-report-abc')).not.toBeInTheDocument();
+  });
 });
 
 describe('ChatMessage LaTeX rendering', () => {

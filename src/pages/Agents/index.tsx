@@ -15,7 +15,7 @@ import { useProviderStore } from '@/stores/providers';
 import { hostApiFetch } from '@/lib/host-api';
 import { subscribeHostEvent } from '@/lib/host-events';
 import { CHANNEL_ICONS, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
-import type { AgentSummary } from '@/types/agent';
+import type { AgentSummary, AgentsSnapshot } from '@/types/agent';
 import type { ProviderAccount, ProviderVendorInfo, ProviderWithKeyInfo } from '@/lib/providers';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -99,15 +99,28 @@ export function Agents() {
   const refreshProviderSnapshot = useProviderStore((state) => state.refreshProviderSnapshot);
   const lastGatewayStateRef = useRef(gatewayStatus.state);
   const {
-    agents,
-    loading,
-    error,
-    fetchAgents,
+    error: storeError,
     createAgent,
     deleteAgent,
   } = useAgentsStore();
+  const [managedAgents, setManagedAgents] = useState<AgentSummary[]>([]);
+  const [managedLoading, setManagedLoading] = useState(true);
+  const [managedError, setManagedError] = useState<string | null>(null);
   const [channelGroups, setChannelGroups] = useState<ChannelGroupItem[]>([]);
-  const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(() => agents.length > 0);
+  const [hasCompletedInitialLoad, setHasCompletedInitialLoad] = useState(false);
+
+  const fetchManagedAgents = useCallback(async () => {
+    setManagedLoading(true);
+    setManagedError(null);
+    try {
+      const snapshot = await hostApiFetch<AgentsSnapshot & { success?: boolean }>('/api/agents?scope=managed');
+      setManagedAgents(snapshot.agents ?? []);
+    } catch (error) {
+      setManagedError(String(error));
+    } finally {
+      setManagedLoading(false);
+    }
+  }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
@@ -125,7 +138,7 @@ export function Agents() {
   useEffect(() => {
     let mounted = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void Promise.all([fetchAgents(), fetchChannelAccounts(), refreshProviderSnapshot()]).finally(() => {
+    void Promise.all([fetchManagedAgents(), fetchChannelAccounts(), refreshProviderSnapshot()]).finally(() => {
       if (mounted) {
         setHasCompletedInitialLoad(true);
       }
@@ -133,7 +146,7 @@ export function Agents() {
     return () => {
       mounted = false;
     };
-  }, [fetchAgents, fetchChannelAccounts, refreshProviderSnapshot]);
+  }, [fetchManagedAgents, fetchChannelAccounts, refreshProviderSnapshot]);
 
   useEffect(() => {
     const unsubscribe = subscribeHostEvent('gateway:channel-status', () => {
@@ -157,18 +170,19 @@ export function Agents() {
   }, [fetchChannelAccounts, gatewayStatus.state]);
 
   const activeAgent = useMemo(
-    () => agents.find((agent) => agent.id === activeAgentId) ?? null,
-    [activeAgentId, agents],
+    () => managedAgents.find((agent) => agent.id === activeAgentId) ?? null,
+    [activeAgentId, managedAgents],
   );
 
-  const visibleAgents = agents;
+  const visibleAgents = managedAgents;
   const visibleChannelGroups = channelGroups;
-  const isUsingStableValue = loading && hasCompletedInitialLoad;
+  const isUsingStableValue = managedLoading && hasCompletedInitialLoad;
+  const error = managedError ?? storeError;
   const handleRefresh = () => {
-    void Promise.all([fetchAgents(), fetchChannelAccounts()]);
+    void Promise.all([fetchManagedAgents(), fetchChannelAccounts()]);
   };
 
-  if (loading && !hasCompletedInitialLoad) {
+  if (managedLoading && !hasCompletedInitialLoad) {
     return (
       <div className="flex flex-col -m-6 dark:bg-background min-h-[calc(100vh-2.5rem)] items-center justify-center">
         <LoadingSpinner size="lg" />
@@ -243,6 +257,7 @@ export function Agents() {
           onClose={() => setShowAddDialog(false)}
           onCreate={async (name, options) => {
             await createAgent(name, options);
+            await fetchManagedAgents();
             setShowAddDialog(false);
             toast.success(t('toast.agentCreated'));
           }}
@@ -253,7 +268,10 @@ export function Agents() {
         <AgentSettingsModal
           agent={activeAgent}
           channelGroups={visibleChannelGroups}
-          onClose={() => setActiveAgentId(null)}
+          onClose={() => {
+            setActiveAgentId(null);
+            void fetchManagedAgents();
+          }}
         />
       )}
 
@@ -268,6 +286,7 @@ export function Agents() {
           if (!agentToDelete) return;
           try {
             await deleteAgent(agentToDelete.id);
+            await fetchManagedAgents();
             const deletedId = agentToDelete.id;
             setAgentToDelete(null);
             if (activeAgentId === deletedId) {

@@ -6,6 +6,8 @@ import type { GatewayLifecycleState } from './process-policy';
 import { logger } from '../utils/logger';
 import { appendNodeRequireToNodeOptions } from '../utils/paths';
 import { buildUtf8ChildProcessEnv, decodeChildProcessOutput } from '../utils/child-output-encoding';
+import { redactSecrets } from '../security/secret-scanner';
+import { assertTrustedInternalCommand } from '../security/trusted-internal-command';
 
 const GATEWAY_FETCH_PRELOAD_SOURCE = `'use strict';
 (function () {
@@ -89,6 +91,14 @@ function ensureGatewayFetchPreload(): string {
   return dest;
 }
 
+function redactGatewayError(error: unknown): Error {
+  const original = error instanceof Error ? error : new Error(String(error));
+  const redacted = new Error(redactSecrets(original.message));
+  redacted.name = original.name;
+  redacted.stack = original.stack ? redactSecrets(original.stack) : undefined;
+  return redacted;
+}
+
 export async function launchGatewayProcess(options: {
   port: number;
   launchContext: GatewayLaunchContext;
@@ -119,6 +129,16 @@ export async function launchGatewayProcess(options: {
     `Starting Gateway process (mode=${mode}, port=${options.port}, entry="${entryScript}", args="${options.sanitizeSpawnArgs(gatewayArgs).join(' ')}", cwd="${openclawDir}", npmRuntime=${npmRuntimeReady ? 'yes' : 'no'}, bundledBin=${binPathExists ? 'yes' : 'no'}, providerKeys=${loadedProviderKeyCount}, channels=${channelStartupSummary}, proxy=${proxySummary})`,
   );
   const lastSpawnSummary = `mode=${mode}, entry="${entryScript}", args="${options.sanitizeSpawnArgs(gatewayArgs).join(' ')}", cwd="${openclawDir}"`;
+
+  // Gateway 启动属于 LYClaw 固定维护动作，不进入 Agent 命令确认流。
+  // 仍然校验入口脚本和参数形状，并记录内部命令审计。
+  assertTrustedInternalCommand({
+    operation: 'gateway:launch',
+    executable: entryScript,
+    args: gatewayArgs,
+    cwd: openclawDir,
+    source: 'system:gateway-launch',
+  });
 
   const runtimeEnv = buildUtf8ChildProcessEnv({ ...forkEnv });
   // Only apply the fetch/child_process preload in dev mode.
@@ -160,9 +180,10 @@ export async function launchGatewayProcess(options: {
     };
 
     child.on('error', (error) => {
-      logger.error('Gateway process spawn error:', error);
-      options.onError(error);
-      rejectOnce(error);
+      const redactedError = redactGatewayError(error);
+      logger.error('Gateway process spawn error:', redactedError);
+      options.onError(redactedError);
+      rejectOnce(redactedError);
     });
 
     child.on('exit', (code: number) => {
@@ -180,7 +201,7 @@ export async function launchGatewayProcess(options: {
     child.stderr?.on('data', (data) => {
       const raw = decodeChildProcessOutput(data as Buffer);
       for (const line of raw.split(/\r?\n/)) {
-        options.onStderrLine(line);
+        options.onStderrLine(redactSecrets(line));
       }
     });
 
@@ -189,7 +210,7 @@ export async function launchGatewayProcess(options: {
       child.stdout?.on('data', (data) => {
         const raw = decodeChildProcessOutput(data as Buffer);
         for (const line of raw.split(/\r?\n/)) {
-          onOut(line);
+          onOut(redactSecrets(line));
         }
       });
     }

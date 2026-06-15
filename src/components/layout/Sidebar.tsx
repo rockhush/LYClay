@@ -8,8 +8,7 @@ import { version } from '@/../package.json';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Network,
-  Bot,
-  // Briefcase,
+  Briefcase,
   Puzzle,
   Link2,
   Clock,
@@ -52,7 +51,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { hostApiFetch } from '@/lib/host-api';
 import { flushUiStateSync } from '@/lib/ui-state-persistence';
-import { toUserMessage } from '@/lib/api-client';
+import { invokeIpc, toUserMessage } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import i18n from '@/i18n';
@@ -356,12 +355,9 @@ export function Sidebar() {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    
-    console.log(`[Sidebar] useEffect triggered: state=${gatewayStatus.state}, gatewayReady=${gatewayStatus.gatewayReady}, isGatewayReady=${isGatewayReady}, isChatActive=${isChatActive}`);
-    
+
     if (isGatewayReady) {
       if (isChatActive) {
-        console.log('[Sidebar] Chat active, deferring session list load');
         return () => {
           cancelled = true;
           if (timer) {
@@ -370,33 +366,21 @@ export function Sidebar() {
         };
       }
 
-      console.log(`[Sidebar] Gateway ready, scheduling session list load...`);
-
       timer = setTimeout(() => {
         void (async () => {
           if (cancelled) return;
-          const startTime = Date.now();
-          console.log(`[Sidebar] Starting loadSessions() at ${startTime}`);
           await loadSessions();
-          console.log(`[Sidebar] loadSessions() completed in ${Date.now() - startTime}ms`);
         })();
       }, STARTUP_LOAD_SESSIONS_DELAY_MS);
     } else if (gatewayStatus.state === 'starting') {
-      console.log(`[Sidebar] Gateway starting, scheduling local fallback session list load...`);
-      
       timer = setTimeout(() => {
         void (async () => {
           if (cancelled) return;
-          const startTime = Date.now();
-          console.log(`[Sidebar] Starting loadSessions() (local fallback) at ${startTime}`);
           await loadSessions();
-          console.log(`[Sidebar] loadSessions() (local fallback) completed in ${Date.now() - startTime}ms`);
         })();
       }, STARTING_FALLBACK_LOAD_SESSIONS_DELAY_MS);
-    } else {
-      console.log(`[Sidebar] Gateway not running (state=${gatewayStatus.state}), skipping load`);
     }
-    
+
     return () => {
       cancelled = true;
       if (timer) {
@@ -444,7 +428,7 @@ export function Sidebar() {
         error?: string;
       }>('/api/gateway/control-ui');
       if (result.success && result.url) {
-        window.electron.openExternal(result.url);
+        await invokeIpc('shell:openExternal', result.url);
       } else {
         console.error('Failed to get Dev Console URL:', result.error);
       }
@@ -822,8 +806,7 @@ export function Sidebar() {
   const coreNavItems = [
     { to: '/cron', icon: <Clock className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.cronTasks'), testId: 'sidebar-nav-cron', end: true },
     { to: '/models', icon: <Cpu className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
-    // { to: '/cron/digital-employee', icon: <Briefcase className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.digitalEmployee'), testId: 'sidebar-nav-digital-employee', end: true },
-    { to: '/agents', icon: <Bot className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.agents'), testId: 'sidebar-nav-agents' },
+    { to: '/cron/digital-employee', icon: <Briefcase className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.digitalEmployee'), testId: 'sidebar-nav-digital-employee', end: true },
     { to: '/skills', icon: <Puzzle className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
     { to: '/channels', icon: <Network className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
     { to: '/connectors', icon: <Link2 className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.connectors'), testId: 'sidebar-nav-connectors' },
@@ -1029,7 +1012,7 @@ export function Sidebar() {
                                 className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  window.electron.ipcRenderer.invoke('shell:openPath', workspace.path);
+                                  void invokeIpc('shell:openPath', workspace.path);
                                 }}
                                 title="打开文件夹"
                               >

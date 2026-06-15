@@ -1,3 +1,5 @@
+import { redactSecrets } from '../security/secret-scanner';
+
 export type GatewayStderrClassification = {
   level: 'drop' | 'debug' | 'warn';
   normalized: string;
@@ -99,7 +101,7 @@ export function parseSessionWriteLockLog(message: string): SessionWriteLockLog |
 }
 
 export function recordGatewayStartupStderrLine(lines: string[], line: string): void {
-  const normalized = line.trim();
+  const normalized = redactSecrets(line).trim();
   if (!normalized) return;
   lines.push(normalized);
   if (lines.length > MAX_STDERR_LINES) {

@@ -5,7 +5,7 @@
  * are in the toolbar; messages render with markdown + streaming.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Loader2, Sparkles } from 'lucide-react';
+import { AlertCircle, Info, Loader2, Sparkles } from 'lucide-react';
 import chatDoubleIcon from '@/assets/chat-double.svg';
 import { useChatStore, type RawMessage } from '@/stores/chat';
 import { useGatewayStore } from '@/stores/gateway';
@@ -100,8 +100,17 @@ function formatDuration(totalSeconds: number): string {
   return restMinutes === 0 ? `${hours}h` : `${hours}h ${restMinutes}m`;
 }
 
+// "operation was aborted" surfaces when a run is stopped or an in-flight
+// request is cancelled. It carries no actionable information, so it is always
+// hidden from the user regardless of how/when it was raised.
+function isAbortedRunError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return error.toLowerCase().includes('operation was aborted');
+}
+
 function describeRunTermination(error: string | null): { title: string; detail: string } | null {
   if (!error) return null;
+  if (isAbortedRunError(error)) return null;
   const normalized = error.toLowerCase();
   if (normalized.includes('llm idle timeout')) {
     return {
@@ -181,6 +190,7 @@ export function Chat() {
   const loading = useChatStore((s) => s.loading);
   const sending = useChatStore((s) => s.sending);
   const error = useChatStore((s) => s.error);
+  const securityCancelNotice = useChatStore((s) => s.securityCancelNotice);
   const streamingMessage = useChatStore((s) => s.streamingMessage);
   const streamingText = useChatStore((s) => s.streamingText);
   const streamingTools = useChatStore((s) => s.streamingTools);
@@ -189,6 +199,7 @@ export function Chat() {
   const abortRun = useChatStore((s) => s.abortRun);
   const clearError = useChatStore((s) => s.clearError);
   const newSession = useChatStore((s) => s.newSession);
+  const clearSecurityCancelNotice = useChatStore((s) => s.clearSecurityCancelNotice);
   const loadHistory = useChatStore((s) => s.loadHistory);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const agents = useAgentsStore((s) => s.agents);
@@ -480,9 +491,19 @@ export function Chat() {
         (b) => b.type === 'tool_use' || b.type === 'toolCall',
       );
     });
-      const runStillExecutingTools = (sending || pendingFinal || hasAnyStreamContent) && hasToolActivity && !hasFinalReply;
-    // const runStillExecutingTools = hasToolActivity && !hasFinalReply;
+      const runStillExecutingTools = hasToolActivity && !hasFinalReply;
+      const hasCompletedSubagentReturn = completionInfos.length > 0;
+      const hasLiveRuntimeSignal = hasStreamText
+        || hasStreamThinking
+        || hasStreamTools
+        || hasStreamImages
+        || hasRunningStreamToolStatus;
+      // Once the subagent completion event is present in history, an otherwise
+      // quiet parent run should not keep the graph alive solely because stale
+      // sending/pendingFinal state has not been cleared yet.
+      const subagentReturnSettled = hasCompletedSubagentReturn && !hasLiveRuntimeSignal;
       const isLatestOpenRun = nextUserIndex === -1
+        && !subagentReturnSettled
         && (sending || pendingFinal || hasAnyStreamContent || (runStillExecutingTools && !error));
     const replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
     const replyIndex = replyIndexOffset === -1 ? null : idx + 1 + replyIndexOffset;
@@ -686,6 +707,8 @@ export function Chat() {
     hasRunningStreamToolStatus,
     hasStreamImages,
     hasStreamText,
+    hasStreamThinking,
+    hasStreamTools,
     isMimo,
     messages,
     pendingFinal,
@@ -1195,8 +1218,26 @@ export function Chat() {
         </div>
       </div>
 
+      {/* Security cancellation notice — user declined a confirmation; not an error */}
+      {securityCancelNotice && (
+        <div className="px-4 py-2 bg-muted/60 border-t border-border">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <p className="text-sm text-muted-foreground flex items-center gap-2">
+              <Info className="h-4 w-4 shrink-0" />
+              {securityCancelNotice}
+            </p>
+            <button
+              onClick={clearSecurityCancelNotice}
+              className="text-xs text-muted-foreground/70 hover:text-foreground underline"
+            >
+              {t('common:actions.dismiss')}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Error bar */}
-      {error && (
+      {error && !isAbortedRunError(error) && (
         <div className="px-4 py-2 bg-destructive/10 border-t border-destructive/20">
           <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
             <p className="text-sm text-destructive flex items-center gap-2 min-w-0">

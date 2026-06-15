@@ -34,7 +34,7 @@ const LY_AUTO_FALLBACK_OVERRIDES: Record<string, unknown> = {
   input: ['text', 'image'],
   contextWindow: 100000,
   maxTokens: 8192,
-  compat: { supportsUsageInStreaming: true },
+  compat: { supportsUsageInStreaming: true, supportsPromptCacheKey: true },
 };
 
 async function fetchNginxModelOverrides(baseUrl: string): Promise<Record<string, unknown> | null> {

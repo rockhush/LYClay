@@ -20,8 +20,8 @@ test.describe('ClawX developer-mode gated UI', () => {
     await page.getByTestId('sidebar-nav-models').click();
     await page.getByTestId('providers-add-button').click();
     await expect(page.getByTestId('add-provider-dialog')).toBeVisible();
-    await page.getByTestId('add-provider-type-siliconflow').click();
-    await expect(page.getByTestId('add-provider-model-id-input')).toHaveCount(0);
+    await expect(page.getByTestId('add-provider-name-input')).toBeVisible();
+    await expect(page.getByTestId('add-provider-model-id-input')).toBeVisible();
     await page.getByTestId('add-provider-close-button').click();
     await expect(page.getByTestId('add-provider-dialog')).toHaveCount(0);
 
@@ -36,7 +36,6 @@ test.describe('ClawX developer-mode gated UI', () => {
     await page.getByTestId('sidebar-nav-models').click();
     await page.getByTestId('providers-add-button').click();
     await expect(page.getByTestId('add-provider-dialog')).toBeVisible();
-    await page.getByTestId('add-provider-type-siliconflow').click();
     await expect(page.getByTestId('add-provider-model-id-input')).toBeVisible();
   });
 });

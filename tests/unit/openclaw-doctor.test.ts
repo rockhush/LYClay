@@ -10,6 +10,7 @@ const {
   mockLoggerWarn,
   mockLoggerInfo,
   mockLoggerError,
+  mockAssertCommandAllowedWithConfirmation,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(),
   mockFork: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockLoggerWarn: vi.fn(),
   mockLoggerInfo: vi.fn(),
   mockLoggerError: vi.fn(),
+  mockAssertCommandAllowedWithConfirmation: vi.fn(),
 }));
 
 vi.mock('node:fs', async () => {
@@ -57,6 +59,10 @@ vi.mock('@electron/utils/logger', () => ({
   },
 }));
 
+vi.mock('@electron/security/confirmation-service', () => ({
+  assertCommandAllowedWithConfirmation: mockAssertCommandAllowedWithConfirmation,
+}));
+
 class MockUtilityChild extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
@@ -70,6 +76,12 @@ describe('openclaw doctor output handling', () => {
 
     mockExistsSync.mockReturnValue(true);
     mockGetUvMirrorEnv.mockResolvedValue({});
+    mockAssertCommandAllowedWithConfirmation.mockResolvedValue({
+      decision: { action: 'allow', risk: 'low', reasons: ['test'] },
+      segments: [],
+      command: 'openclaw doctor',
+      cwd: '/tmp/openclaw',
+    });
   });
 
   it('collects normal output under the buffer limit', async () => {
@@ -173,5 +185,32 @@ describe('openclaw doctor output handling', () => {
     expect(result.success).toBe(true);
     expect(result.command).toBe('openclaw doctor');
     expect(mockFork.mock.calls[0][1]).toEqual(['doctor']);
+  });
+
+  it('routes doctor fix through command confirmation instead of pre-confirming it', async () => {
+    const child = new MockUtilityChild();
+    mockFork.mockReturnValue(child);
+
+    const { runOpenClawDoctorFix } = await import('@electron/utils/openclaw-doctor');
+    const resultPromise = runOpenClawDoctorFix();
+
+    await vi.waitFor(() => {
+      expect(mockAssertCommandAllowedWithConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+        executable: 'openclaw',
+        args: ['doctor', '--fix', '--yes', '--non-interactive'],
+        source: 'renderer:openclaw-doctor',
+        allowCwdOutsideWorkspace: true,
+      }));
+    });
+    expect(mockAssertCommandAllowedWithConfirmation.mock.calls[0][0]).not.toHaveProperty('confirmed');
+    await vi.waitFor(() => {
+      expect(mockFork).toHaveBeenCalledTimes(1);
+    });
+    child.emit('exit', 0);
+
+    await expect(resultPromise).resolves.toMatchObject({
+      mode: 'fix',
+      success: true,
+    });
   });
 });

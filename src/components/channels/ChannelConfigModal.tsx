@@ -23,6 +23,7 @@ import { useChannelsStore } from '@/stores/channels';
 
 import { hostApiFetch } from '@/lib/host-api';
 import { subscribeHostEvent } from '@/lib/host-events';
+import { invokeIpc } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import {
   CHANNEL_ICONS,
@@ -466,8 +467,8 @@ export function ChannelConfigModal({
     if (!meta?.docsUrl) return;
     const url = t(meta.docsUrl);
     try {
-      if (window.electron?.openExternal) {
-        window.electron.openExternal(url);
+      if (window.electron?.ipcRenderer) {
+        void invokeIpc('shell:openExternal', url);
       } else {
         window.open(url, '_blank');
       }

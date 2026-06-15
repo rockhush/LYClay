@@ -71,7 +71,11 @@ describe('handleDiagnosticsRoutes', () => {
   });
 
   it('returns diagnostics snapshot with channel view and tailed logs', async () => {
-    writeFileSync(join(testOpenClawConfigDir, 'logs', 'gateway.log'), 'gateway-line-1\ngateway-line-2\n');
+    writeFileSync(
+      join(testOpenClawConfigDir, 'logs', 'gateway.log'),
+      'gateway-line-1\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz123456\nurl=https://user:pass@example.com/?api_key=sk-abcdefghijklmnopqrstuvwxyz1234567890\n',
+    );
+    readLogFileMock.mockResolvedValue('clawx api_key=sk-abcdefghijklmnopqrstuvwxyz1234567890');
 
     const { handleDiagnosticsRoutes } = await import('@electron/api/routes/diagnostics');
     const handled = await handleDiagnosticsRoutes(
@@ -107,8 +111,12 @@ describe('handleDiagnosticsRoutes', () => {
         status: 'degraded',
       }),
     ]);
-    expect(payload.clawxLogTail).toBe('clawx-log-tail');
+    expect(payload.clawxLogTail).toBe('clawx api_key=[REDACTED]');
     expect(payload.gatewayLogTail).toContain('gateway-line-1');
+    expect(payload.gatewayLogTail).toContain('Bearer [REDACTED]');
+    expect(payload.gatewayLogTail).toContain('https://[REDACTED]@example.com/?api_key=[REDACTED]');
+    expect(payload.gatewayLogTail).not.toContain('abcdefghijklmnopqrstuvwxyz123456');
+    expect(payload.gatewayLogTail).not.toContain('user:pass');
     expect(payload.gatewayErrLogTail).toBe('');
     expect(payload.gateway?.state).toBe('degraded');
     expect(payload.gateway?.reasons).toEqual(expect.arrayContaining(['gateway_degraded']));

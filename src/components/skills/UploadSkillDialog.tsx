@@ -2,11 +2,12 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { ModalOverlay } from '@/components/ui/modal-overlay';
-import { Upload, X, FileArchive, Loader2 } from 'lucide-react';
+import { AlertTriangle, FileArchive, Globe2, Loader2, ShieldCheck, Terminal, Upload, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import type { TFunction } from 'i18next';
 
 interface Finding {
   level: string;
@@ -34,7 +35,12 @@ function translateMessage(f: Finding): string {
   switch (f.category) {
     case 'file-type': {
       // "Blocked executable file: "setup.exe" (extension .exe)"
-      if (file) return ext ? `${file}（${ext} 危险文件）` : `${file}（危险文件类型）`;
+      if (file) {
+        if (f.level === 'warning') {
+          return ext ? `${file}（${ext} 脚本文件，仅提醒）` : `${file}（脚本文件，仅提醒）`;
+        }
+        return ext ? `${file}（${ext} 禁止上传的可执行文件）` : `${file}（禁止上传的可执行文件）`;
+      }
       return f.message;
     }
     case 'path-traversal': {
@@ -80,6 +86,8 @@ function translateMessage(f: Finding): string {
         return '技能名包含敏感/仿冒关键词';
       }
       if (msg.includes('SKILL.md is empty')) return 'SKILL.md 内容为空';
+      if (msg.includes('prompt-injection scan blocked')) return 'SKILL.md 检测到提示词注入攻击（如窃取本地密钥、外传数据），已拦截';
+      if (msg.includes('prompt-injection scan warning')) return 'SKILL.md 疑似包含提示词注入内容，请谨慎确认';
       if (msg.includes('not found')) return '未找到 SKILL.md 文件';
       if (msg.includes('Cannot read')) return '无法读取 SKILL.md 文件';
       // Fallback: just show the category
@@ -98,8 +106,10 @@ function translateMessage(f: Finding): string {
     }
     case 'suspicious-url': {
       // "Suspicious URL in "SKILL.md": Non-HTTPS URL (insecure) — http://..."
-      if (file) return `${file}（含可疑链接）`;
-      return '检测到可疑链接';
+      if (f.level === 'warning') {
+        return file ? `${file}（包含需确认的链接，仅提醒）` : '检测到需确认的链接，仅提醒';
+      }
+      return file ? `${file}（包含高风险链接，已阻止上传）` : '检测到高风险链接，已阻止上传';
     }
     case 'impersonation': {
       // "Name is very similar to official skill "pdf" (typo-squatting)"
@@ -134,7 +144,9 @@ function formatFinding(f: Finding): string {
 
 interface UploadResult {
   success: boolean;
+  preview?: boolean;
   skillName?: string;
+  confirmationToken?: string;
   error?: string;
   errorCode?: string;
   securityBlocked?: boolean;
@@ -144,6 +156,47 @@ interface UploadResult {
     summary: { errors: number; warnings: number };
     stage: string;
   };
+  permissions?: SkillManifestPermissions;
+  permissionDiff?: {
+    added: string[];
+    unchanged: string[];
+    removed: string[];
+  };
+}
+
+interface SkillManifestPermissions {
+  filesystem: string[];
+  network: string[];
+  commands: string[];
+  secrets: string[];
+}
+
+interface PermissionPreview {
+  skillName: string;
+  confirmationToken: string;
+  permissions: SkillManifestPermissions;
+  permissionDiff: NonNullable<UploadResult['permissionDiff']>;
+  riskLevel: string;
+}
+
+function permissionLabel(permission: string, t: TFunction<'skills'>): string {
+  const labels: Record<string, string> = {
+    'filesystem:workspace:metadata': t('upload.permissions.workspaceMetadata'),
+    'filesystem:workspace:read': t('upload.permissions.workspaceRead'),
+    'filesystem:workspace:write': t('upload.permissions.workspaceWrite'),
+    'filesystem:workspace:delete': t('upload.permissions.workspaceDelete'),
+    'filesystem:workspace:execute': t('upload.permissions.workspaceExecute'),
+  };
+  if (labels[permission]) return labels[permission];
+  if (permission.startsWith('network:')) return t('upload.permissions.networkDomain', { domain: permission.slice('network:'.length) });
+  if (permission.startsWith('commands:')) return t('upload.permissions.command', { command: permission.slice('commands:'.length) });
+  return permission;
+}
+
+function permissionIcon(permission: string) {
+  if (permission.startsWith('network:')) return <Globe2 className="h-3.5 w-3.5 shrink-0" />;
+  if (permission.startsWith('commands:')) return <Terminal className="h-3.5 w-3.5 shrink-0" />;
+  return <FileArchive className="h-3.5 w-3.5 shrink-0" />;
 }
 
 /** Translate backend error codes to user-friendly Chinese messages */
@@ -168,6 +221,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [permissionPreview, setPermissionPreview] = useState<PermissionPreview | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -183,6 +237,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
       return;
     }
     setSelectedFile(file);
+    setPermissionPreview(null);
   }, [t]);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -234,10 +289,24 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
       const result = await invokeIpc<UploadResult>('skill:uploadZip', {
         fileName: selectedFile.name,
         base64Data,
-        autoInstall: true,
+        autoInstall: Boolean(permissionPreview),
+        confirmationToken: permissionPreview?.confirmationToken,
       });
 
       if (result.success) {
+        if (result.preview) {
+          if (!result.confirmationToken) {
+            throw new Error('Skill permission preview is missing its confirmation token');
+          }
+          setPermissionPreview({
+            skillName: result.skillName || selectedFile.name,
+            confirmationToken: result.confirmationToken,
+            permissions: result.permissions ?? { filesystem: [], network: [], commands: [], secrets: [] },
+            permissionDiff: result.permissionDiff ?? { added: [], unchanged: [], removed: [] },
+            riskLevel: result.validationResult?.riskLevel ?? 'low',
+          });
+          return;
+        }
         toast.success(t('upload.successDesc', { name: result.skillName || selectedFile.name }));
 
         // If there were warnings, show them with Chinese-friendly format
@@ -286,12 +355,21 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
     } finally {
       setUploading(false);
     }
-  }, [selectedFile, onOpenChange, onUploadComplete, t]);
+  }, [selectedFile, permissionPreview, onOpenChange, onUploadComplete, t]);
 
   const handleClose = useCallback(() => {
     setSelectedFile(null);
+    setPermissionPreview(null);
     onOpenChange(false);
   }, [onOpenChange]);
+
+  const handleBackOrClose = useCallback(() => {
+    if (permissionPreview) {
+      setPermissionPreview(null);
+      return;
+    }
+    handleClose();
+  }, [handleClose, permissionPreview]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape' && !uploading) {
@@ -335,6 +413,59 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
         </div>
 
         <div className="px-6 py-4">
+          {permissionPreview ? (
+            <div className="space-y-4" data-testid="skill-permission-review">
+              <div className="flex items-start gap-3 rounded-xl border border-[#FFD79A]/50 bg-[#FFF7EC] px-4 py-3 dark:bg-[#FF922B]/10">
+                <div className="mt-0.5 rounded-lg bg-white p-2 text-[#FF922B] dark:bg-card">
+                  <ShieldCheck className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-[14px] font-semibold text-foreground">{t('upload.permissions.reviewTitle')}</h3>
+                  <p className="mt-1 break-all text-[12px] text-muted-foreground">
+                    {permissionPreview.skillName} · {t('upload.permissions.risk', { risk: t(`upload.permissions.riskLevels.${permissionPreview.riskLevel}`) })}
+                  </p>
+                </div>
+              </div>
+
+              {permissionPreview.permissionDiff.added.length > 0 && (
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-1.5 text-[12px] font-semibold text-[#C2410C]">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    {t('upload.permissions.added')}
+                  </h4>
+                  <ul className="space-y-1.5">
+                    {permissionPreview.permissionDiff.added.map((permission) => (
+                      <li key={permission} className="flex items-center gap-2 rounded-lg bg-[#FFF2E5] px-3 py-2 text-[12px] text-foreground dark:bg-[#FF922B]/10">
+                        {permissionIcon(permission)}
+                        <span>{permissionLabel(permission, t)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {permissionPreview.permissionDiff.unchanged.length > 0 && (
+                <section className="space-y-2">
+                  <h4 className="text-[12px] font-semibold text-muted-foreground">{t('upload.permissions.unchanged')}</h4>
+                  <ul className="space-y-1.5">
+                    {permissionPreview.permissionDiff.unchanged.map((permission) => (
+                      <li key={permission} className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
+                        {permissionIcon(permission)}
+                        <span>{permissionLabel(permission, t)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {permissionPreview.permissionDiff.added.length === 0 && permissionPreview.permissionDiff.unchanged.length === 0 && (
+                <div className="rounded-xl border border-dashed border-black/10 px-4 py-5 text-center text-[12px] text-muted-foreground dark:border-white/10">
+                  {t('upload.permissions.none')}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
           <div
             className={cn(
               'flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 transition-colors',
@@ -421,19 +552,22 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
               </li>
             </ul>
           </div>
+            </>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 border-t border-black/5 dark:border-white/10 px-6 py-4">
           <Button
             ref={cancelRef}
             variant="outline"
-            onClick={handleClose}
+            onClick={handleBackOrClose}
             disabled={uploading}
             className="h-8 rounded-lg px-3 text-[13px] font-medium border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 text-foreground/80 hover:text-foreground"
           >
-            {t('upload.cancel')}
+            {permissionPreview ? t('upload.permissions.back') : t('upload.cancel')}
           </Button>
           <Button
+            data-testid={permissionPreview ? 'skill-permission-confirm-button' : 'skill-upload-submit-button'}
             onClick={handleUpload}
             disabled={!selectedFile || uploading}
             className="h-8 rounded-lg px-4 text-[13px] font-medium bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 disabled:opacity-50"
@@ -444,7 +578,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
                 {t('upload.uploading')}
               </>
             ) : (
-              t('upload.upload')
+              permissionPreview ? t('upload.permissions.confirm') : t('upload.upload')
             )}
           </Button>
         </div>

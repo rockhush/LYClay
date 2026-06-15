@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useFileTreeStore } from '@/stores/file-tree';
+import { invokeIpc } from '@/lib/api-client';
 import type { FileTreeNode } from '@/types/file-tree';
 
 interface FileTreeProps {
@@ -153,13 +154,13 @@ function FileTreeNode({ node, depth }: FileTreeNodeProps) {
 
   const handleOpen = () => {
     if (node.isFile) {
-      window.electron.ipcRenderer.invoke('shell:openPath', node.path);
+      void invokeIpc('shell:openPath', node.path);
     }
   };
 
   const handleShowInFolder = (e: React.MouseEvent) => {
     e.stopPropagation();
-    window.electron.ipcRenderer.invoke('shell:showItemInFolder', node.path);
+    void invokeIpc('shell:showItemInFolder', node.path);
   };
 
   if (node.isDirectory) {

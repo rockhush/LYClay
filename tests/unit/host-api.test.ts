@@ -45,6 +45,21 @@ describe('host-api', () => {
     expect(result.ok).toBe(1);
   });
 
+  it('throws message from unified non-ok proxy response', async () => {
+    invokeIpcMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        status: 403,
+        ok: false,
+        json: { success: false, error: 'Sensitive path blocked: SSH credentials' },
+      },
+    });
+
+    const { hostApiFetch } = await import('@/lib/host-api');
+    await expect(hostApiFetch('/api/files/stage-paths', { method: 'POST' }))
+      .rejects.toThrow('Sensitive path blocked: SSH credentials');
+  });
+
   it('falls back to browser fetch when hostapi handler is not registered', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

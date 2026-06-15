@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import path from 'path';
-import { existsSync, readFileSync, mkdirSync, readdirSync, rmSync, symlinkSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -39,6 +39,8 @@ import { copyPluginFromNodeModules, fixupPluginManifest, cpSyncSafe } from '../u
 import { assignChannelAccountToAgent, getChannelAccountBindingOwner } from '../utils/agent-config';
 import { ensureDingTalkDedicatedAgent, DINGTALK_DEDICATED_AGENT_ID } from '../utils/dingtalk-auto-provision';
 import { stripSystemdSupervisorEnv } from './config-sync-env';
+import { getCommandPolicyPreflightToken } from '../api/auth-token';
+import { getPort } from '../utils/config';
 
 
 export interface GatewayLaunchContext {
@@ -72,6 +74,115 @@ const CHANNEL_PLUGIN_MAP: Record<string, { dirName: string; npmName: string }> =
  * plugin and must be removed.
  */
 const BUILTIN_CHANNEL_EXTENSIONS = ['discord', 'telegram', 'qqbot'];
+const LYCLAW_COMMAND_POLICY_PLUGIN_ID = 'lyclaw-command-policy';
+
+function writeTextFileIfChanged(filePath: string, content: string): void {
+  try {
+    if (existsSync(fsPath(filePath)) && readFileSync(fsPath(filePath), 'utf8') === content) return;
+  } catch {
+    // Rewrite unreadable partial files.
+  }
+  writeFileSync(fsPath(filePath), content, 'utf8');
+}
+
+function buildLyclawCommandPolicyPluginEntry(): string {
+  return `const PLUGIN_ID = 'lyclaw-command-policy';
+const DEFAULT_TIMEOUT_MS = 70000;
+
+function readString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function block(reason) {
+  return { block: true, blockReason: reason };
+}
+
+async function preflightExecCommand(input) {
+  const port = process.env.CLAWX_HOST_API_PORT || '13210';
+  const token = process.env.CLAWX_COMMAND_POLICY_TOKEN || '';
+  if (!token) return block('LYClaw command policy is unavailable: missing Host API token');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const response = await fetch(\`http://127.0.0.1:\${port}/api/security/command-policy/preflight\`, {
+      method: 'POST',
+      headers: {
+        Authorization: \`Bearer \${token}\`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data && data.success === true) return undefined;
+    return block(data && data.error
+      ? \`Command blocked by LYClaw policy: \${data.error}\`
+      : \`Command blocked by LYClaw policy: HTTP \${response.status}\`);
+  } catch (error) {
+    return block(\`LYClaw command policy preflight failed: \${error instanceof Error ? error.message : String(error)}\`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export default {
+  id: PLUGIN_ID,
+  name: 'LYClaw Command Policy',
+  description: 'Preflights OpenClaw exec tool calls through the LYClaw command policy before execution.',
+  register(api) {
+    api.on('before_tool_call', async (event, ctx) => {
+      if (event.toolName !== 'exec') return undefined;
+      const params = event.params && typeof event.params === 'object' ? event.params : {};
+      const command = readString(params.command);
+      if (!command) return block('Command blocked by LYClaw policy: missing command');
+      const cwd = readString(params.workdir) || readString(params.cwd);
+      return await preflightExecCommand({
+        command,
+        cwd,
+        agentId: ctx && ctx.agentId,
+        sessionKey: ctx && ctx.sessionKey,
+        source: ctx && ctx.agentId ? \`gateway:runtime-exec:\${ctx.agentId}\` : 'gateway:runtime-exec',
+      });
+    }, { priority: 1000, timeoutMs: 75000 });
+  },
+};
+`;
+}
+
+function ensureLyclawCommandPolicyPluginInstalled(): void {
+  const targetDir = join(homedir(), '.openclaw', 'extensions', LYCLAW_COMMAND_POLICY_PLUGIN_ID);
+  try {
+    mkdirSync(fsPath(targetDir), { recursive: true });
+    writeTextFileIfChanged(join(targetDir, 'openclaw.plugin.json'), JSON.stringify({
+      id: LYCLAW_COMMAND_POLICY_PLUGIN_ID,
+      activation: {
+        onStartup: true,
+        onCapabilities: ['hook'],
+      },
+      enabledByDefault: true,
+      name: 'LYClaw Command Policy',
+      description: 'Preflights OpenClaw exec tool calls through the LYClaw command policy.',
+      configSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+      },
+    }, null, 2));
+    writeTextFileIfChanged(join(targetDir, 'package.json'), JSON.stringify({
+      name: '@lyclaw/command-policy-plugin',
+      version: '1.0.0',
+      private: true,
+      type: 'module',
+      openclaw: {
+        extensions: ['./index.js'],
+      },
+    }, null, 2));
+    writeTextFileIfChanged(join(targetDir, 'index.js'), buildLyclawCommandPolicyPluginEntry());
+  } catch (err) {
+    logger.warn('[plugin] Failed to install LYClaw command policy hook plugin:', err);
+  }
+}
 
 function cleanupStaleBuiltInExtensions(): void {
   for (const ext of BUILTIN_CHANNEL_EXTENSIONS) {
@@ -301,6 +412,7 @@ export async function syncGatewayConfigBeforeLaunch(
   // (e.g. user added a channel while the app was running) get their
   // node_modules linked on the next Gateway spawn.
   resetExtensionDepsLinked();
+  ensureLyclawCommandPolicyPluginInstalled();
 
   // Sanitize first so plugin upgrade sees a valid config shape.
   await Promise.allSettled([
@@ -491,6 +603,8 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
     ...uvEnv,
     ...proxyEnv,
     OPENCLAW_GATEWAY_TOKEN: appSettings.gatewayToken,
+    CLAWX_HOST_API_PORT: String(getPort('CLAWX_HOST_API')),
+    CLAWX_COMMAND_POLICY_TOKEN: getCommandPolicyPreflightToken(),
     ...(skipChannels
       ? { OPENCLAW_SKIP_CHANNELS: '1', CLAWDBOT_SKIP_CHANNELS: '1' }
       : {}),

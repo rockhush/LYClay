@@ -12,6 +12,7 @@ import {
   hasBundledNpmRuntime,
   hasNpmCliRuntime,
 } from './bundled-node';
+import { assertCommandAllowedWithConfirmation } from '../security/confirmation-service';
 
 const OPENCLAW_DOCTOR_TIMEOUT_MS = 60_000;
 const MAX_DOCTOR_OUTPUT_BYTES = 10 * 1024 * 1024;
@@ -74,6 +75,30 @@ async function runDoctorCommandWithArgs(
   const entryScript = getOpenClawEntryPath();
   const command = `openclaw ${args.join(' ')}`;
   const startedAt = Date.now();
+
+  try {
+    await assertCommandAllowedWithConfirmation({
+      executable: 'openclaw',
+      args,
+      cwd: openclawDir,
+      source: 'renderer:openclaw-doctor',
+      allowCwdOutsideWorkspace: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(`OpenClaw doctor blocked by command policy: ${message}`);
+    return {
+      mode,
+      success: false,
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      command,
+      cwd: openclawDir,
+      durationMs: Date.now() - startedAt,
+      error: message,
+    };
+  }
 
   if (!existsSync(entryScript)) {
     const error = `OpenClaw entry script not found at ${entryScript}`;

@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { listAgentsSnapshot } from '../../utils/agent-config';
 import { getOpenClawConfigDir } from '../../utils/paths';
 import { logger } from '../../utils/logger';
+import { redactSecrets, redactStructuredSecrets } from '../../security/secret-scanner';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -22,10 +23,6 @@ type FileSignature = {
 
 type SessionFileIndexCache = FileSignature & {
   filesBySessionKey: Map<string, { fileName?: string; resolvedPath?: string }>;
-};
-
-type TranscriptCache = FileSignature & {
-  messages: unknown[];
 };
 
 const sessionFileIndexCache = new Map<string, SessionFileIndexCache>();
@@ -154,36 +151,6 @@ async function getSessionFileIndex(agentId: string, sessionsJsonPath: string): P
   return next;
 }
 
-async function readTranscriptMessages(filePath: string): Promise<unknown[]> {
-  let signature: FileSignature;
-  try {
-    const fileStat = await stat(filePath);
-    signature = { mtimeMs: fileStat.mtimeMs, size: fileStat.size };
-  } catch (error) {
-    transcriptCache.delete(filePath);
-    throw error;
-  }
-
-  const cached = transcriptCache.get(filePath);
-  if (cached && sameSignature(cached, signature)) return cached.messages;
-
-  const raw = await readFile(filePath, 'utf8');
-  const lines = raw.split(/\r?\n/).filter(Boolean);
-  const messages = lines.flatMap((line, idx) => {
-    try {
-      const entry = JSON.parse(line) as { type?: string; message?: unknown };
-      return entry.type === 'message' && entry.message ? [entry.message] : [];
-    } catch (err) {
-      logger.warn(`[sessions:history-local] Failed to parse line ${idx}:`, err);
-      return [];
-    }
-  });
-
-  transcriptCache.set(filePath, { ...signature, messages });
-  logger.debug(`[sessions:history-local] Parsed transcript ${filePath}, lines=${lines.length}, messages=${messages.length}`);
-  return messages;
-}
-
 type PromptErrorRecord = {
   timestamp?: unknown;
   runId?: unknown;
@@ -208,7 +175,7 @@ function getMessageText(content: unknown): string {
 }
 
 function cleanUserPreview(text: string): string {
-  return text
+  return redactSecrets(text)
     .replace(/\s*\[media attached:[^\]]*\]/g, '')
     .replace(/\s*\[message_id:\s*[^\]]+\]/g, '')
     .replace(/\s*\[Working Directory:[^\]]*\]/g, '')
@@ -322,7 +289,7 @@ function toPublicSessionListItem(session: Record<string, unknown>, defaultModel?
   const key = session.key ?? session.sessionKey;
   const firstUserMessagePreview = session.firstUserMessagePreview;
 
-  return {
+  return redactStructuredSecrets({
     key,
     label: firstUserMessagePreview ?? session.label,
     firstUserMessagePreview,
@@ -331,7 +298,7 @@ function toPublicSessionListItem(session: Record<string, unknown>, defaultModel?
     model: session.model ?? defaultModel,
     updatedAt: session.updatedAt,
     lastMessageAt: session.lastMessageAt,
-  };
+  }) as Record<string, unknown>;
 }
 
 export async function handleSessionRoutes(
@@ -492,7 +459,10 @@ export async function handleSessionRoutes(
         const lines = raw.split(/\r?\n/).filter(Boolean);
         logger.info(`[sessions:history-local] Found ${lines.length} lines`);
 
-        const parsed = lines.flatMap((line, idx) => {
+        const parsed = lines.flatMap((line, idx): Array<{
+          kind: 'message' | 'promptError';
+          value: unknown;
+        }> => {
           try {
             const entry = JSON.parse(line) as {
               type?: string;
@@ -501,10 +471,10 @@ export async function handleSessionRoutes(
               data?: PromptErrorRecord;
             };
             if (entry.type === 'message' && entry.message) {
-              return [{ kind: 'message' as const, value: entry.message }];
+              return [{ kind: 'message' as const, value: redactStructuredSecrets(entry.message) }];
             }
             if (entry.type === 'custom' && entry.customType === 'openclaw:prompt-error') {
-              return [{ kind: 'promptError' as const, value: entry.data ?? {} }];
+              return [{ kind: 'promptError' as const, value: redactStructuredSecrets(entry.data ?? {}) }];
             }
             return [];
           } catch (err) {
@@ -565,7 +535,7 @@ export async function handleSessionRoutes(
       const messages = lines.flatMap((line) => {
         try {
           const entry = JSON.parse(line) as { type?: string; message?: unknown };
-          return entry.type === 'message' && entry.message ? [entry.message] : [];
+          return entry.type === 'message' && entry.message ? [redactStructuredSecrets(entry.message)] : [];
         } catch {
           return [];
         }

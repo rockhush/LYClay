@@ -1,0 +1,18 @@
+export type {
+  DigitalEmployeeInstallRecord,
+  DigitalEmployeeInstallStatus,
+  DigitalEmployeeAgentTemplate,
+  DigitalEmployeeMcpBinding,
+  DigitalEmployeePackageManifest,
+  DigitalEmployeePackageSkill,
+  InstallDigitalEmployeeInput,
+  InstallDigitalEmployeeResult,
+  InstalledDigitalEmployeeMcpServer,
+  LocalDigitalEmployee,
+  SetDigitalEmployeeEnabledInput,
+  SetDigitalEmployeeEnabledResult,
+  UpdateDigitalEmployeeInput,
+  UpdateDigitalEmployeeResult,
+  UninstallDigitalEmployeeInput,
+  UninstallDigitalEmployeeResult,
+} from '../../shared/types/digital-employee';

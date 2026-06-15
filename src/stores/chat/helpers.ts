@@ -1,3 +1,4 @@
+import i18n from '@/i18n';
 import { invokeIpc } from '@/lib/api-client';
 import type { AttachedFileMeta, ChatSession, ContentBlock, RawMessage, ToolStatus } from './types';
 
@@ -44,6 +45,39 @@ export function clearAbortedChatRuns(): void {
 // error (e.g. "terminated"), it may retry internally and recover. We wait
 // before committing the error to give the recovery path a chance.
 let _errorRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+
+const USER_SECURITY_DENIAL_PATTERNS = [
+  /NETWORK_ACCESS_DENIED_BY_USER/i,
+  /COMMAND_EXECUTION_DENIED_BY_USER/i,
+  /FILE_PATH_ACCESS_DENIED_BY_USER/i,
+  /OPEN_TARGET_DENIED_BY_USER/i,
+  /MCP_SERVER_ENABLE_DENIED_BY_USER/i,
+  /MODEL_SECRET_DENIED_BY_USER/i,
+  /Network access denied:/i,
+  /Command execution denied:/i,
+  /Local file path access denied by user:/i,
+  /Open target denied:/i,
+  /MCP server enable denied:/i,
+  /Model send denied because message contains secret-like values/i,
+];
+
+export function isUserSecurityDenialMessage(message: unknown): boolean {
+  if (typeof message !== 'string') return false;
+  return USER_SECURITY_DENIAL_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/**
+ * 把一条「用户拒绝安全确认」的错误消息转成会话内的温和取消提示。
+ * 能从文件路径拒绝里提取具体路径，其余拒绝类型回退到通用文案。
+ */
+export function buildSecurityCancelNotice(message: unknown): string {
+  const text = typeof message === 'string' ? message : '';
+  const fileMatch = text.match(/Local file path access denied by user:\s*(.+?)\s*$/i);
+  if (fileMatch?.[1]) {
+    return i18n.t('chat:notices.fileAccessCancelled', { path: fileMatch[1].trim() });
+  }
+  return i18n.t('chat:notices.securityCancelled');
+}
 
 function clearErrorRecoveryTimer(): void {
   if (_errorRecoveryTimer) {
@@ -475,6 +509,16 @@ function mimeFromExtension(filePath: string): string {
   return map[ext] || 'application/octet-stream';
 }
 
+function isWindowsRuntime(): boolean {
+  return typeof navigator !== 'undefined' && /win/i.test(navigator.platform);
+}
+
+function isPreviewableRawFilePath(filePath: string): boolean {
+  if (!filePath || /[*?]/.test(filePath)) return false;
+  if (isWindowsRuntime() && filePath.startsWith('/') && !filePath.startsWith('~/')) return false;
+  return true;
+}
+
 /**
  * Extract raw file paths from message text.
  * Detects absolute paths (Unix: / or ~/, Windows: C:\ etc.) ending with common file extensions.
@@ -493,7 +537,7 @@ function extractRawFilePaths(text: string): Array<{ filePath: string; mimeType: 
     let match;
     while ((match = regex.exec(text)) !== null) {
       const p = match[1];
-      if (p && !seen.has(p)) {
+      if (p && isPreviewableRawFilePath(p) && !seen.has(p)) {
         seen.add(p);
         refs.push({ filePath: p, mimeType: mimeFromExtension(p) });
       }
@@ -1013,7 +1057,7 @@ function isInternalMessage(msg: { role?: unknown; content?: unknown }): boolean 
  * Detect runtime-injected system messages that should be hidden from the chat UI.
  * These are injected by the OpenClaw runtime as user-role messages and include:
  *   - "System (untrusted): ..." — exec results, tool output, etc.
- *   - "An async command you ran earlier has completed" — async completion notices
+ *   - "An async command ... has completed" — async completion notices
  *   - "Current time: ..." followed by nothing else — periodic heartbeat time pings
  *   - "Handle the result internally. Do not relay it to the user" — internal directives
  */
@@ -1023,11 +1067,15 @@ function isRuntimeSystemInjection(text: string): boolean {
   // "System (untrusted): ..." at the start (with optional leading whitespace)
   if (/^\s*System\s*\(untrusted\)\s*:/i.test(normalized)) return true;
 
-  // Async command completion notice + internal relay directive commonly arrive together.
-  // Require both markers to avoid hiding normal conversational text that quotes one phrase.
+  // 模型有时会把 Runtime 的审批协议当成普通回答说给用户看，例如
+  // “请回复 /approve xxx 来放行”。审批权在 Main 安全策略，不应让这类话术进入聊天流。
+  if (isModelCommandApprovalText(normalized)) return true;
+
+  // 异步命令审批完成后，Runtime 会把继续执行提示以 user 消息写回 transcript。
+  // 必须同时命中“异步完成”和“内部处理/不要重复执行”标记，避免误隐藏普通对话。
   if (
-    /An async command you ran earlier has completed/i.test(normalized)
-    && /Do not relay it to the user unless explicitly requested/i.test(normalized)
+    /An async command (?:(?:you ran earlier|the user already approved) has completed|did not run)/i.test(normalized)
+    && /(Do not relay it to the user unless explicitly requested|Do not run the command again|Continue the task if needed|Reply to the user in a helpful way|Explain that the command did not run)/i.test(normalized)
   ) {
     return true;
   }
@@ -1041,6 +1089,19 @@ function isRuntimeSystemInjection(text: string): boolean {
     return true;
   }
   return false;
+}
+
+function isModelCommandApprovalText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  if (/\/approve\s+[a-z0-9_-]+/i.test(normalized) && normalized.length <= 160) return true;
+  const hasApprovalIntent = /(?:需要|请).{0,12}(?:批准|准许|确认|允许).{0,12}(?:执行|运行|放行|命令|操作)/i.test(normalized)
+    || /请\s*(?:批准|准许|确认|允许).{0,16}(?:初始化|生成|创建)/i.test(normalized)
+    || /\b(?:approve|confirm|allow)\b.{0,24}\b(?:run|execute|command)\b/i.test(normalized);
+  if (!hasApprovalIntent) return false;
+  return /\/approve\s+[a-z0-9_-]+/i.test(normalized)
+    || /\b(?:python3?|node|npm|pnpm|yarn|uv|uvx|dir|ls|cd|findstr|grep|Get-ChildItem|Select-String|powershell|cmd)(?:\s|$|[\\/])/i.test(normalized)
+    || /[A-Za-z]:\\/.test(normalized);
 }
 
 function extractTextFromContent(content: unknown): string {

@@ -874,7 +874,7 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
         }
       }}
       className={cn(
-        "group relative flex flex-col text-left rounded-2xl border transition-colors p-4 cursor-pointer overflow-hidden",
+        "group relative flex h-full flex-col text-left rounded-2xl border transition-colors p-4 cursor-pointer overflow-hidden",
         "border-black/[0.06] dark:border-white/10 bg-white/70 dark:bg-white/[0.04]",
         "hover:bg-[#FFF2E5]/70 hover:border-[#FF922B]/25 dark:hover:bg-white/[0.06]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF922B]/40",
@@ -959,7 +959,7 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
       )}
 
       {/* Actions */}
-      <div className="mt-3 flex justify-end gap-2">
+      <div className="mt-auto flex justify-end gap-2 pt-3">
         <Button
           variant="ghost"
           size="sm"

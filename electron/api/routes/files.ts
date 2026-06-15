@@ -5,6 +5,7 @@ import { extname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
+import { assertPathAllowed } from '../../security/path-policy';
 
 const EXT_MIME_MAP: Record<string, string> = {
   '.png': 'image/png',
@@ -53,7 +54,25 @@ function mimeToExt(mimeType: string): string {
   return '';
 }
 
+function hasPathGlobPattern(filePath: string): boolean {
+  return /[*?]/.test(filePath);
+}
+
 const OUTBOUND_DIR = join(homedir(), '.openclaw', 'media', 'outbound');
+
+function sendFileRouteError(res: ServerResponse, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const isSecurityError =
+    message.includes('Sensitive path blocked')
+    || message.includes('outside authorized workspaces')
+    || message.includes('outside its authorized root')
+    || message.includes('Path access denied');
+  sendJson(res, isSecurityError ? 403 : 500, {
+    success: false,
+    error: message,
+    ...(isSecurityError ? { code: 'FILE_ACCESS_DENIED' } : {}),
+  });
+}
 
 async function generateImagePreview(filePath: string, mimeType: string): Promise<string | null> {
   try {
@@ -88,13 +107,14 @@ export async function handleFileRoutes(
       await fsP.mkdir(OUTBOUND_DIR, { recursive: true });
       const results = [];
       for (const filePath of body.filePaths) {
+        const pathInfo = await assertPathAllowed({ path: filePath, capability: 'stage', source: 'api:files:stage-paths' });
         const id = crypto.randomUUID();
-        const ext = extname(filePath);
+        const ext = extname(pathInfo.realPath);
         const stagedPath = join(OUTBOUND_DIR, `${id}${ext}`);
-        await fsP.copyFile(filePath, stagedPath);
+        await fsP.copyFile(pathInfo.realPath, stagedPath);
         const s = await fsP.stat(stagedPath);
         const mimeType = getMimeType(ext);
-        const fileName = filePath.split(/[\\/]/).pop() || 'file';
+        const fileName = pathInfo.realPath.split(/[\\/]/).pop() || 'file';
         const preview = mimeType.startsWith('image/')
           ? await generateImagePreview(stagedPath, mimeType)
           : null;
@@ -102,7 +122,7 @@ export async function handleFileRoutes(
       }
       sendJson(res, 200, results);
     } catch (error) {
-      sendJson(res, 500, { success: false, error: String(error) });
+      sendFileRouteError(res, error);
     }
     return true;
   }
@@ -130,7 +150,7 @@ export async function handleFileRoutes(
         preview,
       });
     } catch (error) {
-      sendJson(res, 500, { success: false, error: String(error) });
+      sendFileRouteError(res, error);
     }
     return true;
   }
@@ -142,9 +162,15 @@ export async function handleFileRoutes(
       const results: Record<string, { preview: string | null; fileSize: number }> = {};
       for (const { filePath, mimeType } of body.paths) {
         try {
-          const s = await fsP.stat(filePath);
+          if (hasPathGlobPattern(filePath)) {
+            results[filePath] = { preview: null, fileSize: 0 };
+            continue;
+          }
+          await fsP.stat(filePath);
+          const pathInfo = await assertPathAllowed({ path: filePath, capability: 'read', source: 'api:files:thumbnails' });
+          const s = await fsP.stat(pathInfo.realPath);
           const preview = mimeType.startsWith('image/')
-            ? await generateImagePreview(filePath, mimeType)
+            ? await generateImagePreview(pathInfo.realPath, mimeType)
             : null;
           results[filePath] = { preview, fileSize: s.size };
         } catch {
@@ -153,7 +179,7 @@ export async function handleFileRoutes(
       }
       sendJson(res, 200, results);
     } catch (error) {
-      sendJson(res, 500, { success: false, error: String(error) });
+      sendFileRouteError(res, error);
     }
     return true;
   }
@@ -182,7 +208,8 @@ export async function handleFileRoutes(
       }
       const fsP = await import('node:fs/promises');
       if (body.filePath) {
-        await fsP.copyFile(body.filePath, result.filePath);
+        const pathInfo = await assertPathAllowed({ path: body.filePath, capability: 'read', source: 'api:files:save-image' });
+        await fsP.copyFile(pathInfo.realPath, result.filePath);
       } else if (body.base64) {
         await fsP.writeFile(result.filePath, Buffer.from(body.base64, 'base64'));
       } else {
@@ -191,7 +218,7 @@ export async function handleFileRoutes(
       }
       sendJson(res, 200, { success: true, savedPath: result.filePath });
     } catch (error) {
-      sendJson(res, 500, { success: false, error: String(error) });
+      sendFileRouteError(res, error);
     }
     return true;
   }

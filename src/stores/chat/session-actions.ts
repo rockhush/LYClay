@@ -101,24 +101,13 @@ export function createSessionActions(
 ): Pick<SessionHistoryActions, 'loadSessions' | 'switchSession' | 'newSession' | 'deleteSession' | 'cleanupEmptySession'> {
   return {
     loadSessions: async () => {
-      const loadStart = performance.now();
-      console.log('[Sessions] loadSessions() started');
-      
       const { gatewayReady } = useGatewayStore.getState().status;
-       
-      console.log(`[Sessions] gatewayReady = ${gatewayReady}, type = ${typeof gatewayReady}`);
-       
+
       if (gatewayReady !== true) {
-        console.log('[Sessions] Gateway not ready, loading from local filesystem');
         try {
-          const localStart = performance.now();
           const sessions = await loadLocalSessionSummaries('main');
-          console.log(`[Sessions] Local read took ${(performance.now() - localStart).toFixed(2)}ms, sessions count: ${sessions.length}`);
-          
+
           if (sessions.length > 0) {
-            console.log('[Sessions] Local sessions:', sessions.map(s => s.key).join(', '));
-            console.log(`[Sessions] Parsed ${sessions.length} sessions from local`);
-            
             const { currentSessionKey } = get();
             const nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
             
@@ -145,8 +134,7 @@ export function createSessionActions(
                 discoveredActivity,
               ),
             }));
-            
-            console.log(`[Sessions] ✅ Loaded ${sessions.length} sessions from LOCAL in ${(performance.now() - loadStart).toFixed(2)}ms`);
+
             return;
           } else {
             console.warn('[Sessions] Local read returned no sessions');
@@ -155,8 +143,7 @@ export function createSessionActions(
           console.warn('[Sessions] Local read failed with exception:', err);
         }
       }
-      
-      console.log('[Sessions] Using Gateway RPC');
+
       try {
         const result = await invokeIpc(
           'gateway:rpc',
@@ -248,10 +235,6 @@ export function createSessionActions(
           if (currentSessionKey !== nextSessionKey) {
             get().loadHistory();
           }
-
-          console.info('[loadSessions] Skipped bulk history label hydration', {
-            sessionCount: sessionsWithCurrent.length,
-          });
         }
       } catch (err) {
         console.warn('Failed to load sessions:', err);

@@ -1,33 +1,230 @@
-diff --git a/dist/pi-embedded-D4aXX24b.js b/dist/pi-embedded-D4aXX24b.js
-index d7bcd7ca041d1bb94c58f8693ef57c766b54aaa0..6e360ed8b0a68772774a8379be919c2d765f51db 100644
---- a/dist/pi-embedded-D4aXX24b.js
-+++ b/dist/pi-embedded-D4aXX24b.js
-@@ -2651,13 +2651,27 @@ async function runEmbeddedPiAgent(params) {
- 							} else log$1.warn(`[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to normal handling`);
- 						}
- 					}
--					const contextOverflowError = !aborted ? (() => {
-+					const contextOverflowError = (!aborted || !externalAbort) ? (() => {
- 						if (promptError) {
- 							const errorText = formatErrorMessage(promptError);
- 							if (isLikelyContextOverflowError(errorText)) return {
- 								text: errorText,
- 								source: "promptError"
- 							};
-+							// Provider-initiated abort with input tokens far exceeding
-+							// the model's context window is treated as a context overflow,
-+							// even when the error message text is not recognized by
-+							// the standard regex patterns (e.g. "This operation was aborted").
-+							if (aborted && !externalAbort) {
-+								const inputTokens = attemptUsage?.input;
-+								const ctxTokens = ctxInfo.tokens;
-+								if (typeof inputTokens === "number" && typeof ctxTokens === "number" && inputTokens > ctxTokens * 0.7) {
-+									return {
-+										text: "Context overflow: " + inputTokens.toLocaleString() + " input tokens exceeds model window of " + ctxTokens.toLocaleString() + " tokens.",
-+										source: "promptError"
-+									};
-+								}
-+							}
- 							return null;
- 						}
- 						if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) return {
+--- a/dist/chat-O8o_e6f5.js
++++ b/dist/chat-O8o_e6f5.js
+@@ -1942,6 +1942,11 @@
+ 			respond(false, void 0, errorShape(err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST, String(err)));
+ 			return;
+ 		}
++		const executeAsAgentId = typeof p.executeAsAgentId === "string" && p.executeAsAgentId.trim() ? p.executeAsAgentId.trim() : void 0;
++		const executedByAgentName = typeof p.executedByAgentName === "string" && p.executedByAgentName.trim() ? p.executedByAgentName.trim() : void 0;
++		if (executeAsAgentId && !modelOverride) {
++			modelOverride = `${resolvedSessionModel.provider}/${resolvedSessionModel.model}`;
++		}
+ 		try {
+ 			const activeRunAbort = registerChatAbortController({
+ 				chatAbortControllers: context.chatAbortControllers,
+@@ -2217,6 +2217,7 @@
+ 					modelOverrideFallbacks,
+ 					thinkingLevelOverride: p.thinking,
+ 					fastModeOverride: p.fastMode,
++					extraSystemPrompt: p.extraSystemPrompt,
++					executeAsAgentId,
++					executedByAgentName,
+ 					onAgentRunStart: (runId) => {
+ 						agentRunStarted = true;
+ 						if (!hasBeforeAgentRunGate) emitUserTranscriptUpdate();
+
+--- a/dist/protocol-CjAsjR7U.js
++++ b/dist/protocol-CjAsjR7U.js
+@@ -2031,7 +2031,8 @@
+ 	timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+ 	systemInputProvenance: Type.Optional(InputProvenanceSchema),
+ 	systemProvenanceReceipt: Type.Optional(Type.String()),
+-	idempotencyKey: NonEmptyString
++	idempotencyKey: NonEmptyString,
++	extraSystemPrompt: Type.Optional(Type.String()),
++	executeAsAgentId: Type.Optional(Type.String()),
++	executedByAgentName: Type.Optional(Type.String())
+ }, { additionalProperties: false });
+ const ChatAbortParamsSchema = Type.Object({
+ 	sessionKey: NonEmptyString,
+
+--- a/dist/get-reply-DbVszRXg.js
++++ b/dist/get-reply-DbVszRXg.js
+@@ -118,6 +118,7 @@
+ import path from "node:path";
+ import fs from "node:fs/promises";
+ import crypto from "node:crypto";
++import { homedir as userHomeDir } from "node:os";
+ //#region src/auto-reply/reply/get-reply-directives-utils.ts
+ const CLEARED_EXEC_FIELDS = {
+ 	hasExecDirective: false,
+@@ -4107,6 +4108,88 @@ async function applyLinkUnderstandingIfNeeded(params) {
+ 		return false;
+ 	}
+ }
++async function pathExistsSafe(filePath) {
++	try {
++		await fs.access(filePath);
++		return true;
++	} catch {
++		return false;
++	}
++}
++async function readJsonFileSafe(filePath) {
++	try {
++		return JSON.parse(await fs.readFile(filePath, "utf-8"));
++	} catch {
++		return null;
++	}
++}
++async function resolveDigitalEmployeeDir(agentId) {
++	const home = userHomeDir();
++	const legacyDir = path.join(home, ".openclaw", "digital-employee", agentId);
++	if (await pathExistsSafe(legacyDir)) return legacyDir;
++	const managedRoot = path.join(home, ".openclaw", "digital-employees");
++	const directManagedDir = path.join(managedRoot, agentId);
++	if (await pathExistsSafe(directManagedDir)) return directManagedDir;
++	if (!await pathExistsSafe(managedRoot)) return null;
++	try {
++		for (const entry of await fs.readdir(managedRoot, { withFileTypes: true })) {
++			if (!entry.isDirectory()) continue;
++			const installDir = path.join(managedRoot, entry.name);
++			const record = await readJsonFileSafe(path.join(installDir, "install.json"));
++			if (record?.agentId === agentId || record?.instanceId === agentId) return installDir;
++		}
++	} catch {}
++	return null;
++}
++async function buildDigitalEmployeeMcpServers(employeeDir) {
++	const manifest = await readJsonFileSafe(path.join(employeeDir, "employee.json"));
++	const templatePath = typeof manifest?.mcp?.serverTemplate === "string" && manifest.mcp.serverTemplate.trim()
++		? path.join(employeeDir, manifest.mcp.serverTemplate)
++		: path.join(employeeDir, "mcp", "servers.json");
++	let config = await readJsonFileSafe(templatePath);
++	if (!config && templatePath.endsWith("servers.json")) config = await readJsonFileSafe(path.join(employeeDir, "mcp", "servers.template.json"));
++	return config?.servers && typeof config.servers === "object" ? config.servers : {};
++}
++async function loadDigitalEmployeeWorkflows(employeeDir) {
++	const wfDir = path.join(employeeDir, "workflows");
++	if (!await pathExistsSafe(wfDir)) return "";
++	try {
++		const files = (await fs.readdir(wfDir)).filter((name) => name.endsWith(".md")).sort();
++		const parts = [];
++		for (const fileName of files) {
++			parts.push(await fs.readFile(path.join(wfDir, fileName), "utf-8"));
++		}
++		return parts.join("\n\n---\n\n");
++	} catch {
++		return "";
++	}
++}
++async function resolveDigitalEmployeeExecutionContext(cfg, opts) {
++	const requestedAgentId = normalizeOptionalString(opts?.executeAsAgentId);
++	if (!requestedAgentId) return null;
++	const agentId = normalizeAgentId(requestedAgentId);
++	const employeeDir = await resolveDigitalEmployeeDir(agentId);
++	if (!employeeDir) throw new Error(`Digital employee "${agentId}" is not installed`);
++	const employeeSkillsDir = path.join(employeeDir, "skills");
++	const employeeCfg = {
++		...cfg,
++		mcp: { ...cfg?.mcp, servers: await buildDigitalEmployeeMcpServers(employeeDir) },
++		skills: {
++			...cfg?.skills,
++			__digitalEmployeeOnly: true,
++			load: { ...cfg?.skills?.load, extraDirs: [employeeSkillsDir] }
++		}
++	};
++	const workflowText = await loadDigitalEmployeeWorkflows(employeeDir);
++	const workflowPrompt = workflowText ? `<workflows>\n${workflowText}\n</workflows>` : "";
++	return { agentId, cfg: employeeCfg, workflowPrompt };
++}
+ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 	const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+-	const cfg = resolveGetReplyConfig({
++	let cfg = resolveGetReplyConfig({
+ 		getRuntimeConfig,
+ 		isFastTestEnv,
+ 		configOverride
+ 	});
++	const digitalEmployeeExecution = await resolveDigitalEmployeeExecutionContext(cfg, opts);
++	if (digitalEmployeeExecution) cfg = digitalEmployeeExecution.cfg;
+@@ -4144,17 +4227,22 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 		config: cfg,
+ 		attributes: traceAttributes
+ 	});
+-	const agentId = resolveSessionAgentId({
++	const sessionAgentId = resolveSessionAgentId({
+ 		sessionKey: agentSessionKey,
+ 		config: cfg
+ 	});
++	const agentId = digitalEmployeeExecution?.agentId ?? sessionAgentId;
+-	const mergedSkillFilter = mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId));
++	const baseOpts = digitalEmployeeExecution ? {
++		...opts,
++		extraSystemPrompt: digitalEmployeeExecution.workflowPrompt || void 0
++	} : opts;
++	const mergedSkillFilter = mergeSkillFilters(baseOpts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId));
+ 	const resolvedOpts = mergedSkillFilter !== void 0 ? {
+-		...opts,
++		...baseOpts,
+ 		skillFilter: mergedSkillFilter
+-	} : opts;
++	} : baseOpts;
+ 	const agentCfg = cfg.agents?.defaults;
+--- a/dist/workspace-DpPIWO-c.js
++++ b/dist/workspace-DpPIWO-c.js
+@@ -714,6 +714,31 @@
+ 		source: "openclaw-extra",
+ 		limits
+ 	})];
++	const mapSkillRecords = (records) => records.sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en")).map((record) => {
++		const skill = record.skill;
++		const frontmatter = record.frontmatter ?? readSkillFrontmatterSafe({
++			rootDir: skill.baseDir,
++			filePath: skill.filePath,
++			maxBytes: limits.maxSkillFileBytes
++		}) ?? {};
++		const invocation = resolveSkillInvocationPolicy(frontmatter);
++		return {
++			skill,
++			frontmatter,
++			metadata: resolveOpenClawMetadata(frontmatter),
++			invocation,
++			...record.syncSourceDir !== void 0 ? { syncSourceDir: record.syncSourceDir } : {},
++			...record.syncDirName !== void 0 ? { syncDirName: record.syncDirName } : {},
++			exposure: {
++				includeInRuntimeRegistry: true,
++				includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
++				userInvocable: invocation.userInvocable !== false
++			}
++		};
++	});
++	if (opts?.config?.skills?.__digitalEmployeeOnly === true) {
++		const mergedEmployeeSkills = /* @__PURE__ */ new Map();
++		for (const record of extraSkills) mergedEmployeeSkills.set(record.skill.name, record);
++		return mapSkillRecords(Array.from(mergedEmployeeSkills.values()));
++	}
+ 	const managedSkills = loadSkills({
+ 		dir: managedSkillsDir,
+ 		source: "openclaw-managed"
+@@ -738,27 +763,7 @@
+ 	for (const record of personalAgentsSkills) merged.set(record.skill.name, record);
+ 	for (const record of projectAgentsSkills) merged.set(record.skill.name, record);
+ 	for (const record of workspaceSkills) merged.set(record.skill.name, record);
+-	return Array.from(merged.values()).sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en")).map((record) => {
+-		const skill = record.skill;
+-		const frontmatter = record.frontmatter ?? readSkillFrontmatterSafe({
+-			rootDir: skill.baseDir,
+-			filePath: skill.filePath,
+-			maxBytes: limits.maxSkillFileBytes
+-		}) ?? {};
+-		const invocation = resolveSkillInvocationPolicy(frontmatter);
+-		return {
+-			skill,
+-			frontmatter,
+-			metadata: resolveOpenClawMetadata(frontmatter),
+-			invocation,
+-			...record.syncSourceDir !== void 0 ? { syncSourceDir: record.syncSourceDir } : {},
+-			...record.syncDirName !== void 0 ? { syncDirName: record.syncDirName } : {},
+-			exposure: {
+-				includeInRuntimeRegistry: true,
+-				includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+-				userInvocable: invocation.userInvocable !== false
+-			}
+-		};
+-	});
++	return mapSkillRecords(Array.from(merged.values()));
+ }
+ function escapeXml(str) {
+ 	return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+

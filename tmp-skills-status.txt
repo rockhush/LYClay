@@ -1,0 +1,49 @@
+﻿pnpm.cmd : [WARN] The "pnpm" field in package.json is no longer read by pnpm. The following keys were ignored: "pnpm.on
+lyBuiltDependencies", "pnpm.overrides", "pnpm.supportedArchitectures". See https://pnpm.io/settings for the new home of
+ each setting.
+At line:2 char:1
++ pnpm.cmd exec openclaw gateway call skills.status 2>&1 | Out-File -Li ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([WARN] The "pnp...f each setting.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Your OpenClaw config was written by version 2026.5.19, but this command is running 2026.5.18.
+Check: `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.
+If unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that sam
+e OpenClaw install.
+|
+o  Config warnings ------------------------------------------------------------+
+|                                                                              |
+|  - plugins.allow: plugin dingtalk: duplicate plugin id detected; global      |
+|    plugin will be overridden by global plugin                                |
+|    (C:\Users\Leon.Long\.openclaw\npm\node_modules\@soimy\dingtalk\dist\inde  |
+|  x.js)                                                                       |
+|  - plugins.entries.minimax-portal-auth: plugin not found:                    |
+|    minimax-portal-auth (stale config entry ignored; remove it from           |
+|    plugins config)                                                           |
+|  - plugins.allow: plugin not found: minimax-portal-auth (stale config        |
+|    entry ignored; remove it from plugins config)                             |
+|  - plugins.allow: plugin not installed: acpx — install the official          |
+|    external plugin with: openclaw plugins install @openclaw/acpx             |
+|  - plugins.allow: plugin not installed: amazon-bedrock — install the         |
+|    official external plugin with: openclaw plugins install                   |
+|    @openclaw/amazon-bedrock-provider                                         |
+|  - plugins.allow: plugin not installed: amazon-bedrock-mantle — install      |
+|    the official external plugin with: openclaw plugins install               |
+|    @openclaw/amazon-bedrock-mantle-provider                                  |
+|  - plugins.allow: plugin not installed: anthropic-vertex — install the       |
+|    official external plugin with: openclaw plugins install                   |
+|    @openclaw/anthropic-vertex-provider                                       |
+|                                                                              |
++------------------------------------------------------------------------------+
+Gateway call failed: GatewayTransportError: gateway closed (1006 abnormal closure (no close frame)): no close reason
+Gateway target: ws://127.0.0.1:18789
+Source: local loopback
+Config: C:\Users\Leon.Long\.openclaw\openclaw.json
+Bind: loopback
+
+Possible causes:
+- Gateway not yet ready to accept connections (retry after a moment)
+- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)
+- Gateway crashed or was terminated unexpectedly
+Run `openclaw doctor` for diagnostics.

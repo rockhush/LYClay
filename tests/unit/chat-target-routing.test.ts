@@ -55,6 +55,9 @@ describe('chat target routing', () => {
         id: 'research',
         name: 'Research',
         isDefault: false,
+        isDigitalEmployee: true,
+        digitalEmployeeInstanceId: 'research--local',
+        digitalEmployeeInstallPath: 'C:\\Users\\test\\.openclaw\\digital-employees\\research--local',
         modelDisplay: 'Claude',
         inheritedModel: false,
         workspace: '~/.openclaw/workspace-research',
@@ -92,7 +95,7 @@ describe('chat target routing', () => {
     vi.useRealTimers();
   });
 
-  it('switches to the selected agent main session before sending text', async () => {
+  it('executes a selected digital employee in the current session for text sends', async () => {
     const { useChatStore } = await import('@/stores/chat');
 
     useChatStore.setState({
@@ -118,19 +121,21 @@ describe('chat target routing', () => {
     await useChatStore.getState().sendMessage('Hello direct agent', undefined, 'research');
 
     const state = useChatStore.getState();
-    expect(state.currentSessionKey).toBe('agent:research:desk');
-    expect(state.currentAgentId).toBe('research');
-    expect(state.sessions.some((session) => session.key === 'agent:research:desk')).toBe(true);
+    expect(state.currentSessionKey).toBe('agent:main:main');
+    expect(state.currentAgentId).toBe('main');
     expect(state.messages.at(-1)?.content).toBe('Hello direct agent');
+    expect(state.messages.at(-1)?._agentMentionName).toBe('Research');
 
     const historyCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.history');
-    expect(historyCall?.[1]).toEqual({ sessionKey: 'agent:research:desk', limit: 200 });
+    expect(historyCall).toBeUndefined();
 
     const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
     expect(sendCall?.[1]).toMatchObject({
-      sessionKey: 'agent:research:desk',
+      sessionKey: 'agent:main:main',
       message: '/think off Hello direct agent',
       deliver: false,
+      executeAsAgentId: 'research',
+      executedByAgentName: 'Research',
     });
     expect(gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch')).toBeUndefined();
     expect(typeof (sendCall?.[1] as { idempotencyKey?: unknown })?.idempotencyKey).toBe('string');
@@ -138,7 +143,7 @@ describe('chat target routing', () => {
     useChatStore.setState({ sending: false, activeRunId: null });
     await vi.advanceTimersByTimeAsync(5_000);
     const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
-    expect(patchCall?.[1]).toEqual({ key: 'agent:research:desk', thinkingLevel: 'off' });
+    expect(patchCall?.[1]).toEqual({ key: 'agent:main:main', thinkingLevel: 'off' });
   });
 
   it('uses one-shot fast reasoning for lightweight input without changing the persisted mode', async () => {
@@ -395,7 +400,7 @@ describe('chat target routing', () => {
     expect(sendCall?.[1]).not.toHaveProperty('model');
   });
 
-  it('uses the selected agent main session for attachment sends', async () => {
+  it('executes a selected digital employee in the current session for attachment sends', async () => {
     const { useChatStore } = await import('@/stores/chat');
 
     useChatStore.setState({
@@ -433,7 +438,7 @@ describe('chat target routing', () => {
       'research',
     );
 
-    expect(useChatStore.getState().currentSessionKey).toBe('agent:research:desk');
+    expect(useChatStore.getState().currentSessionKey).toBe('agent:main:main');
 
     expect(hostApiFetchMock).toHaveBeenCalledWith(
       '/api/chat/send-with-media',
@@ -449,11 +454,17 @@ describe('chat target routing', () => {
     ) as {
       sessionKey: string;
       message: string;
+      executeAsAgentId?: string;
+      executedByAgentName?: string;
       media: Array<{ filePath: string }>;
     };
 
-    expect(payload.sessionKey).toBe('agent:research:desk');
+    expect(payload.sessionKey).toBe('agent:main:main');
     expect(payload.message).toBe('/think off Process the attached file(s).');
+    expect(payload).toMatchObject({
+      executeAsAgentId: 'research',
+      executedByAgentName: 'Research',
+    });
     expect(payload).not.toHaveProperty('model');
     expect(payload.media[0]?.filePath).toBe('/tmp/design.png');
   });

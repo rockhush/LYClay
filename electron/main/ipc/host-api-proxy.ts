@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron';
-import { proxyAwareFetch } from '../../utils/proxy-fetch';
 import { getPort } from '../../utils/config';
 import { getHostApiToken } from '../../api/server';
+import { secureProxyAwareFetch } from '../../security/network-fetch';
 
 type HostApiFetchRequest = {
   path: string;
@@ -24,6 +24,8 @@ export function registerHostApiProxyHandlers(): void {
         throw new Error(`Invalid host API path: ${String(request?.path)}`);
       }
 
+      const targetUrl = `http://127.0.0.1:${hostApiPort}${path}`;
+
       const method = (request.method || 'GET').toUpperCase();
       const headers: Record<string, string> = { ...(request.headers || {}) };
       // Inject the per-session auth token so the Host API server accepts this request.
@@ -43,11 +45,18 @@ export function registerHostApiProxyHandlers(): void {
         }
       }
 
-      const response = await proxyAwareFetch(`http://127.0.0.1:${hostApiPort}${path}`, {
-        method,
-        headers,
-        body,
-      });
+      const response = await secureProxyAwareFetch(
+        targetUrl,
+        {
+          method,
+          headers,
+          body,
+        },
+        {
+          source: 'renderer:hostapi-fetch',
+          allowLocalhostPorts: [hostApiPort],
+        },
+      );
 
       const data: { status: number; ok: boolean; json?: unknown; text?: string } = {
         status: response.status,

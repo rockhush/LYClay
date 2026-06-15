@@ -1,4 +1,6 @@
 import type { McpConfigFile, McpTransportType } from './mcp-json';
+import { evaluatePromptInjectionPolicy } from '../security/prompt-injection-policy';
+import { evaluateSecurityPolicy } from '../security/policy-engine';
 
 const TRANSPORTS: ReadonlySet<McpTransportType> = new Set(['streamable-http', 'stdio', 'sse']);
 
@@ -17,6 +19,78 @@ function looksLikeShellInjection(command: string): boolean {
   return /[;&|`$]|\n|\r/.test(command);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function collectDescriptionFields(value: unknown, path: string, output: Array<{ label: string; text: string }>): void {
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = `${path}.${key}`;
+    const normalizedKey = key.toLowerCase();
+    if (
+      typeof child === 'string'
+      && ['description', 'instructions', 'instruction', 'prompt', 'systemprompt', 'system_prompt'].includes(normalizedKey)
+    ) {
+      output.push({ label: childPath, text: child });
+      continue;
+    }
+    if (isRecord(child)) {
+      collectDescriptionFields(child, childPath, output);
+    } else if (Array.isArray(child)) {
+      child.forEach((item, index) => collectDescriptionFields(item, `${childPath}[${index}]`, output));
+    }
+  }
+}
+
+function validateMcpPromptInjection(name: string, entry: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const fields: Array<{ label: string; text: string }> = [];
+  collectDescriptionFields(entry, `Server "${name}"`, fields);
+
+  for (const field of fields) {
+    const scan = evaluatePromptInjectionPolicy({
+      source: 'mcp',
+      name: field.label,
+      text: field.text,
+    });
+    if (scan.decision.action === 'deny') {
+      errors.push(`${field.label}: prompt-injection scan blocked: ${scan.decision.reasons.join('; ')}`);
+    }
+  }
+
+  return errors;
+}
+
+function isSecureRemoteMcpProtocol(protocol: string): boolean {
+  return protocol === 'https:' || protocol === 'wss:';
+}
+
+function isRemoteMcpType(type: string | undefined): boolean {
+  return type === 'streamable-http' || type === 'sse';
+}
+
+function getMcpServerType(entry: Record<string, unknown>): string | undefined {
+  return typeof entry.type === 'string'
+    ? entry.type
+    : typeof entry.command === 'string'
+      ? 'stdio'
+      : typeof entry.transport === 'string'
+        ? entry.transport
+        : undefined;
+}
+
+function collectRemoteMcpUrls(name: string, entry: Record<string, unknown>): Array<{ label: string; url: string }> {
+  const urls: Array<{ label: string; url: string }> = [];
+  for (const key of ['url', 'baseUrl', 'endpoint']) {
+    const value = entry[key];
+    if (typeof value === 'string' && value.trim()) {
+      urls.push({ label: `Server "${name}".${key}`, url: value.trim() });
+    }
+  }
+  return urls;
+}
+
 export function validateMcpServerEntry(name: string, entry: unknown): string[] {
   const errors: string[] = [];
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
@@ -24,13 +98,7 @@ export function validateMcpServerEntry(name: string, entry: unknown): string[] {
     return errors;
   }
   const s = entry as Record<string, unknown>;
-  const type = typeof s.type === 'string'
-    ? s.type
-    : typeof s.command === 'string'
-      ? 'stdio'
-      : typeof s.transport === 'string'
-        ? s.transport
-        : undefined;
+  const type = getMcpServerType(s);
   if (typeof type !== 'string' || !TRANSPORTS.has(type as McpTransportType)) {
     errors.push(`Server "${name}": type/transport must be one of streamable-http, stdio, sse`);
     return errors;
@@ -54,7 +122,10 @@ export function validateMcpServerEntry(name: string, entry: unknown): string[] {
       errors.push(`Server "${name}": ${type} requires a non-empty url`);
     } else {
       try {
-        new URL(s.url);
+        const u = new URL(s.url);
+        if (!isSecureRemoteMcpProtocol(u.protocol)) {
+          errors.push(`Server "${name}": url must use https or wss`);
+        }
       } catch {
         errors.push(`Server "${name}": url is not a valid URL`);
       }
@@ -105,6 +176,8 @@ export function validateMcpServerEntry(name: string, entry: unknown): string[] {
     }
   }
 
+  errors.push(...validateMcpPromptInjection(name, s));
+
   return errors;
 }
 
@@ -125,6 +198,42 @@ export function validateMcpConfig(config: unknown): { valid: boolean; errors: st
     }
     errors.push(...validateMcpServerEntry(name, entry));
   }
+  return { valid: errors.length === 0, errors };
+}
+
+export async function validateMcpConfigNetworkPolicy(config: unknown): Promise<{ valid: boolean; errors: string[] }> {
+  const structural = validateMcpConfig(config);
+  const errors = [...structural.errors];
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return { valid: errors.length === 0, errors };
+  }
+
+  const coerced = coerceMcpConfig(config);
+  for (const [name, entry] of Object.entries(coerced.servers)) {
+    const server = entry as Record<string, unknown>;
+    const type = getMcpServerType(server);
+    if (!isRemoteMcpType(type)) continue;
+
+    for (const candidate of collectRemoteMcpUrls(name, server)) {
+      let parsed: URL;
+      try {
+        parsed = new URL(candidate.url);
+      } catch {
+        continue;
+      }
+      if (!isSecureRemoteMcpProtocol(parsed.protocol)) continue;
+
+      const result = await evaluateSecurityPolicy({
+        kind: 'network',
+        url: parsed.toString(),
+        source: 'settings:mcp-config',
+      });
+      if (result.decision.action !== 'allow') {
+        errors.push(`${candidate.label}: ${result.decision.reasons.join('; ')}`);
+      }
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 

@@ -7,6 +7,7 @@ import { useChatStore } from '@/stores/chat';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import type { WorkspaceEntry } from '@/types/workspace';
+import { invokeIpc } from '@/lib/api-client';
 
 interface WorkspacePickerProps {
   disabled?: boolean;
@@ -69,12 +70,12 @@ export function WorkspacePicker({ disabled = false, onWorkspaceChange }: Workspa
 
   const handleOpenFolder = async () => {
     try {
-      const result = await window.electron.ipcRenderer.invoke('dialog:open', {
+      const result = await invokeIpc<{ canceled?: boolean; filePaths?: string[] }>('dialog:open', {
         properties: ['openDirectory'],
         title: t('workspace.selectFolder'),
       });
-      if (result && !result.canceled && result.filePaths.length > 0) {
-        const folderPath = result.filePaths[0];
+      if (result && !result.canceled && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
+        const folderPath = result.filePaths[0]!;
         const folderName = folderPath.split(/[\\/]/).pop() || 'Workspace';
         
         const newWorkspace: WorkspaceEntry = {

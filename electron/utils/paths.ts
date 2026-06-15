@@ -62,6 +62,18 @@ export function getOpenClawSkillsDir(): string {
 }
 
 /**
+ * Get the LYClaw-managed digital employee installation directory.
+ */
+export function getDigitalEmployeesDir(): string {
+  const override = process.env.CLAWX_DIGITAL_EMPLOYEES_DIR?.trim();
+  return override || join(getOpenClawConfigDir(), 'digital-employees');
+}
+
+export function getLegacyDigitalEmployeesDir(): string {
+  return join(getOpenClawConfigDir(), 'lyclaw', 'digital-employees');
+}
+
+/**
  * Get LYClaw config directory
  */
 export function getClawXConfigDir(): string {

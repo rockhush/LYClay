@@ -29,6 +29,7 @@ import {
   rememberCompanyMarketplaceInstall,
   writeCompanyMarketplaceSidecar,
 } from '../../utils/company-marketplace-installs';
+import { assertCommandAllowedWithConfirmation } from '../../security/confirmation-service';
 
 const COMPANY_API_BASE = 'http://portal.srv.lstech.com/aihome/api/skill';
 // const COMPANY_API_BASE = 'http://100.0.4.203/aihome/api/skill';
@@ -57,11 +58,17 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
    */
   private runArchiveCommand(command: string, args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const prepared = prepareWinSpawn(command, args);
-      const child = spawn(prepared.command, prepared.args, {
-        shell: prepared.shell,
-        windowsHide: true,
-        stdio: ['ignore', 'ignore', 'pipe'],
+      void assertCommandAllowedWithConfirmation({
+        executable: command,
+        args,
+        source: 'skill:company-marketplace-archive',
+        allowCwdOutsideWorkspace: true,
+      }).then(() => {
+        const prepared = prepareWinSpawn(command, args);
+        const child = spawn(prepared.command, prepared.args, {
+          shell: prepared.shell,
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'pipe'],
       });
 
       let stderr = '';
@@ -71,9 +78,10 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
         if (code === 0) {
           resolve();
           return;
-        }
-        reject(new Error(stderr.trim() || `${command} exited with code ${code}`));
-      });
+          }
+          reject(new Error(stderr.trim() || `${command} exited with code ${code}`));
+        });
+      }).catch(reject);
     });
   }
 
@@ -91,8 +99,6 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
         await this.runArchiveCommand(powershell, [
           '-NoProfile',
           '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
           '-Command',
           cmd,
         ]);

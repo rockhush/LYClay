@@ -9,8 +9,10 @@ import {
   LYCLAW_BUILTIN_MCP_KEYS,
   type McpServerEntry,
 } from '../../utils/mcp-json';
-import { coerceMcpConfig, validateMcpConfig } from '../../utils/mcp-config-validator';
+import { coerceMcpConfig, validateMcpConfigNetworkPolicy } from '../../utils/mcp-config-validator';
 import { fetchGatewayToolNamesForServer } from '../../utils/mcp-gateway-tools';
+import { assertMcpServerAllowedWithConfirmation } from '../../security/confirmation-service';
+import { buildMcpServerFingerprint } from '../../security/mcp-server-policy';
 
 function reloadGatewayMcp(ctx: HostApiContext): void {
   ctx.gatewayManager.debouncedReload();
@@ -44,6 +46,19 @@ function mergeToolInventory(
     for (const n of allow) set.add(n);
   }
   return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+async function assertChangedEnabledMcpServersAllowed(
+  current: Record<string, McpServerEntry>,
+  next: Record<string, McpServerEntry>,
+  source: string,
+): Promise<void> {
+  for (const [name, server] of Object.entries(next)) {
+    if (server.disabled === true) continue;
+    const previous = current[name];
+    if (previous && buildMcpServerFingerprint(name, previous) === buildMcpServerFingerprint(name, server)) continue;
+    await assertMcpServerAllowedWithConfirmation({ serverName: name, server, source });
+  }
 }
 
 export async function handleMcpRoutes(
@@ -129,7 +144,7 @@ export async function handleMcpRoutes(
         else delete nextTools.allow;
       }
       config.servers[name] = { ...server, tools: nextTools };
-      const check = validateMcpConfig(config);
+      const check = await validateMcpConfigNetworkPolicy(config);
       if (!check.valid) {
         sendJson(res, 400, { success: false, errors: check.errors });
         return true;
@@ -165,7 +180,7 @@ export async function handleMcpRoutes(
       } else {
         config.servers[name] = { ...server, tools: nextTools };
       }
-      const check = validateMcpConfig(config);
+      const check = await validateMcpConfigNetworkPolicy(config);
       if (!check.valid) {
         sendJson(res, 400, { success: false, errors: check.errors });
         return true;
@@ -194,7 +209,7 @@ export async function handleMcpRoutes(
       }
       const { [name]: _removed, ...rest } = config.servers;
       const next = { servers: rest };
-      const check = validateMcpConfig(next);
+      const check = await validateMcpConfigNetworkPolicy(next);
       if (!check.valid) {
         sendJson(res, 400, { success: false, errors: check.errors });
         return true;
@@ -219,11 +234,16 @@ export async function handleMcpRoutes(
         return true;
       }
       config.servers[ename].disabled = false;
-      const check = validateMcpConfig(config);
+      const check = await validateMcpConfigNetworkPolicy(config);
       if (!check.valid) {
         sendJson(res, 400, { success: false, errors: check.errors });
         return true;
       }
+      await assertMcpServerAllowedWithConfirmation({
+        serverName: ename,
+        server: config.servers[ename],
+        source: 'settings:mcp-enable',
+      });
       await writeMcpConfigAtomic(getMcpConfigPath(), config);
       reloadGatewayMcp(ctx);
       sendJson(res, 200, { success: true });
@@ -271,11 +291,13 @@ export async function handleMcpRoutes(
         return true;
       }
       const coerced = coerceMcpConfig(body.config);
-      const validation = validateMcpConfig(coerced);
+      const validation = await validateMcpConfigNetworkPolicy(coerced);
       if (!validation.valid) {
         sendJson(res, 400, { success: false, errors: validation.errors });
         return true;
       }
+      const current = await readMcpConfig();
+      await assertChangedEnabledMcpServersAllowed(current.servers, coerced.servers, 'settings:mcp-config');
       await writeMcpConfigAtomic(getMcpConfigPath(), coerced);
       reloadGatewayMcp(ctx);
       sendJson(res, 200, { success: true });
@@ -292,7 +314,7 @@ export async function handleMcpRoutes(
         sendJson(res, 400, { valid: false, errors: ['Missing config'] });
         return true;
       }
-      const result = validateMcpConfig(body.config);
+      const result = await validateMcpConfigNetworkPolicy(body.config);
       sendJson(res, 200, result);
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });

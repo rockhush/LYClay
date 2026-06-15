@@ -10,6 +10,7 @@ import {
   LYCLAW_BUILTIN_MCP_KEYS,
 } from '../../utils/mcp-json';
 import { validateMcpConfig } from '../../utils/mcp-config-validator';
+import { assertMcpServerAllowedWithConfirmation } from '../../security/confirmation-service';
 
 function reloadGatewayMcp(ctx: HostApiContext): void {
   ctx.gatewayManager.debouncedReload();
@@ -59,6 +60,11 @@ export async function handleConnectorRoutes(
         sendJson(res, 400, { success: false, errors: validation.errors });
         return true;
       }
+      await assertMcpServerAllowedWithConfirmation({
+        serverName: id,
+        server: next.servers[id],
+        source: 'settings:connector-install',
+      });
       await writeMcpConfigAtomic(mcpPath, next);
       reloadGatewayMcp(ctx);
       sendJson(res, 200, { success: true });
@@ -108,6 +114,11 @@ export async function handleConnectorRoutes(
         return true;
       }
       current.servers[id].disabled = false;
+      await assertMcpServerAllowedWithConfirmation({
+        serverName: id,
+        server: current.servers[id],
+        source: 'settings:connector-enable',
+      });
       await writeMcpConfigAtomic(mcpPath, current);
       reloadGatewayMcp(ctx);
       sendJson(res, 200, { success: true });

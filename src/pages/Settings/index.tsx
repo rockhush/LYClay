@@ -3,6 +3,7 @@
  * Application configuration
  */
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Sun,
   Moon,
@@ -11,6 +12,7 @@ import {
   ExternalLink,
   Copy,
   FileText,
+  Shield,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -39,6 +41,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { SUPPORTED_LANGUAGES } from '@/i18n';
 import { hostApiFetch } from '@/lib/host-api';
+import { subscribeHostEvent } from '@/lib/host-events';
 import { cn } from '@/lib/utils';
 type ControlUiInfo = {
   url: string;
@@ -268,13 +271,9 @@ export function Settings() {
   };
 
   useEffect(() => {
-    const unsubscribe = window.electron.ipcRenderer.on(
-      'openclaw:cli-installed',
-      (...args: unknown[]) => {
-        const installedPath = typeof args[0] === 'string' ? args[0] : '';
-        toast.success(`openclaw CLI installed at ${installedPath}`);
-      },
-    );
+    const unsubscribe = subscribeHostEvent('openclaw:cli-installed', (installedPath: unknown) => {
+      toast.success(`openclaw CLI installed at ${typeof installedPath === 'string' ? installedPath : ''}`);
+    });
     return () => { unsubscribe?.(); };
   }, []);
 
@@ -552,6 +551,27 @@ export function Settings() {
               </div>
             </div>
           </div>
+          {/* Gateway */}
+          <div>
+            <h2 className="text-base font-semibold text-foreground mb-2">
+              安全
+            </h2>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <Label className="text-sm font-medium text-foreground/70">授权管理</Label>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Workspace、文件和域名授权
+                </p>
+              </div>
+              <Button asChild variant="outline" size="sm" className="rounded-full h-8 px-3 text-xs">
+                <Link to="/settings/security">
+                  <Shield className="h-3.5 w-3.5 mr-1.5" />
+                  打开
+                </Link>
+              </Button>
+            </div>
+          </div>
+
           {/* Gateway */}
           <div>
             <h2 className="text-base font-semibold text-foreground mb-2">

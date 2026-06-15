@@ -101,9 +101,9 @@ ClawX 直接基于官方 **OpenClaw** 核心构建。无需单独安装，我们
 从安装到第一次 AI 对话，全程通过直观的图形界面完成。无需终端命令，无需 YAML 文件，无需到处寻找环境变量。
 
 ### 💬 智能聊天界面
-通过现代化的聊天体验与 AI 智能体交互。支持多会话上下文、消息历史记录、Markdown 富文本渲染（包括 GitHub 风格表格以及由 KaTeX 渲染的 LaTeX 数学公式：`$行内$`、`$$块级$$`、`\(行内\)` 和 `\[块级\]`），以及在多 Agent 场景下通过主输入框中的 `@agent` 直接路由到目标智能体。
+通过现代化的聊天体验与 AI 智能体交互。支持多会话上下文、消息历史记录、Markdown 富文本渲染（包括 GitHub 风格表格以及由 KaTeX 渲染的 LaTeX 数学公式：`$行内$`、`$$块级$$`、`\(行内\)` 和 `\[块级\]`），以及在主输入框中通过 `@agent` 让已安装数字员工在当前会话执行。
 主输入框也提供“快速 / 思考 / 专家”思考模式，会通过 `sessions.patch` 写入当前 OpenClaw 会话的 `off`、`medium` 或 `high` thinking override。
-当你使用 `@agent` 选择其他智能体时，ClawX 会直接切换到该智能体自己的对话上下文，而不是经过默认智能体转发。工作空间默认不自动挂载目录，需要用户主动选择；更强的运行时隔离仍取决于 OpenClaw 的 sandbox 配置。当某个会话在输入栏选择了工作空间目录后，该会话会显示在左侧栏对应工作空间条目下，其余会话仍按时间分组显示在下方列表中。
+当你使用 `@agent` 选择已安装数字员工时，ClawX 会保留当前对话，并把该数字员工的流式执行结果展示在同一个会话中，不切换会话，也不创建子 Agent。执行使用当前会话模型、目标数字员工工作空间（`~/.openclaw/workspace-{agentId}`），并且提示词、Skill、工作流和 MCP 只从 `digital-employee/{agentId}/` 或已安装数字员工目录读取，不回退到全局 Skill/MCP。普通聊天会话的工作空间默认不自动挂载目录，需要用户主动选择；更强的运行时隔离仍取决于 OpenClaw 的 sandbox 配置。当某个会话在输入栏选择了工作空间目录后，该会话会显示在左侧栏对应工作空间条目下，其余会话仍按时间分组显示在下方列表中。
 每个 Agent 还可以单独覆盖自己的 `provider/model` 运行时设置；未覆盖的 Agent 会继续继承全局默认模型。
 
 ### 📡 多频道管理
@@ -131,7 +131,24 @@ Skills 页面可展示来自多个 OpenClaw 来源的技能（托管目录、wor
 - `TAVILY_API_KEY`：用于 `tavily-search`（上游运行时也可能支持 OAuth）
 
 ### 🔌 MCP 连接器
-在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/dev_limit
+在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/openclaw.json#mcp.servers`，保存后会尽量触发本机 OpenClaw Gateway 重载。
+
+数字员工广场可通过 Host API 安装数字员工包。渲染进程只传递广场列表项的 `id`，主进程通过 `https://ai.lingyiitech.com/management/agents/download/<id>/` 下载，且不接受渲染进程指定任意包地址。ZIP 下载上限为 512 MiB，解压内容上限为 1 GiB。LYClaw 会校验并解压到 `~/.openclaw/digital-employees/<package-slug>--<short-id>`，自动创建一个 ID 为 `employee-<package-slug>-<short-id>` 的独占本地 OpenClaw Agent，安全应用包内 Agent 模板，将可移植的 Agent 工作空间描述复制到新工作空间，并保留员工包内的专属 Skill 和 MCP 配置。安装阶段不会把员工包内 MCP 注册到全局 `openclaw.json`；后续使用数字员工时由运行时从当前员工目录读取。安装状态与资源归属记录在 `install.json` 中，不依赖 SQLite。
+数字员工广场页面已直接接入该安装流程，卡片会展示安装进度及成功或失败提示，并根据本地数字员工记录判断是否已安装。
+当员工包明确设置 `"allowMultipleInstances": false` 时，LYClaw 会在创建 Agent 前检查同一 `packageId`，已安装则拒绝重复安装；未配置或设置为 `true` 时允许多实例。
+
+已安装数字员工可通过 Host API 原地升级。升级保持 `instanceId`、`agentId`、会话键和运行目录不变，要求新包 `packageId` 一致且版本更高。员工包、包内 Skill、MCP 配置、工作流、资源以及受管的 Agent 工作空间文件会与新包同步，新包已删除的受管文件也会从本地删除；`USER.md`、会话、记忆、认证信息和用户产物始终保留。任一步失败都会恢复旧包、Workspace 和 Agent 配置。
+<<<<<<< HEAD
+=======
+在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。启用新增或配置已变化的 MCP 服务时需要明确授权；stdio 服务会启动本地进程，因此按高风险处理。
+>>>>>>> origin/dev
+=======
+在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。启用新增或配置已变化的 MCP 服务时需要明确授权；stdio 服务会启动本地进程，因此按高风险处理。
+>>>>>>> origin/dev_limit
 
 ### 🔐 安全的供应商集成
 连接多个 AI 供应商（OpenAI、Anthropic 等），凭证安全存储在系统原生密钥链中。OpenAI 同时支持 API Key 与浏览器 OAuth（Codex 订阅）登录。
@@ -274,6 +291,12 @@ ClawX 采用 **双进程 + Host API 统一接入架构**。渲染进程只调用
 - **优雅恢复**：内置重连、超时、退避逻辑，自动处理瞬时故障
 - **安全存储**：API 密钥和敏感数据利用操作系统原生的安全存储机制
 - **CORS 安全**：本地 HTTP 请求由主进程代理，避免渲染进程跨域问题
+- **Memory 出口保护**：Main 可控的 Memory RPC 返回值会在到达 Renderer 前递归脱敏并扫描；OpenClaw Runtime 内部直接持久化 Memory 的链路仍是后续治理边界
+- **Skill / 插件权限声明**：Skill 默认继承已授权 Workspace 内的 metadata、read 和 write 基础能力；manifest 只需声明额外文件、网络、命令和 Secrets 能力。敏感路径与 Workspace 外路径仍受保护，插件不会获得隐式权限，运行时强制拦截仍是后续治理边界
+- **Skill 上传权限确认**：本地 ZIP 支持在压缩包根目录或唯一顶层文件夹中放置 `SKILL.md`；仅使用 Workspace 基础权限的 Skill 可直接安装，新增额外权限时会在写入文件前展示权限差异，并使用 Main 签发的短期确认令牌避免 Renderer 跳过确认
+- **Skill 授权记录**：本地 ZIP Skill 确认安装后会按 manifest 摘要持久化授权；manifest 变化会使旧授权失效，卸载会撤销有效授权，Settings 可查看和主动撤销 Skill 授权。运行时身份绑定仍属于后续治理边界
+- **Skill 运行时策略基础**：Main 已提供绑定 grant 的文件、网络和命令检查入口；运行时 exec 命令会先经过 LYClaw 注入的 OpenClaw hook 做执行前预检，并在命令路径可识别 Skill 时应用 Skill 命令门禁；旧的 Gateway exec approval bridge 保留为兼容兜底
+- **可信内部命令边界**：Gateway 启动、端口清理、后台 doctor 修复等 LYClaw 固定维护命令会先经过 Main 进程的内部操作注册表校验并写入审计，不再误弹 Agent 命令确认；Agent、Skill、MCP 和 Renderer 的动态命令仍继续走普通命令策略与确认流程
 
 ### 进程模型与 Gateway 排障
 

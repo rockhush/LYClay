@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { logger } from '../../utils/logger';
 import { getOpenClawConfigDir } from '../../utils/paths';
 import { buildGatewayHealthSummary } from '../../utils/gateway-health';
+import { redactSecrets } from '../../security/secret-scanner';
 import type { HostApiContext } from '../context';
 import { sendJson } from '../route-utils';
 import { buildChannelAccountsView, getChannelStatusDiagnostics } from './channels';
@@ -33,7 +34,8 @@ async function readTail(filePath: string, tailLines = DEFAULT_TAIL_LINES): Promi
       }
 
       const lines = content.split('\n');
-      return lines.length <= safeTailLines ? content : lines.slice(-safeTailLines).join('\n');
+      const tail = lines.length <= safeTailLines ? content : lines.slice(-safeTailLines).join('\n');
+      return redactSecrets(tail);
     } finally {
       await file.close();
     }
@@ -72,7 +74,7 @@ export async function handleDiagnosticsRoutes(
         platform: process.platform,
         gateway,
         channels,
-        clawxLogTail: await logger.readLogFile(DEFAULT_TAIL_LINES),
+        clawxLogTail: redactSecrets(await logger.readLogFile(DEFAULT_TAIL_LINES)),
         gatewayLogTail: await readTail(join(openClawDir, 'logs', 'gateway.log')),
         gatewayErrLogTail: await readTail(join(openClawDir, 'logs', 'gateway.err.log')),
       });

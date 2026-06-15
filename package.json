@@ -1,6 +1,6 @@
 {
     "name": "lyclaw",
-    "version": "1.1.7",
+    "version": "1.1.8",
     "pnpm": {
         "onlyBuiltDependencies": [
             "@discordjs/opus",
@@ -58,6 +58,8 @@
         "comms:replay": "node scripts/comms/replay.mjs",
         "comms:baseline": "node scripts/comms/baseline.mjs",
         "comms:compare": "node scripts/comms/compare.mjs",
+        "employee:install:manual": "node --import tsx scripts/manual-install-digital-employee.ts",
+        "employee:update:manual": "node --import tsx scripts/manual-update-digital-employee.ts",
         "uv:download": "zx scripts/download-bundled-uv.mjs",
         "uv:download:mac": "zx scripts/download-bundled-uv.mjs --platform=mac",
         "uv:download:win": "zx scripts/download-bundled-uv.mjs --platform=win",
@@ -98,6 +100,7 @@
         "@sinclair/typebox": "^0.34.48",
         "@types/diff": "^8.0.0",
         "@whiskeysockets/baileys": "7.0.0-rc.9",
+        "adm-zip": "^0.5.17",
         "chokidar": "^5.0.0",
         "clawhub": "^0.5.0",
         "diff": "^9.0.0",
@@ -144,6 +147,7 @@
         "@tencent-weixin/openclaw-weixin": "^2.4.3",
         "@testing-library/jest-dom": "^6.9.1",
         "@testing-library/react": "^16.3.2",
+        "@types/adm-zip": "^0.5.8",
         "@types/node": "^25.3.0",
         "@types/react": "^19.2.14",
         "@types/react-dom": "^19.2.3",

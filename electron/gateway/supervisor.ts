@@ -16,6 +16,8 @@ import {
   hasBundledNpmRuntime,
   hasNpmCliRuntime,
 } from '../utils/bundled-node';
+import { assertTrustedInternalCommand } from '../security/trusted-internal-command';
+import { redactSecrets } from '../security/secret-scanner';
 import { probeGatewayReady } from './ws-client';
 
 export function warmupManagedPythonReadiness(): void {
@@ -33,6 +35,12 @@ export function warmupManagedPythonReadiness(): void {
 
 export async function terminateOwnedGatewayProcess(child: Electron.UtilityProcess): Promise<void> {
   const terminateWindowsProcessTree = async (pid: number): Promise<void> => {
+    assertTrustedInternalCommand({
+      operation: 'gateway:process-tree-kill',
+      executable: 'taskkill',
+      args: ['/F', '/PID', String(pid), '/T'],
+      source: 'system:gateway-stop',
+    });
     const cp = await import('child_process');
     await new Promise<void>((resolve) => {
       cp.exec(`taskkill /F /PID ${pid} /T`, { timeout: 5000, windowsHide: true }, () => resolve());
@@ -101,6 +109,12 @@ export async function unloadLaunchctlGatewayService(): Promise<void> {
     const os = await import('os');
 
     const loaded = await new Promise<boolean>((resolve) => {
+      assertTrustedInternalCommand({
+        operation: 'gateway:launchctl-print',
+        executable: 'launchctl',
+        args: ['print', serviceTarget],
+        source: 'system:gateway-launchctl',
+      });
       cp.exec(`launchctl print ${serviceTarget}`, { timeout: 5000 }, (err) => {
         resolve(!err);
       });
@@ -110,6 +124,12 @@ export async function unloadLaunchctlGatewayService(): Promise<void> {
 
     logger.info(`Unloading launchctl service ${serviceTarget} to prevent auto-respawn`);
     await new Promise<void>((resolve) => {
+      assertTrustedInternalCommand({
+        operation: 'gateway:launchctl-bootout',
+        executable: 'launchctl',
+        args: ['bootout', serviceTarget],
+        source: 'system:gateway-launchctl',
+      });
       cp.exec(`launchctl bootout ${serviceTarget}`, { timeout: 10000 }, (err) => {
         if (err) {
           logger.warn(`Failed to bootout launchctl service: ${err.message}`);
@@ -171,6 +191,12 @@ export async function waitForPortFree(port: number, timeoutMs = 30000): Promise<
 }
 
 async function getListeningProcessIds(port: number): Promise<string[]> {
+  assertTrustedInternalCommand({
+    operation: 'gateway:listener-query',
+    executable: process.platform === 'win32' ? 'netstat' : 'lsof',
+    args: [String(port)],
+    source: 'system:gateway-port-cleanup',
+  });
   const cmd = process.platform === 'win32'
     ? `netstat -ano | findstr :${port}`
     : `lsof -i :${port} -sTCP:LISTEN -t`;
@@ -214,6 +240,12 @@ async function terminateOrphanedProcessIds(port: number, pids: string[]): Promis
   for (const pid of pids) {
     try {
       if (process.platform === 'win32') {
+        assertTrustedInternalCommand({
+          operation: 'gateway:process-tree-kill',
+          executable: 'taskkill',
+          args: ['/F', '/PID', pid, '/T'],
+          source: 'system:gateway-orphan-cleanup',
+        });
         const cp = await import('child_process');
         await new Promise<void>((resolve) => {
           cp.exec(
@@ -303,6 +335,45 @@ export async function cleanupStaleSessionLocks(): Promise<number> {
   return cleaned;
 }
 
+export async function terminateGatewayProcessByPid(pid: number, source = 'system:gateway-process-cleanup'): Promise<void> {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+
+  if (process.platform === 'win32') {
+    assertTrustedInternalCommand({
+      operation: 'gateway:process-tree-kill',
+      executable: 'taskkill',
+      args: ['/F', '/PID', String(pid), '/T'],
+      source,
+    });
+    const cp = await import('child_process');
+    await new Promise<void>((resolve) => {
+      cp.exec(`taskkill /F /PID ${pid} /T`, { timeout: 5000, windowsHide: true }, () => resolve());
+    });
+    return;
+  }
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  try {
+    process.kill(pid, 0);
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // Process already exited.
+  }
+}
+
+export async function terminateGatewayListenersOnPort(port: number): Promise<void> {
+  if (!Number.isInteger(port) || port <= 0) return;
+  const pids = await getListeningProcessIds(port);
+  if (pids.length === 0) return;
+  await terminateOrphanedProcessIds(port, pids);
+}
+
 export async function findExistingGatewayProcess(options: {
   port: number;
   ownedPid?: number;
@@ -352,6 +423,21 @@ export async function runOpenClawDoctorRepair(): Promise<boolean> {
 
   const uvEnv = await getUvMirrorEnv();
   const doctorArgs = ['doctor', '--fix', '--yes', '--non-interactive'];
+
+  try {
+    assertTrustedInternalCommand({
+      operation: 'gateway:doctor-repair',
+      executable: 'openclaw',
+      args: doctorArgs,
+      cwd: openclawDir,
+      source: 'system:gateway-doctor-repair',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(`OpenClaw doctor repair blocked by command policy: ${message}`);
+    return false;
+  }
+
   logger.info(
     `Running OpenClaw doctor repair (entry="${entryScript}", args="${doctorArgs.join(' ')}", cwd="${openclawDir}", npmRuntime=${npmRuntimeReady ? 'yes' : 'no'}, bundledBin=${bundledBinReady ? 'yes' : 'no'})`,
   );
@@ -395,7 +481,7 @@ export async function runOpenClawDoctorRepair(): Promise<boolean> {
     child.stdout?.on('data', (data) => {
       const raw = decodeChildProcessOutput(data as Buffer);
       for (const line of raw.split(/\r?\n/)) {
-        const normalized = line.trim();
+        const normalized = redactSecrets(line).trim();
         if (!normalized) continue;
         logger.debug(`[Gateway doctor stdout] ${normalized}`);
       }
@@ -404,7 +490,7 @@ export async function runOpenClawDoctorRepair(): Promise<boolean> {
     child.stderr?.on('data', (data) => {
       const raw = decodeChildProcessOutput(data as Buffer);
       for (const line of raw.split(/\r?\n/)) {
-        const normalized = line.trim();
+        const normalized = redactSecrets(line).trim();
         if (!normalized) continue;
         logger.warn(`[Gateway doctor stderr] ${normalized}`);
       }

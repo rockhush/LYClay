@@ -24,8 +24,11 @@ test.describe('ClawX main navigation without setup flow', () => {
       await expect(page.getByTestId('models-page')).toBeVisible();
       await expect(page.getByTestId('models-page-title')).toBeVisible();
 
-      await page.getByTestId('sidebar-nav-agents').click();
-      await expect(page.getByTestId('agents-page')).toBeVisible();
+      await page.getByTestId('sidebar-nav-digital-employee').click();
+      await expect(page.getByRole('heading', { name: '数字员工' })).toBeVisible();
+
+      await page.getByTestId('sidebar-nav-skills').click();
+      await expect(page.getByTestId('skills-actions-button')).toBeVisible();
 
       await page.getByTestId('sidebar-nav-channels').click();
       await expect(page.getByTestId('channels-page')).toBeVisible();

@@ -24,7 +24,7 @@ requiredProfiles:
   - comms
 requiredTests:
   - pnpm harness validate --spec harness/specs/tasks/improve-chat-runtime-visibility.md
-  - pnpm exec vitest run tests/unit/chat-store-history-retry.test.ts
+  - pnpm exec vitest run tests/unit/chat-store-history-retry.test.ts tests/unit/chat-event-dedupe.test.ts
   - pnpm exec playwright test tests/e2e/chat-first-response-progress.spec.ts
 acceptance:
   - Renderer continues to use host-api/api-client/Gateway store boundaries.

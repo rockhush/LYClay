@@ -97,7 +97,7 @@ function parseUnifiedProxyResponse<T>(
   });
 
   // Check HTTP status code from the actual response
-  if (data.status && !data.ok) {
+  if (data.ok === false || (typeof data.status === 'number' && data.status >= 400)) {
     let message = `HTTP ${data.status}`;
     if (data.json && typeof data.json === 'object' && 'error' in (data.json as Record<string, unknown>)) {
       const errorPayload = (data.json as Record<string, unknown>).error;
@@ -168,7 +168,8 @@ function shouldFallbackToBrowser(message: string): boolean {
 
 function allowLocalhostFallback(): boolean {
   try {
-    return window.localStorage.getItem('LYClaw:allow-localhost-fallback') === '1';
+    return window.localStorage.getItem('LYClaw:allow-localhost-fallback') === '1'
+      || window.localStorage.getItem('clawx:allow-localhost-fallback') === '1';
   } catch {
     return false;
   }

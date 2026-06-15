@@ -1,4 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import { constants } from 'node:fs';
+import { access, readFile } from 'node:fs/promises';
+import { resolve } from 'path';
 import {
   assignChannelToAgent,
   clearChannelBinding,
@@ -10,12 +13,14 @@ import {
   updateAgentModel,
   updateAgentName,
 } from '../../utils/agent-config';
+import { listDigitalEmployeeAgentIds } from '../../utils/digital-employee-storage';
 import { deleteChannelAccountConfig } from '../../utils/channel-config';
 import { syncAgentModelOverrideToRuntime, syncAllProviderAuthToRuntime } from '../../services/providers/provider-runtime-sync';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 import { ensureClawXContext } from '../../utils/openclaw-workspace';
-
+import { terminateGatewayListenersOnPort, terminateGatewayProcessByPid } from '../../gateway/supervisor';
+import { listLocalDigitalEmployees, readInstalledManifest } from '../../utils/digital-employee-storage';
 function scheduleGatewayReload(ctx: HostApiContext, reason: string): void {
   if (ctx.gatewayManager.getStatus().state !== 'stopped') {
     ctx.gatewayManager.debouncedReload();
@@ -27,6 +32,38 @@ function scheduleGatewayReload(ctx: HostApiContext, reason: string): void {
 import { exec } from 'child_process';
 import { promisify } from 'util';
 const execAsync = promisify(exec);
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readDigitalEmployeeWorkflowPrompt(installPath: string): Promise<string | null> {
+  const root = resolve(installPath);
+  let workflowRelPath = 'workflows/default.md';
+
+  try {
+    const manifest = await readInstalledManifest(installPath);
+    if (typeof manifest.execution?.workflow === 'string' && manifest.execution.workflow.trim()) {
+      workflowRelPath = manifest.execution.workflow.trim();
+    }
+  } catch {
+    // Fall back to the conventional default workflow path.
+  }
+
+  const workflowPath = resolve(root, workflowRelPath);
+  if (workflowPath !== root && !workflowPath.startsWith(`${root}${process.platform === 'win32' ? '\\' : '/'}`)) {
+    return null;
+  }
+  if (!(await pathExists(workflowPath))) return null;
+
+  const content = await readFile(workflowPath, 'utf8');
+  return content.trim() || null;
+}
 
 /**
  * Force a full Gateway process restart after agent deletion.
@@ -40,60 +77,25 @@ const execAsync = promisify(exec);
  */
 export async function restartGatewayForAgentDeletion(ctx: HostApiContext): Promise<void> {
   try {
-    // Capture the PID of the running Gateway BEFORE stop() clears it.
+    // 在 stop()/restart() 清理状态前先取出当前 Gateway 的 PID 和端口。
     const status = ctx.gatewayManager.getStatus();
     const pid = status.pid;
     const port = status.port;
     console.log('[agents] Triggering Gateway restart (kill+respawn) after agent deletion', { pid, port });
 
-    // Force-kill the Gateway process by PID.  The manager's stop() only
-    // kills "owned" processes; if the manager connected to an already-
-    // running Gateway (ownsProcess=false), stop() simply closes the WS
-    // and the old process stays alive with its stale channel connections.
+    // 删除 Agent 后必须完整重启 Gateway，避免通道插件继续保留旧连接。
+    // 路由层不再直接拼接 taskkill/lsof/netstat；所有进程清理都交给
+    // supervisor 的可信内部命令边界做参数校验和审计。
     if (pid) {
       try {
-        if (process.platform === 'win32') {
-          await execAsync(`taskkill /F /PID ${pid} /T`);
-        } else {
-          process.kill(pid, 'SIGTERM');
-          // Give it a moment to die
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          try { process.kill(pid, 0); process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
-        }
+        await terminateGatewayProcessByPid(pid, 'system:agent-delete-gateway-restart');
       } catch {
         // process already gone – that's fine
       }
     } else if (port) {
-      // If we don't know the PID (e.g. connected to an orphaned Gateway from
-      // a previous pnpm dev run), forcefully kill whatever is on the port.
+      // 没有 PID 时按端口清理遗留 Gateway 监听进程，具体命令同样由 supervisor 收口。
       try {
-        if (process.platform === 'darwin' || process.platform === 'linux') {
-          // MUST use -sTCP:LISTEN. Otherwise lsof returns the client process (LYClaw itself) 
-          // that has an ESTABLISHED WebSocket connection to the port, causing us to kill ourselves.
-          const { stdout } = await execAsync(`lsof -t -i :${port} -sTCP:LISTEN`);
-          const pids = stdout.trim().split('\n').filter(Boolean);
-          for (const p of pids) {
-            try { process.kill(parseInt(p, 10), 'SIGTERM'); } catch { /* ignore */ }
-          }
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          for (const p of pids) {
-            try { process.kill(parseInt(p, 10), 'SIGKILL'); } catch { /* ignore */ }
-          }
-        } else if (process.platform === 'win32') {
-          // Find PID listening on the port
-          const { stdout } = await execAsync(`netstat -ano | findstr :${port}`);
-          const lines = stdout.trim().split('\n');
-          const pids = new Set<string>();
-          for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length >= 5 && parts[1].endsWith(`:${port}`) && parts[3] === 'LISTENING') {
-              pids.add(parts[4]);
-            }
-          }
-          for (const p of pids) {
-            try { await execAsync(`taskkill /F /PID ${p} /T`); } catch { /* ignore */ }
-          }
-        }
+        await terminateGatewayListenersOnPort(port);
       } catch {
         // Port might not be bound or command failed; ignore
       }
@@ -113,7 +115,41 @@ export async function handleAgentRoutes(
   ctx: HostApiContext,
 ): Promise<boolean> {
   if (url.pathname === '/api/agents' && req.method === 'GET') {
-    sendJson(res, 200, { success: true, ...(await listAgentsSnapshot()) });
+    const snapshot = await listAgentsSnapshot();
+    if (url.searchParams.get('scope') === 'managed') {
+      const digitalEmployeeAgentIds = await listDigitalEmployeeAgentIds();
+      sendJson(res, 200, {
+        success: true,
+        ...snapshot,
+        agents: snapshot.agents.filter((agent) => !digitalEmployeeAgentIds.has(agent.id)),
+      });
+      return true;
+    }
+    sendJson(res, 200, { success: true, ...snapshot });
+    return true;
+  }
+
+  if (url.pathname === '/api/agents/is-digital-employee' && req.method === 'GET') {
+    const agentId = url.searchParams.get('agentId')?.trim();
+    if (!agentId) {
+      sendJson(res, 400, { success: false, error: 'Missing agentId' });
+      return true;
+    }
+
+    const employees = await listLocalDigitalEmployees();
+    const employee = employees.find((entry) => entry.agentId === agentId || entry.instanceId === agentId) ?? null;
+    const workflowPrompt = employee
+      ? await readDigitalEmployeeWorkflowPrompt(employee.installPath)
+      : null;
+
+    sendJson(res, 200, {
+      success: true,
+      isDigitalEmployee: Boolean(employee),
+      instanceId: employee?.instanceId ?? null,
+      installPath: employee?.installPath ?? null,
+      name: employee?.name ?? null,
+      workflowPrompt,
+    });
     return true;
   }
 

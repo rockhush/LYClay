@@ -3,7 +3,15 @@ import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { testHome, testUserData, mockLoggerWarn, mockLoggerInfo, mockLoggerError } = vi.hoisted(() => {
+const {
+  testHome,
+  testUserData,
+  mockLoggerWarn,
+  mockLoggerInfo,
+  mockLoggerError,
+  mockExec,
+  mockAssertCommandAllowedWithConfirmation,
+} = vi.hoisted(() => {
   const suffix = Math.random().toString(36).slice(2);
   return {
     testHome: `/tmp/clawx-channel-config-${suffix}`,
@@ -11,6 +19,8 @@ const { testHome, testUserData, mockLoggerWarn, mockLoggerInfo, mockLoggerError 
     mockLoggerWarn: vi.fn(),
     mockLoggerInfo: vi.fn(),
     mockLoggerError: vi.fn(),
+    mockExec: vi.fn(),
+    mockAssertCommandAllowedWithConfirmation: vi.fn(),
   };
 });
 
@@ -39,6 +49,14 @@ vi.mock('@electron/utils/logger', () => ({
   warn: mockLoggerWarn,
   info: mockLoggerInfo,
   error: mockLoggerError,
+}));
+
+vi.mock('child_process', () => ({
+  exec: mockExec,
+}));
+
+vi.mock('@electron/security/confirmation-service', () => ({
+  assertCommandAllowedWithConfirmation: mockAssertCommandAllowedWithConfirmation,
 }));
 
 async function readOpenClawJson(): Promise<Record<string, unknown>> {
@@ -175,6 +193,74 @@ describe('parseDoctorValidationOutput', () => {
   });
 });
 
+describe('validateChannelConfig command policy', () => {
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    await rm(testHome, { recursive: true, force: true });
+    await rm(testUserData, { recursive: true, force: true });
+
+    mockAssertCommandAllowedWithConfirmation.mockResolvedValue({
+      decision: { action: 'allow', risk: 'low', reasons: ['test'] },
+      segments: [],
+      command: 'node openclaw.mjs doctor',
+      cwd: join(testHome, '.openclaw'),
+    });
+    mockExec.mockImplementation((
+      _command: string,
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(null, 'feishu ok\n', '');
+      return {} as never;
+    });
+  });
+
+  it('checks command policy before running channel doctor validation', async () => {
+    const { writeOpenClawConfig, validateChannelConfig } = await import('@electron/utils/channel-config');
+
+    await writeOpenClawConfig({
+      channels: {
+        feishu: {
+          enabled: true,
+          defaultAccount: 'default',
+          accounts: {
+            default: { appId: 'app-id', appSecret: 'app-secret' },
+          },
+        },
+      },
+    });
+
+    await validateChannelConfig('feishu');
+
+    expect(mockAssertCommandAllowedWithConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+      executable: 'node',
+      args: ['openclaw.mjs', 'doctor'],
+      cwd: expect.any(String),
+      source: 'system:channel-config-doctor',
+      allowCwdOutsideWorkspace: true,
+    }));
+    const commandCwd = mockAssertCommandAllowedWithConfirmation.mock.calls[0][0].cwd;
+    expect(mockExec).toHaveBeenCalledWith(
+      'node openclaw.mjs doctor 2>&1',
+      expect.objectContaining({ cwd: commandCwd, timeout: 30000 }),
+      expect.any(Function),
+    );
+  });
+
+  it('does not run channel doctor validation when command policy rejects it', async () => {
+    mockAssertCommandAllowedWithConfirmation.mockRejectedValueOnce(new Error('Command execution denied'));
+    const { validateChannelConfig } = await import('@electron/utils/channel-config');
+
+    await expect(validateChannelConfig('feishu')).resolves.toMatchObject({
+      valid: false,
+      errors: expect.arrayContaining(['Channel feishu is not configured']),
+    });
+
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+});
+
 describe('WeCom plugin configuration', () => {
   beforeEach(async () => {
     vi.resetAllMocks();
@@ -191,8 +277,8 @@ describe('WeCom plugin configuration', () => {
     const config = await readOpenClawJson();
     const plugins = config.plugins as { allow: string[], entries: Record<string, { enabled?: boolean }> };
     
-    expect(plugins.allow).toContain('wecom');
-    expect(plugins.entries['wecom'].enabled).toBe(true);
+    expect(plugins.allow).toContain('wecom-openclaw-plugin');
+    expect(plugins.entries['wecom-openclaw-plugin'].enabled).toBe(true);
   });
 
   it('saves whatsapp as a built-in channel instead of a plugin', async () => {

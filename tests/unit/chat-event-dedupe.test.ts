@@ -228,6 +228,314 @@ describe('chat event dedupe', () => {
     expect(useChatStore.getState().lastUserMessageAt).toBeNull();
   });
 
+  it('clears current session execution state when an exec approval followup final arrives', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-original',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'exec-approval-followup:approval-1',
+      sessionKey: 'agent:main:main',
+    });
+
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
+    expect(useChatStore.getState().pendingFinal).toBe(false);
+    expect(useChatStore.getState().lastUserMessageAt).toBeNull();
+  });
+
+  it('clears exec approval followup text finals even after prior tool use when stop reason is absent', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [
+        { role: 'user', content: 'Generate a deck' },
+        {
+          role: 'assistant',
+          id: 'tool-use-1',
+          content: [
+            { type: 'text', text: 'Checking exports.' },
+            { type: 'tool_use', id: 'call-1', name: 'exec', input: { command: 'dir exports' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'hunan-intro.pptx' }],
+        },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'exec-approval-followup:approval-1',
+      streamingText: '',
+      streamingMessage: { role: 'assistant', content: [{ type: 'text', text: 'thinking' }] },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'exec-approval-followup:approval-1',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        id: 'final-report',
+        content: [{ type: 'text', text: 'PPT generated successfully.' }],
+      },
+    });
+
+    const state = useChatStore.getState();
+    expect(state.sending).toBe(false);
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(state.streamingMessage).toBeNull();
+    expect(extractText(state.messages.at(-1))).toBe('PPT generated successfully.');
+  });
+
+  it('ignores unrelated mismatched final events for the current session', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-original',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-other',
+      sessionKey: 'agent:main:main',
+    });
+
+    expect(useChatStore.getState().sending).toBe(true);
+    expect(useChatStore.getState().activeRunId).toBe('run-original');
+    expect(useChatStore.getState().pendingFinal).toBe(true);
+    expect(useChatStore.getState().lastUserMessageAt).toBe(123);
+  });
+
+  it('closes a text final even when prior messages used tools', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [
+        { role: 'user', content: 'Generate a deck' },
+        {
+          role: 'assistant',
+          id: 'tool-use-1',
+          content: [
+            { type: 'text', text: 'I will inspect the project.' },
+            { type: 'tool_use', id: 'call-1', name: 'exec', input: { command: 'dir' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'ok' }],
+        },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-stage-final',
+      streamingText: '',
+      streamingMessage: { role: 'assistant', content: [{ type: 'text', text: 'Installing requests...' }] },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-stage-final',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        id: 'stage-final-text',
+        content: [{ type: 'text', text: 'I need requests in this Python environment. Installing it now:' }],
+      },
+    });
+
+    const state = useChatStore.getState();
+    expect(state.sending).toBe(false);
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(extractText(state.messages.at(-1))).toContain('Installing it now');
+  });
+
+  it('keeps a final carrying an actual tool call active', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'Check my calendar' }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-tool-step',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-tool-step',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        id: 'tool-step',
+        stopReason: 'toolUse',
+        content: [
+          { type: 'text', text: 'Querying the calendar now.' },
+          { type: 'toolCall', id: 'call-1', name: 'exec', arguments: { command: 'query-events' } },
+        ],
+      },
+    });
+
+    const state = useChatStore.getState();
+    expect(state.sending).toBe(true);
+    expect(state.activeRunId).toBe('run-tool-step');
+    expect(state.pendingFinal).toBe(true);
+    expect(extractText(state.messages.at(-1))).toContain('Querying the calendar now');
+  });
+
+  it('reconciles an ambiguous text final with a terminal transcript after tool use', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const userTimestamp = Date.now();
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [
+        { role: 'user', content: 'Export the deck', id: 'user-1', timestamp: userTimestamp },
+        {
+          role: 'assistant',
+          id: 'tool-use-1',
+          content: [
+            { type: 'text', text: 'Exporting the deck.' },
+            { type: 'tool_use', id: 'call-1', name: 'exec', input: { command: 'export-ppt' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'deck.pptx' }],
+        },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-ppt-export',
+      streamingText: '',
+      streamingMessage: { role: 'assistant', content: [{ type: 'text', text: 'Preparing final report.' }] },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTimestamp,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
+      messages: [
+        { role: 'user', content: 'Export the deck', id: 'user-1', timestamp: userTimestamp },
+        {
+          role: 'assistant',
+          id: 'final-report',
+          timestamp: userTimestamp + 1,
+          stopReason: 'stop',
+          content: [{ type: 'text', text: 'PPT generated successfully: deck.pptx' }],
+        },
+      ],
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-ppt-export',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        id: 'final-report',
+        content: [{ type: 'text', text: 'PPT generated successfully: deck.pptx' }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sending).toBe(false);
+    });
+
+    const state = useChatStore.getState();
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(state.streamingMessage).toBeNull();
+    expect(extractText(state.messages.find((message) => message.id === 'final-report'))).toContain(
+      'PPT generated successfully',
+    );
+  });
+
   it('clears background session execution state when its final event arrives', async () => {
     const { useChatStore } = await import('@/stores/chat');
 

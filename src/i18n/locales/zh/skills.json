@@ -182,7 +182,7 @@
         "searching": "正在搜索技能广场...",
         "noResults": "未找到匹配的技能。",
         "emptyPrompt": "暂无数据",
-        "searchError": "技能广场搜索失败。请使用公司内网连接",
+        "searchError": "技能广场搜索失败，请使用公司内网连接",
         "installing": "安装中..."
     },
     "upload": {
@@ -208,6 +208,28 @@
         "securityBlocked": "安全检查未通过",
         "securityBlockedDesc": "该技能包因安全问题被拦截。",
         "securityWarning": "安全提醒",
+        "permissions": {
+            "reviewTitle": "确认 Skill 权限",
+            "risk": "风险：{{risk}}",
+            "riskLevels": {
+                "low": "低",
+                "medium": "中",
+                "high": "高",
+                "critical": "严重"
+            },
+            "added": "本次请求的权限",
+            "unchanged": "基础或已有权限",
+            "none": "该 Skill 未请求额外权限。",
+            "workspaceMetadata": "查看 Workspace 文件信息",
+            "workspaceRead": "读取 Workspace 文件",
+            "workspaceWrite": "写入 Workspace 文件",
+            "workspaceDelete": "删除 Workspace 文件",
+            "workspaceExecute": "执行 Workspace 中的文件",
+            "networkDomain": "访问域名：{{domain}}",
+            "command": "执行命令：{{command}}",
+            "back": "返回",
+            "confirm": "确认安装"
+        },
         "securityCategories": {
             "path-traversal": "路径穿越攻击",
             "file-type": "被禁止的文件类型",

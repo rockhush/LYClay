@@ -18,6 +18,9 @@ import {
   clearHistoryPoll,
   getLastChatEventAt,
   markAbortedChatRun,
+  isUserSecurityDenialMessage,
+  buildSecurityCancelNotice,
+  setHistoryPollTimer,
   setLastChatEventAt,
   upsertImageCacheEntry,
 } from './helpers';
@@ -391,6 +394,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         messages: isInternalStagedExecution ? s.messages : [...s.messages, userMsg],
         sending: true,
         error: null,
+        securityCancelNotice: null,
         streamingText: '',
         streamingMessage: null,
         streamingTools: [],
@@ -562,7 +566,24 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
 
         if (!result.success) {
           clearHistoryPoll();
-          set({ error: result.error || 'Failed to send message', sending: false });
+          const errorMessage = result.error || 'Failed to send message';
+          if (isUserSecurityDenialMessage(errorMessage)) {
+            set({
+              error: null,
+              runError: null,
+              securityCancelNotice: buildSecurityCancelNotice(errorMessage),
+              sending: false,
+              activeRunId: null,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
+              lastUserMessageAt: null,
+            });
+          } else {
+            set({ error: errorMessage, sending: false });
+          }
         } else if (result.result?.runId) {
           const runId = result.result.runId;
           markPendingComplexTaskPlanningRun(currentSessionKey, runId);
@@ -606,7 +627,24 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           });
         }
         clearHistoryPoll();
-        set({ error: String(err), sending: false });
+        const errorMessage = String(err);
+        if (isUserSecurityDenialMessage(errorMessage)) {
+          set({
+            error: null,
+            runError: null,
+            securityCancelNotice: buildSecurityCancelNotice(errorMessage),
+            sending: false,
+            activeRunId: null,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            lastUserMessageAt: null,
+          });
+        } else {
+          set({ error: errorMessage, sending: false });
+        }
       }
     },
 

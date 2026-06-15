@@ -4,6 +4,9 @@ import { buildOpenClawControlUiUrl } from '../../utils/openclaw-control-ui';
 import { getSetting } from '../../utils/store';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
+import { assertModelSecretsAllowedBeforeSend } from '../../security/model-secret-preflight';
+import { assertTextNetworkAllowed } from '../../security/network-preflight';
+import { assertTextFilePathsAllowed } from '../../security/chat-file-path-preflight';
 
 export async function handleGatewayRoutes(
   req: IncomingMessage,
@@ -85,6 +88,9 @@ export async function handleGatewayRoutes(
         deliver?: boolean;
         idempotencyKey: string;
         media?: Array<{ filePath: string; mimeType: string; fileName: string }>;
+        extraSystemPrompt?: string;
+        executeAsAgentId?: string;
+        executedByAgentName?: string;
       }>(req);
       const VISION_MIME_TYPES = new Set([
         'image/png', 'image/jpeg', 'image/bmp', 'image/webp',
@@ -118,6 +124,19 @@ export async function handleGatewayRoutes(
       if (imageAttachments.length > 0) {
         rpcParams.attachments = imageAttachments;
       }
+      if (body.extraSystemPrompt) {
+        rpcParams.extraSystemPrompt = body.extraSystemPrompt;
+      }
+
+      if (body.executeAsAgentId) {
+        rpcParams.executeAsAgentId = body.executeAsAgentId;
+      }
+      if (body.executedByAgentName) {
+        rpcParams.executedByAgentName = body.executedByAgentName;
+      }
+      await assertModelSecretsAllowedBeforeSend(message, 'hostapi:chat.send-with-media');
+      await assertTextNetworkAllowed(message, 'hostapi:chat.send-with-media');
+      await assertTextFilePathsAllowed(message, 'hostapi:chat.send-with-media');
       const result = await ctx.gatewayManager.rpc('chat.send', rpcParams, 120000);
       sendJson(res, 200, { success: true, result });
     } catch (error) {

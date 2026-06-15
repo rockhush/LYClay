@@ -52,6 +52,17 @@ import {
   ensureWeComPluginInstalled,
 } from '../utils/plugin-install';
 import { updateSkillConfig, getSkillConfig, getAllSkillConfigs } from '../utils/skill-config';
+import {
+  readZipEntries,
+  validateZipStructure,
+  validateExtractedSkill,
+} from '../utils/skill-validator';
+import {
+  diffSkillManifestPermissions,
+  requiresSkillPermissionConfirmation,
+  type SkillManifestPermissions,
+} from '../security/skill-permission-policy';
+import { SkillUploadConfirmationStore } from '../security/skill-upload-confirmation';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { getProviderConfig } from '../utils/provider-registry';
 import { deviceOAuthManager, OAuthProviderType } from '../utils/device-oauth';
@@ -60,6 +71,14 @@ import { applyProxySettings } from './proxy';
 import { syncLaunchAtStartupSettingFromStore } from './launch-at-startup';
 import { proxyAwareFetch } from '../utils/proxy-fetch';
 import { getRecentTokenUsageHistory } from '../utils/token-usage';
+import { assertPathAllowed, assertPathInsideRoot } from '../security/path-policy';
+import { findSkillGrant, grantDialogPaths, grantSkillAccess, revokeSkillGrantsForSkill } from '../security/permission-store';
+import { secureProxyAwareFetch } from '../security/network-fetch';
+import { assertGatewayRpcNetworkAllowed, assertTextNetworkAllowed } from '../security/network-preflight';
+import { assertGatewayRpcModelSecretsAllowed, assertModelSecretsAllowedBeforeSend } from '../security/model-secret-preflight';
+import { assertGatewayRpcFilePathsAllowed, assertTextFilePathsAllowed } from '../security/chat-file-path-preflight';
+import { protectMemoryRpcOutput } from '../security/memory-content-policy';
+import { assertOpenTargetAllowedWithConfirmation, registerSecurityConfirmationHandlers } from '../security/confirmation-service';
 import { getProviderService } from '../services/providers/provider-service';
 import {
   getOpenClawProviderKey,
@@ -91,6 +110,9 @@ export function registerIpcHandlers(
 ): void {
   // Unified request protocol (non-breaking: legacy channels remain available)
   registerUnifiedRequestHandlers(gatewayManager);
+
+  // Security confirmation flow
+  registerSecurityConfirmationHandlers(ipcMain, mainWindow);
 
   // Host API proxy handlers
   registerHostApiProxyHandlers();
@@ -1231,6 +1253,9 @@ function registerGatewayHandlers(
     const t0 = Date.now();
     logger.info(`[ipc] gateway:rpc ${method} requested (timeoutMs=${timeoutMs ?? 30000})`);
     try {
+      await assertGatewayRpcModelSecretsAllowed(method, params);
+      await assertGatewayRpcNetworkAllowed(method, params);
+      await assertGatewayRpcFilePathsAllowed(method, params);
       const result = await gatewayManager.rpc(method, params, timeoutMs);
       const duration = Date.now() - t0;
       logger.info(`[ipc] gateway:rpc ${method} completed in ${duration}ms`);
@@ -1275,18 +1300,35 @@ function registerGatewayHandlers(
         if (!headers['Content-Type'] && !headers['content-type']) {
           headers['Content-Type'] = 'application/json';
         }
+        if (typeof request.body === 'object' && request.body !== null) {
+          const rpcBody = request.body as Record<string, unknown>;
+          if (rpcBody.method === 'chat.send') {
+            await assertGatewayRpcModelSecretsAllowed('chat.send', rpcBody.params);
+            await assertGatewayRpcNetworkAllowed('chat.send', rpcBody.params);
+            await assertGatewayRpcFilePathsAllowed('chat.send', rpcBody.params);
+          }
+        }
       }
+
+      const targetUrl = `http://127.0.0.1:${port}${path}`;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const response = await (async () => {
         try {
-          return await proxyAwareFetch(`http://127.0.0.1:${port}${path}`, {
-            method,
-            headers,
-            body,
-            signal: controller.signal,
-          });
+          return await secureProxyAwareFetch(
+            targetUrl,
+            {
+              method,
+              headers,
+              body,
+              signal: controller.signal,
+            },
+            {
+              source: 'renderer:gateway-http-proxy',
+              allowLocalhostPorts: [port],
+            },
+          );
         } finally {
           clearTimeout(timer);
         }
@@ -1294,7 +1336,15 @@ function registerGatewayHandlers(
 
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
       if (contentType.includes('application/json')) {
-        const json = await response.json();
+        const rawJson = await response.json();
+        // HTTP fallback 不经过 GatewayManager.rpc，因此需要在这里补上同样的
+        // Memory 出口净化，保证 WS、HTTP、IPC 三种传输方式安全语义一致。
+        const rpcMethod = request?.body
+          && typeof request.body === 'object'
+          && typeof (request.body as Record<string, unknown>).method === 'string'
+          ? String((request.body as Record<string, unknown>).method)
+          : '';
+        const json = rpcMethod ? protectMemoryRpcOutput(rpcMethod, rawJson) : rawJson;
         return {
           success: true,
           status: response.status,
@@ -1332,6 +1382,8 @@ function registerGatewayHandlers(
     deliver?: boolean;
     idempotencyKey: string;
     media?: Array<{ filePath: string; mimeType: string; fileName: string }>;
+    executeAsAgentId?: string;
+    executedByAgentName?: string;
   }) => {
     try {
       let message = params.message;
@@ -1378,6 +1430,9 @@ function registerGatewayHandlers(
         const refs = fileReferences.join('\n');
         message = message ? `${message}\n\n${refs}` : refs;
       }
+      await assertModelSecretsAllowedBeforeSend(message, 'chat:sendWithMedia');
+      await assertTextNetworkAllowed(message, 'chat:sendWithMedia');
+      await assertTextFilePathsAllowed(message, 'chat:sendWithMedia');
 
       const rpcParams: Record<string, unknown> = {
         sessionKey: params.sessionKey,
@@ -1388,6 +1443,12 @@ function registerGatewayHandlers(
 
       if (imageAttachments.length > 0) {
         rpcParams.attachments = imageAttachments;
+      }
+      if (params.executeAsAgentId) {
+        rpcParams.executeAsAgentId = params.executeAsAgentId;
+      }
+      if (params.executedByAgentName) {
+        rpcParams.executedByAgentName = params.executedByAgentName;
       }
 
       logger.info(`[chat:sendWithMedia] Sending: message="${message.substring(0, 100)}", attachments=${imageAttachments.length}, fileRefs=${fileReferences.length}`);
@@ -2082,30 +2143,44 @@ function registerProviderHandlers(gatewayManager: GatewayManager): void {
 /**
  * Shell-related IPC handlers
  */
-const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'dingtalk:']);
-
 function registerShellHandlers(): void {
   // Open external URL
   ipcMain.handle('shell:openExternal', async (_, url: string) => {
-    const parsed = new URL(url);
-    if (!ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
-      throw new Error(`Disallowed external protocol: ${parsed.protocol}`);
+    const result = await assertOpenTargetAllowedWithConfirmation({
+      target: url,
+      capability: 'open-external',
+      source: 'renderer:shell.openExternal',
+    });
+    if (result.action === 'open-path' && result.realPath) {
+      return await shell.openPath(result.realPath);
     }
-    await shell.openExternal(url);
+    if (result.action === 'open-url' && result.url) {
+      await shell.openExternal(result.url);
+      return undefined;
+    }
+    throw new Error('Open target policy did not return an actionable target');
   });
 
   // Open path in file explorer
   ipcMain.handle('shell:showItemInFolder', async (_, path: string) => {
-    shell.showItemInFolder(path);
+    const result = await assertOpenTargetAllowedWithConfirmation({
+      target: path,
+      capability: 'show-item',
+      source: 'renderer:shell.showItemInFolder',
+    });
+    if (!result.realPath) throw new Error('Open target policy did not return a real path');
+    shell.showItemInFolder(result.realPath);
   });
 
   // Open path
   ipcMain.handle('shell:openPath', async (_, path: string) => {
-    // Resolve ~ to user home directory (works on both Windows and Unix)
-    const resolvedPath = path.replace(/^~(?=\/|\\)/, () => {
-      return process.env.HOME || process.env.USERPROFILE || '';
+    const result = await assertOpenTargetAllowedWithConfirmation({
+      target: path,
+      capability: 'open-path',
+      source: 'renderer:shell.openPath',
     });
-    return await shell.openPath(resolvedPath);
+    if (!result.realPath) throw new Error('Open target policy did not return a real path');
+    return await shell.openPath(result.realPath);
   });
 }
 
@@ -2137,6 +2212,7 @@ function registerClawHubHandlers(clawHubService: ClawHubService): void {
   ipcMain.handle('clawhub:uninstall', async (_, params: ClawHubUninstallParams) => {
     try {
       await clawHubService.uninstall(params);
+      await revokeSkillGrantsForSkill(params.slug);
       return { success: true };
     } catch (error) {
       return { success: false, error: String(error) };
@@ -2171,6 +2247,13 @@ function registerDialogHandlers(): void {
   // Show open dialog
   ipcMain.handle('dialog:open', async (_, options: Electron.OpenDialogOptions) => {
     const result = await dialog.showOpenDialog(options);
+    if (!result.canceled && result.filePaths.length > 0) {
+      const isDirectory = Boolean(options.properties?.includes('openDirectory'));
+      await grantDialogPaths(result.filePaths, {
+        directory: isDirectory,
+        source: isDirectory ? 'dialog:openDirectory' : 'dialog:openFile',
+      });
+    }
     return result;
   });
 
@@ -2420,11 +2503,12 @@ function registerFileHandlers(): void {
     try {
       const fsP = await import('fs/promises');
       const { stat } = fsP;
-      const entries = await fsP.readdir(dirPath, { withFileTypes: true });
+      const pathInfo = await assertPathAllowed({ path: dirPath, capability: 'metadata', source: 'fs:readdir' });
+      const entries = await fsP.readdir(pathInfo.realPath, { withFileTypes: true });
       
       const items = await Promise.all(
         entries.map(async (entry) => {
-          const fullPath = join(dirPath, entry.name);
+          const fullPath = join(pathInfo.realPath, entry.name);
           try {
             const stats = await stat(fullPath);
             return {
@@ -2458,7 +2542,8 @@ function registerFileHandlers(): void {
   ipcMain.handle('fs:readFile', async (_, filePath: string) => {
     try {
       const fsP = await import('fs/promises');
-      const content = await fsP.readFile(filePath, 'utf-8');
+      const pathInfo = await assertPathAllowed({ path: filePath, capability: 'read', source: 'fs:readFile' });
+      const content = await fsP.readFile(pathInfo.realPath, 'utf-8');
       return { success: true, content };
     } catch (error) {
       return { success: false, error: String(error) };
@@ -2472,14 +2557,15 @@ function registerFileHandlers(): void {
 
     const results = [];
     for (const filePath of filePaths) {
+      const pathInfo = await assertPathAllowed({ path: filePath, capability: 'stage', source: 'file:stage' });
       const id = crypto.randomUUID();
-      const ext = extname(filePath);
+      const ext = extname(pathInfo.realPath);
       const stagedPath = join(OUTBOUND_DIR, `${id}${ext}`);
-      await fsP.copyFile(filePath, stagedPath);
+      await fsP.copyFile(pathInfo.realPath, stagedPath);
 
       const s = await fsP.stat(stagedPath);
       const mimeType = getMimeType(ext);
-      const fileName = basename(filePath);
+      const fileName = basename(pathInfo.realPath);
 
       // Generate preview for images
       let preview: string | null = null;
@@ -2543,8 +2629,9 @@ function registerFileHandlers(): void {
       const fsP = await import('fs/promises');
       if (params.filePath) {
         try {
-          await fsP.access(params.filePath);
-          await fsP.copyFile(params.filePath, result.filePath);
+          const pathInfo = await assertPathAllowed({ path: params.filePath, capability: 'read', source: 'media:saveImage' });
+          await fsP.access(pathInfo.realPath);
+          await fsP.copyFile(pathInfo.realPath, result.filePath);
         } catch {
           return { success: false, error: 'Source file not found' };
         }
@@ -2565,10 +2652,11 @@ function registerFileHandlers(): void {
     const results: Record<string, { preview: string | null; fileSize: number }> = {};
     for (const { filePath, mimeType } of paths) {
       try {
-        const s = await fsP.stat(filePath);
+        const pathInfo = await assertPathAllowed({ path: filePath, capability: 'read', source: 'media:getThumbnails' });
+        const s = await fsP.stat(pathInfo.realPath);
         let preview: string | null = null;
         if (mimeType.startsWith('image/')) {
-          preview = await generateImagePreview(filePath, mimeType);
+          preview = await generateImagePreview(pathInfo.realPath, mimeType);
         }
         results[filePath] = { preview, fileSize: s.size };
       } catch {
@@ -2600,6 +2688,9 @@ function registerSessionHandlers(): void {
       }
 
       const agentId = parts[1];
+      if (!agentId || !/^[A-Za-z0-9._-]+$/.test(agentId)) {
+        return { success: false, error: `Invalid agentId in sessionKey: ${sessionKey}` };
+      }
       const openclawConfigDir = getOpenClawConfigDir();
       const sessionsDir = join(openclawConfigDir, 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
@@ -2677,14 +2768,18 @@ function registerSessionHandlers(): void {
         resolvedSrcPath = join(sessionsDir, uuidFileName!);
       }
 
-      const dstPath = resolvedSrcPath.replace(/\.jsonl$/, '.deleted.jsonl');
-      logger.info(`[session:delete] file: ${resolvedSrcPath}`);
+      const safeSessionPath = await assertPathInsideRoot(resolvedSrcPath, sessionsDir);
+      const dstPath = safeSessionPath.realPath.replace(/\.jsonl$/, '.deleted.jsonl');
+      if (dstPath === safeSessionPath.realPath) {
+        return { success: false, error: `Session file must be a .jsonl transcript: ${safeSessionPath.realPath}` };
+      }
+      logger.info(`[session:delete] file: ${safeSessionPath.realPath}`);
 
       // ── Step 2: rename the JSONL file ──
       try {
-        await fsP.access(resolvedSrcPath);
-        await fsP.rename(resolvedSrcPath, dstPath);
-        logger.info(`[session:delete] Renamed ${resolvedSrcPath} → ${dstPath}`);
+        await fsP.access(safeSessionPath.realPath);
+        await fsP.rename(safeSessionPath.realPath, dstPath);
+        logger.info(`[session:delete] Renamed ${safeSessionPath.realPath} → ${dstPath}`);
       } catch (e) {
         logger.warn(`[session:delete] Could not rename file: ${String(e)}`);
       }
@@ -2721,71 +2816,234 @@ function registerSessionHandlers(): void {
  * Skill upload IPC handlers
  * Handles ZIP file upload and extraction to skills directory
  */
+const skillUploadConfirmations = new SkillUploadConfirmationStore();
+
+/**
+ * Extract a ZIP archive to a destination directory using adm-zip.
+ */
+async function manualExtractZip(zipPath: string, destDir: string): Promise<void> {
+  try {
+    const AdmZip = (await import('adm-zip')).default;
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(destDir, true);
+  } catch (error) {
+    logger.error('Manual zip extraction failed:', error);
+    throw new Error('Failed to extract zip file');
+  }
+}
+
+/**
+ * Safely clean up temp files/directories, ignoring errors.
+ */
+async function safeCleanup(zipPath: string | null, extractDir: string | null): Promise<void> {
+  if (zipPath) {
+    try { await fsRm(zipPath, { force: true }); } catch { /* ignore */ }
+  }
+  if (extractDir) {
+    try { await fsRm(extractDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
 function registerSkillUploadHandlers(): void {
   ipcMain.handle('skill:uploadZip', async (_, params: {
     fileName: string;
     base64Data: string;
     autoInstall: boolean;
+    confirmationToken?: string;
   }) => {
+    const skillsDir = getOpenClawSkillsDir();
+    const tempZipPath = join(skillsDir, `.upload_${Date.now()}.zip`);
+    const tempExtractDir = join(skillsDir, `.upload_extract_${Date.now()}`);
+
     try {
-      const skillsDir = getOpenClawSkillsDir();
+      // Ensure skills directory exists
+      await ensureDir(skillsDir);
+
+      // Decode base64 and write temp zip file
       const buffer = Buffer.from(params.base64Data, 'base64');
-      const result = await installLocalSkillZip({
-        fileName: params.fileName,
-        buffer,
-        skillsDir,
-        tempRoot: app.getPath('temp'),
-      });
+      const fileDigest = crypto.createHash('sha256').update(buffer).digest('hex');
+      await fsWriteFile(tempZipPath, buffer);
 
-      return {
-        success: true,
-        skillName: result.skillName,
-        skillVersion: result.skillVersion,
-      };
-    } catch (error) {
-      logger.error('Skill upload error:', error);
-      const msg = error instanceof Error ? error.message : 'Upload failed';
-      const errorCode: string | undefined = (error as any).errorCode;
-      const rawValidation = (error as any).validationResult;
-
-      // If the error carries structured validation data, forward it
-      if (errorCode && rawValidation) {
-        const stage = rawValidation.stage || (errorCode === 'SECURITY_BLOCKED' ? 'pre-extraction' : 'post-extraction');
+      // ── P0 SECURITY: Pre-extraction validation ──────────────────────
+      let preValidationResult: ReturnType<typeof validateZipStructure>;
+      try {
+        const entries = readZipEntries(tempZipPath);
+        if (entries.length === 0) {
+          await safeCleanup(tempZipPath, null);
+          return {
+            success: false,
+            error: 'ZIP 文件为空，请检查文件是否正确',
+            errorCode: 'ZIP_EMPTY',
+            securityBlocked: true,
+          };
+        }
+        preValidationResult = validateZipStructure(entries, tempZipPath);
+      } catch (zipReadError) {
+        await safeCleanup(tempZipPath, null);
         return {
           success: false,
-          error: msg,
-          errorCode,
+          error: 'ZIP 文件读取失败，文件可能已损坏或不是有效的格式',
+          errorCode: 'ZIP_READ_FAILED',
+          securityBlocked: true,
+        };
+      }
+
+      if (!preValidationResult.allowed) {
+        await safeCleanup(tempZipPath, null);
+        logger.warn('[skill:uploadZip] Pre-extraction security check blocked:', preValidationResult.blockReason);
+        return {
+          success: false,
+          error: preValidationResult.blockReason || 'Security check failed',
+          errorCode: 'SECURITY_BLOCKED',
           securityBlocked: true,
           validationResult: {
-            riskLevel: rawValidation.riskLevel,
-            findings: rawValidation.findings,
-            summary: rawValidation.summary,
-            stage,
+            riskLevel: preValidationResult.riskLevel,
+            findings: preValidationResult.findings,
+            summary: preValidationResult.summary,
+            stage: 'pre-extraction',
           },
         };
       }
 
-      // Generic error (no structured validation data)
+      // ── Pre-extraction passed — extract to temp directory ───────────
+      await ensureDir(tempExtractDir);
+
+      try {
+        await manualExtractZip(tempZipPath, tempExtractDir);
+      } catch (unzipError) {
+        logger.error('Zip extraction failed:', unzipError);
+        await safeCleanup(tempZipPath, tempExtractDir);
+        return {
+          success: false,
+          error: 'ZIP 解压失败，请检查文件是否损坏',
+          errorCode: 'ZIP_EXTRACT_FAILED',
+          securityBlocked: true,
+        };
+      }
+
+      // ── P0 SECURITY: Post-extraction validation ─────────────────────
+      const postValidationResult = validateExtractedSkill(tempExtractDir);
+
+      if (!postValidationResult.allowed) {
+        await safeCleanup(tempZipPath, tempExtractDir);
+        logger.warn('[skill:uploadZip] Post-extraction security check blocked:', postValidationResult.blockReason);
+        return {
+          success: false,
+          error: postValidationResult.blockReason || 'Content security check failed',
+          errorCode: 'CONTENT_BLOCKED',
+          securityBlocked: true,
+          validationResult: {
+            riskLevel: postValidationResult.riskLevel,
+            findings: postValidationResult.findings,
+            summary: postValidationResult.summary,
+            stage: 'post-extraction',
+          },
+        };
+      }
+
+      // ── Determine skill target directory ────────────────────────────
+      const skillName = postValidationResult.skillName || params.fileName.replace(/\.zip$/i, '');
+      const targetDir = join(skillsDir, skillName);
+      const permissionResult = postValidationResult.permissionResult;
+      const actualSkillDir = postValidationResult.skillRootDir ?? tempExtractDir;
+      const manifestDigest = crypto.createHash('sha256')
+        .update(await fsReadFile(join(actualSkillDir, 'SKILL.md')))
+        .digest('hex');
+      const existingManifestPath = join(targetDir, 'SKILL.md');
+      const existingManifestDigest = existsSync(existingManifestPath)
+        ? crypto.createHash('sha256').update(await fsReadFile(existingManifestPath)).digest('hex')
+        : null;
+      // 升级 Skill 时只信任已经持久化的授权记录，不能把磁盘上的 manifest 直接当作授权依据。
+      // 这样即使本地 Skill 被篡改，也无法借助重新安装静默扩大权限。
+      const existingGrant = existingManifestDigest
+        ? await findSkillGrant(skillName, existingManifestDigest)
+        : null;
+      const permissionDiff = diffSkillManifestPermissions(
+        existingGrant?.permissions,
+        permissionResult?.permissions ?? {
+          filesystem: [],
+          network: [],
+          commands: [],
+          secrets: [],
+        } satisfies SkillManifestPermissions,
+      );
+      const requiresPermissionConfirmation = requiresSkillPermissionConfirmation(permissionDiff);
+
+      if (requiresPermissionConfirmation && !params.autoInstall) {
+        // Renderer 只能展示新增权限并发起后续请求，真正可安装的短期凭证由 Main 签发。
+        const confirmationToken = skillUploadConfirmations.create(params.fileName, fileDigest);
+        await safeCleanup(tempZipPath, tempExtractDir);
+        return {
+          success: true,
+          preview: true,
+          skillName,
+          confirmationToken,
+          permissions: permissionResult?.permissions,
+          permissionDiff,
+          validationResult: {
+            riskLevel: postValidationResult.riskLevel,
+            findings: postValidationResult.findings,
+            summary: postValidationResult.summary,
+            stage: 'preview',
+          },
+        };
+      }
+
+      // 仅新增额外能力时要求令牌。普通 Skill 继承 Workspace 基础权限后可直接安装。
+      if (requiresPermissionConfirmation
+        && !skillUploadConfirmations.consume(params.confirmationToken, params.fileName, fileDigest)) {
+        await safeCleanup(tempZipPath, tempExtractDir);
+        return {
+          success: false,
+          error: 'Skill installation requires a fresh permission confirmation',
+          errorCode: 'SKILL_PERMISSION_CONFIRMATION_REQUIRED',
+          securityBlocked: true,
+        };
+      }
+
+      // Remove existing skill dir if present (re-install)
+      if (existsSync(targetDir)) {
+        await fsRm(targetDir, { recursive: true, force: true });
+      }
+
+      // ZIP 可能直接包含 SKILL.md，也可能使用唯一顶层目录包裹 Skill。
+      // 始终移动校验器确认过的实际 Skill 根目录，避免安装后出现双层目录。
+      await fsP.rename(postValidationResult.skillRootDir ?? tempExtractDir, targetDir);
+
+      await grantSkillAccess(skillName, manifestDigest, permissionResult?.permissions ?? {
+        filesystem: ['workspace:metadata', 'workspace:read', 'workspace:write'],
+        network: [],
+        commands: [],
+        secrets: [],
+      }, {
+        source: 'skill:uploadZip',
+      });
+
+      // 嵌套目录移动完成后，临时解压目录可能仍为空，需要一并清理。
+      await safeCleanup(tempZipPath, tempExtractDir);
+
+      return {
+        success: true,
+        skillName,
+        validationResult: {
+          riskLevel: postValidationResult.riskLevel,
+          findings: postValidationResult.findings,
+          summary: postValidationResult.summary,
+          stage: 'complete',
+        },
+      };
+    } catch (error) {
+      logger.error('Skill upload error:', error);
+      await safeCleanup(tempZipPath, tempExtractDir);
       return {
         success: false,
-        error: msg,
+        error: error instanceof Error ? error.message : 'Upload failed',
       };
     }
   });
 }
 
-/**
- * Workspace memory IPC handlers
- */
 function registerWorkspaceMemoryHandlers(): void {
-  ipcMain.handle('workspace-memory:status', async (_, workspaceDir?: string) => {
-    try {
-      return { success: true, result: await getWorkspaceMemoryStatus(workspaceDir) };
-    } catch (error) {
-      return { success: false, error: String(error) };
-    }
-  });
-
   ipcMain.handle('workspace-memory:open', async (_, workspaceDir?: string) => {
     try {
       await openWorkspaceMemoryFile(workspaceDir);

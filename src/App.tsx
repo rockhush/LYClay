@@ -13,17 +13,19 @@ import { MainLayout } from './components/layout/MainLayout';
 import { TitleBar } from './components/layout/TitleBar';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { SecurityConfirmationDialog } from '@/components/security/SecurityConfirmationDialog';
 import { Models } from './pages/Models';
 import { Chat } from './pages/Chat';
 import { Agents } from './pages/Agents';
 import { Channels } from './pages/Channels';
 import { Skills } from './pages/Skills';
 import { Cron } from './pages/Cron';
-// import { DigitalEmployee } from './pages/DigitalEmployee';
+import { DigitalEmployee } from './pages/DigitalEmployee';
 import { Connectors } from './pages/Connectors';
 import { Settings } from './pages/Settings';
 import { McpSettings } from './pages/Settings/McpSettings';
 import { McpConfigEditor } from './pages/Settings/McpConfigEditor';
+import { SecuritySettings } from './pages/Settings/SecuritySettings';
 import { Setup } from './pages/Setup';
 import { Login } from './pages/Login';
 import { useSettingsStore } from './stores/settings';
@@ -33,6 +35,7 @@ import { useProviderStore } from './stores/providers';
 import { useDingTalkAuthStore } from './stores/dingtalk-auth';
 import { useChatStore } from './stores/chat';
 import { applyGatewayTransportPreference } from './lib/api-client';
+import { subscribeHostEvent } from './lib/host-events';
 import { rendererExtensionRegistry } from './extensions/registry';
 import { loadExternalRendererExtensions } from './extensions/_ext-bridge.generated';
 import {
@@ -199,20 +202,15 @@ function App() {
 
   // Listen for navigation events from main process
   useEffect(() => {
-    const handleNavigate = (...args: unknown[]) => {
-      const path = args[0];
+    const handleNavigate = (path: unknown) => {
       if (typeof path === 'string') {
         navigate(path);
       }
     };
 
-    const unsubscribe = window.electron.ipcRenderer.on('navigate', handleNavigate);
+    const unsubscribe = subscribeHostEvent('app:navigate', handleNavigate);
 
-    return () => {
-      if (typeof unsubscribe === 'function') {
-        unsubscribe();
-      }
-    };
+    return unsubscribe;
   }, [navigate]);
 
   // Apply theme
@@ -442,9 +440,10 @@ function App() {
             <Route path="/skills" element={<Skills />} />
             <Route path="/connectors" element={<Connectors />} />
             <Route path="/cron" element={<Cron />} />
-            {/* <Route path="/cron/digital-employee" element={<DigitalEmployee />} /> */}
+            <Route path="/cron/digital-employee" element={<DigitalEmployee />} />
             <Route path="/settings/mcp/config" element={<McpConfigEditor />} />
             <Route path="/settings/mcp" element={<McpSettings />} />
+            <Route path="/settings/security" element={<SecuritySettings />} />
             <Route path="/settings/*" element={<Settings />} />
             {extraRoutes.map((r) => (
               <Route key={r.path} path={r.path} element={<r.component />} />
@@ -459,6 +458,7 @@ function App() {
           closeButton
           style={{ zIndex: 99999 }}
         />
+        <SecurityConfirmationDialog />
       </TooltipProvider>
     </ErrorBoundary>
   );

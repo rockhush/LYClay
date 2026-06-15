@@ -1,4 +1,8 @@
 {
+    "notices": {
+        "securityCancelled": "已取消操作：你拒绝了本次安全确认。",
+        "fileAccessCancelled": "已取消：你拒绝了对「{{path}}」的访问，未读取该文件。"
+    },
     "gatewayNotRunning": "网关未运行",
     "gatewayRequired": "OpenClaw 网关需要运行才能使用聊天。它将自动启动，或者您可以从设置中启动。",
     "welcome": {

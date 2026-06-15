@@ -1498,6 +1498,7 @@ export function Skills() {
 
           <div className="relative shrink-0 w-[132px]" ref={addMenuRef}>
             <button
+              data-testid="skills-actions-button"
               onClick={() => setAddMenuOpen((open) => !open)}
               className="w-full bg-[#FF922B] hover:bg-[#FE7B00] transition-colors text-white text-[13px] font-medium h-8 px-3 rounded-lg flex items-center justify-center gap-1.5 shadow-sm shadow-[#FF922B]/25"
             >
@@ -1513,6 +1514,7 @@ export function Skills() {
             {addMenuOpen && (
               <div className="absolute right-0 top-full mt-1.5 w-full rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
                 <button
+                  data-testid="skills-upload-action"
                   onClick={() => {
                     setUploadSkillOpen(true);
                     setAddMenuOpen(false);

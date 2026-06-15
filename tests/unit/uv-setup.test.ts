@@ -5,21 +5,24 @@ const originalPlatform = process.platform;
 const originalResourcesPath = process.resourcesPath;
 
 const {
-  mockExecSync,
+  mockExecFileSync,
   mockSpawn,
   mockExistsSync,
   mockIsPackaged,
   mockResourcesPath,
+  mockAssertCommandAllowedWithConfirmation,
 } = vi.hoisted(() => ({
-  mockExecSync: vi.fn(),
+  mockExecFileSync: vi.fn(),
   mockSpawn: vi.fn(),
   mockExistsSync: vi.fn<(path: string) => boolean>(),
   mockIsPackaged: { value: false },
   mockResourcesPath: { value: 'C:\\Program Files\\LYClaw\\resources' },
+  mockAssertCommandAllowedWithConfirmation: vi.fn(),
 }));
 
 class MockChild extends EventEmitter {
   stdout = new EventEmitter();
+  stderr = new EventEmitter();
 }
 
 function setPlatform(platform: string): void {
@@ -42,14 +45,16 @@ vi.mock('electron', () => ({
     get isPackaged() {
       return mockIsPackaged.value;
     },
+    isReady: () => true,
+    whenReady: () => Promise.resolve(),
   },
 }));
 
 vi.mock('child_process', () => ({
-  execSync: mockExecSync,
+  execFileSync: mockExecFileSync,
   spawn: mockSpawn,
   default: {
-    execSync: mockExecSync,
+    execFileSync: mockExecFileSync,
     spawn: mockSpawn,
   },
 }));
@@ -66,13 +71,26 @@ vi.mock('fs', async () => {
   };
 });
 
+vi.mock('@electron/security/confirmation-service', () => ({
+  assertCommandAllowedWithConfirmation: mockAssertCommandAllowedWithConfirmation,
+}));
+
+vi.mock('@electron/utils/uv-env', () => ({
+  getUvMirrorEnv: vi.fn().mockResolvedValue({}),
+}));
+
 describe('uv setup managed Python environment', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    mockExecSync.mockReturnValue(undefined);
+    mockExecFileSync.mockReturnValue(undefined);
     mockExistsSync.mockReturnValue(false);
     mockIsPackaged.value = false;
+    mockAssertCommandAllowedWithConfirmation.mockResolvedValue({
+      decision: { action: 'allow', risk: 'medium', reasons: ['test'] },
+      segments: [],
+      command: 'uv python install 3.12',
+    });
     Object.defineProperty(process, 'resourcesPath', {
       value: mockResourcesPath.value,
       configurable: true,
@@ -118,6 +136,82 @@ describe('uv setup managed Python environment', () => {
     );
   });
 
+  it('prefers Python bundled in the installed app resources', async () => {
+    mockIsPackaged.value = true;
+    mockExistsSync.mockImplementation((p: string) => (
+      /[\\/]bin[\\/]uv\.exe$/i.test(p)
+      || /[\\/]resources[\\/]python$/i.test(p)
+    ));
+    mockUvPythonFind('C:\\Program Files\\LYClaw\\resources\\resources\\python\\cpython-3.12\\python.exe');
+
+    const { findManagedPythonPath } = await import('@electron/utils/uv-setup');
+
+    await expect(findManagedPythonPath()).resolves.toBe(
+      'C:\\Program Files\\LYClaw\\resources\\resources\\python\\cpython-3.12\\python.exe',
+    );
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'C:\\Program Files\\LYClaw\\resources\\bin\\uv.exe',
+      ['python', 'find', '3.12', '--managed-python', '--no-python-downloads'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          UV_PYTHON_INSTALL_DIR: 'C:\\Program Files\\LYClaw\\resources\\resources\\python',
+        }),
+        shell: false,
+        windowsHide: true,
+      }),
+    );
+  });
+
+  it('falls back to the user-managed uv directory when bundled Python is unusable', async () => {
+    mockIsPackaged.value = true;
+    mockExistsSync.mockImplementation((p: string) => (
+      /[\\/]bin[\\/]uv\.exe$/i.test(p)
+      || /[\\/]resources[\\/]python$/i.test(p)
+    ));
+    mockSpawn
+      .mockImplementationOnce(() => {
+        const child = new MockChild();
+        queueMicrotask(() => child.emit('close', 1));
+        return child;
+      })
+      .mockImplementationOnce(() => {
+        const child = new MockChild();
+        queueMicrotask(() => {
+          child.stdout.emit('data', 'C:\\Users\\me\\AppData\\Roaming\\uv\\python\\cpython-3.12\\python.exe\n');
+          child.emit('close', 0);
+        });
+        return child;
+      });
+
+    const { findManagedPythonPath } = await import('@electron/utils/uv-setup');
+
+    await expect(findManagedPythonPath()).resolves.toBe(
+      'C:\\Users\\me\\AppData\\Roaming\\uv\\python\\cpython-3.12\\python.exe',
+    );
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(mockSpawn.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      env: expect.objectContaining({
+        UV_PYTHON_INSTALL_DIR: 'C:\\Program Files\\LYClaw\\resources\\resources\\python',
+      }),
+    }));
+    expect(mockSpawn.mock.calls[1]?.[2]).toEqual(expect.objectContaining({ env: undefined }));
+  });
+
+  it('does not install Python when a managed runtime is already available', async () => {
+    mockUvPythonFind('C:\\Users\\me\\AppData\\Roaming\\uv\\python\\cpython-3.12\\python.exe');
+
+    const { setupManagedPython } = await import('@electron/utils/uv-setup');
+
+    await expect(setupManagedPython()).resolves.toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'uv',
+      ['python', 'find', '3.12', '--managed-python', '--no-python-downloads'],
+      expect.anything(),
+    );
+  });
+
   it('prepends uv-managed Python to PATH and pins OpenClaw helper Python', async () => {
     mockUvPythonFind('C:\\Uv Python\\python.exe');
 
@@ -128,5 +222,48 @@ describe('uv setup managed Python environment', () => {
     expect(env.OPENCLAW_PINNED_PYTHON).toBe('C:\\Uv Python\\python.exe');
     expect(env.OPENCLAW_PINNED_WRITE_PYTHON).toBe('C:\\Uv Python\\python.exe');
     expect(env.OTHER).toBe('1');
+  });
+
+  it('checks command security before installing managed Python', async () => {
+    const children: MockChild[] = [];
+    mockSpawn.mockImplementation(() => {
+      const child = new MockChild();
+      children.push(child);
+      return child;
+    });
+
+    const { setupManagedPython } = await import('@electron/utils/uv-setup');
+    const setupPromise = setupManagedPython();
+
+    await vi.waitFor(() => {
+      expect(mockAssertCommandAllowedWithConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+        executable: 'uv',
+        args: ['python', 'install', '3.12'],
+        source: 'system:uv-python-install',
+        allowCwdOutsideWorkspace: true,
+      }));
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'uv',
+        ['python', 'install', '3.12'],
+        expect.objectContaining({ shell: true, windowsHide: true }),
+      );
+    });
+    children[0]?.emit('close', 0);
+    await vi.waitFor(() => {
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+    });
+    children[1]?.stdout.emit('data', 'C:\\Uv Python\\python.exe\n');
+    children[1]?.emit('close', 0);
+
+    await expect(setupPromise).resolves.toBeUndefined();
+  });
+
+  it('does not spawn uv install when command confirmation rejects it', async () => {
+    mockAssertCommandAllowedWithConfirmation.mockRejectedValueOnce(new Error('Command execution denied'));
+
+    const { setupManagedPython } = await import('@electron/utils/uv-setup');
+
+    await expect(setupManagedPython()).rejects.toThrow('Command execution denied');
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 });

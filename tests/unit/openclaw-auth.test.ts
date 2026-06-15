@@ -51,6 +51,17 @@ async function readOpenClawJson(): Promise<Record<string, unknown>> {
   return JSON.parse(content) as Record<string, unknown>;
 }
 
+async function readExecApprovalsJson(): Promise<Record<string, unknown>> {
+  const content = await readFile(join(testHome, '.openclaw', 'exec-approvals.json'), 'utf8');
+  return JSON.parse(content) as Record<string, unknown>;
+}
+
+async function writeExecApprovalsJson(config: unknown): Promise<void> {
+  const openclawDir = join(testHome, '.openclaw');
+  await mkdir(openclawDir, { recursive: true });
+  await writeFile(join(openclawDir, 'exec-approvals.json'), JSON.stringify(config, null, 2), 'utf8');
+}
+
 async function readAuthProfiles(agentId: string): Promise<Record<string, unknown>> {
   const content = await readFile(join(testHome, '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json'), 'utf8');
   return JSON.parse(content) as Record<string, unknown>;
@@ -847,6 +858,63 @@ describe('sanitizeOpenClawConfig', () => {
 
     expect(allow).toContain('custom-plugin');
     expect(allow).toContain('openai');
+  });
+
+  it('uses the pre-exec command policy hook without forcing OpenClaw exec approvals', async () => {
+    await writeOpenClawJson({
+      tools: {
+        exec: {
+          security: 'full',
+          ask: 'off',
+          askFallback: 'deny',
+        },
+      },
+    });
+    await writeExecApprovalsJson({
+      version: 1,
+      defaults: {
+        security: 'deny',
+        ask: 'off',
+        askFallback: 'deny',
+      },
+      agents: {
+        main: {
+          ask: 'off',
+          askFallback: 'deny',
+        },
+      },
+    });
+
+    const { sanitizeOpenClawConfig } = await import('@electron/utils/openclaw-auth');
+    await sanitizeOpenClawConfig();
+
+    const result = await readOpenClawJson();
+    const tools = result.tools as Record<string, unknown>;
+    const exec = (tools.exec ?? {}) as Record<string, unknown>;
+
+    expect(exec.security).toBe('full');
+    expect(exec.ask).toBe('off');
+    expect(exec.askFallback).toBeUndefined();
+    const plugins = result.plugins as Record<string, unknown>;
+    const entries = plugins.entries as Record<string, Record<string, unknown>>;
+    expect(entries['lyclaw-command-policy']).toEqual(expect.objectContaining({
+      enabled: true,
+    }));
+
+    const approvals = await readExecApprovalsJson();
+    const defaults = approvals.defaults as Record<string, unknown>;
+    const agents = approvals.agents as Record<string, Record<string, unknown>>;
+    expect(defaults).toEqual(expect.objectContaining({
+      security: 'full',
+      ask: 'off',
+      askFallback: 'full',
+      autoAllowSkills: true,
+    }));
+    expect(agents.main).toEqual(expect.objectContaining({
+      ask: 'off',
+      askFallback: 'full',
+      autoAllowSkills: true,
+    }));
   });
 });
 

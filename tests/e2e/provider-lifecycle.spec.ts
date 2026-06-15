@@ -153,7 +153,7 @@ test.describe('ClawX provider lifecycle', () => {
     await page.getByTestId('providers-add-button').click();
     await expect(page.getByTestId('add-provider-dialog')).toBeVisible();
 
-    await page.getByTestId('add-provider-type-custom').click();
+    await expect(page.getByTestId('add-provider-name-input')).toBeVisible();
     await page.getByTestId('add-provider-name-input').fill('LM Studio Local');
     await page.getByTestId('add-provider-api-key-input').fill('  sk-lm-test \n');
     await page.getByTestId('add-provider-base-url-input').fill('http://127.0.0.1:1234/v1');

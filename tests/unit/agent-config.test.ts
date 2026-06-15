@@ -510,6 +510,56 @@ describe('agent config lifecycle', () => {
     expect(agentIds).not.toContain('1');
   });
 
+  it('creates an Agent with a caller-provided portable id and model', async () => {
+    await writeOpenClawJson({
+      agents: {
+        list: [{ id: 'main', name: 'Main', default: true }],
+      },
+    });
+
+    const { createAgentWithResult } = await import('@electron/utils/agent-config');
+    const { createdAgent } = await createAgentWithResult('Document Employee', {
+      preferredId: 'employee-document-analyst-a1b2c3d4',
+      modelRef: 'provider/document-model',
+    });
+
+    expect(createdAgent).toMatchObject({
+      id: 'employee-document-analyst-a1b2c3d4',
+      name: 'Document Employee',
+      overrideModelRef: 'provider/document-model',
+    });
+  });
+
+  it('updates an Agent name and model in one config transaction', async () => {
+    await writeOpenClawJson({
+      agents: {
+        list: [
+          { id: 'main', name: 'Main', default: true },
+          { id: 'employee-docs', name: 'Old Employee', model: { primary: 'provider/old' } },
+        ],
+      },
+    });
+
+    const { updateAgentDefinition } = await import('@electron/utils/agent-config');
+    const snapshot = await updateAgentDefinition('employee-docs', {
+      name: 'New Employee',
+      modelRef: 'provider/new',
+    });
+
+    expect(snapshot.agents.find((agent) => agent.id === 'employee-docs')).toMatchObject({
+      name: 'New Employee',
+      overrideModelRef: 'provider/new',
+    });
+    const config = await readOpenClawJson();
+    const employee = (config.agents as {
+      list: Array<{ id: string; name: string; model?: { primary?: string } }>;
+    }).list.find((agent) => agent.id === 'employee-docs');
+    expect(employee).toMatchObject({
+      name: 'New Employee',
+      model: { primary: 'provider/new' },
+    });
+  });
+
   it('ensures fixed-id agents without generating numeric copies', async () => {
     await writeOpenClawJson({
       agents: {

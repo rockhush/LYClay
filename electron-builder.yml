@@ -26,6 +26,7 @@ extraResources:
       - "**/*"
       - "!icons/**"
       - "!bin/**"
+      - "!python/**"
       - "!device-guid/**"
       - "!screenshot/**"
   # OpenClaw package (node_modules copied separately by afterPack hook
@@ -79,6 +80,8 @@ mac:
   extraResources:
     - from: resources/bin/darwin-${arch}
       to: bin
+    - from: resources/python/darwin-${arch}
+      to: resources/python
     - from: resources/cli/posix/
       to: cli/
   category: public.app-category.productivity

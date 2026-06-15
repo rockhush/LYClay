@@ -24,6 +24,8 @@ import {
   normalizeUserCreatedSkillsUnderRoot,
   resolveCurrentSkillAuthorName,
 } from '../utils/user-created-skill-metadata';
+import { assertCommandAllowedWithConfirmation } from '../security/confirmation-service';
+import { assertOpenTargetAllowed } from '../security/open-target-policy';
 
 export interface ClawHubSearchParams {
     query: string;
@@ -226,70 +228,78 @@ export class ClawHubService {
             const displayCommand = [this.cliPath, ...commandArgs].join(' ');
             console.log(`Running ClawHub command: ${displayCommand}`);
 
-            const prepared = prepareWinSpawn(this.cliPath, commandArgs);
-            const { NODE_OPTIONS: _nodeOptions, ...baseEnv } = process.env;
-            const env = {
-                ...baseEnv,
-                CI: 'true',
-                FORCE_COLOR: '0',
-            };
-            if (this.useNodeRunner) {
-                env.ELECTRON_RUN_AS_NODE = '1';
-            }
-            const child = spawn(prepared.command, prepared.args, {
+            assertCommandAllowedWithConfirmation({
+                executable: this.cliPath,
+                args: commandArgs,
                 cwd: this.workDir,
-                shell: prepared.shell,
-                env: {
-                    ...env,
-                    CLAWHUB_WORKDIR: this.workDir,
-                },
-                windowsHide: true,
-            });
-
-            let stdout = '';
-            let stderr = '';
-            let settled = false;
-
-            const timer = setTimeout(() => {
-                if (settled) return;
-                settled = true;
-                console.error(`ClawHub command timed out after ${timeoutMs}ms: ${displayCommand}`);
-                try {
-                    child.kill('SIGTERM');
-                } catch (killErr) {
-                    console.error('Failed to kill timed-out ClawHub child:', killErr);
+                source: 'skill:clawhub-cli',
+                allowCwdOutsideWorkspace: true,
+            }).then(() => {
+                const prepared = prepareWinSpawn(this.cliPath, commandArgs);
+                const { NODE_OPTIONS: _nodeOptions, ...baseEnv } = process.env;
+                const env = {
+                    ...baseEnv,
+                    CI: 'true',
+                    FORCE_COLOR: '0',
+                };
+                if (this.useNodeRunner) {
+                    env.ELECTRON_RUN_AS_NODE = '1';
                 }
-                reject(new Error(`ClawHub command timed out after ${timeoutMs}ms`));
-            }, timeoutMs);
+                const child = spawn(prepared.command, prepared.args, {
+                    cwd: this.workDir,
+                    shell: prepared.shell,
+                    env: {
+                        ...env,
+                        CLAWHUB_WORKDIR: this.workDir,
+                    },
+                    windowsHide: true,
+                });
 
-            child.stdout.on('data', (data) => {
-                stdout += data.toString('utf8');
-            });
+                let stdout = '';
+                let stderr = '';
+                let settled = false;
 
-            child.stderr.on('data', (data) => {
-                stderr += data.toString('utf8');
-            });
+                const timer = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    console.error(`ClawHub command timed out after ${timeoutMs}ms: ${displayCommand}`);
+                    try {
+                        child.kill('SIGTERM');
+                    } catch (killErr) {
+                        console.error('Failed to kill timed-out ClawHub child:', killErr);
+                    }
+                    reject(new Error(`ClawHub command timed out after ${timeoutMs}ms`));
+                }, timeoutMs);
 
-            child.on('error', (error) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(timer);
-                console.error('ClawHub process error:', error);
-                reject(error);
-            });
+                child.stdout.on('data', (data) => {
+                    stdout += data.toString('utf8');
+                });
 
-            child.on('close', (code) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(timer);
-                if (code !== 0 && code !== null) {
-                    console.error(`ClawHub command failed with code ${code}`);
-                    console.error('Stderr:', stderr);
-                    reject(new Error(`Command failed: ${stderr || stdout}`));
-                } else {
-                    resolve(stdout.trim());
-                }
-            });
+                child.stderr.on('data', (data) => {
+                    stderr += data.toString('utf8');
+                });
+
+                child.on('error', (error) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    console.error('ClawHub process error:', error);
+                    reject(error);
+                });
+
+                child.on('close', (code) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    if (code !== 0 && code !== null) {
+                        console.error(`ClawHub command failed with code ${code}`);
+                        console.error('Stderr:', stderr);
+                        reject(new Error(`Command failed: ${stderr || stdout}`));
+                    } else {
+                        resolve(stdout.trim());
+                    }
+                });
+            }).catch(reject);
         });
     }
 
@@ -701,7 +711,14 @@ export class ClawHubService {
 
         try {
             // Open file with default application
-            await shell.openPath(targetFile);
+            const result = await assertOpenTargetAllowed({
+                target: targetFile,
+                capability: 'open-path',
+                source: 'skill:clawhub-open-readme',
+                allowedRoots: [path.join(this.workDir, 'skills')],
+            });
+            if (!result.realPath) throw new Error('Open target policy did not return a real path');
+            await shell.openPath(result.realPath);
             return true;
         } catch (error) {
             console.error('Failed to open skill readme:', error);
@@ -717,7 +734,14 @@ export class ClawHubService {
         if (!skillDir) {
             throw new Error('Skill directory not found');
         }
-        const openResult = await shell.openPath(skillDir);
+        const result = await assertOpenTargetAllowed({
+            target: skillDir,
+            capability: 'open-path',
+            source: 'skill:clawhub-open-path',
+            allowedRoots: [path.join(this.workDir, 'skills')],
+        });
+        if (!result.realPath) throw new Error('Open target policy did not return a real path');
+        const openResult = await shell.openPath(result.realPath);
         if (openResult) {
             throw new Error(openResult);
         }

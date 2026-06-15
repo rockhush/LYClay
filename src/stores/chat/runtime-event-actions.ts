@@ -55,6 +55,15 @@ function appendMessageIfMissing(messages: RawMessage[], message: RawMessage): Ra
   return [...messages, message];
 }
 
+function isExecApprovalFollowupRun(runId: string): boolean {
+  return runId.startsWith('exec-approval-followup:');
+}
+
+function shouldProcessSessionRunEvent(activeRunId: string | null, runId: string): boolean {
+  if (!activeRunId || !runId || runId === activeRunId) return true;
+  return isExecApprovalFollowupRun(runId);
+}
+
 function applyBackgroundChatEvent(
   get: ChatGet,
   sessionKey: string,
@@ -64,7 +73,7 @@ function applyBackgroundChatEvent(
 ): Record<string, SessionStreamingState> | null {
   const state = get();
   const existing = state.sessionStreamingStates[sessionKey] ?? createEmptySessionStreamingState();
-  if (existing.activeRunId && runId && runId !== existing.activeRunId) return null;
+  if (!shouldProcessSessionRunEvent(existing.activeRunId, runId)) return null;
 
   const next: SessionStreamingState = { ...existing };
   if (runId && !next.activeRunId && (resolvedState === 'started' || resolvedState === 'delta')) {
@@ -317,7 +326,7 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
         return;
       }
 
-      if (activeRunId && runId && runId !== activeRunId) return;
+      if (!shouldProcessSessionRunEvent(activeRunId, runId)) return;
 
       setLastChatEventAt(Date.now());
 

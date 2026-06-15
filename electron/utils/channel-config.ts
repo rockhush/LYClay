@@ -12,6 +12,7 @@ import { getOpenClawResolvedDir } from './paths';
 import * as logger from './logger';
 import { proxyAwareFetch } from './proxy-fetch';
 import { withConfigLock } from './config-mutex';
+import { assertCommandAllowedWithConfirmation } from '../security/confirmation-service';
 import {
     OPENCLAW_WECHAT_CHANNEL_TYPE,
     isWechatChannelType,
@@ -1556,6 +1557,13 @@ export async function validateChannelConfig(channelType: string): Promise<Valida
 
     try {
         const openclawPath = getOpenClawResolvedDir();
+        await assertCommandAllowedWithConfirmation({
+            executable: 'node',
+            args: ['openclaw.mjs', 'doctor'],
+            cwd: openclawPath,
+            source: 'system:channel-config-doctor',
+            allowCwdOutsideWorkspace: true,
+        });
 
         // Run openclaw doctor command to validate config (async to avoid
         // blocking the main thread).

@@ -122,6 +122,20 @@ let _historyPollTimer: ReturnType<typeof setTimeout> | null = null;
 // Runs the user explicitly stopped — ignore late gateway deltas after abort clears activeRunId.
 const _abortedChatRunIds = new Set<string>();
 
+// Timestamp of the most recent user-initiated stop. Late abort-type error
+// events (which may arrive after the run id was already forgotten and
+// runAborted reset) are suppressed when they land within this window.
+let _lastUserAbortAt = 0;
+const USER_ABORT_ERROR_SUPPRESS_WINDOW_MS = 15_000;
+
+function markUserAbort(): void {
+  _lastUserAbortAt = Date.now();
+}
+
+function isWithinUserAbortWindow(): boolean {
+  return _lastUserAbortAt > 0 && Date.now() - _lastUserAbortAt < USER_ABORT_ERROR_SUPPRESS_WINDOW_MS;
+}
+
 function markAbortedChatRun(runId: string): void {
   const id = runId.trim();
   if (id) _abortedChatRunIds.add(id);
@@ -177,6 +191,7 @@ let _interruptedSendSession: InterruptedSendSessionState | null = null;
 // the user sees a friendly error message.
 let _lastSendParams: { text: string; attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>; targetAgentId?: string | null } | null = null;
 let _retriedRunIds = new Set<string>();
+const _digitalEmployeeRuns = new Map<string, { agentId: string; name: string }>();
 
 function isToolStreamError(error: string): boolean {
   const normalized = error.toLowerCase();
@@ -200,6 +215,39 @@ function normalizeRuntimeErrorMessage(error: string): string {
   }
 
   return trimmed || 'An error occurred';
+}
+
+function annotateDigitalEmployeeMessage<T extends RawMessage | null | undefined>(
+  message: T,
+  runId: string | null | undefined,
+): T {
+  if (!message || !runId) return message;
+  const employee = _digitalEmployeeRuns.get(runId);
+  if (!employee || message.role !== 'assistant') return message;
+  return {
+    ...message,
+    executedByAgentId: employee.agentId,
+    executedByAgentName: employee.name,
+  } as T;
+}
+
+function annotateDigitalEmployeeHistoryMessages(messages: RawMessage[]): RawMessage[] {
+  if (_digitalEmployeeRuns.size === 0) return messages;
+  return messages.map((message) => {
+    if (!message || message.role !== 'assistant' || message.executedByAgentId) return message;
+    const id = typeof message.id === 'string' ? message.id : '';
+    if (!id) return message;
+    for (const [runId, employee] of _digitalEmployeeRuns) {
+      if (id === runId || id.includes(runId)) {
+        return {
+          ...message,
+          executedByAgentId: employee.agentId,
+          executedByAgentName: employee.name,
+        };
+      }
+    }
+    return message;
+  });
 }
 
 const SESSION_LOAD_MIN_INTERVAL_MS = 1_200;
@@ -1062,7 +1110,10 @@ function snapshotStreamingAssistantMessage(
 ): RawMessage[] {
   if (!currentStream) return [];
 
-  const normalizedStream = normalizeStreamingMessage(currentStream) as RawMessage;
+  const normalizedStream = annotateDigitalEmployeeMessage(
+    normalizeStreamingMessage(currentStream) as RawMessage,
+    runId,
+  ) as RawMessage;
   const streamRole = normalizedStream.role;
   if (streamRole !== 'assistant' && streamRole !== undefined) return [];
 
@@ -1160,6 +1211,7 @@ function snapshotCurrentStreamingState(state: ChatState): SessionStreamingState 
     lastUserMessageAt: state.lastUserMessageAt,
     pendingToolImages: state.pendingToolImages,
     runAborted: state.runAborted,
+    runError: state.runError,
     sending: state.sending,
     messagesSnapshot: state.messages.length > 0 ? [...state.messages] : (state.sessionStreamingStates[state.currentSessionKey]?.messagesSnapshot ?? []),
   };
@@ -1178,7 +1230,7 @@ function applyBackgroundChatEvent(
   runId: string,
 ): Record<string, SessionStreamingState> | null {
   const existing = state.sessionStreamingStates[sessionKey] ?? createEmptySessionStreamingState();
-  if (existing.activeRunId && runId && runId !== existing.activeRunId) return null;
+  if (!shouldProcessCurrentSessionRunEvent(existing.activeRunId, runId)) return null;
 
   const next: SessionStreamingState = { ...existing };
   if (runId && !next.activeRunId && (resolvedState === 'started' || resolvedState === 'delta')) {
@@ -1527,6 +1579,16 @@ function mimeFromExtension(filePath: string): string {
   return map[ext] || 'application/octet-stream';
 }
 
+function isWindowsRuntime(): boolean {
+  return typeof navigator !== 'undefined' && /win/i.test(navigator.platform);
+}
+
+function isPreviewableRawFilePath(filePath: string): boolean {
+  if (!filePath || /[*?]/.test(filePath)) return false;
+  if (isWindowsRuntime() && filePath.startsWith('/') && !filePath.startsWith('~/')) return false;
+  return true;
+}
+
 /**
  * Extract raw file paths from message text.
  * Detects absolute paths (Unix: / or ~/, Windows: C:\ etc.) ending with common file extensions.
@@ -1545,7 +1607,7 @@ function extractRawFilePaths(text: string): Array<{ filePath: string; mimeType: 
     let match;
     while ((match = regex.exec(text)) !== null) {
       const p = match[1];
-      if (p && !seen.has(p)) {
+      if (p && isPreviewableRawFilePath(p) && !seen.has(p)) {
         seen.add(p);
         refs.push({ filePath: p, mimeType: mimeFromExtension(p) });
       }
@@ -2228,6 +2290,15 @@ function shouldAdoptStreamingRun(
   return Boolean(activeRunId && runId === activeRunId);
 }
 
+function isExecApprovalFollowupRun(runId: string): boolean {
+  return runId.startsWith('exec-approval-followup:');
+}
+
+function shouldProcessCurrentSessionRunEvent(activeRunId: string | null, runId: string): boolean {
+  if (!activeRunId || !runId || runId === activeRunId) return true;
+  return isExecApprovalFollowupRun(runId);
+}
+
 function getCanonicalPrefixFromSessionKey(sessionKey: string): string | null {
   if (!sessionKey.startsWith('agent:')) return null;
   const parts = sessionKey.split(':');
@@ -2304,7 +2375,7 @@ function isInternalMessage(msg: { role?: unknown; content?: unknown }): boolean 
  * Detect runtime-injected system messages that should be hidden from the chat UI.
  * These are injected by the OpenClaw runtime as user-role messages and include:
  *   - "System (untrusted): ..." — exec results, tool output, etc.
- *   - "An async command you ran earlier has completed" — async completion notices
+ *   - "An async command ... has completed" — async completion notices
  *   - "Current time: ..." followed by nothing else — periodic heartbeat time pings
  *   - "Handle the result internally. Do not relay it to the user" — internal directives
  */
@@ -2313,9 +2384,10 @@ function isRuntimeSystemInjection(text: string): boolean {
   const normalized = text.trim();
   if (/^\s*System\s*\(untrusted\)\s*:/i.test(normalized)) return true;
   if (/^\s*System\s*:/i.test(normalized)) return true;
+  if (isModelCommandApprovalText(normalized)) return true;
   if (
-    /An async command you ran earlier has completed/i.test(normalized)
-    && /Do not relay it to the user unless explicitly requested/i.test(normalized)
+    /An async command (?:(?:you ran earlier|the user already approved) has completed|did not run)/i.test(normalized)
+    && /(Do not relay it to the user unless explicitly requested|Do not run the command again|Continue the task if needed|Reply to the user in a helpful way|Explain that the command did not run)/i.test(normalized)
   ) {
     return true;
   }
@@ -2326,6 +2398,19 @@ function isRuntimeSystemInjection(text: string): boolean {
     return true;
   }
   return false;
+}
+
+function isModelCommandApprovalText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  if (/\/approve\s+[a-z0-9_-]+/i.test(normalized) && normalized.length <= 160) return true;
+  const hasApprovalIntent = /(?:需要|请).{0,12}(?:批准|准许|确认|允许).{0,12}(?:执行|运行|放行|命令|操作)/i.test(normalized)
+    || /请\s*(?:批准|准许|确认|允许).{0,16}(?:初始化|生成|创建)/i.test(normalized)
+    || /\b(?:approve|confirm|allow)\b.{0,24}\b(?:run|execute|command)\b/i.test(normalized);
+  if (!hasApprovalIntent) return false;
+  return /\/approve\s+[a-z0-9_-]+/i.test(normalized)
+    || /\b(?:python3?|node|npm|pnpm|yarn|uv|uvx|dir|ls|cd|findstr|grep|Get-ChildItem|Select-String|powershell|cmd)(?:\s|$|[\\/])/i.test(normalized)
+    || /[A-Za-z]:\\/.test(normalized);
 }
 
 function extractTextFromContent(content: unknown): string {
@@ -2533,6 +2618,85 @@ function hasNonToolAssistantContent(message: RawMessage | undefined): boolean {
   return false;
 }
 
+const USER_SECURITY_DENIAL_PATTERNS = [
+  /NETWORK_ACCESS_DENIED_BY_USER/i,
+  /COMMAND_EXECUTION_DENIED_BY_USER/i,
+  /FILE_PATH_ACCESS_DENIED_BY_USER/i,
+  /OPEN_TARGET_DENIED_BY_USER/i,
+  /MCP_SERVER_ENABLE_DENIED_BY_USER/i,
+  /MODEL_SECRET_DENIED_BY_USER/i,
+  /Network access denied:/i,
+  /Command execution denied:/i,
+  /Local file path access denied by user:/i,
+  /Open target denied:/i,
+  /MCP server enable denied:/i,
+  /Model send denied because message contains secret-like values/i,
+];
+
+function isUserSecurityDenialMessage(message: unknown): boolean {
+  if (typeof message !== 'string') return false;
+  return USER_SECURITY_DENIAL_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function buildSecurityCancelNotice(message: unknown): string {
+  const text = typeof message === 'string' ? message : '';
+  const fileMatch = text.match(/Local file path access denied by user:\s*(.+?)\s*$/i);
+  if (fileMatch?.[1]) {
+    return i18n.t('chat:notices.fileAccessCancelled', { path: fileMatch[1].trim() });
+  }
+  return i18n.t('chat:notices.securityCancelled');
+}
+
+function getRuntimeEventErrorMessage(event: Record<string, unknown>): string {
+  const candidates = [
+    event.errorMessage,
+    event.error_message,
+    event.error,
+    event.message,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate;
+    if (candidate && typeof candidate === 'object') {
+      const record = candidate as Record<string, unknown>;
+      const nested = record.errorMessage ?? record.error_message ?? record.error;
+      if (typeof nested === 'string' && nested.trim()) return nested;
+    }
+  }
+
+  return 'An error occurred';
+}
+
+function isTerminalAssistantErrorMessage(message: RawMessage | undefined): boolean {
+  if (!message || message.role !== 'assistant') return false;
+  const msg = message as RawMessage & { stopReason?: unknown; stop_reason?: unknown };
+  return (msg.stopReason ?? msg.stop_reason) === 'error';
+}
+
+function getMessageErrorMessage(message: RawMessage | undefined): string {
+  const msg = message as (RawMessage & { errorMessage?: unknown; error_message?: unknown; error?: unknown }) | undefined;
+  const value = msg?.errorMessage ?? msg?.error_message ?? msg?.error;
+  if (typeof value === 'string' && value.trim()) return value;
+  const contentText = getMessageText(message?.content);
+  return contentText.trim() || 'An error occurred';
+}
+
+function buildSecurityDenialState(message: string): Partial<ChatState> {
+  return {
+    error: null,
+    runError: null,
+    securityCancelNotice: buildSecurityCancelNotice(message),
+    sending: false,
+    activeRunId: null,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingFinal: false,
+    pendingToolImages: [],
+    lastUserMessageAt: null,
+  };
+}
+
 function hasToolInvocation(message: RawMessage | undefined): boolean {
   if (!message) return false;
   const msg = message as unknown as Record<string, unknown>;
@@ -2555,7 +2719,10 @@ function isTerminalAssistantMessage(message: RawMessage | undefined): boolean {
 
   const msg = message as RawMessage & { stopReason?: unknown; stop_reason?: unknown };
   const stopReason = msg.stopReason ?? msg.stop_reason;
-  if (stopReason == null) return !hasToolInvocation(message);
+  // Transcript polling is observational and may catch an assistant message
+  // while it is still being persisted. Only an explicit stop reason is strong
+  // enough to close the active run from history.
+  if (stopReason == null) return false;
 
   const normalized = String(stopReason).toLowerCase();
   return normalized !== 'tooluse'
@@ -2828,6 +2995,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loading: false,
   error: null,
   runError: null,
+  securityCancelNotice: null,
   prefilledInput: null,
   sending: false,
   aborting: false,
@@ -2943,21 +3111,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     _loadSessionsInFlight = (async () => {
       try {
-        console.log('[Sessions] loadSessions() started');
         const { gatewayReady } = useGatewayStore.getState().status;
-        console.log(`[Sessions] gatewayReady = ${gatewayReady}, type = ${typeof gatewayReady}`);
-        
-        if (gatewayReady !== true) {
-          console.log('[Sessions] Gateway not ready, loading from local filesystem');
-          try {
-            const localStart = performance.now();
-            const sessions = await loadLocalSessionSummaries('main');
-            console.log(`[Sessions] Local read took ${(performance.now() - localStart).toFixed(2)}ms, sessions count: ${sessions.length}`);
-            
-            if (sessions.length > 0) {
-              console.log('[Sessions] Local sessions:', sessions.map(s => s.key).join(', '));
-              console.log(`[Sessions] Parsed ${sessions.length} sessions from local`);
 
+        if (gatewayReady !== true) {
+          try {
+            const sessions = await loadLocalSessionSummaries('main');
+
+            if (sessions.length > 0) {
               const mergedLocal = mergePreservedSessionsIntoGatewayList(sessions, get());
               
               const { currentSessionKey } = get();
@@ -2987,13 +3147,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   discoveredActivity,
                 ),
               }));
-              
-              console.log(`[Sessions] ✅ Loaded ${mergedLocal.length} sessions from LOCAL in ${(performance.now() - now).toFixed(2)}ms, activity records: ${Object.keys(discoveredActivity).length}`);
-              
-              console.info('[loadSessions] Skipped bulk local history label hydration', {
-                sessionCount: mergedLocal.length,
-              });
-              
+
               return;
             } else {
               console.warn('[Sessions] Local read returned no sessions');
@@ -3002,8 +3156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             console.warn('[Sessions] Local read failed with exception:', err);
           }
         }
-        
-        console.log('[Sessions] Using Gateway RPC');
+
         const data = await useGatewayStore.getState().rpc<Record<string, unknown>>('sessions.list', {});
         if (data) {
           const rawSessions = Array.isArray(data.sessions) ? data.sessions : [];
@@ -3091,10 +3244,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (currentSessionKey !== nextSessionKey) {
             void get().loadHistory();
           }
-
-          console.info('[loadSessions] Skipped bulk Gateway history label hydration', {
-            sessionCount: sessionsWithCurrent.length,
-          });
         }
       } catch (err) {
         console.warn('Failed to load sessions:', err);
@@ -3516,8 +3665,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const hasMessages = state.messages.length > 0;
           const hasRegisteredSession = Boolean(state.sessionLabels[currentSessionKey]);
           // Suppress RPC timeout errors for chat.history as they are transient
-          // and will be retried automatically
-          const shouldSuppressError = errorMessage?.includes('RPC timeout: chat.history');
+          // and will be retried automatically. Also suppress abort-type failures
+          // that result from the user stopping the run (the in-flight history/RPC
+          // request gets aborted as part of the stop).
+          const shouldSuppressError = errorMessage?.includes('RPC timeout: chat.history')
+            || (!!errorMessage && errorMessage.toLowerCase().includes('abort') && isWithinUserAbortWindow());
           return {
             error: !quiet && errorMessage && !shouldSuppressError ? errorMessage : state.error,
             ...(hasMessages || hasRegisteredSession ? {} : { messages: [] as RawMessage[] }),
@@ -3540,7 +3692,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const messagesWithToolImages = enrichWithToolResultFiles(rawMessages);
       const filteredMessages = messagesWithToolImages.filter((msg) => !isToolResultRole(msg.role) && !isInternalMessage(msg));
       // Restore file attachments for user/assistant messages (from cache + text patterns)
-      const enrichedMessages = normalizeComplexTaskControlUserMessages(enrichWithCachedImages(filteredMessages));
+      const enrichedMessages = annotateDigitalEmployeeHistoryMessages(
+        normalizeComplexTaskControlUserMessages(enrichWithCachedImages(filteredMessages)),
+      );
 
       const interruptedOut = resolveInterruptedSendResume(currentSessionKey, enrichedMessages, quiet);
       if (interruptedOut.resumePatch) {
@@ -3909,12 +4063,62 @@ export const useChatStore = create<ChatState>((set, get) => ({
     attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>,
     targetAgentId?: string | null,
   ) => {
+    let _deIsDigital = false;
+    let _deAgentId = targetAgentId;
+    let _deDisplayName: string | null = null;
+    if (targetAgentId) {
+      // LYClaw rule: @agent in the chat composer is currently limited to
+      // digital employees. The target executes in this session via chat.send
+      // with executeAsAgentId; the renderer must not switch sessions or call
+      // sessions_spawn.
+      console.info('[agent-mention] resolving digital employee mention', {
+        agentId: targetAgentId,
+      });
+      const targetAgentSummary = useAgentsStore.getState().agents.find((agent) => agent.id === targetAgentId);
+      if (targetAgentSummary?.isDigitalEmployee === true) {
+        _deIsDigital = true;
+        _deAgentId = null;
+        _deDisplayName = targetAgentSummary.name || targetAgentId;
+        console.info('[digital-employee] resolved from agent snapshot', {
+          agentId: targetAgentId,
+          instanceId: targetAgentSummary.digitalEmployeeInstanceId ?? null,
+        });
+      }
+      try {
+        const checkResult = await hostApiFetch<{
+          success: boolean;
+          isDigitalEmployee: boolean;
+          name?: string | null;
+        }>(
+          `/api/agents/is-digital-employee?agentId=${encodeURIComponent(targetAgentId)}`
+        );
+        if (checkResult.success && checkResult.isDigitalEmployee) {
+          _deIsDigital = true;
+          _deAgentId = null;
+          _deDisplayName = (typeof checkResult.name === 'string' && checkResult.name.trim())
+            ? checkResult.name.trim()
+            : (_deDisplayName || targetAgentId);
+          console.info('[digital-employee] resolved mention to current-session execution', {
+            agentId: targetAgentId,
+            displayName: _deDisplayName,
+          });
+        }
+      } catch {
+        console.info('[digital-employee] lookup skipped or failed', {
+          agentId: targetAgentId,
+        });
+      }
+      if (!_deIsDigital) {
+        set({ error: `@${targetAgentId} 不是已安装的数字员工，当前 @agent 只支持数字员工。`, sending: false });
+        return;
+      }
+    }
     const trimmed = text.trim();
     if (!trimmed && (!attachments || attachments.length === 0)) return;
 
     clearAbortedChatRuns();
 
-    const targetSessionKey = resolveMainSessionKeyForAgent(targetAgentId) ?? get().currentSessionKey;
+    const targetSessionKey = resolveMainSessionKeyForAgent(_deAgentId) ?? get().currentSessionKey;
 
     if (targetSessionKey !== get().currentSessionKey) {
       set((s) => buildSessionSwitchPatch(s, targetSessionKey));
@@ -3950,7 +4154,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const originalRuntimeMessage = trimmed || (attachmentCount > 0 ? 'Process the attached file(s).' : '');
     const isInternalStagedExecution = trimmed.includes(COMPLEX_TASK_EXECUTION_MARKER);
 
-    if (!isInternalStagedExecution) {
+    if (!isInternalStagedExecution && !_deIsDigital) {
       currentSessionKey = promoteEmptyMainSessionIfNeeded(get, set);
     }
 
@@ -3977,6 +4181,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content: trimmed || (attachments?.length ? '(file attached)' : ''),
       timestamp: nowMs / 1000,
       id: crypto.randomUUID(),
+      _agentMention: targetAgentId || void 0,
+      _agentMentionName: _deDisplayName || targetAgentId || void 0,
       _attachedFiles: attachments?.map(a => ({
         fileName: a.fileName,
         mimeType: a.mimeType,
@@ -4167,6 +4373,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setTimeout(checkStuck, 30_000);
 
     const idempotencyKey = crypto.randomUUID();
+    if (_deIsDigital && targetAgentId) {
+      _digitalEmployeeRuns.set(idempotencyKey, {
+        agentId: targetAgentId,
+        name: _deDisplayName || targetAgentId,
+      });
+    }
     try {
       const firstSessionPerfMethod = hasMedia ? 'chat.sendWithMedia' : 'chat.send';
       beginChatRunPerf({
@@ -4207,6 +4419,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Longer timeout for chat sends to tolerate high-latency networks (avoids connect error)
       const CHAT_SEND_TIMEOUT_MS = 120_000;
       markChatRunRpcStarted(idempotencyKey);
+      const messageForGateway = withThinkingDirective(
+        runtimeMessage + (_deIsDigital ? '' : workspaceContext),
+        effectiveReasoningMode,
+      );
+      const executeAsParams = _deIsDigital && targetAgentId
+        ? {
+          executeAsAgentId: targetAgentId,
+          executedByAgentName: _deDisplayName || targetAgentId,
+        }
+        : {};
 
       if (hasMedia) {
         result = await hostApiFetch<{ success: boolean; result?: { runId?: string }; error?: string }>(
@@ -4215,9 +4437,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             method: 'POST',
             body: JSON.stringify({
               sessionKey: currentSessionKey,
-              message: withThinkingDirective(runtimeMessage + workspaceContext, effectiveReasoningMode),
+              message: messageForGateway,
               deliver: false,
               idempotencyKey,
+              ...executeAsParams,
               media: (attachments ?? []).map((a) => ({
                 filePath: a.stagedPath,
                 mimeType: a.mimeType,
@@ -4229,9 +4452,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         const chatSendParams: Record<string, unknown> = {
           sessionKey: currentSessionKey,
-          message: withThinkingDirective(runtimeMessage + workspaceContext, effectiveReasoningMode),
+          message: messageForGateway,
           deliver: false,
           idempotencyKey,
+          ...executeAsParams,
         };
         const rpcResult = await useGatewayStore.getState().rpc<{ runId?: string }>(
           'chat.send',
@@ -4256,7 +4480,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       if (!result.success) {
         const errorMsg = result.error || 'Failed to send message';
-        if (isRecoverableChatSendTimeout(errorMsg)) {
+        if (isUserSecurityDenialMessage(errorMsg)) {
+          clearHistoryPoll();
+          _pendingComplexTaskPlans.delete(currentSessionKey);
+          set(buildSecurityDenialState(errorMsg));
+        } else if (isRecoverableChatSendTimeout(errorMsg)) {
           console.warn(`[sendMessage] Recoverable chat.send timeout, keeping poll alive: ${errorMsg}`);
         } else {
           clearHistoryPoll();
@@ -4265,6 +4493,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       } else if (result.result?.runId && get().sending) {
         const runId = result.result.runId;
+        if (_deIsDigital && targetAgentId) {
+          _digitalEmployeeRuns.set(runId, {
+            agentId: targetAgentId,
+            name: _deDisplayName || targetAgentId,
+          });
+        }
         const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
         if (pendingPlan) {
           _pendingComplexTaskPlans.set(currentSessionKey, {
@@ -4294,7 +4528,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         success: false,
         error: errStr,
       });
-      if (isRecoverableChatSendTimeout(errStr)) {
+      if (isUserSecurityDenialMessage(errStr)) {
+        clearHistoryPoll();
+        _pendingComplexTaskPlans.delete(currentSessionKey);
+        set(buildSecurityDenialState(errStr));
+      } else if (isRecoverableChatSendTimeout(errStr)) {
         console.warn(`[sendMessage] Recoverable chat.send timeout, keeping poll alive: ${errStr}`);
       } else {
         clearHistoryPoll();
@@ -4310,6 +4548,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearHistoryPoll();
     clearErrorRecoveryTimer();
     const { currentSessionKey, messages, activeRunId } = get();
+    markUserAbort();
     if (activeRunId) {
       markAbortedChatRun(activeRunId);
     }
@@ -4398,8 +4637,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return;
     }
 
-    // Only process events for the active run (or if no active run set)
-    if (activeRunId && runId && runId !== activeRunId) return;
+    // Approval followups resume the same user-visible run with a synthetic
+    // runId. Let those continuation events close the current session state.
+    if (!shouldProcessCurrentSessionRunEvent(activeRunId, runId)) return;
 
     // Defensive: if state is missing but we have a message, try to infer state.
     let resolvedState = eventState;
@@ -4427,7 +4667,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     _lastChatEventAt = Date.now();
 
-    if (runId && isAbortedChatRun(runId)) {
+    const wasUserAbortedRun = Boolean(runId && isAbortedChatRun(runId));
+    if (wasUserAbortedRun) {
       if (resolvedState === 'aborted' || resolvedState === 'final' || resolvedState === 'error') {
         forgetAbortedChatRun(runId);
       } else {
@@ -4517,7 +4758,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 return null;
               }
             }
-            return normalizeStreamingMessage(event.message ?? s.streamingMessage);
+            return annotateDigitalEmployeeMessage(
+              normalizeStreamingMessage(event.message ?? s.streamingMessage) as RawMessage,
+              runId,
+            );
           })(),
           streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
         }));
@@ -4529,7 +4773,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // Message complete - add to history and clear streaming
         const finalMsg = event.message as RawMessage | undefined;
         if (finalMsg) {
-          const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
+          const normalizedFinalMessage = annotateDigitalEmployeeMessage(
+            normalizeStreamingMessage(finalMsg) as RawMessage,
+            runId,
+          ) as RawMessage;
 
           // ── Silent retry for tool stream errors ──
           if (
@@ -4575,6 +4822,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 break;
               }
             }
+          }
+
+          if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
+            const messageError = getMessageErrorMessage(normalizedFinalMessage);
+            clearHistoryPoll();
+            if (isUserSecurityDenialMessage(messageError)) {
+              finishChatRunPerf('cancelled', runId);
+              set(buildSecurityDenialState(messageError));
+              break;
+            }
+            set({
+              streamingText: '',
+              streamingMessage: null,
+              sending: false,
+              activeRunId: null,
+              pendingFinal: false,
+              runError: messageError,
+            });
+            break;
           }
 
           const finalMsgContent = getMessageText(normalizedFinalMessage.content);
@@ -4641,11 +4907,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
             break;
           }
           const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
+          const intermediateToolStep = toolOnly || hasToolInvocation(normalizedFinalMessage);
           const hasOutput = hasNonToolAssistantContent(normalizedFinalMessage);
-          const msgId = normalizedFinalMessage.id || (toolOnly ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
+          const keepRunActiveAfterFinal = intermediateToolStep && !isExecApprovalFollowupRun(runId);
+          const msgId = normalizedFinalMessage.id || (intermediateToolStep ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
           set((s) => {
             const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
-            const streamingTools = hasOutput ? [] : nextTools;
+            const streamingTools = hasOutput && !intermediateToolStep ? [] : nextTools;
 
             // Attach any images collected from preceding tool results
             const pendingImgs = s.pendingToolImages;
@@ -4662,7 +4930,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // Check if message already exists (prevent duplicates)
             const alreadyExists = s.messages.some(m => m.id === msgId);
             if (alreadyExists) {
-              return toolOnly ? {
+              return keepRunActiveAfterFinal ? {
                 streamingText: '',
                 streamingMessage: null,
                 pendingFinal: true,
@@ -4678,7 +4946,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 ...clearPendingImages,
               };
             }
-            return toolOnly ? {
+            return keepRunActiveAfterFinal ? {
               messages: [...s.messages, msgWithImages],
               streamingText: '',
               streamingMessage: null,
@@ -4698,7 +4966,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
           // After the final response, quietly reload history to surface all intermediate
           // tool-use turns (thinking + tool blocks) from the Gateway's authoritative record.
-          if (hasOutput && !toolOnly) {
+          if (hasOutput && !intermediateToolStep) {
             clearHistoryPoll();
             void get().loadHistory(true, { force: true });
             const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
@@ -4736,6 +5004,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case 'error': {
         const rawErrorMsg = String(event.errorMessage || 'An error occurred');
 
+        // ── User-initiated stop ──
+        // When the user clicks the stop button, the runtime may still emit an
+        // `error` event carrying an "abort" message. Treat that as a clean stop
+        // and suppress the error bar instead of surfacing it to the user.
+        // The terminal `aborted` event can arrive first (clearing runAborted and
+        // forgetting the run id), so we also honor a short post-stop time window.
+        const isAbortError = rawErrorMsg.toLowerCase().includes('abort');
+        if (isAbortError && (wasUserAbortedRun || get().runAborted || isWithinUserAbortWindow())) {
+          clearErrorRecoveryTimer();
+          clearHistoryPoll();
+          set({
+            sending: false,
+            activeRunId: null,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            lastUserMessageAt: null,
+            error: null,
+          });
+          break;
+        }
+
         // ── Silent retry for tool stream errors ──
         if (runId && !_retriedRunIds.has(runId) && isToolStreamError(rawErrorMsg) && _lastSendParams) {
           console.warn('[chat.runtime] tool stream error event, attempting silent retry once', {
@@ -4766,9 +5058,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }, 100);
           break;
         }
-
-        const errorMsg = normalizeRuntimeErrorMessage(rawErrorMsg);
+        const errorMsg = getRuntimeEventErrorMessage(event);
         const wasSending = get().sending;
+        if (isUserSecurityDenialMessage(errorMsg)) {
+          clearErrorRecoveryTimer();
+          clearHistoryPoll();
+          finishChatRunPerf('cancelled', runId);
+          _pendingComplexTaskPlans.delete(currentSessionKey);
+          set(buildSecurityDenialState(errorMsg));
+          break;
+        }
 
         // Snapshot the current streaming message into messages[] so partial
         // content ("Let me get that written down...") is preserved in the UI
@@ -4875,7 +5174,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await Promise.all([loadHistory(), loadSessions()]);
   },
 
-  clearError: () => set({ error: null, runError: null }),
+  clearError: () => set({ error: null }),
+
+  clearSecurityCancelNotice: () => set({ securityCancelNotice: null }),
 }));
 
 useChatStore.subscribe((state) => {

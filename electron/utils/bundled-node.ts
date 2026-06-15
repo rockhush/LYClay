@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { execSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { logger } from './logger';
@@ -34,7 +34,7 @@ function resolveSystemNpmCliPath(): string | null {
   const candidates: string[] = [];
 
   try {
-    const whereOutput = execSync('where.exe node', {
+    const whereOutput = execFileSync('where.exe', ['node'], {
       encoding: 'utf8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],

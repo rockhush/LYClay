@@ -9,7 +9,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { logger } from './logger';
 import { getDwsTokenPath } from './dws-env-setup';
 
@@ -25,8 +25,8 @@ export async function saveTokenToEnvAndFile(token: string): Promise<void> {
     // Also set system-level environment variable on Windows so other processes can access it
     if (process.platform === 'win32') {
       try {
-        // Use setx to set user-level environment variable (persists across sessions)
-        execSync(`setx DWS_ACCESS_TOKEN "${token}"`, { encoding: 'utf-8' });
+        // 使用 execFileSync 传参数，避免 token 被拼进 shell 命令字符串。
+        execFileSync('setx', ['DWS_ACCESS_TOKEN', token], { encoding: 'utf-8' });
         logger.info('[TokenStorage] Set DWS_ACCESS_TOKEN system environment variable (Windows)');
       } catch (error) {
         logger.warn('[TokenStorage] Failed to set system env var with setx:', error);
@@ -128,7 +128,7 @@ export async function clearToken(): Promise<void> {
     if (process.platform === 'win32') {
       try {
         // Use setx with empty value to clear the user-level environment variable
-        execSync('setx DWS_ACCESS_TOKEN ""', { encoding: 'utf-8' });
+        execFileSync('setx', ['DWS_ACCESS_TOKEN', ''], { encoding: 'utf-8' });
         logger.info('[TokenStorage] Cleared DWS_ACCESS_TOKEN system environment variable (Windows)');
       } catch (error) {
         logger.warn('[TokenStorage] Failed to clear system env var with setx:', error);

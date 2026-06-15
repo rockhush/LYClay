@@ -281,6 +281,7 @@ test.describe('ClawX chat execution graph', () => {
       await expect(execRow.locator('pre')).toBeVisible();
       await expect(page.locator('[data-testid="chat-execution-graph"]').getByText('I asked coder to break down the core blocks of ~/Velaria uncommitted changes; will give you the conclusion when it returns.')).toBeVisible();
       await expect(page.getByText('CHECKLIST.md')).toHaveCount(0);
+      await expect(page.getByTestId('chat-execution-step-thinking-trailing')).toHaveCount(0);
     } finally {
       await closeElectronApp(app);
     }

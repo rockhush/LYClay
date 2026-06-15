@@ -5,8 +5,16 @@ import {
   isInvalidConfigSignal,
   shouldAttemptConfigAutoRepair,
 } from '@electron/gateway/startup-recovery';
+import { recordGatewayStartupStderrLine } from '@electron/gateway/startup-stderr';
 
 describe('gateway startup recovery heuristics', () => {
+  it('redacts secrets before keeping Gateway startup diagnostics in memory', () => {
+    const lines: string[] = [];
+    recordGatewayStartupStderrLine(lines, 'Config invalid api_key=sk-abcdefghijklmnopqrstuvwxyz1234567890');
+
+    expect(lines).toEqual(['Config invalid api_key=[REDACTED]']);
+  });
+
   it('detects invalid-config signal from stderr lines', () => {
     const lines = [
       'Invalid config at C:\\Users\\pc\\.openclaw\\openclaw.json:\\n- skills: Unrecognized key: "enabled"',

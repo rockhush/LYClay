@@ -200,7 +200,8 @@ function appendDetailSegments(
 ): void {
   const normalizedSegments = segments
     .map((segment) => normalizeText(segment))
-    .filter((segment): segment is string => !!segment);
+    .filter((segment): segment is string => !!segment)
+    .filter((segment) => !isModelCommandApprovalNarration(segment));
 
   normalizedSegments.forEach((detail, index) => {
     options.upsertStep({
@@ -212,6 +213,23 @@ function appendDetailSegments(
       depth: 1,
     });
   });
+}
+
+function isModelCommandApprovalNarration(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  if (/\/approve\s+[a-z0-9_-]+/i.test(normalized) && normalized.length <= 160) return true;
+
+  const hasApprovalPhrase = /(?:需要|请).{0,12}(?:批准|准许|确认|允许).{0,12}(?:执行|运行|查看|搜索|列出|检查|确认|放行|命令|操作)/i.test(normalized)
+    || /请\s*(?:批准|准许|确认|允许).{0,16}(?:初始化|生成|创建)/i.test(normalized)
+    || /\b(?:please\s+)?(?:approve|confirm|allow)\s+(?:running|executing|checking|listing|searching)\b/i.test(normalized);
+  if (!hasApprovalPhrase) return false;
+
+  // 只隐藏带明显命令片段的伪审批话术；普通“请确认需求”不应被过滤。
+  return /\/approve\s+[a-z0-9_-]+/i.test(normalized)
+    || /(?:^|[\s:：])(?:>\s*)?(?:`[^`]+`|(?:python3?|node|npm|pnpm|yarn|uv|uvx|dir|ls|cd|findstr|grep|Get-ChildItem|Select-String|powershell|cmd)(?:\s|$|[\\/]))/i.test(normalized)
+    || /[A-Za-z]:\\/.test(normalized)
+    || /\$env:[A-Za-z_][A-Za-z0-9_]*/i.test(normalized);
 }
 
 export function deriveTaskSteps({

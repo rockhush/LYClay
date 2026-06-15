@@ -42,9 +42,10 @@ function isInternalText(text: string): boolean {
   if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(normalized)) return true;
   if (/^\s*System\s*\(untrusted\)\s*:/i.test(normalized)) return true;
   if (/^\s*System\s*:/i.test(normalized)) return true;
+  if (isModelCommandApprovalText(normalized)) return true;
   if (
-    /An async command you ran earlier has completed/i.test(normalized)
-    && /Do not relay it to the user unless explicitly requested/i.test(normalized)
+    /An async command (?:(?:you ran earlier|the user already approved) has completed|did not run)/i.test(normalized)
+    && /(Do not relay it to the user unless explicitly requested|Do not run the command again|Continue the task if needed|Reply to the user in a helpful way|Explain that the command did not run)/i.test(normalized)
   ) {
     return true;
   }
@@ -55,6 +56,19 @@ function isInternalText(text: string): boolean {
     return true;
   }
   return false;
+}
+
+function isModelCommandApprovalText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  if (/\/approve\s+[a-z0-9_-]+/i.test(normalized) && normalized.length <= 160) return true;
+  const hasApprovalIntent = /(?:需要|请).{0,12}(?:批准|准许|确认|允许).{0,12}(?:执行|运行|放行|命令|操作)/i.test(normalized)
+    || /请\s*(?:批准|准许|确认|允许).{0,16}(?:初始化|生成|创建)/i.test(normalized)
+    || /\b(?:approve|confirm|allow)\b.{0,24}\b(?:run|execute|command)\b/i.test(normalized);
+  if (!hasApprovalIntent) return false;
+  return /\/approve\s+[a-z0-9_-]+/i.test(normalized)
+    || /\b(?:python3?|node|npm|pnpm|yarn|uv|uvx|dir|ls|cd|findstr|grep|Get-ChildItem|Select-String|powershell|cmd)(?:\s|$|[\\/])/i.test(normalized)
+    || /[A-Za-z]:\\/.test(normalized);
 }
 
 function compactProgressiveParts(parts: string[]): string[] {

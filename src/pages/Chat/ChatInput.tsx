@@ -7,7 +7,7 @@
  * are sent with the message (no base64 over WebSocket).
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle, Upload, ChevronDown, Search } from 'lucide-react';
+import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle, Upload, ChevronDown, Search, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { WorkspacePicker } from '@/components/workspace/WorkspacePicker';
@@ -50,9 +50,9 @@ function getSkillColor(name: string): string {
 }
 import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
+import { useDigitalEmployeesStore } from '@/stores/digital-employees';
 import { useChatStore } from '@/stores/chat';
 import type { ReasoningMode } from '@/stores/chat';
-import type { AgentSummary } from '@/types/agent';
 import { useTranslation } from 'react-i18next';
 import { useSkillsStore } from '@/stores/skills';
 import { UploadSkillDialog } from '@/components/skills/UploadSkillDialog';
@@ -68,6 +68,24 @@ export interface FileAttachment {
   preview: string | null;    // data URL for images, null for others
   status: 'staging' | 'ready' | 'error';
   error?: string;
+}
+
+function normalizeAttachmentError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  const lower = raw.toLowerCase();
+  if (lower.includes('sensitive path blocked')) {
+    return '安全策略已阻止此附件：该路径可能包含密钥、凭据或登录数据。';
+  }
+  if (lower.includes('outside authorized workspaces') || lower.includes('outside authorized roots')) {
+    return '无法添加此附件：文件不在已授权的工作区或已选择的文件范围内。';
+  }
+  if (lower.includes('outside its authorized root') || lower.includes('symlink')) {
+    return '无法添加此附件：路径通过软链接指向授权范围外。';
+  }
+  if (lower.includes('file_access_denied') || lower.includes('path access denied')) {
+    return '无法添加此附件：文件访问被安全策略拒绝。';
+  }
+  return raw.replace(/^Error:\s*/i, '') || '附件处理失败。';
 }
 
 export interface SkillAttachment {
@@ -89,6 +107,13 @@ interface ChatInputProps {
   onTextChange?: (text: string) => void;
 }
 
+interface MentionableDigitalEmployee {
+  id: string;
+  name: string;
+  description?: string;
+  instanceId?: string;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────
 
 function formatFileSize(bytes: number): string {
@@ -96,6 +121,23 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function resolveLeadingAgentMention(
+  text: string,
+  agents: Array<{ id: string }> | undefined,
+): { text: string; targetAgentId: string | null } {
+  const match = /^\s*@([a-zA-Z0-9][\w-]{0,63})(?=\s|$)/.exec(text);
+  if (!match) return { text, targetAgentId: null };
+
+  const mention = match[1];
+  const agent = (agents ?? []).find((candidate) => candidate.id === mention);
+  const targetAgentId = agent?.id ?? mention;
+
+  return {
+    text: text.slice(match[0].length).trimStart(),
+    targetAgentId,
+  };
 }
 
 function FileIcon({ mimeType, className }: { mimeType: string; className?: string }) {
@@ -182,6 +224,9 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
           : t('composer.gatewayPreparingPlaceholder')
     : '';
   const agents = useAgentsStore((s) => s.agents);
+  const digitalEmployees = useDigitalEmployeesStore((s) => s.employees);
+  const digitalEmployeesLoading = useDigitalEmployeesStore((s) => s.loading);
+  const fetchDigitalEmployees = useDigitalEmployeesStore((s) => s.fetchEmployees);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
   const reasoningMode = useChatStore((s) => s.reasoningMode);
   const setReasoningMode = useChatStore((s) => s.setReasoningMode);
@@ -215,14 +260,21 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     [agents, currentAgentId],
   );
   const mentionableAgents = useMemo(
-    () => (agents ?? []).filter((agent) => agent.id !== currentAgentId),
-    [agents, currentAgentId],
+    (): MentionableDigitalEmployee[] => (digitalEmployees ?? [])
+      .filter((employee) => employee.status === 'active' || employee.status === 'degraded')
+      .map((employee) => ({
+        id: employee.agentId,
+        name: employee.name || employee.agentId,
+        description: employee.description,
+        instanceId: employee.instanceId,
+      })),
+    [digitalEmployees],
   );
   const selectedTarget = useMemo(
-    () => (agents ?? []).find((agent) => agent.id === targetAgentId) ?? null,
-    [agents, targetAgentId],
+    () => mentionableAgents.find((agent) => agent.id === targetAgentId) ?? null,
+    [mentionableAgents, targetAgentId],
   );
-  const showAgentPicker = mentionableAgents.length > 0;
+  const showAgentPicker = true;
 
   // Auto-resize textarea
   useEffect(() => {
@@ -241,16 +293,15 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
 
   useEffect(() => {
     if (!targetAgentId) return;
-    if (targetAgentId === currentAgentId) {
-      setTargetAgentId(null);
-      setPickerOpen(false);
-      return;
-    }
-    if (!(agents ?? []).some((agent) => agent.id === targetAgentId)) {
+    if (!mentionableAgents.some((agent) => agent.id === targetAgentId)) {
       setTargetAgentId(null);
       setPickerOpen(false);
     }
-  }, [agents, currentAgentId, targetAgentId]);
+  }, [mentionableAgents, targetAgentId]);
+
+  useEffect(() => {
+    void fetchDigitalEmployees();
+  }, [fetchDigitalEmployees]);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -417,11 +468,12 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
       });
     } catch (err) {
       console.error('[pickFiles] Failed to stage files:', err);
+      const message = normalizeAttachmentError(err);
       // Mark any stuck 'staging' attachments as 'error' so the user can remove them
       // and the send button isn't permanently blocked
       setAttachments(prev => prev.map(a =>
         a.status === 'staging'
-          ? { ...a, status: 'error' as const, error: String(err) }
+          ? { ...a, status: 'error' as const, error: message }
           : a,
       ));
     }
@@ -467,9 +519,10 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
         ));
       } catch (err) {
         console.error(`[stageBuffer] Error staging ${file.name}:`, err);
+        const message = normalizeAttachmentError(err);
         setAttachments(prev => prev.map(a =>
           a.id === tempId
-            ? { ...a, status: 'error' as const, error: String(err) }
+            ? { ...a, status: 'error' as const, error: message }
             : a,
         ));
       }
@@ -556,9 +609,14 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
       });
     }
     
-    const finalText = textToSend + skillPrompt;
+    const resolvedAgentMention = targetAgentId
+      ? { text: textToSend, targetAgentId: null }
+      : resolveLeadingAgentMention(textToSend, mentionableAgents);
+    const effectiveTargetAgentId = targetAgentId ?? resolvedAgentMention.targetAgentId;
+    const effectiveTextToSend = resolvedAgentMention.targetAgentId ? resolvedAgentMention.text : textToSend;
+    const finalText = effectiveTextToSend + skillPrompt;
     
-    console.log(`[handleSend] text="${finalText.substring(0, 50)}", attachments=${attachments.length}, ready=${readyAttachments.length}, skills=${skillAttachments.length}, sending=${!!attachmentsToSend}`);
+    console.log(`[handleSend] text="${finalText.substring(0, 50)}", attachments=${attachments.length}, ready=${readyAttachments.length}, skills=${skillAttachments.length}, targetAgent=${effectiveTargetAgentId ?? '(none)'}, sending=${!!attachmentsToSend}`);
     if (attachmentsToSend) {
       console.log('[handleSend] Attachment details:', attachmentsToSend.map(a => ({
         id: a.id, fileName: a.fileName, mimeType: a.mimeType, fileSize: a.fileSize,
@@ -599,10 +657,10 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    onSend(finalText, attachmentsToSend, targetAgentId);
+    onSend(finalText, attachmentsToSend, effectiveTargetAgentId);
     setTargetAgentId(null);
     setPickerOpen(false);
-  }, [input, attachments, skillAttachments, canSend, onSend, targetAgentId]);
+  }, [input, attachments, skillAttachments, canSend, onSend, targetAgentId, mentionableAgents]);
 
   const handleStop = useCallback(() => {
     if (!canStop) return;
@@ -843,6 +901,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                 }}
                 disabled={disabled || sending}
                 title={t('composer.pickSkill')}
+                data-testid="chat-composer-skill"
               >
                 <Puzzle className="h-3.5 w-3.5" />
               </Button>
@@ -970,9 +1029,13 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                     'h-8 w-8 rounded-lg text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground transition-colors',
                     (pickerOpen || selectedTarget) && 'bg-primary/10 text-primary hover:bg-primary/20'
                   )}
-                  onClick={() => setPickerOpen((open) => !open)}
+                  onClick={() => {
+                    setPickerOpen((open) => !open);
+                    void fetchDigitalEmployees();
+                  }}
                   disabled={disabled || sending}
                   title={t('composer.pickAgent')}
+                  data-testid="chat-composer-agent"
                 >
                   <AtSign className="h-3.5 w-3.5" />
                 </Button>
@@ -982,7 +1045,16 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                       {t('composer.agentPickerTitle', { currentAgent: currentAgentName })}
                     </div>
                     <div className="max-h-64 overflow-y-auto">
-                      {mentionableAgents.map((agent) => (
+                      {digitalEmployeesLoading ? (
+                        <div className="flex items-center justify-center px-3 py-3 text-[12px] text-muted-foreground">
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          加载中...
+                        </div>
+                      ) : mentionableAgents.length === 0 ? (
+                        <div className="px-3 py-3 text-[12px] text-muted-foreground">
+                          暂无可用数字员工
+                        </div>
+                      ) : mentionableAgents.map((agent) => (
                         <AgentPickerItem
                           key={agent.id}
                           agent={agent}
@@ -1058,10 +1130,9 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
               className="h-auto p-0 text-[11px]"
               onClick={() => {
                 setAttachments((prev) => prev.filter((att) => att.status !== 'error'));
-                void pickFiles();
               }}
             >
-              {t('composer.retryFailedAttachments')}
+              {t('composer.removeFailedAttachments', { defaultValue: '移除失败附件' })}
             </Button>
           )}
         </div>
@@ -1090,10 +1161,14 @@ function AttachmentPreview({
   onRemove: () => void;
 }) {
   const isImage = attachment.mimeType.startsWith('image/') && attachment.preview;
+  const errorMessage = attachment.error || '附件处理失败。';
 
   return (
-    <div className="relative group pt-1 pr-1">
-      <div className="relative rounded-lg overflow-hidden border border-border">
+    <div className="relative group pt-1 pr-1" title={attachment.status === 'error' ? errorMessage : attachment.fileName}>
+      <div className={cn(
+        "relative rounded-lg overflow-hidden border",
+        attachment.status === 'error' ? "border-destructive/40 bg-destructive/5" : "border-border",
+      )}>
         {isImage ? (
           // Image thumbnail
           <div className="w-16 h-16">
@@ -1105,12 +1180,19 @@ function AttachmentPreview({
           </div>
         ) : (
           // Generic file card
-          <div className="flex items-center gap-2 px-3 py-2 bg-muted/50 max-w-[200px]">
-            <FileIcon mimeType={attachment.mimeType} className="h-5 w-5 shrink-0 text-muted-foreground" />
+          <div className="flex items-center gap-2 px-3 py-2 bg-muted/50 max-w-[260px] min-w-[180px]">
+            {attachment.status === 'error'
+              ? <ShieldAlert className="h-5 w-5 shrink-0 text-destructive" />
+              : <FileIcon mimeType={attachment.mimeType} className="h-5 w-5 shrink-0 text-muted-foreground" />}
             <div className="min-w-0 overflow-hidden">
               <p className="text-xs font-medium truncate">{attachment.fileName}</p>
-              <p className="text-[10px] text-muted-foreground">
-                {attachment.fileSize > 0 ? formatFileSize(attachment.fileSize) : '...'}
+              <p className={cn(
+                "text-[10px] truncate",
+                attachment.status === 'error' ? "text-destructive" : "text-muted-foreground",
+              )}>
+                {attachment.status === 'error'
+                  ? errorMessage
+                  : attachment.fileSize > 0 ? formatFileSize(attachment.fileSize) : '...'}
               </p>
             </div>
           </div>
@@ -1123,12 +1205,6 @@ function AttachmentPreview({
           </div>
         )}
 
-        {/* Error overlay */}
-        {attachment.status === 'error' && (
-          <div className="absolute inset-0 bg-destructive/20 flex items-center justify-center">
-            <span className="text-[10px] text-destructive font-medium px-1">Error</span>
-          </div>
-        )}
       </div>
 
       {/* Remove button */}
@@ -1148,7 +1224,7 @@ function AgentPickerItem({
   selected,
   onSelect,
 }: {
-  agent: AgentSummary;
+  agent: MentionableDigitalEmployee;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -1163,7 +1239,7 @@ function AgentPickerItem({
     >
       <span className="text-[14px] font-medium text-foreground">{agent.name}</span>
       <span className="text-[11px] text-muted-foreground">
-        {agent.modelDisplay}
+        {agent.description || agent.id}
       </span>
     </button>
   );
@@ -1219,6 +1295,7 @@ function SkillPickerItem({
     <button
       type="button"
       onClick={onSelect}
+      data-testid={`chat-composer-skill-option-${skill.id}`}
       className={cn(
         'relative flex w-full flex-col items-start rounded-xl px-3 py-2 text-left transition-colors',
         selected

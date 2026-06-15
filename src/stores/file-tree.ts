@@ -1,5 +1,12 @@
 import { create } from 'zustand';
 import type { FileTreeNode, FileTreeState } from '@/types/file-tree';
+import { invokeIpc } from '@/lib/api-client';
+
+type ReadDirectoryResponse = {
+  success?: boolean;
+  items?: Array<Omit<FileTreeNode, 'children' | 'loaded' | 'expanded' | 'loading'>>;
+  error?: string;
+};
 
 export const useFileTreeStore = create<FileTreeState>((set, get) => ({
   treeNodes: {},
@@ -16,11 +23,11 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
     }));
 
     try {
-      const result = await window.electron.ipcRenderer.invoke('fs:readdir', dirPath);
+      const result = await invokeIpc<ReadDirectoryResponse>('fs:readdir', dirPath);
       console.log('[FileTree] IPC result:', result);
 
       if (result.success) {
-        const children: FileTreeNode[] = result.items.map((item: any) => ({
+        const children: FileTreeNode[] = (result.items ?? []).map((item) => ({
           ...item,
           children: item.isDirectory ? [] : undefined,
           loaded: !item.isDirectory,

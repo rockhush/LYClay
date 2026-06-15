@@ -207,6 +207,47 @@ describe('useChatStore startup history retry', () => {
     expect(useChatStore.getState().streamingMessage).toBeNull();
   });
 
+  it('does not finalize an active send from history without an explicit stop reason', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'hello', id: 'u1', timestamp: 1000 }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-history-progress',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: 1000,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
+      messages: [
+        { role: 'user', content: 'hello', id: 'u1', timestamp: 1000 },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'intermediate progress' }],
+          id: 'a1',
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    await useChatStore.getState().loadHistory(true, { force: true });
+
+    expect(useChatStore.getState().sending).toBe(true);
+    expect(useChatStore.getState().activeRunId).toBe('run-history-progress');
+  });
+
   it('keeps non-startup foreground loading safety timeout at 15 seconds', async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const { useChatStore } = await import('@/stores/chat');

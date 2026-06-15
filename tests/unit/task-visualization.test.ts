@@ -246,6 +246,136 @@ describe('deriveTaskSteps', () => {
     expect(steps).toEqual([]);
   });
 
+  it('filters model-generated command approval narration while keeping real tool calls', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-approval-noise',
+          content: [
+            { type: 'text', text: '请批准查看图标目录： > `dir tabler-filled 图标库`' },
+            {
+              type: 'tool_use',
+              id: 'exec-1',
+              name: 'exec',
+              input: { command: 'dir C:\\Users\\Leon.Long\\.openclaw\\skills\\ppt-master\\templates\\icons\\tabler-filled', timeout: 10 },
+            },
+            { type: 'text', text: '请批准搜索所需图标： > `findstr building users chart map flame rocket laptop camera tree beach award star world`' },
+            {
+              type: 'tool_use',
+              id: 'exec-2',
+              name: 'exec',
+              input: { command: 'Get-ChildItem tabler-filled | Select-String building|users|chart|map' },
+            },
+          ],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps).toEqual([
+      expect.objectContaining({ id: 'exec-1', label: 'exec', kind: 'tool' }),
+      expect.objectContaining({ id: 'exec-2', label: 'exec', kind: 'tool' }),
+    ]);
+    expect(steps.some((step) => step.kind === 'message')).toBe(false);
+  });
+
+  it('filters approve-token command narration from execution graph', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-approve-token',
+          content: [
+            {
+              type: 'text',
+              text: '需要你批准执行项目初始化命令。这是 project_manager.py init 创建 PPT 项目结构的第一步。请回复 /approve d0aebe53 来放行。',
+            },
+            {
+              type: 'tool_use',
+              id: 'exec-token',
+              name: 'exec',
+              input: { command: 'uv run python project_manager.py init shenzhen_intro --format ppt169' },
+            },
+          ],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps).toEqual([
+      expect.objectContaining({ id: 'exec-token', label: 'exec', kind: 'tool' }),
+    ]);
+  });
+
+  it('filters short approve-token followup narration from execution graph', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-approve-followup',
+          content: [
+            { type: 'text', text: '继续批一下：`/approve 954d3c37`' },
+            {
+              type: 'tool_use',
+              id: 'write-after-approval',
+              name: 'write',
+              input: { path: 'design_spec.md', content: 'ok' },
+            },
+          ],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps).toEqual([
+      expect.objectContaining({ id: 'write-after-approval', label: 'write', kind: 'tool' }),
+    ]);
+  });
+
+  it('keeps normal process narration that is not a command approval request', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-normal-narration',
+          content: [
+            { type: 'text', text: '图标只显示了最后几个。让我用更完整的方式搜索所需图标。' },
+            {
+              type: 'tool_use',
+              id: 'exec-normal',
+              name: 'exec',
+              input: { command: 'Get-ChildItem tabler-filled' },
+            },
+          ],
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-final',
+          content: [{ type: 'text', text: '已经找到合适的图标。' }],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps).toEqual([
+      expect.objectContaining({
+        id: 'history-message-assistant-normal-narration-0',
+        kind: 'message',
+        detail: '图标只显示了最后几个。让我用更完整的方式搜索所需图标。',
+      }),
+      expect.objectContaining({
+        id: 'exec-normal',
+        label: 'exec',
+        kind: 'tool',
+      }),
+    ]);
+  });
+
   it('keeps earlier reply segments in the graph when the last streaming segment is rendered separately', () => {
     const steps = deriveTaskSteps({
       messages: [],

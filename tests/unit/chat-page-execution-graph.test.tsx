@@ -16,9 +16,16 @@ const { gatewayState, agentsState, chatScrollRef } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@/stores/gateway', () => ({
-  useGatewayStore: (selector: (state: typeof gatewayState) => unknown) => selector(gatewayState),
-}));
+vi.mock('@/stores/gateway', () => {
+  const useGatewayStore = Object.assign(
+    (selector: (state: typeof gatewayState) => unknown) => selector(gatewayState),
+    {
+      getState: () => gatewayState,
+      subscribe: vi.fn(() => vi.fn()),
+    },
+  );
+  return { useGatewayStore };
+});
 
 vi.mock('@/stores/agents', () => ({
   useAgentsStore: (selector: (state: typeof agentsState) => unknown) => selector(agentsState),
@@ -26,6 +33,12 @@ vi.mock('@/stores/agents', () => ({
 
 vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
+}));
+
+vi.mock('@/lib/ui-state-persistence', () => ({
+  flushUiStateSync: vi.fn(),
+  hydrateUiStateFromDisk: vi.fn(),
+  startUiStateSync: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -579,5 +592,85 @@ describe('Chat execution graph lifecycle', () => {
 
     expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
     expect(screen.getAllByText('404 Resource not found').length).toBeGreaterThan(0);
+  });
+
+  it('stops stale trailing thinking after a subagent completion event returns without live stream activity', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'user',
+          content: 'Check tomorrow weather',
+        },
+        {
+          role: 'assistant',
+          id: 'spawn-turn',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'spawn-call',
+              name: 'sessions_spawn',
+              input: { agentId: 'subagent', task: 'Check tomorrow weather' },
+            },
+          ],
+        },
+        {
+          role: 'assistant',
+          id: 'yield-turn',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'yield-call',
+              name: 'sessions_yield',
+              input: { message: 'Waiting for weather subtask.' },
+            },
+          ],
+        },
+        {
+          role: 'user',
+          id: 'subagent-complete',
+          content: `[Internal task completion event]
+source: subagent
+session_key: agent:subagent:child-123
+session_id: child-session-id
+type: subagent task
+status: completed successfully`,
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: true,
+      activeRunId: 'stale-parent-run',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [
+        {
+          toolCallId: 'yield-call',
+          name: 'sessions_yield',
+          status: 'completed',
+          updatedAt: Date.now(),
+        },
+      ],
+      pendingFinal: true,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+
+    render(<Chat />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-execution-graph')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
   });
 });

@@ -1,11 +1,12 @@
 import { app } from 'electron';
-import { execSync, spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { dirname, join, win32 } from 'path';
 import { getUvMirrorEnv } from './uv-env';
 import { logger } from './logger';
 import { prepareWinSpawn } from './paths';
 import { prependPathEntry } from './env-path';
+import { assertCommandAllowedWithConfirmation } from '../security/confirmation-service';
 
 /**
  * Get the path to the bundled uv binary
@@ -21,6 +22,11 @@ function getBundledUvPath(): string {
   } else {
     return join(process.cwd(), 'resources', 'bin', target, binName);
   }
+}
+
+function getBundledPythonDir(): string | null {
+  if (!app.isPackaged) return null;
+  return join(process.resourcesPath, 'resources', 'python');
 }
 
 /**
@@ -53,8 +59,8 @@ function resolveUvBin(): { bin: string; source: 'bundled' | 'path' | 'bundled-fa
 
 function findUvInPathSync(): boolean {
   try {
-    const cmd = process.platform === 'win32' ? 'where.exe uv' : 'which uv';
-    execSync(cmd, { stdio: 'ignore', timeout: 5000, windowsHide: true });
+    const command = process.platform === 'win32' ? 'where.exe' : 'which';
+    execFileSync(command, ['uv'], { stdio: 'ignore', timeout: 5000, windowsHide: true });
     return true;
   } catch {
     return false;
@@ -92,8 +98,10 @@ export async function isPythonReady(): Promise<boolean> {
   return Boolean(await findManagedPythonPath());
 }
 
-export async function findManagedPythonPath(): Promise<string | null> {
-  const { bin: uvBin } = resolveUvBin();
+async function runPythonFind(
+  uvBin: string,
+  env?: Record<string, string | undefined>,
+): Promise<string | null> {
   const prepared = prepareWinSpawn(uvBin, ['python', 'find', '3.12', '--managed-python', '--no-python-downloads']);
 
   return new Promise<string | null>((resolve) => {
@@ -103,6 +111,7 @@ export async function findManagedPythonPath(): Promise<string | null> {
         prepared.args,
         {
           shell: prepared.shell,
+          env,
           windowsHide: true,
         },
       );
@@ -119,6 +128,24 @@ export async function findManagedPythonPath(): Promise<string | null> {
   });
 }
 
+export async function findManagedPythonPath(): Promise<string | null> {
+  const { bin: uvBin } = resolveUvBin();
+  const bundledPythonDir = getBundledPythonDir();
+
+  if (bundledPythonDir && existsSync(bundledPythonDir)) {
+    const bundledPythonPath = await runPythonFind(uvBin, {
+      ...process.env,
+      UV_PYTHON_INSTALL_DIR: bundledPythonDir,
+    });
+    if (bundledPythonPath) {
+      return bundledPythonPath;
+    }
+    logger.warn(`Bundled Python was not usable at ${bundledPythonDir}; checking the user-managed uv directory`);
+  }
+
+  return runPythonFind(uvBin);
+}
+
 /**
  * Run `uv python install 3.12` once with the given environment.
  * Returns on success, throws with captured stderr on failure.
@@ -128,6 +155,13 @@ async function runPythonInstall(
   env: Record<string, string | undefined>,
   label: string,
 ): Promise<void> {
+  await assertCommandAllowedWithConfirmation({
+    executable: uvBin,
+    args: ['python', 'install', '3.12'],
+    source: 'system:uv-python-install',
+    allowCwdOutsideWorkspace: true,
+  });
+
   const prepared = prepareWinSpawn(uvBin, ['python', 'install', '3.12']);
   return new Promise<void>((resolve, reject) => {
     const stderrChunks: string[] = [];
@@ -212,6 +246,12 @@ export async function getManagedPythonEnv(
  * if the first attempt fails, to rule out mirror-specific issues.
  */
 export async function setupManagedPython(): Promise<void> {
+  const existingPython = await findManagedPythonPath();
+  if (existingPython) {
+    logger.info(`Managed Python 3.12 is already available at: ${existingPython}`);
+    return;
+  }
+
   const { bin: uvBin, source } = resolveUvBin();
   const uvEnv = await getUvMirrorEnv();
   const hasMirror = Object.keys(uvEnv).length > 0;
@@ -243,20 +283,9 @@ export async function setupManagedPython(): Promise<void> {
     }
   }
 
-  // After installation, verify and log the Python path
-  const verifySpawn = prepareWinSpawn(uvBin, ['python', 'find', '3.12', '--managed-python', '--no-python-downloads']);
+  // After installation, verify and log the Python path.
   try {
-    const findPath = await new Promise<string>((resolve) => {
-      const child = spawn(verifySpawn.command, verifySpawn.args, {
-        shell: verifySpawn.shell,
-        env: { ...process.env, ...uvEnv },
-        windowsHide: true,
-      });
-      let output = '';
-      child.stdout?.on('data', (data) => { output += data; });
-      child.on('close', () => resolve(output.trim()));
-    });
-
+    const findPath = await findManagedPythonPath();
     if (findPath) {
       logger.info(`Managed Python 3.12 installed at: ${findPath}`);
     }

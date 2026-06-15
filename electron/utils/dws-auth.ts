@@ -5,7 +5,7 @@
  * client. ClawX's DingTalk OAuth token is not interchangeable with that token.
  */
 
-import { execFile, execSync, spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { execFile, execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { promisify } from 'util';
 import * as path from 'path';
@@ -377,7 +377,7 @@ export async function authenticateDwsCliWithToken(
 export function isDwsCliAuthenticated(): boolean {
   const dwsPath = getDwsCliPath();
   try {
-    const output = execSync(`"${dwsPath}" auth status --format json`, {
+    const output = execFileSync(dwsPath, ['auth', 'status', '--format', 'json'], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: sanitizeDwsEnv(),
@@ -392,7 +392,7 @@ export function isDwsCliAuthenticated(): boolean {
 export async function logoutDwsCli(): Promise<void> {
   const dwsPath = getDwsCliPath();
   logger.info('[DwsAuth] Logging out DWS CLI...');
-  execSync(`"${dwsPath}" auth logout --yes`, {
+  execFileSync(dwsPath, ['auth', 'logout', '--yes'], {
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
     env: sanitizeDwsEnv(),

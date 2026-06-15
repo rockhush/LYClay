@@ -10,6 +10,11 @@
 
 import { join } from 'path';
 import * as fs from 'fs';
+import { evaluatePromptInjectionPolicy } from '../security/prompt-injection-policy';
+import {
+  evaluateSkillFrontmatterPermissions,
+  type SkillPermissionPolicyResult,
+} from '../security/skill-permission-policy';
 
 // ── ZIP Central Directory Reader (zero-dependency) ───────────────────────────
 
@@ -158,7 +163,6 @@ const BLOCKED_EXTENSIONS = new Set([
   '.app', '.dmg', '.pkg', '.deb', '.rpm',
   // Compiled bytecode
   '.jar', '.class', '.war', '.ear',
-  '.pyc', '.pyo',
   // Shortcuts / URL files (can auto-launch)
   '.lnk', '.url',
 ]);
@@ -168,6 +172,8 @@ const BLOCKED_EXTENSIONS = new Set([
 const WARNING_EXTENSIONS = new Set([
   // Scripting languages (require interpreter, not auto-executable)
   '.js', '.py', '.rb', '.pl', '.php',
+  // Python bytecode requires an interpreter and is reviewed as a warning.
+  '.pyc', '.pyo',
   '.sh', '.bash', '.zsh', '.csh', '.fish',
   '.ps1', '.psm1', '.psd1',
   '.reg',
@@ -600,12 +606,13 @@ export function validateZipStructure(
  */
 export function validateSkillManifest(
   manifestPath: string,
-): { valid: boolean; name?: string; description?: string; errors: string[] } {
+): { valid: boolean; name?: string; description?: string; errors: string[]; warnings: string[] } {
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   if (!fs.existsSync(manifestPath)) {
     errors.push(`SKILL.md not found at expected path: ${manifestPath}`);
-    return { valid: false, errors };
+    return { valid: false, errors, warnings };
   }
 
   let raw: string;
@@ -613,22 +620,31 @@ export function validateSkillManifest(
     raw = fs.readFileSync(manifestPath, 'utf-8');
   } catch {
     errors.push(`Cannot read SKILL.md: ${manifestPath}`);
-    return { valid: false, errors };
+    return { valid: false, errors, warnings };
   }
 
   if (raw.trim().length === 0) {
     errors.push('SKILL.md is empty');
-    return { valid: false, errors };
+    return { valid: false, errors, warnings };
   }
 
   // Check for YAML frontmatter (--- ... ---)
   const frontmatterMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!frontmatterMatch) {
     errors.push('SKILL.md is missing YAML frontmatter (must start with ---)');
-    return { valid: false, errors };
+    return { valid: false, errors, warnings };
   }
 
   const body = frontmatterMatch[1];
+
+  // Skill 权限声明在安装阶段先做结构化校验。运行时放行仍由 Main 策略中心决定，
+  // 这里的职责是阻止模糊、越权或无法解释的 manifest 进入本地技能目录。
+  const permissionResult = evaluateSkillFrontmatterPermissions(body);
+  for (const finding of permissionResult.findings) {
+    const message = `SKILL.md ${finding.message}`;
+    if (finding.level === 'error') errors.push(message);
+    else warnings.push(message);
+  }
 
   // Extract name
   const nameMatch = body.match(/^\s*name\s*:\s*(.+?)\s*$/m);
@@ -681,11 +697,26 @@ export function validateSkillManifest(
     }
   }
 
+  // Scan the entire manifest, not only the description. Skill bodies are often
+  // injected into agent context, so hidden instructions after frontmatter are
+  // just as dangerous as malicious metadata.
+  const promptScan = evaluatePromptInjectionPolicy({
+    source: 'skill',
+    name: name || manifestPath,
+    text: raw,
+  });
+  if (promptScan.decision.action === 'deny') {
+    errors.push(`SKILL.md prompt-injection scan blocked: ${promptScan.decision.reasons.join('; ')}`);
+  } else if (promptScan.decision.action === 'prompt') {
+    warnings.push(`SKILL.md prompt-injection scan warning: ${promptScan.decision.reasons.join('; ')}`);
+  }
+
   return {
     valid: errors.length === 0,
     name,
     description,
     errors,
+    warnings,
   };
 }
 
@@ -1216,18 +1247,73 @@ export interface ExtractedValidationResult {
   findings: ValidationFinding[];
   skillName?: string;
   skillDescription?: string;
+  /** 解压后的实际 Skill 根目录，可能是临时目录本身，也可能是唯一的顶层文件夹 */
+  skillRootDir?: string;
+  /** 安装前展示给用户的结构化权限声明 */
+  permissionResult?: SkillPermissionPolicyResult;
   summary: { errors: number; warnings: number };
+}
+
+export interface ExtractedSkillRootResult {
+  skillRootDir?: string;
+  error?: string;
+}
+
+/**
+ * 兼容两种常见 ZIP 布局：
+ * 1. ZIP 根目录直接包含 SKILL.md；
+ * 2. ZIP 只有一个顶层文件夹，该文件夹中包含 SKILL.md。
+ *
+ * 顶层结构存在歧义时直接拒绝，避免把额外文件或错误目录静默带入安装结果。
+ */
+export function resolveExtractedSkillRoot(extractDir: string): ExtractedSkillRootResult {
+  if (fs.existsSync(join(extractDir, 'SKILL.md'))) {
+    return { skillRootDir: extractDir };
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(extractDir, { withFileTypes: true });
+  } catch {
+    return { error: `Cannot read extracted Skill directory: ${extractDir}` };
+  }
+
+  if (entries.length !== 1 || !entries[0].isDirectory()) {
+    return {
+      error: 'SKILL.md was not found at the ZIP root or inside a single top-level directory',
+    };
+  }
+
+  const nestedRoot = join(extractDir, entries[0].name);
+  if (!fs.existsSync(join(nestedRoot, 'SKILL.md'))) {
+    return {
+      error: 'SKILL.md was not found at the ZIP root or inside the single top-level directory',
+    };
+  }
+
+  return { skillRootDir: nestedRoot };
 }
 
 export function validateExtractedSkill(
   skillDir: string,
 ): ExtractedValidationResult {
-  const manifestPath = join(skillDir, 'SKILL.md');
+  const resolvedRoot = resolveExtractedSkillRoot(skillDir);
+  const actualSkillDir = resolvedRoot.skillRootDir ?? skillDir;
+  const manifestPath = join(actualSkillDir, 'SKILL.md');
   const manifest = validateSkillManifest(manifestPath);
-  const scan = scanExtractedDirectory(skillDir);
-  const contentSafety = scanContentSafety(skillDir, manifest.name);
+  const permissionResult = readSkillManifestPermissions(manifestPath);
+  const scan = scanExtractedDirectory(actualSkillDir);
+  const contentSafety = scanContentSafety(actualSkillDir, manifest.name);
 
   const allFindings: ValidationFinding[] = [];
+
+  if (resolvedRoot.error) {
+    allFindings.push({
+      level: 'error',
+      category: 'manifest',
+      message: resolvedRoot.error,
+    });
+  }
 
   // Manifest errors
   for (const err of manifest.errors) {
@@ -1235,6 +1321,13 @@ export function validateExtractedSkill(
       level: 'error',
       category: 'manifest',
       message: err,
+    });
+  }
+  for (const warning of manifest.warnings) {
+    allFindings.push({
+      level: 'warning',
+      category: 'manifest',
+      message: warning,
     });
   }
 
@@ -1273,9 +1366,21 @@ export function validateExtractedSkill(
     findings: allFindings,
     skillName: manifest.name,
     skillDescription: manifest.description,
+    skillRootDir: resolvedRoot.skillRootDir,
+    permissionResult,
     summary: {
       errors: errors.length,
       warnings: warnings.length,
     },
   };
+}
+
+export function readSkillManifestPermissions(manifestPath: string): SkillPermissionPolicyResult | undefined {
+  try {
+    const raw = fs.readFileSync(manifestPath, 'utf8');
+    const frontmatterMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/);
+    return frontmatterMatch ? evaluateSkillFrontmatterPermissions(frontmatterMatch[1]) : undefined;
+  } catch {
+    return undefined;
+  }
 }
