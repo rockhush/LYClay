@@ -10,6 +10,7 @@ import {
   getMessageText,
   stripGatewayUserMetadata,
   isInternalMessage,
+  isSuppressedRunError,
   isToolResultRole,
   loadMissingPreviews,
   matchesOptimisticUserMessage,
@@ -142,7 +143,8 @@ export function createHistoryActions(
           return true;
         });
 
-        const runError = getRunErrorFromMessages(deduplicatedMessages);
+        const runErrorRaw = getRunErrorFromMessages(deduplicatedMessages);
+        const runError = runErrorRaw && isSuppressedRunError(runErrorRaw) ? null : runErrorRaw;
         set({ messages: deduplicatedMessages, thinkingLevel, loading: false, runError });
 
         const { pendingFinal, lastUserMessageAt, sending: isSendingNow } = get();

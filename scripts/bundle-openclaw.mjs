@@ -1047,14 +1047,31 @@ function findFilesByName(rootDir, matcher) {
 
 function verifyBundledDigitalEmployeeIsolation(outputDir) {
   const distDir = path.join(outputDir, 'dist');
-  const subagentFile = findFirstFileByName(distDir, /^subagent-spawn-.*\.js$/);
+  const chatFiles = findFilesByName(distDir, /^chat-.*\.js$/);
+  const getReplyFiles = findFilesByName(distDir, /^get-reply-.*\.js$/);
+  const protocolFiles = findFilesByName(distDir, /^protocol-.*\.js$/);
   const workspaceFiles = findFilesByName(distDir, /^workspace-.*\.js$/);
 
-  if (!subagentFile || workspaceFiles.length === 0) {
+  if (chatFiles.length === 0 || getReplyFiles.length === 0 || protocolFiles.length === 0 || workspaceFiles.length === 0) {
     return false;
   }
 
-  const subagentSource = fs.readFileSync(subagentFile, 'utf8');
+  const hasChatExecutionTarget = chatFiles.some((chatFile) => {
+    const chatSource = fs.readFileSync(chatFile, 'utf8');
+    return chatSource.includes('executeAsAgentId') && chatSource.includes('executedByAgentName');
+  });
+  const hasProtocolExecutionTarget = protocolFiles.some((protocolFile) => {
+    const protocolSource = fs.readFileSync(protocolFile, 'utf8');
+    return protocolSource.includes('executeAsAgentId: Type.Optional(Type.String())');
+  });
+  const hasGetReplyEmployeeIsolation = getReplyFiles.some((getReplyFile) => {
+    const getReplySource = fs.readFileSync(getReplyFile, 'utf8');
+    return (
+      getReplySource.includes('resolveDigitalEmployeeExecutionContext') &&
+      getReplySource.includes('buildDigitalEmployeeMcpServers') &&
+      getReplySource.includes('__digitalEmployeeOnly: true')
+    );
+  });
   const workspaceSourceHasEmployeeOnly = workspaceFiles.some((workspaceFile) => {
     const workspaceSource = fs.readFileSync(workspaceFile, 'utf8');
     return (
@@ -1064,11 +1081,9 @@ function verifyBundledDigitalEmployeeIsolation(outputDir) {
   });
 
   return (
-    subagentSource.includes('buildEmployeeMcpConfig') &&
-    subagentSource.includes('servers: buildEmployeeMcpConfig(employeeDir)') &&
-    subagentSource.includes('__digitalEmployeeOnly') &&
-    subagentSource.includes('buildWorkspaceSkillSnapshot(spawnedWorkspaceDir') &&
-    subagentSource.includes('skillsSnapshot: employeeSkillsSnapshot') &&
+    hasChatExecutionTarget &&
+    hasProtocolExecutionTarget &&
+    hasGetReplyEmployeeIsolation &&
     workspaceSourceHasEmployeeOnly
   );
 }

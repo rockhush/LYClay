@@ -32,7 +32,12 @@ import {
   type SessionStreamingState,
   type ToolStatus,
 } from './chat/types';
-import { attachmentFileNameFromPath } from './chat/helpers';
+import { attachmentFileNameFromPath, isSuppressedRunError } from './chat/helpers';
+import {
+  clearUserAbortedSession,
+  isUserAbortedSession,
+  persistUserAbortedSession,
+} from './chat/user-aborted-sessions';
 import {
   beginChatRunPerf,
   markChatRunRpcCompleted,
@@ -1229,6 +1234,10 @@ function applyBackgroundChatEvent(
   resolvedState: string,
   runId: string,
 ): Record<string, SessionStreamingState> | null {
+  if (isUserAbortedSession(sessionKey) && (resolvedState === 'started' || resolvedState === 'delta')) {
+    return null;
+  }
+
   const existing = state.sessionStreamingStates[sessionKey] ?? createEmptySessionStreamingState();
   if (!shouldProcessCurrentSessionRunEvent(existing.activeRunId, runId)) return null;
 
@@ -2238,6 +2247,28 @@ function buildSessionSwitchPatch(
     messagesSnapshot: [],
   };
 
+  const persistedAborted = isUserAbortedSession(nextSessionKey);
+  const effectiveNextSessionState = persistedAborted
+    ? {
+        ...nextSessionState,
+        sending: false,
+        activeRunId: null,
+        runAborted: true,
+        pendingFinal: false,
+        streamingText: '',
+        streamingMessage: null,
+        streamingTools: [],
+        pendingToolImages: [],
+        lastUserMessageAt: null,
+      }
+    : nextSessionState;
+  const effectiveStreamingStates = persistedAborted
+    ? {
+        ...finalStreamingStates,
+        [nextSessionKey]: effectiveNextSessionState,
+      }
+    : finalStreamingStates;
+
   return {
     currentSessionKey: nextSessionKey,
     currentAgentId: getAgentIdFromSessionKey(nextSessionKey),
@@ -2256,21 +2287,21 @@ function buildSessionSwitchPatch(
       : state.sessionPinnedAt,
     // customSessionLabels is purely user-driven persisted state; preserved
     // across switches and only pruned in `deleteSession`/`renameSession`.
-    sessionStreamingStates: finalStreamingStates,
+    sessionStreamingStates: effectiveStreamingStates,
     // Restore messages snapshot if there's an active stream, otherwise clear for loadHistory
-    messages: nextSessionState.messagesSnapshot.length > 0 ? nextSessionState.messagesSnapshot : [],
+    messages: effectiveNextSessionState.messagesSnapshot.length > 0 ? effectiveNextSessionState.messagesSnapshot : [],
     error: null,
     // Restore streaming state from the next session
-    activeRunId: nextSessionState.activeRunId,
-    streamingText: nextSessionState.streamingText,
-    streamingMessage: nextSessionState.streamingMessage,
-    streamingTools: nextSessionState.streamingTools,
-    pendingFinal: nextSessionState.pendingFinal,
-    lastUserMessageAt: nextSessionState.lastUserMessageAt,
-    pendingToolImages: nextSessionState.pendingToolImages,
-    runAborted: nextSessionState.runAborted,
-    runError: nextSessionState.runError ?? null,
-    sending: nextSessionState.sending,
+    activeRunId: effectiveNextSessionState.activeRunId,
+    streamingText: effectiveNextSessionState.streamingText,
+    streamingMessage: effectiveNextSessionState.streamingMessage,
+    streamingTools: effectiveNextSessionState.streamingTools,
+    pendingFinal: effectiveNextSessionState.pendingFinal,
+    lastUserMessageAt: effectiveNextSessionState.lastUserMessageAt,
+    pendingToolImages: effectiveNextSessionState.pendingToolImages,
+    runAborted: effectiveNextSessionState.runAborted,
+    runError: effectiveNextSessionState.runError ?? null,
+    sending: effectiveNextSessionState.sending,
     loading: false,
  };
 }
@@ -3317,6 +3348,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (_interruptedSendSession?.sessionKey === key) {
       _interruptedSendSession = null;
     }
+    clearUserAbortedSession(key);
 
     const { currentSessionKey, sessions } = get();
     const remaining = sessions.filter((s) => s.key !== key);
@@ -4127,6 +4159,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     let currentSessionKey = get().currentSessionKey;
+    clearUserAbortedSession(currentSessionKey);
     const reasoningMode = get().reasoningMode;
     const hasMedia = Boolean(attachments && attachments.length > 0);
     const reasoningDecision = getReasoningDecision(trimmed, reasoningMode, hasMedia);
@@ -4552,6 +4585,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (activeRunId) {
       markAbortedChatRun(activeRunId);
     }
+    persistUserAbortedSession(currentSessionKey, activeRunId);
     if (_interruptedSendSession?.sessionKey === currentSessionKey) {
       _interruptedSendSession = null;
     }
@@ -4622,6 +4656,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
 
+      if (eventSessionKey && isUserAbortedSession(eventSessionKey)) {
+        if (backgroundState === 'aborted' || backgroundState === 'final' || backgroundState === 'error') {
+          clearUserAbortedSession(eventSessionKey);
+        } else {
+          return;
+        }
+      }
+
       if (runId && isAbortedChatRun(runId)) {
         if (backgroundState === 'aborted' || backgroundState === 'final' || backgroundState === 'error') {
           forgetAbortedChatRun(runId);
@@ -4676,6 +4718,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }
 
+    const foregroundSessionKey = eventSessionKey ?? currentSessionKey;
+    if (isUserAbortedSession(foregroundSessionKey)) {
+      if (resolvedState === 'aborted' || resolvedState === 'final' || resolvedState === 'error') {
+        clearUserAbortedSession(foregroundSessionKey);
+      } else if (resolvedState === 'started' || resolvedState === 'delta') {
+        return;
+      }
+    }
+
     const { runAborted, sending: isSending } = get();
     if (runAborted && !isSending && (resolvedState === 'delta' || resolvedState === 'started')) {
       return;
@@ -4712,6 +4763,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         && !runAborted
         && runId
         && !isAbortedChatRun(runId)
+        && !isUserAbortedSession(foregroundSessionKey)
         && shouldAdoptStreamingRun(eventSessionKey, runId, storedRunId)
       ) {
         set({ sending: true, activeRunId: runId, error: null, runAborted: false });
@@ -4727,6 +4779,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           && !runAborted
           && runId
           && !isAbortedChatRun(runId)
+          && !isUserAbortedSession(foregroundSessionKey)
           && shouldAdoptStreamingRun(eventSessionKey, runId, storedRunId)
         ) {
           set({ sending: true, activeRunId: runId, error: null, runAborted: false });
@@ -4830,6 +4883,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (isUserSecurityDenialMessage(messageError)) {
               finishChatRunPerf('cancelled', runId);
               set(buildSecurityDenialState(messageError));
+              break;
+            }
+            if (isSuppressedRunError(messageError)) {
+              set({
+                streamingText: '',
+                streamingMessage: null,
+                sending: false,
+                activeRunId: null,
+                pendingFinal: false,
+                error: null,
+                runError: null,
+              });
+              void get().loadHistory(true);
               break;
             }
             set({
@@ -5066,6 +5132,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
           finishChatRunPerf('cancelled', runId);
           _pendingComplexTaskPlans.delete(currentSessionKey);
           set(buildSecurityDenialState(errorMsg));
+          break;
+        }
+
+        if (isSuppressedRunError(errorMsg)) {
+          clearErrorRecoveryTimer();
+          clearHistoryPoll();
+          set({
+            sending: false,
+            activeRunId: null,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            lastUserMessageAt: null,
+            error: null,
+            runError: null,
+          });
+          void get().loadHistory(true);
           break;
         }
 

@@ -22,6 +22,7 @@ import { extractImages, extractText, extractThinking, extractToolUse, stripProce
 import { deriveTaskSteps, findReplyMessageIndex, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { isSuppressedRunError } from '@/stores/chat/helpers';
 import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
 import { useMinLoading } from '@/hooks/use-min-loading';
 import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
@@ -100,17 +101,15 @@ function formatDuration(totalSeconds: number): string {
   return restMinutes === 0 ? `${hours}h` : `${hours}h ${restMinutes}m`;
 }
 
-// "operation was aborted" surfaces when a run is stopped or an in-flight
-// request is cancelled. It carries no actionable information, so it is always
-// hidden from the user regardless of how/when it was raised.
-function isAbortedRunError(error: string | null | undefined): boolean {
-  if (!error) return false;
-  return error.toLowerCase().includes('operation was aborted');
+// Non-actionable runtime errors (user abort, session lock races) are hidden
+// from the chat error bar and run termination notice.
+function shouldHideRunError(error: string | null | undefined): boolean {
+  return isSuppressedRunError(error);
 }
 
 function describeRunTermination(error: string | null): { title: string; detail: string } | null {
   if (!error) return null;
-  if (isAbortedRunError(error)) return null;
+  if (shouldHideRunError(error)) return null;
   const normalized = error.toLowerCase();
   if (normalized.includes('llm idle timeout')) {
     return {
@@ -1237,7 +1236,7 @@ export function Chat() {
       )}
 
       {/* Error bar */}
-      {error && !isAbortedRunError(error) && (
+      {error && !shouldHideRunError(error) && (
         <div className="px-4 py-2 bg-destructive/10 border-t border-destructive/20">
           <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
             <p className="text-sm text-destructive flex items-center gap-2 min-w-0">

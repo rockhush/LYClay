@@ -67,6 +67,18 @@ export function isUserSecurityDenialMessage(message: unknown): boolean {
 }
 
 /**
+ * Runtime errors that carry no actionable information for the user and should
+ * not surface in the chat error bar or run termination notice.
+ */
+export function isSuppressedRunError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const normalized = error.toLowerCase();
+  if (normalized.includes('operation was aborted')) return true;
+  if (normalized.includes('session file changed while embedded prompt lock was released')) return true;
+  return false;
+}
+
+/**
  * 把一条「用户拒绝安全确认」的错误消息转成会话内的温和取消提示。
  * 能从文件路径拒绝里提取具体路径，其余拒绝类型回退到通用文案。
  */

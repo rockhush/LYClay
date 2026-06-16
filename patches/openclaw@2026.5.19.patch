@@ -1,6 +1,8 @@
+diff --git a/dist/chat-O8o_e6f5.js b/dist/chat-O8o_e6f5.js
+index 81337ce..789b5ed 100644
 --- a/dist/chat-O8o_e6f5.js
 +++ b/dist/chat-O8o_e6f5.js
-@@ -1942,6 +1942,11 @@
+@@ -1944,6 +1944,11 @@ const chatHandlers = {
  			respond(false, void 0, errorShape(err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST, String(err)));
  			return;
  		}
@@ -12,7 +14,7 @@
  		try {
  			const activeRunAbort = registerChatAbortController({
  				chatAbortControllers: context.chatAbortControllers,
-@@ -2217,6 +2217,7 @@
+@@ -2217,6 +2222,9 @@ const chatHandlers = {
  					modelOverrideFallbacks,
  					thinkingLevelOverride: p.thinking,
  					fastModeOverride: p.fastMode,
@@ -22,25 +24,11 @@
  					onAgentRunStart: (runId) => {
  						agentRunStarted = true;
  						if (!hasBeforeAgentRunGate) emitUserTranscriptUpdate();
-
---- a/dist/protocol-CjAsjR7U.js
-+++ b/dist/protocol-CjAsjR7U.js
-@@ -2031,7 +2031,8 @@
- 	timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
- 	systemInputProvenance: Type.Optional(InputProvenanceSchema),
- 	systemProvenanceReceipt: Type.Optional(Type.String()),
--	idempotencyKey: NonEmptyString
-+	idempotencyKey: NonEmptyString,
-+	extraSystemPrompt: Type.Optional(Type.String()),
-+	executeAsAgentId: Type.Optional(Type.String()),
-+	executedByAgentName: Type.Optional(Type.String())
- }, { additionalProperties: false });
- const ChatAbortParamsSchema = Type.Object({
- 	sessionKey: NonEmptyString,
-
+diff --git a/dist/get-reply-DbVszRXg.js b/dist/get-reply-DbVszRXg.js
+index 244ff4c..8e379fc 100644
 --- a/dist/get-reply-DbVszRXg.js
 +++ b/dist/get-reply-DbVszRXg.js
-@@ -118,6 +118,7 @@
+@@ -118,6 +118,7 @@ import { t as isResetAuthorizedForContext } from "./reset-authorization-CmJSdj6Q
  import path from "node:path";
  import fs from "node:fs/promises";
  import crypto from "node:crypto";
@@ -48,7 +36,7 @@
  //#region src/auto-reply/reply/get-reply-directives-utils.ts
  const CLEARED_EXEC_FIELDS = {
  	hasExecDirective: false,
-@@ -4107,6 +4108,88 @@ async function applyLinkUnderstandingIfNeeded(params) {
+@@ -4115,13 +4116,91 @@ async function applyLinkUnderstandingIfNeeded(params) {
  		return false;
  	}
  }
@@ -138,7 +126,10 @@
  	});
 +	const digitalEmployeeExecution = await resolveDigitalEmployeeExecutionContext(cfg, opts);
 +	if (digitalEmployeeExecution) cfg = digitalEmployeeExecution.cfg;
-@@ -4144,17 +4227,22 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 	const useFastTestBootstrap = shouldUseReplyFastTestBootstrap({
+ 		isFastTestEnv,
+ 		configOverride
+@@ -4143,15 +4222,20 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
  		config: cfg,
  		attributes: traceAttributes
  	});
@@ -147,23 +138,43 @@
  		sessionKey: agentSessionKey,
  		config: cfg
  	});
-+	const agentId = digitalEmployeeExecution?.agentId ?? sessionAgentId;
 -	const mergedSkillFilter = mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId));
+-	const resolvedOpts = mergedSkillFilter !== void 0 ? {
++	const agentId = digitalEmployeeExecution?.agentId ?? sessionAgentId;
 +	const baseOpts = digitalEmployeeExecution ? {
-+		...opts,
+ 		...opts,
+-		skillFilter: mergedSkillFilter
 +		extraSystemPrompt: digitalEmployeeExecution.workflowPrompt || void 0
-+	} : opts;
+ 	} : opts;
 +	const mergedSkillFilter = mergeSkillFilters(baseOpts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId));
- 	const resolvedOpts = mergedSkillFilter !== void 0 ? {
--		...opts,
++	const resolvedOpts = mergedSkillFilter !== void 0 ? {
 +		...baseOpts,
- 		skillFilter: mergedSkillFilter
--	} : opts;
++		skillFilter: mergedSkillFilter
 +	} : baseOpts;
  	const agentCfg = cfg.agents?.defaults;
+ 	const sessionCfg = cfg.session;
+ 	const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
+diff --git a/dist/protocol-CjAsjR7U.js b/dist/protocol-CjAsjR7U.js
+index d98b055..f61b7ec 100644
+--- a/dist/protocol-CjAsjR7U.js
++++ b/dist/protocol-CjAsjR7U.js
+@@ -2031,7 +2031,10 @@ const ChatSendParamsSchema = Type.Object({
+ 	timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+ 	systemInputProvenance: Type.Optional(InputProvenanceSchema),
+ 	systemProvenanceReceipt: Type.Optional(Type.String()),
+-	idempotencyKey: NonEmptyString
++	idempotencyKey: NonEmptyString,
++	extraSystemPrompt: Type.Optional(Type.String()),
++	executeAsAgentId: Type.Optional(Type.String()),
++	executedByAgentName: Type.Optional(Type.String())
+ }, { additionalProperties: false });
+ const ChatAbortParamsSchema = Type.Object({
+ 	sessionKey: NonEmptyString,
+diff --git a/dist/workspace-DpPIWO-c.js b/dist/workspace-DpPIWO-c.js
+index db3cc02..8a1cb5d 100644
 --- a/dist/workspace-DpPIWO-c.js
 +++ b/dist/workspace-DpPIWO-c.js
-@@ -714,6 +714,31 @@
+@@ -714,6 +714,33 @@ function loadSkillEntries(workspaceDir, opts) {
  		source: "openclaw-extra",
  		limits
  	})];
@@ -197,7 +208,7 @@
  	const managedSkills = loadSkills({
  		dir: managedSkillsDir,
  		source: "openclaw-managed"
-@@ -738,27 +763,7 @@
+@@ -738,28 +765,7 @@ function loadSkillEntries(workspaceDir, opts) {
  	for (const record of personalAgentsSkills) merged.set(record.skill.name, record);
  	for (const record of projectAgentsSkills) merged.set(record.skill.name, record);
  	for (const record of workspaceSkills) merged.set(record.skill.name, record);
@@ -227,4 +238,3 @@
  }
  function escapeXml(str) {
  	return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-

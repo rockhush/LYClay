@@ -2,8 +2,10 @@
 
 import 'zx/globals';
 import { readFileSync, existsSync, mkdirSync, rmSync, cpSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -19,6 +21,7 @@ const DEFAULT_GIT_REMOTE_TEMPLATES = [
   'https://gh.llkk.cc/https://github.com/{repo}.git',
   'https://ghfast.top/https://github.com/{repo}.git',
 ];
+const execFileAsync = promisify(execFile);
 
 function readArgValue(name) {
   const prefix = `${name}=`;
@@ -140,22 +143,16 @@ function shouldCopySkillFile(srcPath) {
 }
 
 async function extractArchive(archiveFileName, cwd) {
-  const prevCwd = $.cwd;
-  $.cwd = cwd;
   try {
-    try {
-      await $`tar -xf ${archiveFileName}`;
+    await execFileAsync('tar', ['-xf', archiveFileName], { cwd, windowsHide: true });
+    return;
+  } catch (tarError) {
+    if (process.platform === 'win32') {
+      // Some Windows images expose bsdtar instead of tar.
+      await execFileAsync('bsdtar', ['-xf', archiveFileName], { cwd, windowsHide: true });
       return;
-    } catch (tarError) {
-      if (process.platform === 'win32') {
-        // Some Windows images expose bsdtar instead of tar.
-        await $`bsdtar -xf ${archiveFileName}`;
-        return;
-      }
-      throw tarError;
     }
-  } finally {
-    $.cwd = prevCwd;
+    throw tarError;
   }
 }
 
@@ -166,19 +163,22 @@ async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
   const archivePath = join(checkoutDir, archiveFileName);
   const archivePaths = [...new Set(paths.map(normalizeRepoPath))];
 
-  await $`git init ${gitCheckoutDir}`;
+  await execFileAsync('git', ['init', gitCheckoutDir], { cwd: ROOT, windowsHide: true });
   let lastFetchError;
   for (let index = 0; index < GIT_REMOTE_TEMPLATES.length; index += 1) {
     const remote = createRemoteUrl(GIT_REMOTE_TEMPLATES[index], repo);
     if (index === 0) {
-      await $`git -C ${gitCheckoutDir} remote add origin ${remote}`;
+      await execFileAsync('git', ['-C', gitCheckoutDir, 'remote', 'add', 'origin', remote], { cwd: ROOT, windowsHide: true });
     } else {
-      await $`git -C ${gitCheckoutDir} remote set-url origin ${remote}`;
+      await execFileAsync('git', ['-C', gitCheckoutDir, 'remote', 'set-url', 'origin', remote], { cwd: ROOT, windowsHide: true });
     }
 
     try {
       echo`   fetching from ${remote}`;
-      await $`git -C ${gitCheckoutDir} fetch --depth 1 origin ${ref}`;
+      await execFileAsync('git', ['-C', gitCheckoutDir, 'fetch', '--depth', '1', 'origin', ref], {
+        cwd: ROOT,
+        windowsHide: true,
+      });
       lastFetchError = null;
       break;
     } catch (error) {
@@ -193,11 +193,19 @@ async function fetchSparseRepo(repo, ref, paths, checkoutDir) {
 
   // Do not checkout working tree on Windows: upstream repos may contain
   // Windows-invalid paths. Export only requested directories via git archive.
-  await $`git -C ${gitCheckoutDir} archive --format=tar --output ${archiveFileName} FETCH_HEAD ${archivePaths}`;
+  await execFileAsync(
+    'git',
+    ['-C', gitCheckoutDir, 'archive', '--format=tar', '--output', archiveFileName, 'FETCH_HEAD', ...archivePaths],
+    { cwd: ROOT, windowsHide: true },
+  );
   await extractArchive(archiveFileName, checkoutDir);
   rmSync(archivePath, { force: true });
 
-  const commit = (await $`git -C ${gitCheckoutDir} rev-parse FETCH_HEAD`).stdout.trim();
+  const { stdout } = await execFileAsync('git', ['-C', gitCheckoutDir, 'rev-parse', 'FETCH_HEAD'], {
+    cwd: ROOT,
+    windowsHide: true,
+  });
+  const commit = stdout.trim();
   return commit;
 }
 

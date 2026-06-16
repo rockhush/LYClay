@@ -21,6 +21,9 @@ import { parseJsonBody, sendJson } from '../route-utils';
 import { ensureClawXContext } from '../../utils/openclaw-workspace';
 import { terminateGatewayListenersOnPort, terminateGatewayProcessByPid } from '../../gateway/supervisor';
 import { listLocalDigitalEmployees, readInstalledManifest } from '../../utils/digital-employee-storage';
+import { listLocalDigitalEmployees, readInstalledManifest } from '../../utils/digital-employee-storage';
+import { terminateGatewayListenersOnPort, terminateGatewayProcessByPid } from '../../gateway/supervisor';
+
 function scheduleGatewayReload(ctx: HostApiContext, reason: string): void {
   if (ctx.gatewayManager.getStatus().state !== 'stopped') {
     ctx.gatewayManager.debouncedReload();
@@ -29,9 +32,11 @@ function scheduleGatewayReload(ctx: HostApiContext, reason: string): void {
   void reason;
 }
 
+
 import { exec } from 'child_process';
 import { promisify } from 'util';
 const execAsync = promisify(exec);
+
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -147,7 +152,6 @@ export async function handleAgentRoutes(
       isDigitalEmployee: Boolean(employee),
       instanceId: employee?.instanceId ?? null,
       installPath: employee?.installPath ?? null,
-      name: employee?.name ?? null,
       workflowPrompt,
     });
     return true;

@@ -14,6 +14,7 @@ import {
   isInternalMessageText,
   isUserSecurityDenialMessage,
   buildSecurityCancelNotice,
+  isSuppressedRunError,
   makeAttachedFile,
   attachmentFileNameFromPath,
   normalizeStreamingMessage,
@@ -265,6 +266,19 @@ export function handleRuntimeEventState(
 
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
+              const messageError = getMessageErrorMessage(normalizedFinalMessage);
+              if (isSuppressedRunError(messageError)) {
+                patchBackgroundSessionState({
+                  streamingText: '',
+                  streamingMessage: null,
+                  sending: false,
+                  activeRunId: null,
+                  pendingFinal: false,
+                  runError: null,
+                });
+                clearHistoryPoll();
+                break;
+              }
               patchBackgroundSessionState({
                 streamingText: '',
                 streamingMessage: null,
@@ -337,6 +351,20 @@ export function handleRuntimeEventState(
                   streamingTools: [],
                 });
                 clearHistoryPoll();
+                break;
+              }
+              if (isSuppressedRunError(messageError)) {
+                set({
+                  streamingText: '',
+                  streamingMessage: null,
+                  sending: false,
+                  activeRunId: null,
+                  pendingFinal: false,
+                  error: null,
+                  runError: null,
+                });
+                clearHistoryPoll();
+                void get().loadHistory(true);
                 break;
               }
               set({
@@ -564,6 +592,25 @@ export function handleRuntimeEventState(
               activeRunId: null,
               lastUserMessageAt: null,
             });
+            break;
+          }
+
+          if (isSuppressedRunError(errorMsg)) {
+            clearErrorRecoveryTimer();
+            clearHistoryPoll();
+            set({
+              sending: false,
+              activeRunId: null,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
+              lastUserMessageAt: null,
+              error: null,
+              runError: null,
+            });
+            void get().loadHistory(true);
             break;
           }
 

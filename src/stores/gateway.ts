@@ -7,6 +7,7 @@ import { hostApiFetch } from '@/lib/host-api';
 import { invokeIpc } from '@/lib/api-client';
 import { subscribeHostEvent } from '@/lib/host-events';
 import type { GatewayStatus } from '../types/gateway';
+import { reabortPersistedUserSessions } from './chat/user-aborted-sessions';
 
 let gatewayInitPromise: Promise<void> | null = null;
 let gatewayEventUnsubscribers: Array<() => void> | null = null;
@@ -21,6 +22,7 @@ let lastLoadSessionsAt = 0;
 let lastLoadHistoryAt = 0;
 let cronRepairTriggeredThisSession = false;
 let cronRepairStartupTimer: ReturnType<typeof setTimeout> | null = null;
+let lastReabortGatewayConnectedAt: number | undefined;
 let chatStoreImportPromise: Promise<typeof import('./chat')> | null = null;
 
 function loadChatStoreModule(): Promise<typeof import('./chat')> {
@@ -325,6 +327,18 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
                   resetFirstMessageFlag();
                 })
                 .catch(() => {});
+            }
+
+            if (
+              payload.state === 'running'
+              && payload.gatewayReady === true
+              && payload.connectedAt
+              && payload.connectedAt !== lastReabortGatewayConnectedAt
+            ) {
+              lastReabortGatewayConnectedAt = payload.connectedAt;
+              void reabortPersistedUserSessions((method, params, timeoutMs) => (
+                get().rpc(method, params, timeoutMs)
+              ));
             }
 
             // Delay cron repair after startup so first chat has priority for

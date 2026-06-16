@@ -96,4 +96,49 @@ describe('chat abort run', () => {
     expect(useChatStore.getState().streamingMessage).toBeNull();
     expect(useChatStore.getState().sending).toBe(false);
   });
+
+  it('does not re-adopt a persisted user-aborted session after a simulated restart', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const { isUserAbortedSession } = await import('@/stores/chat/user-aborted-sessions');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-restart-me',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      runAborted: false,
+    });
+
+    await useChatStore.getState().abortRun();
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
+
+    useChatStore.setState({
+      sending: false,
+      activeRunId: null,
+      runAborted: false,
+      streamingMessage: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'started',
+      runId: 'run-restart-me',
+      sessionKey: 'agent:main:main',
+    });
+
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
+  });
 });
