@@ -307,16 +307,16 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
           });
           return;
         }
-        toast.success(t('upload.successDesc', { name: result.skillName || selectedFile.name }));
-
         // If there were warnings, show them with Chinese-friendly format
         if (result.validationResult && result.validationResult.summary.warnings > 0) {
           const warnings = result.validationResult.findings.filter(f => f.level === 'warning');
           const warningLines = warnings.slice(0, 2).map(f => formatFinding(f)).join('\n');
           toast.warning(
-            `${t('upload.securityWarning', 'Security warnings found')}\n${warningLines}`,
+            `${t('upload.successDesc', { name: result.skillName || selectedFile.name })}\n${t('upload.securityWarning', 'Security warnings found')}\n${warningLines}`,
             { duration: 6000 },
           );
+        } else {
+          toast.success(t('upload.successDesc', { name: result.skillName || selectedFile.name }));
         }
 
         setSelectedFile(null);

@@ -19,8 +19,6 @@ import { syncAgentModelOverrideToRuntime, syncAllProviderAuthToRuntime } from '.
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 import { ensureClawXContext } from '../../utils/openclaw-workspace';
-import { terminateGatewayListenersOnPort, terminateGatewayProcessByPid } from '../../gateway/supervisor';
-import { listLocalDigitalEmployees, readInstalledManifest } from '../../utils/digital-employee-storage';
 import { listLocalDigitalEmployees, readInstalledManifest } from '../../utils/digital-employee-storage';
 import { terminateGatewayListenersOnPort, terminateGatewayProcessByPid } from '../../gateway/supervisor';
 

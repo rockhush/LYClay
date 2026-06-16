@@ -3,7 +3,7 @@
  * Navigation sidebar with menu items.
  * No longer fixed - sits inside the flex layout below the title bar.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { version } from '@/../package.json';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -62,8 +62,6 @@ import {
   resolveSessionActivityMs,
   type SessionBucketKey,
 } from '@/lib/session-sidebar-order';
-import { buildBatchDeleteSessionGroups } from '@/lib/session-batch-delete-groups';
-import { BatchDeleteSessionsDialog } from '@/components/chat/BatchDeleteSessionsDialog';
 import logoSvg from '@/assets/1.png';
 
 /** While Chat shows first-response preparing, block switching sessions (sidebar + workspace). */
@@ -447,7 +445,6 @@ export function Sidebar() {
   const [renameSaving, setRenameSaving] = useState(false);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const [nowMs, setNowMs] = useState(INITIAL_NOW_MS);
-  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -803,76 +800,6 @@ export function Sidebar() {
     [pinnedSidebarSessions, sessionWorkspaceIds, workspaceIdsKnown],
   );
 
-  const batchDeleteSessionGroups = useMemo(() => {
-    const resolveTitle = (session: ChatSession) =>
-      getSessionLabel(session.key, session.displayName, session.label);
-
-    return buildBatchDeleteSessionGroups({
-      sessions: orderedSidebarSessions,
-      sessionLastActivity,
-      sessionWorkspaceIds,
-      sessionPinnedAt,
-      workspaces: allWorkspaces,
-      nowMs,
-      resolveTitle,
-      workspaceGroupLabel: (name) => t('common:sidebar.batchDeleteWorkspaceGroup', { name }),
-      bucketLabels: {
-        pinned: t('chat:historyBuckets.pinned'),
-        today: t('chat:historyBuckets.today'),
-        yesterday: t('chat:historyBuckets.yesterday'),
-        withinWeek: t('chat:historyBuckets.withinWeek'),
-        withinTwoWeeks: t('chat:historyBuckets.withinTwoWeeks'),
-        withinMonth: t('chat:historyBuckets.withinMonth'),
-        older: t('chat:historyBuckets.older'),
-      },
-    });
-  }, [
-    orderedSidebarSessions,
-    sessionLastActivity,
-    sessionWorkspaceIds,
-    sessionPinnedAt,
-    allWorkspaces,
-    nowMs,
-    t,
-    customSessionLabels,
-    sessionLabels,
-  ]);
-
-  const batchDeleteSessionCount = useMemo(
-    () => batchDeleteSessionGroups.reduce((count, group) => count + group.sessions.length, 0),
-    [batchDeleteSessionGroups],
-  );
-
-  const handleBatchDeleteSessions = useCallback(async (sessionKeys: string[]) => {
-    for (const key of sessionKeys) {
-      await deleteSession(key);
-    }
-    if (sessionKeys.includes(currentSessionKey)) {
-      navigate('/');
-    }
-    toast.success(t('common:sidebar.batchDeleteSuccess', { count: sessionKeys.length }));
-  }, [currentSessionKey, deleteSession, navigate, t]);
-
-  const renderBatchDeleteButton = (className?: string) => (
-    <button
-      type="button"
-      data-testid="sidebar-batch-delete-sessions"
-      disabled={batchDeleteSessionCount === 0}
-      onClick={(event) => {
-        event.stopPropagation();
-        setBatchDeleteOpen(true);
-      }}
-      className={cn(
-        'shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-muted-foreground transition-colors',
-        'hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10',
-        'disabled:cursor-not-allowed disabled:opacity-40',
-        className,
-      )}
-    >
-      {t('common:sidebar.batchDelete')}
-    </button>
-  );
-
   const hiddenRoutes = rendererExtensionRegistry.getHiddenRoutes();
   const extraNavItems = rendererExtensionRegistry.getExtraNavItems();
 
@@ -999,30 +926,19 @@ export function Sidebar() {
           {/* Workspaces */}
           {allWorkspaces.length > 0 && (
             <div data-testid="sidebar-workspaces-section" className="pb-2">
-              <div className="flex items-center justify-between gap-1 px-2.5 py-2 rounded-lg hover:bg-white dark:hover:bg-white/10">
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center cursor-pointer"
-                  onClick={toggleWorkspaceSection}
-                >
-                  <span className="text-[14px] font-medium text-foreground tracking-tight">
-                    {t('sidebar.workspaces')}
-                  </span>
-                </button>
-                {renderBatchDeleteButton()}
-                <button
-                  type="button"
-                  className="flex shrink-0 items-center justify-center cursor-pointer"
-                  onClick={toggleWorkspaceSection}
-                  aria-expanded={!workspacesCollapsed}
-                >
-                  <ChevronRight
-                    className={cn(
-                      'h-3 w-3 text-muted-foreground transition-transform',
-                      !workspacesCollapsed && 'rotate-90',
-                    )}
-                  />
-                </button>
+              <div
+                className="flex items-center justify-between px-2.5 py-2 cursor-pointer hover:bg-white dark:hover:bg-white/10 rounded-lg"
+                onClick={toggleWorkspaceSection}
+              >
+                <span className="text-[14px] font-medium text-foreground tracking-tight">
+                  {t('sidebar.workspaces')}
+                </span>
+                <ChevronRight
+                  className={cn(
+                    'h-3 w-3 text-muted-foreground transition-transform',
+                    !workspacesCollapsed && 'rotate-90',
+                  )}
+                />
               </div>
               {!workspacesCollapsed && (
                 <div className="space-y-0.5 mt-1">
@@ -1146,11 +1062,6 @@ export function Sidebar() {
           )}
 
           {/* Session list — below workspaces */}
-          {allWorkspaces.length === 0 && batchDeleteSessionCount > 0 && (
-            <div className="flex justify-end px-2.5 pb-1">
-              {renderBatchDeleteButton()}
-            </div>
-          )}
           {orderedSidebarSessions.some((s) => !isSessionListedUnderWorkspace(s.key)) && (
             <div className="space-y-0.5">
               {pinnedHistorySessions.length > 0 ? (
@@ -1299,23 +1210,6 @@ export function Sidebar() {
         )}
       </div>
     </aside>
-
-      <BatchDeleteSessionsDialog
-        open={batchDeleteOpen}
-        onOpenChange={setBatchDeleteOpen}
-        groups={batchDeleteSessionGroups}
-        title={t('common:sidebar.batchDeleteTitle')}
-        subtitle={t('common:sidebar.batchDeleteSubtitle', { count: batchDeleteSessionCount })}
-        selectAllLabel={t('common:sidebar.batchDeleteSelectAll')}
-        selectAllAria={t('common:sidebar.batchDeleteSelectAll')}
-        deselectAllAria={t('common:sidebar.batchDeleteDeselectAll')}
-        cancelLabel={t('common:actions.cancel')}
-        deleteLabel={t('common:actions.delete')}
-        confirmTitle={t('common:actions.confirm')}
-        confirmMessage={t('common:sidebar.batchDeleteConfirm')}
-        emptySelectionMessage={t('common:sidebar.batchDeleteNoSessions')}
-        onDelete={handleBatchDeleteSessions}
-      />
 
       <ConfirmDialog
         open={!!sessionToDelete}

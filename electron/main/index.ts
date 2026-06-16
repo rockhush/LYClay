@@ -43,6 +43,7 @@ import { migrateHomedirBuiltinSkills } from '../utils/skill-homedir-migration';
 import { ensureDwsEnvironmentInitialized } from '../utils/dws-env-setup';
 import { ensureDwsCliInstalled } from '../utils/dws-cli-installer';
 import { migrateLegacyUserDataIfNeeded } from '../utils/user-data-migration';
+import { startSessionTranscriptWatcher } from '../utils/session-transcript-watcher';
 
 import { startHostApiServer } from '../api/server';
 import { HostEventBus } from '../api/event-bus';
@@ -139,6 +140,7 @@ let gatewayManager!: GatewayManager;
 let clawHubService!: ClawHubService;
 let hostEventBus!: HostEventBus;
 let hostApiServer: Server | null = null;
+let stopSessionTranscriptWatcher: (() => void) | null = null;
 const mainWindowFocusState = createMainWindowFocusState();
 const quitLifecycleState = createQuitLifecycleState();
 
@@ -394,6 +396,10 @@ async function initialize(): Promise<void> {
     eventBus: hostEventBus,
     mainWindow: window,
   });
+  stopSessionTranscriptWatcher = startSessionTranscriptWatcher({
+    eventBus: hostEventBus,
+    getMainWindow: () => mainWindow,
+  }).stop;
 
   // Daily usage-report uploader (12:00 / 17:30 local). The scheduler is
   // unref'd so it does not keep the event loop alive after the window
@@ -691,6 +697,8 @@ if (gotTheLock) {
 
     hostEventBus.closeAll();
     hostApiServer?.close();
+    stopSessionTranscriptWatcher?.();
+    stopSessionTranscriptWatcher = null;
     stopUsageReportScheduler();
     void extensionRegistry.teardownAll();
 

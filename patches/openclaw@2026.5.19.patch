@@ -36,7 +36,7 @@ index 244ff4c..8e379fc 100644
  //#region src/auto-reply/reply/get-reply-directives-utils.ts
  const CLEARED_EXEC_FIELDS = {
  	hasExecDirective: false,
-@@ -4115,13 +4116,91 @@ async function applyLinkUnderstandingIfNeeded(params) {
+@@ -4115,13 +4116,97 @@ async function applyLinkUnderstandingIfNeeded(params) {
  		return false;
  	}
  }
@@ -113,7 +113,13 @@ index 244ff4c..8e379fc 100644
 +		}
 +	};
 +	const workflowText = await loadDigitalEmployeeWorkflows(employeeDir);
-+	const workflowPrompt = workflowText ? `<workflows>\n${workflowText}\n</workflows>` : "";
++	const isolationPrompt = [
++		"Digital employee isolation:",
++		"- Available skills and MCP servers are limited to this digital employee package.",
++		"- Ignore skills, MCP servers, or tool inventories mentioned earlier in the shared conversation unless they appear in the current package-local inventory.",
++		"- When asked about your skills, list only the package-local skills available to this digital employee."
++	].join("\n");
++	const workflowPrompt = [isolationPrompt, workflowText ? `<workflows>\n${workflowText}\n</workflows>` : ""].filter(Boolean).join("\n\n");
 +	return { agentId, cfg: employeeCfg, workflowPrompt };
 +}
  async function getReplyFromConfig(ctx, opts, configOverride) {
@@ -129,7 +135,7 @@ index 244ff4c..8e379fc 100644
  	const useFastTestBootstrap = shouldUseReplyFastTestBootstrap({
  		isFastTestEnv,
  		configOverride
-@@ -4143,15 +4222,20 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+@@ -4143,15 +4227,20 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
  		config: cfg,
  		attributes: traceAttributes
  	});
@@ -154,6 +160,24 @@ index 244ff4c..8e379fc 100644
  	const agentCfg = cfg.agents?.defaults;
  	const sessionCfg = cfg.session;
  	const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
+@@ -4252,7 +4342,17 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 		ctx: finalized,
+ 		cfg,
+ 		commandAuthorized
+ 	}));
++	if (digitalEmployeeExecution && sessionEntry?.skillsSnapshot) {
++		sessionEntry = {
++			...sessionEntry,
++			skillsSnapshot: void 0
++		};
++		if (sessionStore && sessionKey) sessionStore[sessionKey] = {
++			...sessionStore[sessionKey],
++			skillsSnapshot: void 0
++		};
++	}
+ 	if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
+ 		const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
+ 		if (opts?.isHeartbeat) {
 diff --git a/dist/protocol-CjAsjR7U.js b/dist/protocol-CjAsjR7U.js
 index d98b055..f61b7ec 100644
 --- a/dist/protocol-CjAsjR7U.js

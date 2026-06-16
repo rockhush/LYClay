@@ -3,12 +3,10 @@
  * Registers all IPC handlers for main-renderer communication
  */
 import { ipcMain, BrowserWindow, shell, dialog, app, nativeImage } from 'electron';
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, extname, basename } from 'node:path';
 import crypto from 'node:crypto';
-import { readFile as fsReadFile, writeFile as fsWriteFile, access as fsAccess, mkdir as fsMkdir, rm as fsRm } from 'fs/promises';
-import * as fsP from 'fs/promises';
 import { GatewayManager } from '../gateway/manager';
 import { ClawHubService, ClawHubSearchParams, ClawHubInstallParams, ClawHubUninstallParams } from '../gateway/clawhub';
 import {
@@ -52,16 +50,6 @@ import {
   ensureWeComPluginInstalled,
 } from '../utils/plugin-install';
 import { updateSkillConfig, getSkillConfig, getAllSkillConfigs } from '../utils/skill-config';
-import {
-  readZipEntries,
-  validateZipStructure,
-  validateExtractedSkill,
-} from '../utils/skill-validator';
-import {
-  diffSkillManifestPermissions,
-  requiresSkillPermissionConfirmation,
-  type SkillManifestPermissions,
-} from '../security/skill-permission-policy';
 import { SkillUploadConfirmationStore } from '../security/skill-upload-confirmation';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { getProviderConfig } from '../utils/provider-registry';
@@ -72,7 +60,7 @@ import { syncLaunchAtStartupSettingFromStore } from './launch-at-startup';
 import { proxyAwareFetch } from '../utils/proxy-fetch';
 import { getRecentTokenUsageHistory } from '../utils/token-usage';
 import { assertPathAllowed, assertPathInsideRoot } from '../security/path-policy';
-import { findSkillGrant, grantDialogPaths, grantSkillAccess, revokeSkillGrantsForSkill } from '../security/permission-store';
+import { grantDialogPaths, revokeSkillGrantsForSkill } from '../security/permission-store';
 import { secureProxyAwareFetch } from '../security/network-fetch';
 import { assertGatewayRpcNetworkAllowed, assertTextNetworkAllowed } from '../security/network-preflight';
 import { assertGatewayRpcModelSecretsAllowed, assertModelSecretsAllowedBeforeSend } from '../security/model-secret-preflight';
@@ -2818,32 +2806,6 @@ function registerSessionHandlers(): void {
  */
 const skillUploadConfirmations = new SkillUploadConfirmationStore();
 
-/**
- * Extract a ZIP archive to a destination directory using adm-zip.
- */
-async function manualExtractZip(zipPath: string, destDir: string): Promise<void> {
-  try {
-    const AdmZip = (await import('adm-zip')).default;
-    const zip = new AdmZip(zipPath);
-    zip.extractAllTo(destDir, true);
-  } catch (error) {
-    logger.error('Manual zip extraction failed:', error);
-    throw new Error('Failed to extract zip file');
-  }
-}
-
-/**
- * Safely clean up temp files/directories, ignoring errors.
- */
-async function safeCleanup(zipPath: string | null, extractDir: string | null): Promise<void> {
-  if (zipPath) {
-    try { await fsRm(zipPath, { force: true }); } catch { /* ignore */ }
-  }
-  if (extractDir) {
-    try { await fsRm(extractDir, { recursive: true, force: true }); } catch { /* ignore */ }
-  }
-}
-
 function registerSkillUploadHandlers(): void {
   ipcMain.handle('skill:uploadZip', async (_, params: {
     fileName: string;
@@ -2852,192 +2814,32 @@ function registerSkillUploadHandlers(): void {
     confirmationToken?: string;
   }) => {
     const skillsDir = getOpenClawSkillsDir();
-    const tempZipPath = join(skillsDir, `.upload_${Date.now()}.zip`);
-    const tempExtractDir = join(skillsDir, `.upload_extract_${Date.now()}`);
 
     try {
-      // Ensure skills directory exists
       await ensureDir(skillsDir);
-
-      // Decode base64 and write temp zip file
-      const buffer = Buffer.from(params.base64Data, 'base64');
-      const fileDigest = crypto.createHash('sha256').update(buffer).digest('hex');
-      await fsWriteFile(tempZipPath, buffer);
-
-      // ── P0 SECURITY: Pre-extraction validation ──────────────────────
-      let preValidationResult: ReturnType<typeof validateZipStructure>;
-      try {
-        const entries = readZipEntries(tempZipPath);
-        if (entries.length === 0) {
-          await safeCleanup(tempZipPath, null);
-          return {
-            success: false,
-            error: 'ZIP 文件为空，请检查文件是否正确',
-            errorCode: 'ZIP_EMPTY',
-            securityBlocked: true,
-          };
-        }
-        preValidationResult = validateZipStructure(entries, tempZipPath);
-      } catch (zipReadError) {
-        await safeCleanup(tempZipPath, null);
-        return {
-          success: false,
-          error: 'ZIP 文件读取失败，文件可能已损坏或不是有效的格式',
-          errorCode: 'ZIP_READ_FAILED',
-          securityBlocked: true,
-        };
-      }
-
-      if (!preValidationResult.allowed) {
-        await safeCleanup(tempZipPath, null);
-        logger.warn('[skill:uploadZip] Pre-extraction security check blocked:', preValidationResult.blockReason);
-        return {
-          success: false,
-          error: preValidationResult.blockReason || 'Security check failed',
-          errorCode: 'SECURITY_BLOCKED',
-          securityBlocked: true,
-          validationResult: {
-            riskLevel: preValidationResult.riskLevel,
-            findings: preValidationResult.findings,
-            summary: preValidationResult.summary,
-            stage: 'pre-extraction',
-          },
-        };
-      }
-
-      // ── Pre-extraction passed — extract to temp directory ───────────
-      await ensureDir(tempExtractDir);
-
-      try {
-        await manualExtractZip(tempZipPath, tempExtractDir);
-      } catch (unzipError) {
-        logger.error('Zip extraction failed:', unzipError);
-        await safeCleanup(tempZipPath, tempExtractDir);
-        return {
-          success: false,
-          error: 'ZIP 解压失败，请检查文件是否损坏',
-          errorCode: 'ZIP_EXTRACT_FAILED',
-          securityBlocked: true,
-        };
-      }
-
-      // ── P0 SECURITY: Post-extraction validation ─────────────────────
-      const postValidationResult = validateExtractedSkill(tempExtractDir);
-
-      if (!postValidationResult.allowed) {
-        await safeCleanup(tempZipPath, tempExtractDir);
-        logger.warn('[skill:uploadZip] Post-extraction security check blocked:', postValidationResult.blockReason);
-        return {
-          success: false,
-          error: postValidationResult.blockReason || 'Content security check failed',
-          errorCode: 'CONTENT_BLOCKED',
-          securityBlocked: true,
-          validationResult: {
-            riskLevel: postValidationResult.riskLevel,
-            findings: postValidationResult.findings,
-            summary: postValidationResult.summary,
-            stage: 'post-extraction',
-          },
-        };
-      }
-
-      // ── Determine skill target directory ────────────────────────────
-      const skillName = postValidationResult.skillName || params.fileName.replace(/\.zip$/i, '');
-      const targetDir = join(skillsDir, skillName);
-      const permissionResult = postValidationResult.permissionResult;
-      const actualSkillDir = postValidationResult.skillRootDir ?? tempExtractDir;
-      const manifestDigest = crypto.createHash('sha256')
-        .update(await fsReadFile(join(actualSkillDir, 'SKILL.md')))
-        .digest('hex');
-      const existingManifestPath = join(targetDir, 'SKILL.md');
-      const existingManifestDigest = existsSync(existingManifestPath)
-        ? crypto.createHash('sha256').update(await fsReadFile(existingManifestPath)).digest('hex')
-        : null;
-      // 升级 Skill 时只信任已经持久化的授权记录，不能把磁盘上的 manifest 直接当作授权依据。
-      // 这样即使本地 Skill 被篡改，也无法借助重新安装静默扩大权限。
-      const existingGrant = existingManifestDigest
-        ? await findSkillGrant(skillName, existingManifestDigest)
-        : null;
-      const permissionDiff = diffSkillManifestPermissions(
-        existingGrant?.permissions,
-        permissionResult?.permissions ?? {
-          filesystem: [],
-          network: [],
-          commands: [],
-          secrets: [],
-        } satisfies SkillManifestPermissions,
-      );
-      const requiresPermissionConfirmation = requiresSkillPermissionConfirmation(permissionDiff);
-
-      if (requiresPermissionConfirmation && !params.autoInstall) {
-        // Renderer 只能展示新增权限并发起后续请求，真正可安装的短期凭证由 Main 签发。
-        const confirmationToken = skillUploadConfirmations.create(params.fileName, fileDigest);
-        await safeCleanup(tempZipPath, tempExtractDir);
-        return {
-          success: true,
-          preview: true,
-          skillName,
-          confirmationToken,
-          permissions: permissionResult?.permissions,
-          permissionDiff,
-          validationResult: {
-            riskLevel: postValidationResult.riskLevel,
-            findings: postValidationResult.findings,
-            summary: postValidationResult.summary,
-            stage: 'preview',
-          },
-        };
-      }
-
-      // 仅新增额外能力时要求令牌。普通 Skill 继承 Workspace 基础权限后可直接安装。
-      if (requiresPermissionConfirmation
-        && !skillUploadConfirmations.consume(params.confirmationToken, params.fileName, fileDigest)) {
-        await safeCleanup(tempZipPath, tempExtractDir);
-        return {
-          success: false,
-          error: 'Skill installation requires a fresh permission confirmation',
-          errorCode: 'SKILL_PERMISSION_CONFIRMATION_REQUIRED',
-          securityBlocked: true,
-        };
-      }
-
-      // Remove existing skill dir if present (re-install)
-      if (existsSync(targetDir)) {
-        await fsRm(targetDir, { recursive: true, force: true });
-      }
-
-      // ZIP 可能直接包含 SKILL.md，也可能使用唯一顶层目录包裹 Skill。
-      // 始终移动校验器确认过的实际 Skill 根目录，避免安装后出现双层目录。
-      await fsP.rename(postValidationResult.skillRootDir ?? tempExtractDir, targetDir);
-
-      await grantSkillAccess(skillName, manifestDigest, permissionResult?.permissions ?? {
-        filesystem: ['workspace:metadata', 'workspace:read', 'workspace:write'],
-        network: [],
-        commands: [],
-        secrets: [],
-      }, {
-        source: 'skill:uploadZip',
+      const result = await installLocalSkillZip({
+        fileName: params.fileName,
+        buffer: Buffer.from(params.base64Data, 'base64'),
+        skillsDir,
+        tempRoot: app.getPath('temp'),
+        autoInstall: params.autoInstall,
+        confirmationToken: params.confirmationToken,
+        confirmationStore: skillUploadConfirmations,
+        targetDirNameStrategy: 'manifest-name',
       });
-
-      // 嵌套目录移动完成后，临时解压目录可能仍为空，需要一并清理。
-      await safeCleanup(tempZipPath, tempExtractDir);
 
       return {
         success: true,
-        skillName,
-        validationResult: {
-          riskLevel: postValidationResult.riskLevel,
-          findings: postValidationResult.findings,
-          summary: postValidationResult.summary,
-          stage: 'complete',
-        },
+        ...result,
       };
     } catch (error) {
       logger.error('Skill upload error:', error);
-      await safeCleanup(tempZipPath, tempExtractDir);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Upload failed',
+        errorCode: (error as { errorCode?: string })?.errorCode,
+        securityBlocked: Boolean((error as { errorCode?: string })?.errorCode),
+        validationResult: (error as { validationResult?: unknown })?.validationResult,
       };
     }
   });

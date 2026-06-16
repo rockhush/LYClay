@@ -23,7 +23,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-type UploadValidationStage = 'pre-extraction' | 'post-extraction' | 'preview';
+type UploadValidationStage = 'pre-extraction' | 'post-extraction' | 'preview' | 'complete';
 
 type UploadValidationResult = Pick<ExtractedValidationResult, 'riskLevel' | 'findings' | 'summary'> & {
   stage: UploadValidationStage;
@@ -34,6 +34,7 @@ export type InstalledLocalSkillUploadResult = {
   skillVersion: string;
   skillDir: string;
   preview?: false;
+  validationResult: UploadValidationResult;
 };
 
 export type LocalSkillPermissionPreviewResult = {
@@ -162,23 +163,35 @@ export async function extractZipToDir(zipPath: string, destDir: string): Promise
       return;
     } catch {
       const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-      await runArchiveCommand(powershell, [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        'Expand-Archive -LiteralPath $env:CLAWX_ARCHIVE_PATH -DestinationPath $env:CLAWX_ARCHIVE_DEST -Force',
-      ], {
-        ...process.env,
-        CLAWX_ARCHIVE_PATH: zipPath,
-        CLAWX_ARCHIVE_DEST: destDir,
-      });
+      try {
+        await runArchiveCommand(powershell, [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          'Expand-Archive -LiteralPath $env:CLAWX_ARCHIVE_PATH -DestinationPath $env:CLAWX_ARCHIVE_DEST -Force',
+        ], {
+          ...process.env,
+          CLAWX_ARCHIVE_PATH: zipPath,
+          CLAWX_ARCHIVE_DEST: destDir,
+        });
+      } catch (error) {
+        const err = new Error('Failed to extract zip file');
+        (err as any).errorCode = 'ZIP_EXTRACT_FAILED';
+        throw err;
+      }
       return;
     }
   }
 
-  await runArchiveCommand('unzip', ['-o', zipPath, '-d', destDir]);
+  try {
+    await runArchiveCommand('unzip', ['-o', zipPath, '-d', destDir]);
+  } catch (error) {
+    const err = new Error('Failed to extract zip file');
+    (err as any).errorCode = 'ZIP_EXTRACT_FAILED';
+    throw err;
+  }
 }
 
 type InstallLocalSkillFromExtractedContentParams = {
@@ -186,14 +199,26 @@ type InstallLocalSkillFromExtractedContentParams = {
   fileName: string;
   skillsDir: string;
   permissionConfirmation?: PermissionConfirmationOptions;
+  targetDirNameStrategy?: 'zip-basename' | 'manifest-name';
 };
+
+function resolveTargetDirName(
+  strategy: InstallLocalSkillFromExtractedContentParams['targetDirNameStrategy'],
+  metadataName: string,
+  packageDirName: string,
+): string {
+  if (strategy === 'manifest-name') {
+    return metadataName || packageDirName;
+  }
+  return packageDirName;
+}
 
 
 export async function installLocalSkillFromExtractedContent(params: InstallLocalSkillFromExtractedContentParams): Promise<LocalSkillUploadResult> {
   const packageDirName = resolveLocalUploadPackageDirName(params.fileName);
-  const skillDir = path.join(params.skillsDir, packageDirName);
+  let skillDir = path.join(params.skillsDir, packageDirName);
 
-  if (await restorePreservedSkillDirectory(packageDirName, skillDir)) {
+  if (params.targetDirNameStrategy !== 'manifest-name' && await restorePreservedSkillDirectory(packageDirName, skillDir)) {
     const manifestPath = path.join(skillDir, 'SKILL.md');
     const manifestRaw = await fs.promises.readFile(manifestPath);
     const metadata = resolveLocalUploadSkillMetadata(
@@ -218,6 +243,7 @@ export async function installLocalSkillFromExtractedContent(params: InstallLocal
       skillName: metadata.name,
       skillVersion: metadata.version,
       skillDir,
+      validationResult: buildValidationResult(validation, 'complete'),
     };
   }
 
@@ -241,6 +267,38 @@ export async function installLocalSkillFromExtractedContent(params: InstallLocal
     parseSkillManifestFields(manifestRaw.toString('utf8')),
     packageDirName,
   );
+  const targetDirName = resolveTargetDirName(params.targetDirNameStrategy, metadata.name, packageDirName);
+  skillDir = path.join(params.skillsDir, targetDirName);
+
+  if (params.targetDirNameStrategy === 'manifest-name' && await restorePreservedSkillDirectory(targetDirName, skillDir)) {
+    const manifestPath = path.join(skillDir, 'SKILL.md');
+    const manifestRaw = await fs.promises.readFile(manifestPath);
+    const restoredMetadata = resolveLocalUploadSkillMetadata(
+      parseSkillManifestFields(manifestRaw.toString('utf8')),
+      packageDirName,
+    );
+    const validation = validateExtractedSkill(skillDir);
+    const permissions = validation.permissionResult?.permissions ?? defaultSkillPermissions();
+    const { manifestDigest } = await buildPermissionGate({
+      fileName: params.fileName,
+      skillId: restoredMetadata.name,
+      skillDir,
+      manifestRaw,
+      permissions,
+      validation,
+      options: params.permissionConfirmation,
+    });
+    await grantSkillAccess(restoredMetadata.name, manifestDigest, permissions, {
+      source: params.permissionConfirmation?.source ?? 'skill:uploadZip',
+    });
+    return {
+      skillName: restoredMetadata.name,
+      skillVersion: restoredMetadata.version,
+      skillDir,
+      validationResult: buildValidationResult(validation, 'complete'),
+    };
+  }
+
   const gate = await buildPermissionGate({
     fileName: params.fileName,
     fileDigest: params.permissionConfirmation?.fileDigest,
@@ -263,6 +321,7 @@ export async function installLocalSkillFromExtractedContent(params: InstallLocal
     skillName: metadata.name,
     skillVersion: metadata.version,
     skillDir,
+    validationResult: buildValidationResult(postValidationResult, 'complete'),
   };
 }
 
@@ -274,6 +333,7 @@ export async function installLocalSkillZip(params: {
   autoInstall?: boolean;
   confirmationToken?: string;
   confirmationStore?: SkillUploadConfirmationStore;
+  targetDirNameStrategy?: InstallLocalSkillFromExtractedContentParams['targetDirNameStrategy'];
 }): Promise<LocalSkillUploadResult> {
   const tempExtractDir = path.join(params.tempRoot, `lyclaw-upload-${Date.now()}`);
   const tempZipPath = path.join(params.tempRoot, `.upload_${Date.now()}.zip`);
@@ -289,11 +349,15 @@ export async function installLocalSkillZip(params: {
     try {
       entries = readZipEntries(tempZipPath);
     } catch (zipReadError) {
-      throw new Error('ZIP file read failed; the archive may be damaged or invalid');
+      const err = new Error('ZIP file read failed; the archive may be damaged or invalid');
+      (err as any).errorCode = 'ZIP_READ_FAILED';
+      throw err;
     }
 
     if (entries.length === 0) {
-      throw new Error('ZIP file is empty');
+      const err = new Error('ZIP file is empty');
+      (err as any).errorCode = 'ZIP_EMPTY';
+      throw err;
     }
 
     const preValidationResult = validateZipStructure(entries, tempZipPath);
@@ -315,6 +379,7 @@ export async function installLocalSkillZip(params: {
       extractDir: tempExtractDir,
       fileName: params.fileName,
       skillsDir: params.skillsDir,
+      targetDirNameStrategy: params.targetDirNameStrategy,
       permissionConfirmation: {
         autoInstall: params.autoInstall,
         confirmationToken: params.confirmationToken,

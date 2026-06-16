@@ -75,6 +75,66 @@ description: nested
     await fs.promises.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it('can preserve legacy local upload target directory naming from SKILL.md name', async () => {
+    const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lyclaw-upload-test-'));
+    const skillsDir = path.join(tempRoot, 'skills');
+    const extractDir = path.join(tempRoot, 'extract');
+    await fs.promises.mkdir(extractDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(extractDir, 'SKILL.md'),
+      `---
+name: Machine Offline Quick Analysis Tool
+description: test
+---`,
+      'utf8',
+    );
+
+    const result = await installLocalSkillFromExtractedContent({
+      extractDir,
+      fileName: 'Machine-Offline-Quick-Analysis-Tool.zip',
+      skillsDir,
+      targetDirNameStrategy: 'manifest-name',
+    });
+
+    expect(result.skillName).toBe('Machine Offline Quick Analysis Tool');
+    expect(result.skillDir).toBe(path.join(skillsDir, 'Machine Offline Quick Analysis Tool'));
+    expect(fs.existsSync(path.join(result.skillDir, 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(skillsDir, 'Machine-Offline-Quick-Analysis-Tool'))).toBe(false);
+
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it('returns validation warnings after successful install', async () => {
+    const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lyclaw-upload-test-'));
+    const skillsDir = path.join(tempRoot, 'skills');
+    const extractDir = path.join(tempRoot, 'extract');
+    await fs.promises.mkdir(extractDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(extractDir, 'SKILL.md'),
+      `---
+name: script-warning-skill
+description: test
+---`,
+      'utf8',
+    );
+    await fs.promises.writeFile(path.join(extractDir, 'setup.sh'), '#!/bin/sh\necho hello\n', 'utf8');
+
+    const result = await installLocalSkillFromExtractedContent({
+      extractDir,
+      fileName: 'script-warning-skill.zip',
+      skillsDir,
+    });
+
+    expect(result.preview).not.toBe(true);
+    expect(result.validationResult.stage).toBe('complete');
+    expect(result.validationResult.summary.warnings).toBeGreaterThan(0);
+    expect(result.validationResult.findings.some((finding) =>
+      finding.level === 'warning' && finding.message.includes('setup.sh'),
+    )).toBe(true);
+
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
   it.runIf(process.platform === 'win32')('extracts a ZIP archive on Windows', async () => {
     const destination = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lyclaw-zip-extract-'));
     try {
