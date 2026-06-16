@@ -25,7 +25,16 @@
         "pinSession": "Pin session",
         "unpinSession": "Unpin session",
         "openClawPage": "OpenClaw Page",
-        "updateAvailable": " (Upgrade available)"
+        "updateAvailable": " (Upgrade available)",
+        "batchDelete": "Batch delete",
+        "batchDeleteTitle": "Batch delete conversations",
+        "batchDeleteSubtitle": "{{count}} conversations",
+        "batchDeleteConfirm": "Delete the selected conversations?",
+        "batchDeleteSelectAll": "Select all",
+        "batchDeleteDeselectAll": "Deselect all",
+        "batchDeleteNoSessions": "No conversations to delete",
+        "batchDeleteSuccess": "Deleted {{count}} conversations",
+        "batchDeleteWorkspaceGroup": "Workspace · {{name}}"
     },
     "actions": {
         "save": "Save",

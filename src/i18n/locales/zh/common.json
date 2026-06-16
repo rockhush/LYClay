@@ -26,7 +26,16 @@
         "pinSession": "置顶对话",
         "unpinSession": "取消置顶",
         "openClawPage": "OpenClaw 页面",
-        "updateAvailable": "（可升级）"
+        "updateAvailable": "（可升级）",
+        "batchDelete": "批量删除",
+        "batchDeleteTitle": "批量删除对话",
+        "batchDeleteSubtitle": "共 {{count}} 条对话",
+        "batchDeleteConfirm": "确认要删除选中的会话吗？",
+        "batchDeleteSelectAll": "全选",
+        "batchDeleteDeselectAll": "取消全选",
+        "batchDeleteNoSessions": "暂无可删除的对话",
+        "batchDeleteSuccess": "已删除 {{count}} 条对话",
+        "batchDeleteWorkspaceGroup": "工作空间 · {{name}}"
     },
     "actions": {
         "save": "保存",
