@@ -26,12 +26,11 @@ export interface CachedSkillDisplayMetadata {
 }
 
 export interface CachedDigitalEmployeeDisplayMetadata {
-  name?: string;
-  description?: string;
   version?: string;
+  name?: string;
   author?: string;
+  description?: string;
   updateTime?: string;
-  category?: string;
   tags?: string[];
 }
 
@@ -89,20 +88,26 @@ export function createEmptyUiState(): LyclawUiState {
   };
 }
 
-function sanitizeCachedDigitalEmployeeDisplayMetadata(input: unknown): CachedDigitalEmployeeDisplayMetadata | null {
+function sanitizeCachedDigitalEmployeeDisplayMetadata(
+  input: unknown,
+): CachedDigitalEmployeeDisplayMetadata | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const raw = input as Record<string, unknown>;
   const metadata: CachedDigitalEmployeeDisplayMetadata = {};
-  if (typeof raw.name === 'string' && raw.name.trim()) metadata.name = raw.name.trim();
-  if (typeof raw.description === 'string' && raw.description.trim()) metadata.description = raw.description.trim();
   if (typeof raw.version === 'string' && raw.version.trim()) metadata.version = raw.version.trim();
+  if (typeof raw.name === 'string' && raw.name.trim()) metadata.name = raw.name.trim();
   if (typeof raw.author === 'string' && raw.author.trim()) metadata.author = raw.author.trim();
-  if (typeof raw.updateTime === 'string' && raw.updateTime.trim()) metadata.updateTime = raw.updateTime.trim();
-  if (typeof raw.category === 'string' && raw.category.trim()) metadata.category = raw.category.trim();
+  if (typeof raw.description === 'string' && raw.description.trim()) {
+    metadata.description = raw.description.trim();
+  }
+  if (typeof raw.updateTime === 'string' && raw.updateTime.trim()) {
+    metadata.updateTime = raw.updateTime.trim();
+  }
   if (Array.isArray(raw.tags)) {
     const tags = raw.tags
-      .filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
-      .map((tag) => tag.trim());
+      .filter((tag): tag is string => typeof tag === 'string')
+      .map((tag) => tag.trim())
+      .filter(Boolean);
     if (tags.length > 0) metadata.tags = tags;
   }
   return Object.keys(metadata).length > 0 ? metadata : null;
@@ -230,7 +235,9 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
     ? skillsRaw as Record<string, unknown>
     : {};
   const digitalEmployeesRaw = data.digitalEmployees;
-  const digitalEmployeesObj = digitalEmployeesRaw && typeof digitalEmployeesRaw === 'object' && !Array.isArray(digitalEmployeesRaw)
+  const digitalEmployeesObj = digitalEmployeesRaw
+    && typeof digitalEmployeesRaw === 'object'
+    && !Array.isArray(digitalEmployeesRaw)
     ? digitalEmployeesRaw as Record<string, unknown>
     : {};
 

@@ -246,6 +246,25 @@ describe('deriveTaskSteps', () => {
     expect(steps).toEqual([]);
   });
 
+  it('filters OpenClaw heartbeat poll text from execution graph narration', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-heartbeat-poll',
+          content: [{ type: 'text', text: '[OpenClaw heartbeat poll]' }],
+        },
+      ],
+      streamingMessage: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '[OpenClaw heartbeat poll]' }],
+      },
+      streamingTools: [],
+    });
+
+    expect(steps).toEqual([]);
+  });
+
   it('filters model-generated command approval narration while keeping real tool calls', () => {
     const steps = deriveTaskSteps({
       messages: [

@@ -40,6 +40,7 @@ function normalizeProgressiveText(text: string | undefined): string {
 function isInternalText(text: string): boolean {
   const normalized = text.trim();
   if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(normalized)) return true;
+  if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(normalized)) return true;
   if (/^\s*System\s*\(untrusted\)\s*:/i.test(normalized)) return true;
   if (/^\s*System\s*:/i.test(normalized)) return true;
   if (isModelCommandApprovalText(normalized)) return true;
@@ -228,6 +229,10 @@ export function extractText(message: RawMessage | unknown): string {
   // Strip Gateway metadata from user messages for clean display
   if (isUser && result) {
     result = cleanUserText(result);
+  }
+
+  if (result && isInternalText(result)) {
+    return '';
   }
 
   return result;

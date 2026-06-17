@@ -1,14 +1,14 @@
 import { hostApiFetch } from '@/lib/host-api';
 import {
-  getDigitalEmployeeDisplayCacheSnapshot,
-  loadDigitalEmployeeDisplayCache,
-  type CachedDigitalEmployeeDisplayMetadata,
-} from '@/lib/digital-employee-display-cache';
-import {
   getSkillDisplayCacheSnapshot,
   loadSkillDisplayCacheLegacy,
 } from '@/lib/skill-display-cache';
 import type { CachedSkillDisplayMetadata } from '@/lib/skill-display-cache';
+import {
+  getDigitalEmployeeDisplayCacheSnapshot,
+  loadDigitalEmployeeDisplayCache,
+} from '@/lib/digital-employee-display-cache';
+import type { CachedDigitalEmployeeDisplayMetadata } from '@/lib/digital-employee-display-cache';
 import { useChatStore } from '@/stores/chat';
 import type { CompressionStateEntry } from '@/stores/chat/types';
 import { useWorkspacesStore } from '@/stores/workspaces';
@@ -150,12 +150,12 @@ function readLocalChatState(): LyclawUiState['chat'] {
   return { sessionWorkspaceIds, customSessionLabels, sessionPinnedAt, sessionLastActivity, sessionCompressionState: {} };
 }
 
-function readLocalSkillsState(): LyclawUiState['skills'] {
-  return getSkillDisplayCacheSnapshot();
-}
-
 function readLocalDigitalEmployeesState(): LyclawUiState['digitalEmployees'] {
   return getDigitalEmployeeDisplayCacheSnapshot();
+}
+
+function readLocalSkillsState(): LyclawUiState['skills'] {
+  return getSkillDisplayCacheSnapshot();
 }
 
 function readLocalUiState(): LyclawUiState {

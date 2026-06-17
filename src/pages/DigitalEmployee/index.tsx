@@ -21,16 +21,17 @@ import { LoaderBadge, LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { cn } from '@/lib/utils';
 import { hostApiFetch } from '@/lib/host-api';
 import {
-  resolveMarketplaceAgentWithCache,
+  commitCachedDigitalEmployeeDisplayMetadata,
+  resolveCachedDigitalEmployeeDisplayMetadata,
   seedCachedDigitalEmployeeDisplayMetadata,
 } from '@/lib/digital-employee-display-cache';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { useChatStore } from '@/stores/chat';
 import { useDigitalEmployeesStore } from '@/stores/digital-employees';
-import { useGatewayStore } from '@/stores/gateway';
 import {
   groupInstalledEmployeesByMarketId,
   mapInstalledEmployeeToMyAgent,
+  shouldIncludeInMyDigitalEmployees,
 } from './installed-employee-utils';
 import {
   MARKETPLACE_CATEGORY_OPTIONS,
@@ -116,6 +117,14 @@ function formatCreateTime(time: string): string {
   } catch {
     return '';
   }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isAlreadyLatestUpdateError(error: unknown): boolean {
+  return /Update version .+ must be newer than installed version .+/i.test(getErrorMessage(error));
 }
 
 interface AgentCardProps {
@@ -355,7 +364,7 @@ export function DigitalEmployee() {
   const [activeTab, setActiveTab] = useState<'mine' | 'market'>('mine');
   const [searchQuery, setSearchQuery] = useState('');
   const [marketQuery, setMarketQuery] = useState('');
-  const [marketplaceCatalog, setMarketplaceCatalog] = useState<MarketplaceAgent[]>([]);
+  const [displayCacheRevision, setDisplayCacheRevision] = useState(0);
   const [marketAgents, setMarketAgents] = useState<MarketplaceAgent[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketSearchError, setMarketSearchError] = useState(false);
@@ -365,62 +374,26 @@ export function DigitalEmployee() {
   const [isUpdating, setIsUpdating] = useState(false);
   const {
     employees,
+    marketplaceCatalog,
     loading: employeesLoading,
+    marketplaceCatalogLoading,
     installingMarketEmployeeId,
     updatingInstanceId,
     fetchEmployees,
+    prefetchMarketplaceCatalog,
     installMarketplaceEmployee,
     uninstallMarketplaceEmployee,
     updateEmployee,
     setEmployeeEnabled,
   } = useDigitalEmployeesStore();
-  const gatewayStatus = useGatewayStore((state) => state.status);
-  const isGatewayReady = gatewayStatus.state === 'running' && gatewayStatus.gatewayReady === true;
 
   useEffect(() => {
     void fetchEmployees();
   }, [fetchEmployees]);
 
   useEffect(() => {
-    if (!isGatewayReady) return;
-    void fetchEmployees();
-  }, [isGatewayReady, fetchEmployees]);
-
-  const fetchMarketplaceCatalog = useCallback(async () => {
-    try {
-      const result = await hostApiFetch<{
-        success: boolean;
-        results?: MarketplaceAgent[];
-        error?: string;
-      }>('/api/digital-employee/marketplace/list', {
-        method: 'POST',
-        body: JSON.stringify({
-          query: '',
-          category: '',
-          sort: '-download_count',
-        }),
-      });
-      if (!result.success) {
-        throw new Error(result.error || MARKETPLACE_SEARCH_ERROR_MESSAGE);
-      }
-      const results = result.results || [];
-      if (seedCachedDigitalEmployeeDisplayMetadata(results)) {
-        scheduleUiStateSync();
-      }
-      setMarketplaceCatalog(results);
-    } catch (error) {
-      console.warn('[DigitalEmployee] marketplace catalog fetch failed, keeping cache fallback', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchMarketplaceCatalog();
-  }, [fetchMarketplaceCatalog]);
-
-  useEffect(() => {
-    if (!isGatewayReady) return;
-    void fetchMarketplaceCatalog();
-  }, [isGatewayReady, fetchMarketplaceCatalog]);
+    void prefetchMarketplaceCatalog();
+  }, [prefetchMarketplaceCatalog]);
 
   const fetchMarketAgents = useCallback(async () => {
     setMarketLoading(true);
@@ -442,11 +415,7 @@ export function DigitalEmployee() {
       if (!result.success) {
         throw new Error(result.error || MARKETPLACE_SEARCH_ERROR_MESSAGE);
       }
-      const results = result.results || [];
-      if (seedCachedDigitalEmployeeDisplayMetadata(results)) {
-        scheduleUiStateSync();
-      }
-      setMarketAgents(results);
+      setMarketAgents(result.results || []);
     } catch {
       setMarketAgents([]);
       setMarketSearchError(true);
@@ -466,16 +435,61 @@ export function DigitalEmployee() {
   );
 
   const marketplaceCatalogBySlug = useMemo(() => new Map(
-    marketplaceCatalog.map((agent) => [agent.slug, agent]),
+    marketplaceCatalog.map((agent) => [agent.slug, agent as MarketplaceAgent]),
   ), [marketplaceCatalog]);
 
-  const myAgents = useMemo(() => employees.map((employee) => {
-    const marketplace = resolveMarketplaceAgentWithCache(
-      employee.marketEmployeeId,
-      marketplaceCatalogBySlug.get(employee.marketEmployeeId),
-    );
-    return mapInstalledEmployeeToMyAgent(employee, marketplace);
-  }), [employees, marketplaceCatalogBySlug]);
+  const resolveCachedDisplay = useCallback((marketEmployeeId: string) => (
+    resolveCachedDigitalEmployeeDisplayMetadata(marketEmployeeId)
+  ), [displayCacheRevision]);
+
+  useEffect(() => {
+    let dirty = false;
+    for (const employee of employees) {
+      const marketplace = marketplaceCatalogBySlug.get(employee.marketEmployeeId);
+      if (marketplace && seedCachedDigitalEmployeeDisplayMetadata(employee.marketEmployeeId, {
+        version: marketplace.version,
+        name: marketplace.name,
+        author: marketplace.author,
+        description: marketplace.description,
+        updateTime: marketplace.updateTime,
+        tags: marketplace.tags,
+      })) {
+        dirty = true;
+      }
+    }
+    for (const agent of marketplaceCatalog) {
+      if (seedCachedDigitalEmployeeDisplayMetadata(agent.slug, {
+        version: agent.version,
+        name: agent.name,
+        author: agent.author,
+        description: agent.description,
+        updateTime: agent.updateTime,
+        tags: agent.tags,
+      })) {
+        dirty = true;
+      }
+    }
+    if (dirty) {
+      setDisplayCacheRevision((value) => value + 1);
+      scheduleUiStateSync();
+    }
+  }, [employees, marketplaceCatalog, marketplaceCatalogBySlug]);
+
+  const myAgents = useMemo(() => employees
+    .filter((employee) => {
+      const cached = resolveCachedDisplay(employee.marketEmployeeId);
+      return shouldIncludeInMyDigitalEmployees(
+        employee,
+        marketplaceCatalogBySlug,
+        cached,
+        { marketplaceCatalogLoading },
+      );
+    })
+    .map((employee) => {
+      const marketplace = marketplaceCatalogBySlug.get(employee.marketEmployeeId);
+      const cached = resolveCachedDisplay(employee.marketEmployeeId);
+      return mapInstalledEmployeeToMyAgent(employee, marketplace, cached);
+    }), [employees, marketplaceCatalogBySlug, resolveCachedDisplay, marketplaceCatalogLoading]);
 
   const filteredMyAgents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -523,18 +537,25 @@ export function DigitalEmployee() {
   const refreshMyDigitalEmployees = useCallback(async () => {
     await Promise.all([
       fetchEmployees(),
-      fetchMarketplaceCatalog(),
+      prefetchMarketplaceCatalog(),
     ]);
-  }, [fetchEmployees, fetchMarketplaceCatalog]);
+  }, [fetchEmployees, prefetchMarketplaceCatalog]);
 
   const handleInstallMarketAgent = useCallback(async (agent: MarketplaceAgent) => {
     setIsUpdating(true);
     try {
       await installMarketplaceEmployee({ marketEmployeeId: agent.slug });
-      if (seedCachedDigitalEmployeeDisplayMetadata([agent])) {
-        scheduleUiStateSync();
-      }
-      await fetchMarketplaceCatalog();
+      commitCachedDigitalEmployeeDisplayMetadata(agent.slug, {
+        version: agent.version,
+        name: agent.name,
+        author: agent.author,
+        description: agent.description,
+        updateTime: agent.updateTime,
+        tags: agent.tags,
+      });
+      setDisplayCacheRevision((value) => value + 1);
+      scheduleUiStateSync();
+      await prefetchMarketplaceCatalog();
       toast.success(`“${agent.name}”安装成功`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch (error) {
@@ -543,7 +564,7 @@ export function DigitalEmployee() {
     } finally {
       setIsUpdating(false);
     }
-  }, [installMarketplaceEmployee, fetchMarketplaceCatalog]);
+  }, [installMarketplaceEmployee, prefetchMarketplaceCatalog]);
 
   const handleUninstallByMarketEmployeeId = useCallback(async (
     marketEmployeeId: string,
@@ -551,12 +572,12 @@ export function DigitalEmployee() {
   ) => {
     try {
       await uninstallMarketplaceEmployee({ marketEmployeeId });
-      await fetchMarketplaceCatalog();
+      await prefetchMarketplaceCatalog();
       toast.success(`“${displayName}”已卸载`);
     } catch (error) {
       toast.error(`卸载失败：${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [uninstallMarketplaceEmployee, fetchMarketplaceCatalog]);
+  }, [uninstallMarketplaceEmployee, prefetchMarketplaceCatalog]);
 
   const handleUninstallMarketAgent = useCallback(async (agent: MarketplaceAgent) => {
     await handleUninstallByMarketEmployeeId(agent.slug, agent.name);
@@ -574,12 +595,12 @@ export function DigitalEmployee() {
   const handleUninstallMyAgent = useCallback(async (agent: MyAgent) => {
     try {
       await uninstallMarketplaceEmployee({ instanceId: agent.id });
-      await fetchMarketplaceCatalog();
+      await prefetchMarketplaceCatalog();
       toast.success(`“${agent.name}”已卸载`);
     } catch (error) {
       toast.error(`卸载失败：${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [uninstallMarketplaceEmployee, fetchMarketplaceCatalog]);
+  }, [uninstallMarketplaceEmployee, prefetchMarketplaceCatalog]);
 
   const handleUpdateMarketAgent = useCallback(async (agent: MarketplaceAgent) => {
     const installedEmployee = installedEmployeesByMarketId.get(agent.slug)?.[0];
@@ -587,16 +608,20 @@ export function DigitalEmployee() {
     setIsUpdating(true);
     try {
       await updateEmployee(installedEmployee.instanceId, {});
-      await fetchMarketplaceCatalog();
+      await prefetchMarketplaceCatalog();
       toast.success(`“${agent.name}”升级成功`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch (error) {
-      toast.warning(`升级失败：${error instanceof Error ? error.message : String(error)}`);
+      if (isAlreadyLatestUpdateError(error)) {
+        toast.info(`"${agent.name}" 当前已是最新版本`);
+      } else {
+        toast.error(`升级失败：${getErrorMessage(error)}`);
+      }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } finally {
       setIsUpdating(false);
     }
-  }, [installedEmployeesByMarketId, updateEmployee, fetchMarketplaceCatalog]);
+  }, [installedEmployeesByMarketId, updateEmployee, prefetchMarketplaceCatalog]);
 
   return (
     <div className="relative flex flex-col -m-6 h-[calc(100vh-2.5rem)] overflow-hidden bg-background">
@@ -764,7 +789,7 @@ export function DigitalEmployee() {
                   className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5"
                   title="刷新"
                   disabled={marketLoading || isUpdating}
-                  onClick={() => void Promise.all([fetchMarketAgents(), fetchMarketplaceCatalog()])}
+                  onClick={() => void Promise.all([fetchMarketAgents(), prefetchMarketplaceCatalog()])}
                 >
                   <RefreshCw className={cn('h-3.5 w-3.5', marketLoading && 'animate-spin')} />
                 </Button>

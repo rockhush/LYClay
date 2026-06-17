@@ -1,28 +1,62 @@
 import type { LocalDigitalEmployee } from '@/types/digital-employee';
+import type { CachedDigitalEmployeeDisplayMetadata } from '@/lib/digital-employee-display-cache';
+import { resolveInstalledDigitalEmployeeForDisplay } from '@/lib/digital-employee-display-cache';
 import type { MarketplaceAgent, MyAgent } from './mock-data';
 
 export function mapInstalledEmployeeToMyAgent(
   employee: LocalDigitalEmployee,
   marketplace?: MarketplaceAgent,
+  cached?: CachedDigitalEmployeeDisplayMetadata,
 ): MyAgent {
-  // Display info is sourced exclusively from the digital-employee marketplace
-  // (backend API). Local manifest fields from install.json/employee.json are
-  // never used for display — even when the marketplace value is empty. Only
-  // runtime fields (instanceId/sessionKey/agentId/packageId/enabled) come from
-  // the local install record because the marketplace does not provide them.
+  const display = resolveInstalledDigitalEmployeeForDisplay(
+    employee.marketEmployeeId,
+    marketplace
+      ? {
+          version: marketplace.version,
+          name: marketplace.name,
+          author: marketplace.author,
+          description: marketplace.description,
+          updateTime: marketplace.updateTime,
+          tags: marketplace.tags,
+        }
+      : undefined,
+    cached,
+  );
+
   return {
     id: employee.instanceId,
     marketEmployeeId: employee.marketEmployeeId,
     sessionKey: employee.sessionKey,
     agentId: employee.agentId,
     packageId: employee.packageId,
-    name: marketplace?.name?.trim() ?? '',
-    description: marketplace?.description?.trim() ?? '',
-    version: marketplace?.version?.trim() ?? '',
-    author: marketplace?.author?.trim() ?? '',
+    name: display.name,
+    description: display.description,
+    version: display.version,
+    author: display.author,
     enabled: employee.enabled,
-    tags: marketplace?.tags ?? [],
+    tags: display.tags ?? [],
   };
+}
+
+export function shouldIncludeInMyDigitalEmployees(
+  employee: LocalDigitalEmployee,
+  marketplaceCatalogBySlug: Map<string, MarketplaceAgent>,
+  cached?: CachedDigitalEmployeeDisplayMetadata,
+  options?: { marketplaceCatalogLoading?: boolean },
+): boolean {
+  if (marketplaceCatalogBySlug.has(employee.marketEmployeeId)) return true;
+
+  const hasCachedDisplay = Boolean(
+    cached?.name?.trim()
+    || cached?.description?.trim()
+    || cached?.author?.trim(),
+  );
+
+  if (options?.marketplaceCatalogLoading) {
+    return hasCachedDisplay;
+  }
+
+  return hasCachedDisplay;
 }
 
 export function groupInstalledEmployeesByMarketId(

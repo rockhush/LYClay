@@ -25,16 +25,7 @@
         "pinSession": "セッションを固定",
         "unpinSession": "固定を解除",
         "openClawPage": "OpenClaw ページ",
-        "updateAvailable": "（アップグレード可）",
-        "batchDelete": "一括削除",
-        "batchDeleteTitle": "会話を一括削除",
-        "batchDeleteSubtitle": "会話 {{count}} 件",
-        "batchDeleteConfirm": "選択した会話を削除しますか？",
-        "batchDeleteSelectAll": "すべて選択",
-        "batchDeleteDeselectAll": "選択解除",
-        "batchDeleteNoSessions": "削除できる会話がありません",
-        "batchDeleteSuccess": "{{count}} 件の会話を削除しました",
-        "batchDeleteWorkspaceGroup": "ワークスペース · {{name}}"
+        "updateAvailable": "（アップグレード可）"
     },
     "actions": {
         "save": "保存",

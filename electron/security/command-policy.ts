@@ -115,7 +115,67 @@ function isNullDeviceRedirectionTarget(target: string): boolean {
   const normalized = stripQuotes(target).trim().replace(/\\/g, '/').toLowerCase();
   return normalized === 'nul'
     || normalized === 'nul:'
+    || normalized === '$null'
     || normalized === '/dev/null';
+}
+
+function isShellControlChar(char: string): boolean {
+  return char === ';' || char === '&' || char === '|' || char === '\n' || char === '\r';
+}
+
+function isCommandBoundary(char: string | undefined): boolean {
+  return !char || /\s/.test(char) || isShellControlChar(char) || char === '(' || char === ')';
+}
+
+function redirectOperatorAt(command: string, index: number): { capability: FileCapability; length: number } | null {
+  const char = command[index];
+  if (char !== '>' && char !== '<') return null;
+
+  const capability: FileCapability = char === '<' ? 'read' : 'write';
+  const length = char === '>' && command[index + 1] === '>' ? 2 : 1;
+  const previous = command[index - 1];
+  if (isCommandBoundary(previous)) return { capability, length };
+
+  if (previous === '*') {
+    return isCommandBoundary(command[index - 2]) ? { capability, length } : null;
+  }
+
+  if (/\d/.test(previous ?? '')) {
+    let cursor = index - 1;
+    while (cursor >= 0 && /\d/.test(command[cursor] ?? '')) cursor -= 1;
+    return isCommandBoundary(command[cursor]) ? { capability, length } : null;
+  }
+
+  return null;
+}
+
+function readRedirectTarget(command: string, start: number): { target?: string; nextIndex: number } {
+  let index = start;
+  while (index < command.length && /\s/.test(command[index] ?? '')) index += 1;
+  if (index >= command.length) return { nextIndex: index };
+
+  const quote = command[index];
+  if (quote === '"' || quote === "'") {
+    let target = quote;
+    index += 1;
+    for (; index < command.length; index += 1) {
+      const char = command[index]!;
+      target += char;
+      if (char === quote && command[index - 1] !== '\\' && command[index - 1] !== '`') {
+        index += 1;
+        break;
+      }
+    }
+    return { target, nextIndex: index };
+  }
+
+  let target = '';
+  for (; index < command.length; index += 1) {
+    const char = command[index]!;
+    if (/\s/.test(char) || isShellControlChar(char)) break;
+    target += char;
+  }
+  return { target, nextIndex: index };
 }
 
 function basenameLower(token: string): string {
@@ -174,8 +234,12 @@ function isSimplePowerShellVariableExpression(body: string): boolean {
     || /^\s*\$_(?:\.[A-Za-z_][\w]*|\[[^\]\r\n;|&<>]+\])*\s*$/.test(body);
 }
 
+function stripPowerShellEscapedCharacters(text: string): string {
+  return text.replace(/`["'`$]/g, '');
+}
+
 function hasRiskyCommandSubstitution(text: string): boolean {
-  if (/`[^`]+`/.test(text)) return true;
+  if (/`[^`]+`/.test(stripPowerShellEscapedCharacters(text))) return true;
   return findSubexpressionBodies(text).some((body) => !isSimplePowerShellVariableExpression(body));
 }
 
@@ -400,43 +464,38 @@ function segmentPathAccesses(segment: string): CommandPathAccess[] {
 }
 
 function redirectionPathAccesses(command: string): CommandPathAccess[] {
-  const tokens = tokenize(command);
   const accesses: CommandPathAccess[] = [];
+  let quote: '"' | "'" | '`' | null = null;
 
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i] ?? '';
-    let capability: FileCapability | null = null;
-    let target: string | undefined;
-
-    if (token === '>' || token === '>>') {
-      capability = 'write';
-      target = tokens[i + 1];
-      i += 1;
-    } else if (token === '<') {
-      capability = 'read';
-      target = tokens[i + 1];
-      i += 1;
-    } else {
-      const redirectMatch = token.match(/^(?:\d*)>>?(.+)$/);
-      if (redirectMatch) {
-        capability = 'write';
-        target = redirectMatch[1];
-      }
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i]!;
+    if (quote) {
+      if (char === quote && command[i - 1] !== '\\' && command[i - 1] !== '`') quote = null;
+      continue;
     }
 
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+
+    const redirect = redirectOperatorAt(command, i);
+    if (!redirect) continue;
+
+    const { target, nextIndex } = readRedirectTarget(command, i + redirect.length);
+    i = Math.max(i, nextIndex - 1);
     if (
-      !capability
-      || !target
+      !target
       || target.startsWith('&')
       || isNullDeviceRedirectionTarget(target)
     ) continue;
     accesses.push({
       path: target,
-      capability,
-      matchedRule: capability === 'write' ? 'command-path-write' : 'command-path-read',
-      promptOnAllow: capability === 'write',
-      promptReason: capability === 'write' ? 'Writing local files from command redirection requires confirmation' : undefined,
-      promptRisk: capability === 'write' ? 'medium' : undefined,
+      capability: redirect.capability,
+      matchedRule: redirect.capability === 'write' ? 'command-path-write' : 'command-path-read',
+      promptOnAllow: redirect.capability === 'write',
+      promptReason: redirect.capability === 'write' ? 'Writing local files from command redirection requires confirmation' : undefined,
+      promptRisk: redirect.capability === 'write' ? 'medium' : undefined,
     });
   }
 

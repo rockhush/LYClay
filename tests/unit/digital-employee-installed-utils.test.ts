@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   groupInstalledEmployeesByMarketId,
   mapInstalledEmployeeToMyAgent,
+  shouldIncludeInMyDigitalEmployees,
 } from '@/pages/DigitalEmployee/installed-employee-utils';
 import type { LocalDigitalEmployee } from '@/types/digital-employee';
 
@@ -69,18 +70,6 @@ describe('installed employee utils', () => {
     expect(mapped.tags).toEqual([]);
   });
 
-  it('uses no display fields when there is no marketplace entry', () => {
-    const mapped = mapInstalledEmployeeToMyAgent(createEmployee());
-
-    expect(mapped.name).toBe('');
-    expect(mapped.description).toBe('');
-    expect(mapped.version).toBe('');
-    expect(mapped.tags).toEqual([]);
-    // Runtime fields still come from the local install record.
-    expect(mapped.sessionKey).toBe('agent:employee-document-analyst-abc:main');
-    expect(mapped.id).toBe('document-analyst--abc');
-  });
-
   it('groups multiple local installs that share a marketplace id', () => {
     const grouped = groupInstalledEmployeesByMarketId([
       createEmployee(),
@@ -94,5 +83,46 @@ describe('installed employee utils', () => {
     ]);
 
     expect(grouped.get('7')).toHaveLength(2);
+  });
+
+  it('hides orphan installs without marketplace or cached display metadata', () => {
+    const catalog = new Map([
+      ['12', {
+        slug: '12',
+        name: '采购询价与比价专员',
+        description: 'desc',
+        version: '1.0.0',
+        author: '龙鸣',
+        downloads: 1,
+        updateTime: '',
+        category: 'procurement',
+        installed: true,
+        tags: [],
+      }],
+    ]);
+
+    expect(shouldIncludeInMyDigitalEmployees(createEmployee(), catalog)).toBe(false);
+    expect(shouldIncludeInMyDigitalEmployees(
+      createEmployee({ marketEmployeeId: '12' }),
+      catalog,
+    )).toBe(true);
+  });
+
+  it('keeps cached installs visible while marketplace catalog is loading', () => {
+    const catalog = new Map<string, never>();
+
+    expect(shouldIncludeInMyDigitalEmployees(
+      createEmployee({ marketEmployeeId: '12' }),
+      catalog,
+      { name: '采购询价与比价专员' },
+      { marketplaceCatalogLoading: true },
+    )).toBe(true);
+
+    expect(shouldIncludeInMyDigitalEmployees(
+      createEmployee({ marketEmployeeId: 'orphan' }),
+      catalog,
+      undefined,
+      { marketplaceCatalogLoading: true },
+    )).toBe(false);
   });
 });

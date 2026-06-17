@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import { hostApiFetch } from '@/lib/host-api';
+import {
+  commitCachedDigitalEmployeeDisplayMetadata,
+  seedCachedDigitalEmployeeDisplayMetadata,
+} from '@/lib/digital-employee-display-cache';
+import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import type {
   InstallDigitalEmployeeInput,
   InstallDigitalEmployeeResult,
@@ -12,14 +17,30 @@ import type {
 } from '@/types/digital-employee';
 import { useAgentsStore } from './agents';
 
+export interface DigitalEmployeeMarketplaceEntry {
+  slug: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  downloads: number;
+  updateTime: string;
+  category: string;
+  installed: boolean;
+  tags: string[];
+}
+
 interface DigitalEmployeesState {
   employees: LocalDigitalEmployee[];
+  marketplaceCatalog: DigitalEmployeeMarketplaceEntry[];
   loading: boolean;
+  marketplaceCatalogLoading: boolean;
   installingMarketEmployeeId: string | null;
   uninstallingMarketEmployeeId: string | null;
   updatingInstanceId: string | null;
   error: string | null;
   fetchEmployees: () => Promise<void>;
+  prefetchMarketplaceCatalog: () => Promise<void>;
   installMarketplaceEmployee: (
     input: InstallDigitalEmployeeInput,
   ) => Promise<InstallDigitalEmployeeResult>;
@@ -34,9 +55,30 @@ interface DigitalEmployeesState {
   clearError: () => void;
 }
 
+function seedMarketplaceCatalogCache(entries: DigitalEmployeeMarketplaceEntry[]): void {
+  let dirty = false;
+  for (const entry of entries) {
+    if (seedCachedDigitalEmployeeDisplayMetadata(entry.slug, {
+      version: entry.version,
+      name: entry.name,
+      author: entry.author,
+      description: entry.description,
+      updateTime: entry.updateTime,
+      tags: entry.tags,
+    })) {
+      dirty = true;
+    }
+  }
+  if (dirty) {
+    scheduleUiStateSync();
+  }
+}
+
 export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get) => ({
   employees: [],
+  marketplaceCatalog: [],
   loading: false,
+  marketplaceCatalogLoading: false,
   installingMarketEmployeeId: null,
   uninstallingMarketEmployeeId: null,
   updatingInstanceId: null,
@@ -52,6 +94,33 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
     }
   },
 
+  prefetchMarketplaceCatalog: async () => {
+    set({ marketplaceCatalogLoading: true });
+    try {
+      const result = await hostApiFetch<{
+        success: boolean;
+        results?: DigitalEmployeeMarketplaceEntry[];
+        error?: string;
+      }>('/api/digital-employee/marketplace/list', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: '',
+          category: '',
+          sort: '-download_count',
+        }),
+      });
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to prefetch digital employee marketplace catalog');
+      }
+      const marketplaceCatalog = result.results || [];
+      seedMarketplaceCatalogCache(marketplaceCatalog);
+      set({ marketplaceCatalog, marketplaceCatalogLoading: false });
+    } catch (error) {
+      console.warn('[Digital Employees Store] Prefetch marketplace catalog failed (non-fatal):', error);
+      set({ marketplaceCatalogLoading: false });
+    }
+  },
+
   installMarketplaceEmployee: async (input) => {
     set({ installingMarketEmployeeId: String(input.marketEmployeeId), error: null });
     try {
@@ -62,6 +131,19 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
           body: JSON.stringify(input),
         },
       );
+      const marketplaceEntry = get().marketplaceCatalog.find(
+        (entry) => entry.slug === String(input.marketEmployeeId),
+      );
+      if (marketplaceEntry) {
+        commitCachedDigitalEmployeeDisplayMetadata(marketplaceEntry.slug, {
+          version: marketplaceEntry.version,
+          name: marketplaceEntry.name,
+          author: marketplaceEntry.author,
+          description: marketplaceEntry.description,
+          updateTime: marketplaceEntry.updateTime,
+          tags: marketplaceEntry.tags,
+        });
+      }
       await Promise.all([
         get().fetchEmployees(),
         useAgentsStore.getState().fetchAgents({ force: true }),
@@ -112,6 +194,20 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
           body: JSON.stringify(input),
         },
       );
+      const employee = get().employees.find((entry) => entry.instanceId === instanceId);
+      const marketplaceEntry = employee
+        ? get().marketplaceCatalog.find((entry) => entry.slug === employee.marketEmployeeId)
+        : undefined;
+      if (marketplaceEntry) {
+        commitCachedDigitalEmployeeDisplayMetadata(marketplaceEntry.slug, {
+          version: marketplaceEntry.version,
+          name: marketplaceEntry.name,
+          author: marketplaceEntry.author,
+          description: marketplaceEntry.description,
+          updateTime: marketplaceEntry.updateTime,
+          tags: marketplaceEntry.tags,
+        });
+      }
       await Promise.all([
         get().fetchEmployees(),
         useAgentsStore.getState().fetchAgents({ force: true }),
@@ -167,3 +263,13 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
 
   clearError: () => set({ error: null }),
 }));
+
+/** Load installed employees and marketplace metadata on app startup. */
+let startupDigitalEmployeesFetchHooked = false;
+function ensureStartupDigitalEmployeesFetch(): void {
+  if (startupDigitalEmployeesFetchHooked) return;
+  startupDigitalEmployeesFetchHooked = true;
+  void useDigitalEmployeesStore.getState().fetchEmployees();
+  void useDigitalEmployeesStore.getState().prefetchMarketplaceCatalog();
+}
+ensureStartupDigitalEmployeesFetch();

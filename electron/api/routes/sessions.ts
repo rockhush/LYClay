@@ -175,6 +175,7 @@ function getMessageText(content: unknown): string {
 }
 
 function cleanUserPreview(text: string): string {
+  if (isInternalUserPreviewText(text)) return '';
   return redactSecrets(text)
     .replace(/\s*\[media attached:[^\]]*\]/g, '')
     .replace(/\s*\[message_id:\s*[^\]]+\]/g, '')
@@ -187,6 +188,19 @@ function cleanUserPreview(text: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, SESSION_PREVIEW_MAX_CHARS);
+}
+
+function isInternalUserPreviewText(text: string): boolean {
+  const normalized = text.trim();
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(normalized)) return true;
+  if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(normalized)) return true;
+  if (
+    /^\s*Current time\s*:/i.test(normalized)
+    && /^\s*Current time\s*:[^\n]*\/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+UTC\s*$/i.test(normalized)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function resolveSessionFilePath(entry: Record<string, unknown>, sessionsDir: string): string | null {

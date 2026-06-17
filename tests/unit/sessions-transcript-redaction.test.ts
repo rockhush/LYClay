@@ -21,6 +21,10 @@ vi.mock('@electron/utils/logger', () => ({
     info: vi.fn(),
     warn: vi.fn(),
   },
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock('@electron/utils/paths', () => ({
@@ -86,6 +90,68 @@ describe('session transcript redaction', () => {
 
     expect(serialized).toContain('api_key=[REDACTED]');
     expect(serialized).not.toContain(providerToken);
+  });
+
+  it('skips heartbeat poll messages when deriving session list previews', async () => {
+    const sessionsDir = join(testOpenClawConfigDir, 'agents', 'main', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, 'sessions.json'),
+      JSON.stringify({
+        'agent:main:main': {
+          id: 'heartbeat-session',
+        },
+      }),
+    );
+    writeTranscript('main', 'heartbeat-session', [
+      {
+        type: 'message',
+        message: {
+          role: 'user',
+          content: '[OpenClaw heartbeat poll]',
+        },
+      },
+      {
+        type: 'message',
+        message: {
+          role: 'user',
+          content: '真正的用户问题',
+        },
+      },
+    ]);
+
+    const payload = await request('/api/sessions/list-local?agentId=main&includePreviews=1');
+    const serialized = JSON.stringify(payload);
+
+    expect(serialized).toContain('真正的用户问题');
+    expect(serialized).not.toContain('[OpenClaw heartbeat poll]');
+  });
+
+  it('keeps normal session previews that mention the heartbeat label', async () => {
+    const sessionsDir = join(testOpenClawConfigDir, 'agents', 'main', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, 'sessions.json'),
+      JSON.stringify({
+        'agent:main:main': {
+          id: 'heartbeat-question-session',
+        },
+      }),
+    );
+    writeTranscript('main', 'heartbeat-question-session', [
+      {
+        type: 'message',
+        message: {
+          role: 'user',
+          content: '为什么我会看到 [OpenClaw heartbeat poll] 这个消息？',
+        },
+      },
+    ]);
+
+    const payload = await request('/api/sessions/list-local?agentId=main&includePreviews=1');
+    const serialized = JSON.stringify(payload);
+
+    expect(serialized).toContain('为什么我会看到 [OpenClaw heartbeat poll] 这个消息？');
   });
 
   it('redacts nested messages and prompt errors returned from local history', async () => {

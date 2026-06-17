@@ -249,7 +249,7 @@ export function BatchSelectSkillsDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={busy || selectedKeys.size === 0}
+            disabled={busy}
             className="h-8 rounded-lg px-4 text-[13px] bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25"
           >
             {confirmLabel}

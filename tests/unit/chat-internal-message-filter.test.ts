@@ -68,8 +68,21 @@ describe('chat internal message filter', () => {
     expect(isInternalMessage({ role: 'assistant', content })).toBe(true);
   });
 
+  it('filters standalone OpenClaw heartbeat poll message', () => {
+    expect(isInternalMessage({ role: 'assistant', content: 'OpenClaw heartbeat poll' })).toBe(true);
+    expect(isInternalMessage({ role: 'user', content: 'OpenClaw heartbeat poll' })).toBe(true);
+    expect(isInternalMessage({ role: 'assistant', content: '[OpenClaw heartbeat poll]' })).toBe(true);
+    expect(isInternalMessage({ role: 'user', content: '[OpenClaw heartbeat poll]' })).toBe(true);
+  });
+
   it('does not filter normal user message that starts with current time', () => {
     const content = 'Current time: 北京现在几点？';
+
+    expect(isInternalMessage({ role: 'user', content })).toBe(false);
+  });
+
+  it('does not filter normal user text that merely mentions the heartbeat label', () => {
+    const content = '为什么我会看到 [OpenClaw heartbeat poll] 这个消息？';
 
     expect(isInternalMessage({ role: 'user', content })).toBe(false);
   });

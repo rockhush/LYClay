@@ -176,7 +176,7 @@ export function SecurityConfirmationDialog() {
         }
       }}
     >
-      <div className="mx-4 w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
+      <div className="mx-4 max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-lg border bg-card p-6 shadow-lg">
         <div className="flex items-start gap-3">
           <div className="mt-0.5 rounded-full bg-orange-500/10 p-2 text-orange-500">
             <ShieldAlert className="h-5 w-5" />
@@ -186,7 +186,10 @@ export function SecurityConfirmationDialog() {
               {getTitle(active)}
             </h2>
             <div className="mt-3 space-y-2 text-sm">
-              <div className="flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2">
+              <div
+                className={`flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2 ${isCommand ? 'max-h-56 overflow-y-auto' : ''}`}
+                data-testid="security-confirmation-target"
+              >
                 {isCommand ? (
                   <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 ) : isMcpServer ? (
@@ -204,7 +207,7 @@ export function SecurityConfirmationDialog() {
                 ) : (
                   <Globe2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 )}
-                <span className="break-all font-mono">{targetLabel}</span>
+                <span className="break-all font-mono whitespace-pre-wrap">{targetLabel}</span>
               </div>
               {isCommand && active.target.cwd && (
                 <p className="break-all text-muted-foreground">

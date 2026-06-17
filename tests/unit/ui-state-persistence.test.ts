@@ -18,14 +18,6 @@ const emptyLocal: LyclawUiState = {
     sessionWorkspaceIds: {},
     customSessionLabels: {},
     sessionPinnedAt: {},
-    sessionLastActivity: {},
-    sessionCompressionState: {},
-  },
-  skills: {
-    cachedDisplayMetadata: {},
-  },
-  digitalEmployees: {
-    cachedDisplayMetadata: {},
   },
 };
 
@@ -49,14 +41,6 @@ const diskWithWorkspace: LyclawUiState = {
     sessionWorkspaceIds: { 'agent:main:session-a': 'temp-1' },
     customSessionLabels: { 'agent:main:session-a': 'My chat' },
     sessionPinnedAt: { 'agent:main:session-a': 1000 },
-    sessionLastActivity: {},
-    sessionCompressionState: {},
-  },
-  skills: {
-    cachedDisplayMetadata: {},
-  },
-  digitalEmployees: {
-    cachedDisplayMetadata: {},
   },
 };
 
@@ -119,14 +103,6 @@ describe('ui-state persistence hydrate merge', () => {
           'agent:main:session-a': 2000,
           'agent:main:session-b': 3000,
         },
-        sessionLastActivity: {},
-        sessionCompressionState: {},
-      },
-      skills: {
-        cachedDisplayMetadata: {},
-      },
-      digitalEmployees: {
-        cachedDisplayMetadata: {},
       },
     };
 

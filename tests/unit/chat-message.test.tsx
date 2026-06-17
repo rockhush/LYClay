@@ -4,6 +4,29 @@ import { ChatMessage } from '@/pages/Chat/ChatMessage';
 import type { RawMessage } from '@/stores/chat';
 
 describe('ChatMessage attachment dedupe', () => {
+  it('does not render OpenClaw heartbeat poll bubbles', () => {
+    const message: RawMessage = {
+      role: 'user',
+      content: '[OpenClaw heartbeat poll]',
+    };
+
+    const { container } = render(<ChatMessage message={message} />);
+
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText('[OpenClaw heartbeat poll]')).not.toBeInTheDocument();
+  });
+
+  it('keeps normal user text that mentions the heartbeat label', () => {
+    const message: RawMessage = {
+      role: 'user',
+      content: '为什么我会看到 [OpenClaw heartbeat poll] 这个消息？',
+    };
+
+    render(<ChatMessage message={message} />);
+
+    expect(screen.getByText(/为什么我会看到/)).toBeInTheDocument();
+  });
+
   it('keeps attachment-only assistant replies visible even when process attachments are suppressed', () => {
     const message: RawMessage = {
       role: 'assistant',

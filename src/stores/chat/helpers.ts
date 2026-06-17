@@ -1054,6 +1054,7 @@ function isToolResultRole(role: unknown): boolean {
 
 function isInternalMessageText(text: string): boolean {
   if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(text.trim())) return true;
+  if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(text.trim())) return true;
   return isRuntimeSystemInjection(text);
 }
 

@@ -230,6 +230,17 @@ describe('command security policy', () => {
     expect(result.segments.some((segment) => segment.matchedRules.includes('command-substitution'))).toBe(false);
   });
 
+  it('allows common PowerShell backtick escapes without treating them as command substitution', async () => {
+    const result = await evaluateCommandPolicy({
+      command: 'Write-Host `"file: $filePath`"; Start-Process "cmd" -ArgumentList "/c copy /b `"$filePath`" `"$printerName`"" -WindowStyle Hidden',
+      cwd: workspace,
+      allowedRoots: [workspace],
+      source: 'agent',
+    });
+
+    expect(result.segments.some((segment) => segment.matchedRules.includes('command-substitution'))).toBe(false);
+  });
+
   it('still requires confirmation for executable command substitutions', async () => {
     const result = await evaluateCommandPolicy({
       command: 'Write-Output "$(Get-Content .\\secret.txt)"',
@@ -240,6 +251,18 @@ describe('command security policy', () => {
 
     expect(result.decision.action).toBe('prompt');
     expect(result.decision.risk).toBe('high');
+    expect(result.segments.some((segment) => segment.matchedRules.includes('command-substitution'))).toBe(true);
+  });
+
+  it('still requires confirmation for backtick command substitutions', async () => {
+    const result = await evaluateCommandPolicy({
+      command: 'echo `whoami`',
+      cwd: workspace,
+      allowedRoots: [workspace],
+      source: 'agent',
+    });
+
+    expect(result.decision.action).toBe('prompt');
     expect(result.segments.some((segment) => segment.matchedRules.includes('command-substitution'))).toBe(true);
   });
 
@@ -319,6 +342,13 @@ describe('command security policy', () => {
     const commands = [
       'dir . /b 2>nul',
       'dir . /b 2>NUL:',
+      'dir . /b 2>$null',
+      'dir . /b 2>$NULL',
+      'dir . /b 2> $null',
+      'dir . /b 2> "$null"',
+      'dir . /b *> $null',
+      'dir . /b 2>&1',
+      'dir . /b 2>$null; where node 2>$null;',
       'findstr query SKILL.md 2>/dev/null',
       'dir . /b 2>nul & echo --- & dir . /b 2>nul',
     ];
@@ -340,15 +370,26 @@ describe('command security policy', () => {
   });
 
   it('still requires confirmation for files whose names merely start with nul', async () => {
-    const result = await evaluateCommandPolicy({
-      command: 'echo hello 2>nul.txt',
-      cwd: workspace,
-      allowedRoots: [workspace],
-      source: 'agent',
-    });
+    const commands = [
+      'echo hello 2>nul.txt',
+      'echo hello 2>$null.txt',
+      'echo hello 2>"$null.txt"',
+    ];
 
-    expect(result.decision.action).toBe('prompt');
-    expect(result.segments.some((segment) => segment.matchedRules.includes('command-path-write'))).toBe(true);
+    for (const command of commands) {
+      const result = await evaluateCommandPolicy({
+        command,
+        cwd: workspace,
+        allowedRoots: [workspace],
+        source: 'agent',
+      });
+
+      expect(result.decision.action, command).toBe('prompt');
+      expect(
+        result.segments.some((segment) => segment.matchedRules.includes('command-path-write')),
+        command,
+      ).toBe(true);
+    }
   });
 
   it('denies shell redirection writes to sensitive paths', async () => {

@@ -119,6 +119,29 @@ describe('SecurityConfirmationDialog', () => {
     });
   });
 
+  it('keeps long command details in a scrollable target area', async () => {
+    render(<SecurityConfirmationDialog />);
+
+    act(() => {
+      listener?.({
+        id: 'confirm-command-long',
+        kind: 'command',
+        source: 'gateway:runtime-exec',
+        risk: 'high',
+        target: {
+          command: Array.from({ length: 40 }, (_, index) => `Write-Host "line ${index}"`).join('; '),
+          cwd: 'D:\\code\\ClawX',
+        },
+        reasons: ['Command substitution requires confirmation'],
+      });
+    });
+
+    const target = await screen.findByTestId('security-confirmation-target');
+    expect(target).toHaveClass('max-h-56');
+    expect(target).toHaveClass('overflow-y-auto');
+    expect(screen.getByRole('button', { name: '拒绝' })).toBeInTheDocument();
+  });
+
   it('shows open target confirmation without persistent allow', async () => {
     render(<SecurityConfirmationDialog />);
 

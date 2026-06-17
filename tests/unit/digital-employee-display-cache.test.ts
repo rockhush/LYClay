@@ -1,65 +1,73 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import {
-  buildMarketplaceAgentFromCache,
-  resetDigitalEmployeeDisplayCacheForTests,
-  resolveMarketplaceAgentWithCache,
+  commitCachedDigitalEmployeeDisplayMetadata,
+  loadDigitalEmployeeDisplayCache,
+  resolveCachedDigitalEmployeeDisplayMetadata,
+  resolveInstalledDigitalEmployeeForDisplay,
   seedCachedDigitalEmployeeDisplayMetadata,
 } from '@/lib/digital-employee-display-cache';
 
 describe('digital-employee-display-cache', () => {
   beforeEach(() => {
-    resetDigitalEmployeeDisplayCacheForTests();
+    loadDigitalEmployeeDisplayCache({ cachedDisplayMetadata: {} });
   });
 
-  it('seeds and resolves cached marketplace display metadata by slug', () => {
-    seedCachedDigitalEmployeeDisplayMetadata([{
-      slug: 'office-assistant',
-      name: '办公助手',
-      description: '处理日程与消息',
+  it('seeds metadata from API only once', () => {
+    expect(seedCachedDigitalEmployeeDisplayMetadata('42', {
+      name: '采购询价与比价专员',
       version: '1.0.0',
-      author: '彭雪',
-      updateTime: '2026-06-01',
-      category: 'office',
-      tags: ['办公'],
-    }]);
+      author: '龙鸣',
+      description: 'Review procurement requirements and supplier quotes.',
+      updateTime: '2026-06-08',
+      tags: ['采购', '比价'],
+    })).toBe(true);
 
-    expect(buildMarketplaceAgentFromCache('office-assistant')).toMatchObject({
-      slug: 'office-assistant',
-      name: '办公助手',
-      description: '处理日程与消息',
+    expect(resolveCachedDigitalEmployeeDisplayMetadata('42')).toEqual({
+      name: '采购询价与比价专员',
       version: '1.0.0',
-      author: '彭雪',
-      tags: ['办公'],
+      author: '龙鸣',
+      description: 'Review procurement requirements and supplier quotes.',
+      updateTime: '2026-06-08',
+      tags: ['采购', '比价'],
     });
+
+    expect(seedCachedDigitalEmployeeDisplayMetadata('42', {
+      name: 'Updated name',
+      version: '2.0.0',
+    })).toBe(false);
+    expect(resolveCachedDigitalEmployeeDisplayMetadata('42')?.name).toBe('采购询价与比价专员');
   });
 
-  it('prefers live marketplace data over cache', () => {
-    seedCachedDigitalEmployeeDisplayMetadata([{
-      slug: 'office-assistant',
-      name: '旧名称',
-      description: '旧描述',
-      version: '1.0.0',
-      author: '旧作者',
-      updateTime: '',
-      category: 'office',
-      tags: [],
-    }]);
+  it('commits metadata after install or update', () => {
+    expect(commitCachedDigitalEmployeeDisplayMetadata('99', {
+      name: '领益智造每日情报推送助手',
+      version: '1.0.1',
+      author: '领益AI开发团队',
+      description: 'Push daily intelligence.',
+    })).toBe(true);
 
-    expect(resolveMarketplaceAgentWithCache('office-assistant', {
-      slug: 'office-assistant',
-      name: '办公助手',
-      description: '新描述',
-      version: '1.0.1',
-      author: '彭雪',
-      downloads: 1,
+    expect(resolveCachedDigitalEmployeeDisplayMetadata('99')?.version).toBe('1.0.1');
+  });
+
+  it('falls back to cached metadata when marketplace data is missing', () => {
+    loadDigitalEmployeeDisplayCache({
+      cachedDisplayMetadata: {
+        '12': {
+          name: 'Cached Agent',
+          description: 'Cached description',
+          version: '1.0.0',
+          author: 'Alice',
+        },
+      },
+    });
+
+    expect(resolveInstalledDigitalEmployeeForDisplay('12')).toEqual({
+      name: 'Cached Agent',
+      description: 'Cached description',
+      version: '1.0.0',
+      author: 'Alice',
       updateTime: '',
-      category: 'office',
-      installed: true,
-      tags: ['办公'],
-    })).toMatchObject({
-      name: '办公助手',
-      description: '新描述',
-      version: '1.0.1',
+      tags: [],
     });
   });
 });

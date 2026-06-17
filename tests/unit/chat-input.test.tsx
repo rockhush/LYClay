@@ -375,6 +375,37 @@ describe('ChatInput agent targeting', () => {
     );
   });
 
+  it('does not route an unmatched leading skill mention as a digital employee target', () => {
+    const onSend = vi.fn();
+    agentsState.agents = [
+      {
+        id: 'main',
+        name: 'Main',
+        isDefault: true,
+        modelDisplay: 'MiniMax',
+        inheritedModel: true,
+        workspace: '~/.openclaw/workspace',
+        agentDir: '~/.openclaw/agents/main/agent',
+        mainSessionKey: 'agent:main:main',
+        channelTypes: [],
+      },
+      {
+        id: 'calendar-agent',
+        name: 'Calendar Agent',
+        isDigitalEmployee: true,
+        mainSessionKey: 'agent:calendar-agent:main',
+      },
+    ];
+
+    renderChatInput(onSend);
+
+    const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: '@undefined-network-skill 查询今天日程' } });
+    fireEvent.click(screen.getByTitle('Send'));
+
+    expect(onSend).toHaveBeenCalledWith('@undefined-network-skill 查询今天日程', undefined, null);
+  });
+
   it('removes the full inline skill token with one backspace', async () => {
     agentsState.agents = [
       {
