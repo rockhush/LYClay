@@ -30,6 +30,7 @@ import {
   writeCompanyMarketplaceSidecar,
 } from '../../utils/company-marketplace-installs';
 import { assertCommandAllowedWithConfirmation } from '../../security/confirmation-service';
+import { extractZipArchive } from '../../utils/zip-extract';
 
 const COMPANY_API_BASE = 'http://portal.srv.lstech.com/aihome/api/skill';
 // const COMPANY_API_BASE = 'http://100.0.4.203/aihome/api/skill';
@@ -106,7 +107,7 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       }
     }
 
-    await this.runArchiveCommand('unzip', ['-o', tempZipPath, '-d', skillDir]);
+    await extractZipArchive(tempZipPath, skillDir);
   }
 
   private async fixNestedDirectory(skillDir: string): Promise<void> {
@@ -418,7 +419,7 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       console.error('[CompanyMarketplace] Install error:', errorMsg);
-      throw new Error(`Company marketplace install failed: ${errorMsg}`);
+      throw new Error(`Company marketplace install failed: ${errorMsg}`, { cause: error });
     } finally {
       if (tempZipPath) {
         await fsPromises.unlink(tempZipPath).catch(() => undefined);

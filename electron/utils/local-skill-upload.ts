@@ -20,6 +20,7 @@ import {
   validateExtractedSkill,
   type ExtractedValidationResult,
 } from './skill-validator';
+import { extractZipArchive } from './zip-extract';
 
 const execFileAsync = promisify(execFile);
 
@@ -199,27 +200,8 @@ export async function extractZipToDir(zipPath: string, destDir: string): Promise
     }
   }
 
-  if (process.platform === 'darwin') {
-    try {
-      await runArchiveCommand('/usr/bin/unzip', ['-o', zipPath, '-d', destDir]);
-      return;
-    } catch (unzipError) {
-      try {
-        await runArchiveCommand('/usr/bin/ditto', ['-x', '-k', zipPath, destDir]);
-        return;
-      } catch (dittoError) {
-        const err = new Error(
-          `Failed to extract zip file: unzip failed (${formatArchiveError(unzipError)}); `
-          + `ditto failed (${formatArchiveError(dittoError)})`,
-        );
-        (err as any).errorCode = 'ZIP_EXTRACT_FAILED';
-        throw err;
-      }
-    }
-  }
-
   try {
-    await runArchiveCommand('unzip', ['-o', zipPath, '-d', destDir]);
+    await extractZipArchive(zipPath, destDir);
   } catch (error) {
     const err = new Error(`Failed to extract zip file: ${formatArchiveError(error)}`);
     (err as any).errorCode = 'ZIP_EXTRACT_FAILED';
