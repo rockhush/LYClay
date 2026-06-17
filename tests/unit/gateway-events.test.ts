@@ -76,7 +76,6 @@ describe('gateway store event wiring', () => {
     expect(subscribeHostEventMock).toHaveBeenCalledWith('gateway:error', expect.any(Function));
     expect(subscribeHostEventMock).toHaveBeenCalledWith('gateway:notification', expect.any(Function));
     expect(subscribeHostEventMock).toHaveBeenCalledWith('gateway:chat-message', expect.any(Function));
-    expect(subscribeHostEventMock).toHaveBeenCalledWith('session:updated', expect.any(Function));
     expect(subscribeHostEventMock).toHaveBeenCalledWith('gateway:channel-status', expect.any(Function));
 
     handlers.get('gateway:status')?.({ state: 'stopped', port: 18789 });
@@ -164,31 +163,5 @@ describe('gateway store event wiring', () => {
       sessionKey: 'agent:main:main',
       seq: 1,
     })).toBe('run-1|agent:main:main|1|delta');
-  });
-
-  it('refreshes sessions and current history when local transcript updates arrive', async () => {
-    hostApiFetchMock.mockResolvedValueOnce({ state: 'running', port: 18789 });
-
-    const handlers = new Map<string, (payload: unknown) => void>();
-    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
-      handlers.set(eventName, handler);
-      return () => {};
-    });
-
-    const { useGatewayStore } = await import('@/stores/gateway');
-    await useGatewayStore.getState().init();
-
-    handlers.get('session:updated')?.({
-      agentId: 'main',
-      sessionKey: 'agent:main:main',
-      fileName: 'main.jsonl',
-      reason: 'transcript',
-      changedAt: Date.now(),
-    });
-
-    await vi.waitFor(() => {
-      expect(chatLoadSessionsMock).toHaveBeenCalledWith(true);
-      expect(chatLoadHistoryMock).toHaveBeenCalledWith(true, { force: true });
-    });
   });
 });

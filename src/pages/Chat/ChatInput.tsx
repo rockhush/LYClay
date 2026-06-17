@@ -132,11 +132,11 @@ function resolveLeadingAgentMention(
 
   const mention = match[1];
   const agent = (agents ?? []).find((candidate) => candidate.id === mention);
-  if (!agent) return { text, targetAgentId: null };
+  const targetAgentId = agent?.id ?? mention;
 
   return {
     text: text.slice(match[0].length).trimStart(),
-    targetAgentId: agent.id,
+    targetAgentId,
   };
 }
 

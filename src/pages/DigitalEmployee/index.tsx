@@ -20,8 +20,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { LoaderBadge, LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { cn } from '@/lib/utils';
 import { hostApiFetch } from '@/lib/host-api';
+import {
+  resolveMarketplaceAgentWithCache,
+  seedCachedDigitalEmployeeDisplayMetadata,
+} from '@/lib/digital-employee-display-cache';
+import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { useChatStore } from '@/stores/chat';
 import { useDigitalEmployeesStore } from '@/stores/digital-employees';
+import { useGatewayStore } from '@/stores/gateway';
 import {
   groupInstalledEmployeesByMarketId,
   mapInstalledEmployeeToMyAgent,
@@ -368,10 +374,17 @@ export function DigitalEmployee() {
     updateEmployee,
     setEmployeeEnabled,
   } = useDigitalEmployeesStore();
+  const gatewayStatus = useGatewayStore((state) => state.status);
+  const isGatewayReady = gatewayStatus.state === 'running' && gatewayStatus.gatewayReady === true;
 
   useEffect(() => {
     void fetchEmployees();
   }, [fetchEmployees]);
+
+  useEffect(() => {
+    if (!isGatewayReady) return;
+    void fetchEmployees();
+  }, [isGatewayReady, fetchEmployees]);
 
   const fetchMarketplaceCatalog = useCallback(async () => {
     try {
@@ -390,15 +403,24 @@ export function DigitalEmployee() {
       if (!result.success) {
         throw new Error(result.error || MARKETPLACE_SEARCH_ERROR_MESSAGE);
       }
-      setMarketplaceCatalog(result.results || []);
-    } catch {
-      setMarketplaceCatalog([]);
+      const results = result.results || [];
+      if (seedCachedDigitalEmployeeDisplayMetadata(results)) {
+        scheduleUiStateSync();
+      }
+      setMarketplaceCatalog(results);
+    } catch (error) {
+      console.warn('[DigitalEmployee] marketplace catalog fetch failed, keeping cache fallback', error);
     }
   }, []);
 
   useEffect(() => {
     void fetchMarketplaceCatalog();
   }, [fetchMarketplaceCatalog]);
+
+  useEffect(() => {
+    if (!isGatewayReady) return;
+    void fetchMarketplaceCatalog();
+  }, [isGatewayReady, fetchMarketplaceCatalog]);
 
   const fetchMarketAgents = useCallback(async () => {
     setMarketLoading(true);
@@ -420,7 +442,11 @@ export function DigitalEmployee() {
       if (!result.success) {
         throw new Error(result.error || MARKETPLACE_SEARCH_ERROR_MESSAGE);
       }
-      setMarketAgents(result.results || []);
+      const results = result.results || [];
+      if (seedCachedDigitalEmployeeDisplayMetadata(results)) {
+        scheduleUiStateSync();
+      }
+      setMarketAgents(results);
     } catch {
       setMarketAgents([]);
       setMarketSearchError(true);
@@ -444,7 +470,10 @@ export function DigitalEmployee() {
   ), [marketplaceCatalog]);
 
   const myAgents = useMemo(() => employees.map((employee) => {
-    const marketplace = marketplaceCatalogBySlug.get(employee.marketEmployeeId);
+    const marketplace = resolveMarketplaceAgentWithCache(
+      employee.marketEmployeeId,
+      marketplaceCatalogBySlug.get(employee.marketEmployeeId),
+    );
     return mapInstalledEmployeeToMyAgent(employee, marketplace);
   }), [employees, marketplaceCatalogBySlug]);
 
@@ -502,6 +531,9 @@ export function DigitalEmployee() {
     setIsUpdating(true);
     try {
       await installMarketplaceEmployee({ marketEmployeeId: agent.slug });
+      if (seedCachedDigitalEmployeeDisplayMetadata([agent])) {
+        scheduleUiStateSync();
+      }
       await fetchMarketplaceCatalog();
       toast.success(`“${agent.name}”安装成功`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -559,7 +591,7 @@ export function DigitalEmployee() {
       toast.success(`“${agent.name}”升级成功`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch (error) {
-      toast.error(`升级失败：${error instanceof Error ? error.message : String(error)}`);
+      toast.warning(`升级失败：${error instanceof Error ? error.message : String(error)}`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } finally {
       setIsUpdating(false);

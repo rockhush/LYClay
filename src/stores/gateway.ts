@@ -73,14 +73,6 @@ interface GatewayHealth {
   uptime?: number;
 }
 
-type SessionUpdatedPayload = {
-  agentId?: string;
-  sessionKey?: string;
-  fileName?: string;
-  reason?: string;
-  changedAt?: number;
-};
-
 interface GatewayState {
   status: GatewayStatus;
   health: GatewayHealth | null;
@@ -162,40 +154,23 @@ export function shouldProcessGatewayEvent(event: Record<string, unknown>): boole
 }
 
 function maybeLoadSessions(
-  state: { loadSessions: (force?: boolean) => Promise<void> },
+  state: { loadSessions: () => Promise<void> },
   force = false,
 ): void {
   const now = Date.now();
   if (!force && now - lastLoadSessionsAt < LOAD_SESSIONS_MIN_INTERVAL_MS) return;
   lastLoadSessionsAt = now;
-  void state.loadSessions(force);
+  void state.loadSessions();
 }
 
 function maybeLoadHistory(
-  state: { loadHistory: (quiet?: boolean, opts?: { force?: boolean }) => Promise<void> },
+  state: { loadHistory: (quiet?: boolean) => Promise<void> },
   force = false,
 ): void {
   const now = Date.now();
   if (!force && now - lastLoadHistoryAt < LOAD_HISTORY_MIN_INTERVAL_MS) return;
   lastLoadHistoryAt = now;
-  void state.loadHistory(true, force ? { force: true } : undefined);
-}
-
-function handleSessionUpdated(payload: SessionUpdatedPayload | undefined): void {
-  if (!payload) return;
-  const sessionKey = typeof payload.sessionKey === 'string' ? payload.sessionKey : '';
-  if (sessionKey.includes('__warmup__')) return;
-
-  loadChatStoreModule()
-    .then(({ useChatStore }) => {
-      const state = useChatStore.getState();
-      maybeLoadSessions(state, true);
-
-      if (sessionKey && sessionKey === state.currentSessionKey) {
-        maybeLoadHistory(state, true);
-      }
-    })
-    .catch(() => {});
+  void state.loadHistory(true);
 }
 
 function handleGatewayNotification(notification: { method?: string; params?: Record<string, unknown> } | undefined): void {
@@ -384,9 +359,6 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
           ));
           unsubscribers.push(subscribeHostEvent('gateway:chat-message', (payload) => {
             handleGatewayChatMessage(payload);
-          }));
-          unsubscribers.push(subscribeHostEvent<SessionUpdatedPayload>('session:updated', (payload) => {
-            handleSessionUpdated(payload);
           }));
           unsubscribers.push(subscribeHostEvent<{ channelId?: string; status?: string }>(
             'gateway:channel-status',

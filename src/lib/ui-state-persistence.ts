@@ -1,5 +1,10 @@
 import { hostApiFetch } from '@/lib/host-api';
 import {
+  getDigitalEmployeeDisplayCacheSnapshot,
+  loadDigitalEmployeeDisplayCache,
+  type CachedDigitalEmployeeDisplayMetadata,
+} from '@/lib/digital-employee-display-cache';
+import {
   getSkillDisplayCacheSnapshot,
   loadSkillDisplayCacheLegacy,
 } from '@/lib/skill-display-cache';
@@ -27,6 +32,9 @@ export interface LyclawUiState {
   skills: {
     cachedDisplayMetadata: Record<string, CachedSkillDisplayMetadata>;
     cachedDisplayVersions?: Record<string, string>;
+  };
+  digitalEmployees: {
+    cachedDisplayMetadata: Record<string, CachedDigitalEmployeeDisplayMetadata>;
   };
 }
 
@@ -146,10 +154,15 @@ function readLocalSkillsState(): LyclawUiState['skills'] {
   return getSkillDisplayCacheSnapshot();
 }
 
+function readLocalDigitalEmployeesState(): LyclawUiState['digitalEmployees'] {
+  return getDigitalEmployeeDisplayCacheSnapshot();
+}
+
 function readLocalUiState(): LyclawUiState {
   const workspaces = readLocalWorkspaceState();
   const chat = readLocalChatState();
   const skills = readLocalSkillsState();
+  const digitalEmployees = readLocalDigitalEmployeesState();
   return {
     version: 1,
     updatedAt: Date.now(),
@@ -160,6 +173,7 @@ function readLocalUiState(): LyclawUiState {
     },
     chat,
     skills,
+    digitalEmployees,
   };
 }
 
@@ -190,6 +204,12 @@ export function isNonEmptyChatState(chat: LyclawUiState['chat']): boolean {
 
 export function isNonEmptySkillsState(skills: LyclawUiState['skills']): boolean {
   return Object.keys(skills.cachedDisplayMetadata).length > 0;
+}
+
+export function isNonEmptyDigitalEmployeesState(
+  digitalEmployees: LyclawUiState['digitalEmployees'],
+): boolean {
+  return Object.keys(digitalEmployees.cachedDisplayMetadata).length > 0;
 }
 
 /** Pure merge used on startup; exported for unit tests. */
@@ -247,6 +267,9 @@ export function mergeHydratedUiState(
     skills: disk?.skills && isNonEmptySkillsState(disk.skills)
       ? disk.skills
       : local.skills,
+    digitalEmployees: disk?.digitalEmployees && isNonEmptyDigitalEmployeesState(disk.digitalEmployees)
+      ? disk.digitalEmployees
+      : local.digitalEmployees,
   };
 }
 
@@ -296,6 +319,7 @@ function buildUiStateFromStores(): LyclawUiState {
       sessionCompressionState: chat.sessionCompressionState as unknown as Record<string, unknown>,
     },
     skills: getSkillDisplayCacheSnapshot(),
+    digitalEmployees: getDigitalEmployeeDisplayCacheSnapshot(),
   };
 }
 
@@ -376,6 +400,7 @@ export async function hydrateUiStateFromDisk(): Promise<void> {
 
     const merged = mergeUiState(disk, local);
     loadSkillDisplayCacheLegacy(merged.skills.cachedDisplayMetadata, merged.skills.cachedDisplayVersions);
+    loadDigitalEmployeeDisplayCache(merged.digitalEmployees);
     applyUiStateToStores(merged);
 
     startUiStateSync();

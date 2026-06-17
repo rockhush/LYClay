@@ -25,6 +25,16 @@ export interface CachedSkillDisplayMetadata {
   update_time?: string;
 }
 
+export interface CachedDigitalEmployeeDisplayMetadata {
+  name?: string;
+  description?: string;
+  version?: string;
+  author?: string;
+  updateTime?: string;
+  category?: string;
+  tags?: string[];
+}
+
 export interface LyclawUiState {
   version: 1;
   updatedAt: number;
@@ -42,6 +52,9 @@ export interface LyclawUiState {
   };
   skills: {
     cachedDisplayMetadata: Record<string, CachedSkillDisplayMetadata>;
+  };
+  digitalEmployees: {
+    cachedDisplayMetadata: Record<string, CachedDigitalEmployeeDisplayMetadata>;
   };
 }
 
@@ -70,7 +83,42 @@ export function createEmptyUiState(): LyclawUiState {
     skills: {
       cachedDisplayMetadata: {},
     },
+    digitalEmployees: {
+      cachedDisplayMetadata: {},
+    },
   };
+}
+
+function sanitizeCachedDigitalEmployeeDisplayMetadata(input: unknown): CachedDigitalEmployeeDisplayMetadata | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const raw = input as Record<string, unknown>;
+  const metadata: CachedDigitalEmployeeDisplayMetadata = {};
+  if (typeof raw.name === 'string' && raw.name.trim()) metadata.name = raw.name.trim();
+  if (typeof raw.description === 'string' && raw.description.trim()) metadata.description = raw.description.trim();
+  if (typeof raw.version === 'string' && raw.version.trim()) metadata.version = raw.version.trim();
+  if (typeof raw.author === 'string' && raw.author.trim()) metadata.author = raw.author.trim();
+  if (typeof raw.updateTime === 'string' && raw.updateTime.trim()) metadata.updateTime = raw.updateTime.trim();
+  if (typeof raw.category === 'string' && raw.category.trim()) metadata.category = raw.category.trim();
+  if (Array.isArray(raw.tags)) {
+    const tags = raw.tags
+      .filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
+      .map((tag) => tag.trim());
+    if (tags.length > 0) metadata.tags = tags;
+  }
+  return Object.keys(metadata).length > 0 ? metadata : null;
+}
+
+function sanitizeCachedDigitalEmployeeDisplayMetadataRecord(
+  input: unknown,
+): Record<string, CachedDigitalEmployeeDisplayMetadata> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, CachedDigitalEmployeeDisplayMetadata> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof key !== 'string' || !key) continue;
+    const metadata = sanitizeCachedDigitalEmployeeDisplayMetadata(value);
+    if (metadata) out[key] = metadata;
+  }
+  return out;
 }
 
 function sanitizeCachedSkillDisplayMetadata(input: unknown): CachedSkillDisplayMetadata | null {
@@ -181,6 +229,10 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
   const skillsObj = skillsRaw && typeof skillsRaw === 'object' && !Array.isArray(skillsRaw)
     ? skillsRaw as Record<string, unknown>
     : {};
+  const digitalEmployeesRaw = data.digitalEmployees;
+  const digitalEmployeesObj = digitalEmployeesRaw && typeof digitalEmployeesRaw === 'object' && !Array.isArray(digitalEmployeesRaw)
+    ? digitalEmployeesRaw as Record<string, unknown>
+    : {};
 
   return {
     version: 1,
@@ -205,6 +257,11 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
       cachedDisplayMetadata: migrateLegacySkillVersionCache(
         sanitizeCachedSkillDisplayMetadataRecord(skillsObj.cachedDisplayMetadata),
         sanitizeStringRecord(skillsObj.cachedDisplayVersions),
+      ),
+    },
+    digitalEmployees: {
+      cachedDisplayMetadata: sanitizeCachedDigitalEmployeeDisplayMetadataRecord(
+        digitalEmployeesObj.cachedDisplayMetadata,
       ),
     },
   };
@@ -248,6 +305,7 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
   const replaceWorkspaces = patch.workspaces != null;
   const replaceChat = patch.chat != null;
   const replaceSkills = patch.skills != null;
+  const replaceDigitalEmployees = patch.digitalEmployees != null;
 
   const temporaryWorkspaces = replaceWorkspaces
     ? normalizedPatch.workspaces.temporaryWorkspaces
@@ -288,6 +346,14 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
       cachedDisplayMetadata: replaceSkills
         ? normalizedPatch.skills.cachedDisplayMetadata
         : { ...base.skills.cachedDisplayMetadata, ...normalizedPatch.skills.cachedDisplayMetadata },
+    },
+    digitalEmployees: {
+      cachedDisplayMetadata: replaceDigitalEmployees
+        ? normalizedPatch.digitalEmployees.cachedDisplayMetadata
+        : {
+            ...base.digitalEmployees.cachedDisplayMetadata,
+            ...normalizedPatch.digitalEmployees.cachedDisplayMetadata,
+          },
     },
   };
 }

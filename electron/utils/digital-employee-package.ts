@@ -18,7 +18,7 @@ import { validateMcpConfig } from './mcp-config-validator';
 import type { McpConfigFile } from './mcp-json';
 
 const MANIFEST_FILE = 'employee.json';
-const MAX_PACKAGE_FILES = 100_000;
+const MAX_PACKAGE_FILES = 2_000;
 export const MAX_DIGITAL_EMPLOYEE_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
 const ALLOWED_TOP_LEVEL_ENTRIES = new Set([
   'employee.json',
