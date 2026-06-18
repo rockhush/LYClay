@@ -203,6 +203,7 @@ export interface ChatState {
   setReasoningMode: (mode: ReasoningMode) => Promise<void>;
   setCurrentSessionModel: (model: string | null) => Promise<void>;
   handleChatEvent: (event: Record<string, unknown>) => void;
+  handleGatewayRunCompleted: (runId?: string | null, sessionKey?: string | null) => void;
   refresh: () => Promise<void>;
   clearError: () => void;
   clearSecurityCancelNotice: () => void;

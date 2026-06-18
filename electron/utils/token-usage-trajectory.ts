@@ -89,7 +89,13 @@ function usageFromShape(usage: unknown): TrajectoryUsageSupplement | null {
   const shape = usage as Record<string, unknown>;
   const inputTokens = firstUsageNumber(shape, ['input', 'promptTokens', 'prompt_tokens', 'input_tokens']) ?? 0;
   const outputTokens = firstUsageNumber(shape, ['output', 'completionTokens', 'completion_tokens', 'output_tokens']) ?? 0;
-  const cacheReadTokens = firstUsageNumber(shape, ['cacheRead', 'cache_read', 'cache_read_tokens']) ?? 0;
+  const cacheReadTokens = firstUsageNumber(shape, ['cacheRead', 'cache_read', 'cache_read_tokens'])
+    ?? (() => {
+      const details = shape.prompt_tokens_details;
+      if (!details || typeof details !== 'object' || Array.isArray(details)) return undefined;
+      return firstUsageNumber(details as Record<string, unknown>, ['cached_tokens', 'cachedTokens', 'cache_read']);
+    })()
+    ?? 0;
   const cacheWriteTokens = firstUsageNumber(shape, ['cacheWrite', 'cache_write', 'cache_write_tokens']) ?? 0;
   const explicitTotal = firstUsageNumber(shape, ['total', 'totalTokens', 'total_tokens']) ?? 0;
   const totalTokens = explicitTotal > 0

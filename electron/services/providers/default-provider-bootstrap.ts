@@ -11,6 +11,7 @@ import { removeProviderFromOpenClaw, syncProviderConfigToOpenClaw, updateAgentMo
 import { getOpenClawProviderKeyForType } from '../../utils/provider-keys';
 import { getProviderConfig } from '../../utils/provider-registry';
 import { proxyAwareFetch } from '../../utils/proxy-fetch';
+import { buildLyAutoModelOverrides, alignVllmCompilePluginState } from './ly-auto-compile-parity';
 import { getProviderService } from './provider-service';
 import { deleteProvider, storeApiKey } from '../../utils/secure-storage';
 import { getProviderAccount, saveProviderAccount } from './provider-store';
@@ -36,14 +37,6 @@ interface NginxModelConfigResponse {
   models: NginxModelEntry[];
 }
 
-const LY_AUTO_FALLBACK_OVERRIDES: Record<string, unknown> = {
-  reasoning: true,
-  input: ['text', 'image'],
-  contextWindow: 100000,
-  maxTokens: 8192,
-  compat: { supportsUsageInStreaming: true },
-};
-
 async function fetchNginxModelConfig(baseUrl: string): Promise<NginxModelEntry | null> {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
   const url = `${normalized}/lyclaw/models`;
@@ -66,18 +59,10 @@ async function fetchNginxModelConfig(baseUrl: string): Promise<NginxModelEntry |
   }
 }
 
-function buildModelOverrides(nginxEntry: NginxModelEntry | null): Record<string, unknown> {
-  const overrides = { ...LY_AUTO_FALLBACK_OVERRIDES };
-  if (nginxEntry) {
-    if (typeof nginxEntry.reasoning === 'boolean') overrides.reasoning = nginxEntry.reasoning;
-    if (Array.isArray(nginxEntry.input)) overrides.input = nginxEntry.input;
-    if (typeof nginxEntry.contextWindow === 'number') overrides.contextWindow = nginxEntry.contextWindow;
-    if (typeof nginxEntry.maxTokens === 'number') overrides.maxTokens = nginxEntry.maxTokens;
-    if (nginxEntry.compat && typeof nginxEntry.compat === 'object') {
-      overrides.compat = { ...(overrides.compat as Record<string, unknown>), ...nginxEntry.compat };
-    }
-  }
-  return overrides;
+function buildModelOverrides(_nginxEntry: NginxModelEntry | null): Record<string, unknown> {
+  // Match custom vLLM direct providers (compat only). Nginx reasoning/input flags
+  // must not change OpenClaw compile — gateway rewrites model name at HTTP layer.
+  return buildLyAutoModelOverrides();
 }
 
 function createLyAutoAccount(existing?: ProviderAccount | null): ProviderAccount {
@@ -245,6 +230,8 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
 
   // Sync to agent models.json
   await syncManagedProviderToAgentModels(account, LY_AUTO_MODEL_ID, modelOverrides);
+
+  await alignVllmCompilePluginState();
 
   // Set default provider account
   const defaultProviderId = await providerService.getDefaultAccountId();

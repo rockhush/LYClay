@@ -8,6 +8,7 @@ import { useAgentsStore } from '@/stores/agents';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { buildProviderListItems, type ProviderListItem } from '@/lib/provider-accounts';
+import { findProviderItemByModelRef } from '@/lib/provider-model-ref';
 import { LY_AUTO_PROVIDER_ID } from '@/lib/providers';
 import {
   formatContextWindowTokens,
@@ -167,13 +168,16 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const currentSessionModel = sessions.find((session) => session.key === currentSessionKey)?.model;
   const currentAgent = agents.find((agent) => agent.id === currentAgentId);
   const effectiveModelRef = currentSessionModel || currentAgent?.modelRef || defaultModelRef || undefined;
-  const currentItem = configuredProviders.find((item) => item.account.model === effectiveModelRef)
+  const currentItem = findProviderItemByModelRef(configuredProviders, effectiveModelRef)
     ?? configuredProviders.find((item) => item.account.id === defaultAccountId)
     ?? configuredProviders[0];
-  const currentLabel = effectiveModelRef
-    || currentItem?.account.model
-    || currentItem?.vendor?.name
+  const matchedAccount = findProviderItemByModelRef(configuredProviders, effectiveModelRef);
+  const currentLabel = matchedAccount?.account.label
+    || matchedAccount?.vendor?.name
+    || effectiveModelRef?.split('/').slice(1).join('/')
+    || effectiveModelRef
     || currentItem?.account.label
+    || currentItem?.vendor?.name
     || currentAgent?.modelDisplay
     || defaultModelRef?.split('/').pop()
     || t('composer.switchModel');

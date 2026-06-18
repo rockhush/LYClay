@@ -130,24 +130,13 @@ Skills ページでは OpenClaw の複数ソース（管理ディレクトリ、
 - `TAVILY_API_KEY`: `tavily-search` 用（上流ランタイムで OAuth 対応の場合あり）
 
 ### 🔌 MCP コネクタ
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> origin/dev_limit
-サイドバーの **コネクタ** から Model Context Protocol サーバーを管理できます（内蔵の Notion / GitHub セットアップとカスタム MCP）。**`#/settings/mcp`**（MCP サービス）や **`#/settings/mcp/config`**（MCP JSON 編集）からも `~/.openclaw/openclaw.json#mcp.servers` を扱え、保存時に可能な範囲でローカルの OpenClaw Gateway を再読み込みします。
+サイドバーの **コネクタ** から Model Context Protocol サーバーを管理できます（内蔵の Notion / GitHub セットアップとカスタム MCP）。**`#/settings/mcp`**（MCP サービス）や **`#/settings/mcp/config`**（MCP JSON 編集）からも `~/.openclaw/mcp.json` を扱え、保存時に可能な範囲でローカルの OpenClaw Gateway を再読み込みします。新規または設定変更済みの MCP サーバーを有効化する際は明示的な許可が必要です。stdio サーバーはローカルプロセスを起動するため、高リスクとして扱われます。
 
 マーケットプレイスのデジタル従業員パッケージは Host API 経由でインストールできます。レンダラープロセスはマーケットプレイス一覧項目の `id` のみを渡し、メインプロセスが `https://ai.lingyiitech.com/management/agents/download/<id>/` からパッケージをダウンロードします。レンダラーが任意のパッケージ URL を指定することはできません。ZIP ダウンロードは 512 MiB、展開後の内容は 1 GiB に制限されます。LYClaw はパッケージを検証して `~/.openclaw/digital-employees/<package-slug>--<short-id>` に展開し、`employee-<package-slug>-<short-id>` という読みやすい ID の専用ローカル OpenClaw Agent を作成して、安全に Agent テンプレートを適用します。Agent のワークスペース記述、従業員専用 Skill、MCP 設定はインストール済みパッケージ内に保持されます。インストール時に MCP をグローバルな `openclaw.json` へ登録せず、従業員の利用時に選択された従業員ディレクトリから設定を読み取ります。インストール状態とリソース所有情報は `install.json` に保存され、SQLite は使用しません。
 デジタル従業員マーケットプレイス画面はこのインストール処理をカードから直接呼び出し、進行状態と成功・失敗の通知を表示し、ローカルの従業員記録からインストール済み状態を判定します。
 パッケージが `"allowMultipleInstances": false` を明示した場合、LYClaw は Agent を作成する前に同じ `packageId` の再インストールを拒否します。未指定または `true` の場合は複数インスタンスを許可します。
 
 インストール済みのデジタル従業員は Host API から同じインスタンスのまま更新できます。更新では `instanceId`、`agentId`、セッションキー、ランタイムパスを維持し、同じ `packageId` とより新しいバージョンを要求します。パッケージ、同梱 Skill、パッケージ内 MCP 設定、ワークフロー、リソース、管理対象の Agent ワークスペースファイルは新しいパッケージに同期され、削除された管理対象ファイルもローカルから削除されます。一方、`USER.md`、セッション、メモリ、認証情報、ユーザー成果物は保持されます。失敗時は旧パッケージ、Workspace、Agent を復元します。
-<<<<<<< HEAD
-=======
-サイドバーの **コネクタ** から Model Context Protocol サーバーを管理できます（内蔵の Notion / GitHub セットアップとカスタム MCP）。**`#/settings/mcp`**（MCP サービス）や **`#/settings/mcp/config`**（MCP JSON 編集）からも同じ `~/.openclaw/mcp.json` を扱え、保存時に可能な範囲でローカルの OpenClaw Gateway を再読み込みします。新規または設定変更済みの MCP サーバーを有効化する際は明示的な許可が必要です。stdio サーバーはローカルプロセスを起動するため、高リスクとして扱われます。
->>>>>>> origin/dev
-=======
-サイドバーの **コネクタ** から Model Context Protocol サーバーを管理できます（内蔵の Notion / GitHub セットアップとカスタム MCP）。**`#/settings/mcp`**（MCP サービス）や **`#/settings/mcp/config`**（MCP JSON 編集）からも同じ `~/.openclaw/mcp.json` を扱え、保存時に可能な範囲でローカルの OpenClaw Gateway を再読み込みします。新規または設定変更済みの MCP サーバーを有効化する際は明示的な許可が必要です。stdio サーバーはローカルプロセスを起動するため、高リスクとして扱われます。
->>>>>>> origin/dev_limit
 
 ### 🔐 セキュアなプロバイダー統合
 複数のAIプロバイダー（OpenAI、Anthropicなど）に接続でき、資格情報はシステムのネイティブキーチェーンに安全に保存されます。OpenAI は API キーとブラウザ OAuth（Codex サブスクリプション）の両方に対応しています。

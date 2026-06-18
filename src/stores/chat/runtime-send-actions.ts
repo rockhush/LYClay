@@ -24,6 +24,7 @@ import {
   setLastChatEventAt,
   upsertImageCacheEntry,
 } from './helpers';
+import { buildClearedActiveRunPatch } from './run-lifecycle';
 import type { ChatSession, RawMessage, ReasoningMode } from './types';
 import { prepareContextBeforeSend } from './context-send-guard';
 import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
@@ -427,12 +428,24 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
 
       const SOFT_NO_RESPONSE_NOTICE_MS = 90_000;
       const HARD_NO_RESPONSE_TIMEOUT_MS = 15 * 60_000;
+      const PENDING_FINAL_STUCK_MS = 90_000;
       let slowResponseNoticeLogged = false;
       const checkStuck = () => {
         const state = get();
         if (!state.sending) return;
         if (state.streamingMessage || state.streamingText) return;
         if (state.pendingFinal) {
+          const idleMs = Date.now() - getLastChatEventAt();
+          if (idleMs >= PENDING_FINAL_STUCK_MS) {
+            void get().loadHistory(true, { force: true }).finally(() => {
+              const next = get();
+              if (next.currentSessionKey !== currentSessionKey || !next.sending) return;
+              if (Date.now() - getLastChatEventAt() < PENDING_FINAL_STUCK_MS / 2) return;
+              clearHistoryPoll();
+              clearErrorRecoveryTimer();
+              set(buildClearedActiveRunPatch());
+            });
+          }
           setTimeout(checkStuck, 10_000);
           return;
         }
@@ -519,7 +532,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             'chat:sendWithMedia',
             {
               sessionKey: currentSessionKey,
-              message: withThinkingDirective(runtimeMessage, reasoningMode),
+              message: withThinkingDirective(runtimeMessage, effectiveReasoningMode),
               deliver: false,
               idempotencyKey,
               media: attachments!.map((a) => ({
@@ -530,12 +543,16 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             },
           ) as { success: boolean; result?: { runId?: string }; error?: string };
         } else {
+          const sessionId = currentSessionKey.startsWith('agent:')
+            ? currentSessionKey.split(':').slice(2).join(':') || undefined
+            : undefined;
           result = await invokeIpc(
             'gateway:rpc',
             'chat.send',
             {
               sessionKey: currentSessionKey,
-              message: withThinkingDirective(runtimeMessage, reasoningMode),
+              sessionId,
+              message: withThinkingDirective(runtimeMessage, effectiveReasoningMode),
               deliver: false,
               idempotencyKey,
             },

@@ -1053,9 +1053,28 @@ function isToolResultRole(role: unknown): boolean {
 }
 
 function isInternalMessageText(text: string): boolean {
-  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(text.trim())) return true;
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(text.trim())) return true;
+  if (containsSilentReplyToken(text) && stripSilentReplyToken(text).trim().length === 0) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(text.trim())) return true;
   return isRuntimeSystemInjection(text);
+}
+
+/** Whether assistant text includes OpenClaw silent reply tokens. */
+function containsSilentReplyToken(text: string): boolean {
+  return /\b(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(text);
+}
+
+/**
+ * Remove OpenClaw silent reply tokens from assistant-visible text.
+ * Common after messaging tools (e.g. DingTalk send): "已发送\\n\\nNO_REPLY".
+ */
+function stripSilentReplyToken(text: string): string {
+  if (!text) return text;
+  const trimmed = text.trim();
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(trimmed)) return '';
+  // Leading silent token means the whole turn should stay hidden.
+  if (/^\s*(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(trimmed)) return '';
+  return text.replace(/(?:\r?\n|\r|\s)*\b(?:NO_REPLY|HEARTBEAT_OK)\b\s*$/i, '').trimEnd();
 }
 
 /** True for internal plumbing messages that should never be shown in the UI. */
@@ -1101,6 +1120,7 @@ function isRuntimeSystemInjection(text: string): boolean {
   ) {
     return true;
   }
+
   return false;
 }
 
@@ -1346,6 +1366,7 @@ export {
   enrichWithToolResultFiles,
   isInternalMessage,
   isInternalMessageText,
+  stripSilentReplyToken,
   isToolResultRole,
   enrichWithCachedImages,
   normalizeComplexTaskControlUserMessages,

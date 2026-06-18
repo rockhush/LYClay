@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   getProviderAccount: vi.fn(),
   deleteProvider: vi.fn(),
   removeProviderFromOpenClaw: vi.fn(),
+  proxyAwareFetch: vi.fn(),
 }));
 
 vi.mock('@electron/shared/providers/registry', () => ({
@@ -62,6 +63,10 @@ vi.mock('@electron/utils/secure-storage', () => ({
   storeApiKey: mocks.storeApiKey,
 }));
 
+vi.mock('@electron/utils/proxy-fetch', () => ({
+  proxyAwareFetch: (...args: unknown[]) => mocks.proxyAwareFetch(...args),
+}));
+
 vi.mock('@electron/services/providers/provider-store', () => ({
   getProviderAccount: mocks.getProviderAccount,
   saveProviderAccount: mocks.saveProviderAccount,
@@ -72,6 +77,7 @@ import { bootstrapLyManagedProviders } from '@electron/services/providers/defaul
 describe('bootstrapLyManagedProviders', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.proxyAwareFetch.mockRejectedValue(new Error('network unavailable in unit test'));
     mocks.getProviderDefinition.mockReturnValue({ defaultModelId: 'auto' });
     mocks.readOpenClawConfig.mockResolvedValue({ models: { providers: {} }, agents: { defaults: { model: {} } } });
     mocks.writeOpenClawConfig.mockResolvedValue(undefined);
@@ -110,7 +116,9 @@ describe('bootstrapLyManagedProviders', () => {
     expect(mocks.deleteProvider).toHaveBeenCalledWith('ly-qwen');
     expect(mocks.deleteProvider).toHaveBeenCalledWith('ly-mimo');
 
-    // Should sync only ly-auto
+    expect(mocks.proxyAwareFetch).toHaveBeenCalled();
+
+    // Should sync only ly-auto (fallback overrides when nginx fetch fails in unit tests)
     expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
       'ly-auto',
       'auto',
@@ -118,13 +126,12 @@ describe('bootstrapLyManagedProviders', () => {
         baseUrl: 'http://10.64.10.48/v1',
         api: 'openai-completions',
         modelOverrides: {
-          auto: {
-            reasoning: true,
-            input: ['text', 'image'],
-            contextWindow: 100000,
-            maxTokens: 8192,
-            compat: { supportsUsageInStreaming: true },
-          },
+          auto: expect.objectContaining({
+            compat: expect.objectContaining({
+              supportsUsageInStreaming: true,
+              supportsPromptCacheKey: false,
+            }),
+          }),
         },
       }),
     );
@@ -137,11 +144,7 @@ describe('bootstrapLyManagedProviders', () => {
         apiKey: 'EMPTY',
         models: [expect.objectContaining({
           id: 'auto',
-          reasoning: true,
-          input: ['text', 'image'],
-          contextWindow: 100000,
-          maxTokens: 8192,
-          compat: { supportsUsageInStreaming: true },
+          compat: expect.objectContaining({ supportsUsageInStreaming: true }),
         })],
       }),
     );

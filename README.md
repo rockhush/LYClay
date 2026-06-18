@@ -132,25 +132,14 @@ Environment variables for bundled search skills:
 - `TAVILY_API_KEY` for `tavily-search` (OAuth may also be supported by upstream skill runtime)
 - `find-skills` and `self-improving-agent` do not require API keys
 
-### 🔌 MCP connectors
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> origin/dev_limit
-Manage Model Context Protocol servers from the sidebar **Connectors** page (built-in Notion and GitHub setup flows, plus custom entries). You can also open **MCP services** at `#/settings/mcp` and **Edit MCP JSON** at `#/settings/mcp/config`. Configuration is stored in `~/.openclaw/openclaw.json#mcp.servers`; saving changes asks the local OpenClaw Gateway to reload when possible.
+### 🔌 MCP Connectors
+Manage Model Context Protocol servers from the sidebar **Connectors** page (built-in Notion and GitHub setup flows, plus custom entries). You can also open **MCP services** at `#/settings/mcp` and **Edit MCP JSON** at `#/settings/mcp/config`. Configuration is stored in `~/.openclaw/mcp.json`; saving changes asks the local OpenClaw Gateway to reload when possible. Enabling a new or changed MCP server requires explicit authorization; stdio servers are treated as high risk because they start a local process.
 
 Marketplace digital employee packages can be installed through the Host API. The renderer passes the marketplace list item id, and the main process downloads the package from `https://ai.lingyiitech.com/management/agents/download/<id>/`; renderer-controlled package URLs are not accepted. Downloads are limited to 512 MiB and extracted content to 1 GiB. LYClaw validates and extracts each package under `~/.openclaw/digital-employees/<package-slug>--<short-id>`, creates one exclusive local OpenClaw Agent with a readable `employee-<package-slug>-<short-id>` id, safely applies its Agent template, copies portable Agent workspace descriptions, and preserves employee-scoped Skills and MCP configuration inside the installed package. Installation does not register packaged MCP servers in global `openclaw.json`; employee runtime usage reads the configuration from the selected employee directory. Installation state and resource ownership are recorded in `install.json`; SQLite is not required.
 The Digital Employee marketplace page invokes this installation flow directly from each card, displays progress and success or failure feedback, and derives installed status from local employee records.
 When a package explicitly sets `"allowMultipleInstances": false`, LYClaw rejects another installation with the same `packageId` before creating an Agent. Missing or `true` values allow multiple instances.
 
 Installed employees can be updated in place through the Host API. Updates preserve the `instanceId`, `agentId`, session key, and runtime paths, require the same `packageId` and a newer version, and synchronize the package, bundled Skills, packaged MCP configuration, workflows, resources, and managed Agent workspace files. Managed files removed by the new package are removed locally, while `USER.md`, sessions, memory, credentials, and user outputs are preserved. Any failure restores the previous package, workspace, and Agent definition.
-<<<<<<< HEAD
-=======
-Manage Model Context Protocol servers from the sidebar **Connectors** page (built-in Notion and GitHub setup flows, plus custom entries). You can also open **MCP services** at `#/settings/mcp` and **Edit MCP JSON** at `#/settings/mcp/config`. Configuration is stored in `~/.openclaw/mcp.json`; saving changes asks the local OpenClaw Gateway to reload when possible. Enabling a new or changed MCP server requires explicit authorization; stdio servers are treated as high risk because they start a local process.
->>>>>>> origin/dev
-=======
-Manage Model Context Protocol servers from the sidebar **Connectors** page (built-in Notion and GitHub setup flows, plus custom entries). You can also open **MCP services** at `#/settings/mcp` and **Edit MCP JSON** at `#/settings/mcp/config`. Configuration is stored in `~/.openclaw/mcp.json`; saving changes asks the local OpenClaw Gateway to reload when possible. Enabling a new or changed MCP server requires explicit authorization; stdio servers are treated as high risk because they start a local process.
->>>>>>> origin/dev_limit
 
 ### 🔐 Secure Provider Integration
 Connect to multiple AI providers (OpenAI, Anthropic, and more) with credentials stored securely in your system's native keychain. OpenAI supports both API key and browser OAuth (Codex subscription) sign-in.

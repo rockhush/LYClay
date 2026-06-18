@@ -1,8 +1,9 @@
 #!/usr/bin/env zx
 
 import 'zx/globals';
+import { fileURLToPath } from 'node:url';
 
-const ROOT_DIR = path.resolve(__dirname, '..');
+const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NODE_VERSION = '22.19.0';
 const OUTPUT_BASE = path.join(ROOT_DIR, 'resources', 'bin');
 

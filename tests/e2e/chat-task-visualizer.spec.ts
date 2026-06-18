@@ -190,7 +190,7 @@ const errorRunHistory = [
 ];
 
 test.describe('ClawX chat execution graph', () => {
-  test('renders internal yield status and linked subagent branch from mocked IPC', async ({ launchElectronApp }) => {
+  test('hides subagent orchestration plumbing while flattening child tool work into the parent run', async ({ launchElectronApp }) => {
     const app = await launchElectronApp({ skipSetup: true });
 
     try {
@@ -271,15 +271,16 @@ test.describe('ClawX chat execution graph', () => {
       }
       await expect(
         page.locator('[data-testid="chat-execution-graph"] [data-testid="chat-execution-step"]').getByText('sessions_yield', { exact: true }),
-      ).toBeVisible();
-      await expect(page.getByText('coder subagent')).toBeVisible();
+      ).toHaveCount(0);
+      await expect(page.getByText('coder subagent')).toHaveCount(0);
+      await expect(page.getByText('[Internal task completion event]')).toHaveCount(0);
       await expect(
         page.locator('[data-testid="chat-execution-graph"] [data-testid="chat-execution-step"]').getByText('exec', { exact: true }),
       ).toBeVisible();
       const execRow = page.locator('[data-testid="chat-execution-step"]').filter({ hasText: 'exec' }).first();
       await execRow.click();
       await expect(execRow.locator('pre')).toBeVisible();
-      await expect(page.locator('[data-testid="chat-execution-graph"]').getByText('I asked coder to break down the core blocks of ~/Velaria uncommitted changes; will give you the conclusion when it returns.')).toBeVisible();
+      await expect(page.getByText('Coder has finished the analysis, here are the conclusions.')).toBeVisible();
       await expect(page.getByText('CHECKLIST.md')).toHaveCount(0);
       await expect(page.getByTestId('chat-execution-step-thinking-trailing')).toHaveCount(0);
     } finally {

@@ -7,6 +7,7 @@ import { listAgentsSnapshot } from '../../utils/agent-config';
 import { getOpenClawConfigDir } from '../../utils/paths';
 import { logger } from '../../utils/logger';
 import { redactSecrets, redactStructuredSecrets } from '../../security/secret-scanner';
+import { sanitizeTranscriptMessageForDisplay } from '../../utils/silent-reply-sanitize';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -485,7 +486,7 @@ export async function handleSessionRoutes(
               data?: PromptErrorRecord;
             };
             if (entry.type === 'message' && entry.message) {
-              return [{ kind: 'message' as const, value: redactStructuredSecrets(entry.message) }];
+              return [{ kind: 'message' as const, value: redactStructuredSecrets(sanitizeTranscriptMessageForDisplay(entry.message)) }];
             }
             if (entry.type === 'custom' && entry.customType === 'openclaw:prompt-error') {
               return [{ kind: 'promptError' as const, value: redactStructuredSecrets(entry.data ?? {}) }];

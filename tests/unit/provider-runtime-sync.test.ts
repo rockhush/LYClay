@@ -268,6 +268,77 @@ describe('provider-runtime-sync refresh strategy', () => {
     );
   });
 
+  it('syncs custom vLLM provider models.json with streaming usage compat flags', async () => {
+    const customProvider = createProvider({
+      id: 'customa6',
+      type: 'custom',
+      name: 'MiniMax Direct',
+      model: 'MiniMax-M2.7',
+      baseUrl: 'http://10.64.22.11:8000/v1',
+    });
+
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getApiKey.mockResolvedValue('sk-lyitech');
+
+    const gateway = createGateway('running');
+    await syncSavedProviderToRuntime(customProvider, undefined, gateway as GatewayManager);
+
+    expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
+      'custom-customa6',
+      expect.objectContaining({
+        baseUrl: 'http://10.64.22.11:8000/v1',
+        api: 'openai-completions',
+        models: [{
+          id: 'MiniMax-M2.7',
+          name: 'MiniMax-M2.7',
+          compat: {
+            supportsUsageInStreaming: true,
+            supportsPromptCacheKey: false,
+          },
+        }],
+      }),
+    );
+  });
+
+  it('syncs agent model override with streaming usage compat for custom providers', async () => {
+    mocks.getAllProviders.mockResolvedValue([
+      createProvider({
+        id: 'customa6',
+        type: 'custom',
+        name: 'MiniMax Direct',
+        model: 'MiniMax-M2.7',
+        baseUrl: 'http://10.64.22.11:8000/v1',
+      }),
+    ]);
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getApiKey.mockResolvedValue('sk-lyitech');
+    mocks.listAgentsSnapshot.mockResolvedValue({
+      agents: [
+        {
+          id: 'main',
+          modelRef: 'custom-customa6/MiniMax-M2.7',
+        },
+      ],
+    });
+
+    await syncAgentModelOverrideToRuntime('main');
+
+    expect(mocks.updateSingleAgentModelProvider).toHaveBeenCalledWith(
+      'main',
+      'custom-customa6',
+      expect.objectContaining({
+        models: [{
+          id: 'MiniMax-M2.7',
+          name: 'MiniMax-M2.7',
+          compat: {
+            supportsUsageInStreaming: true,
+            supportsPromptCacheKey: false,
+          },
+        }],
+      }),
+    );
+  });
+
   it('syncs Ollama provider config to runtime without adding model prefix', async () => {
     const ollamaProvider = createProvider({
       id: 'ollamafd',

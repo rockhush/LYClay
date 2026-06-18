@@ -2,6 +2,9 @@
  * Electron Main Process Entry
  * Manages window creation, system tray, and IPC handlers
  */
+import '../instrumentation/load-env';
+// Dev-only: Langfuse OTEL bootstrap (see electron/instrumentation/langfuse.ts).
+// import '../instrumentation/langfuse';
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 import type { Server } from 'node:http';
 import { join } from 'path';
@@ -14,6 +17,7 @@ import { appUpdater, registerUpdateHandlers } from './updater';
 import { logger } from '../utils/logger';
 import { warmupNetworkOptimization } from '../utils/uv-env';
 import { initTelemetry, shutdownTelemetry } from '../utils/telemetry';
+// import { shutdownLangfuseTracing } from '../instrumentation/langfuse';
 
 import { ClawHubService } from '../gateway/clawhub';
 import { extensionRegistry } from '../extensions/registry';
@@ -578,6 +582,10 @@ async function initialize(): Promise<void> {
       logger.debug('Auto-starting Gateway...');
       await gatewayManager.start();
       logger.info('Gateway auto-start succeeded');
+      // OpenClaw may rewrite models.json on first boot; re-apply custom vLLM streaming compat.
+      await syncAllProviderAuthToRuntime().catch((error) => {
+        logger.warn('Failed to re-sync provider compat after gateway start:', error);
+      });
     } catch (error) {
       logger.error('Gateway auto-start failed:', error);
       mainWindow?.webContents.send('gateway:error', String(error));
@@ -623,6 +631,7 @@ if (gotTheLock) {
 
   app.on('will-quit', () => {
     releaseProcessInstanceFileLock();
+    // void shutdownLangfuseTracing();
   });
 
   if (process.platform === 'win32') {

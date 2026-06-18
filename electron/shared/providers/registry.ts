@@ -31,12 +31,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
         {
           id: 'auto',
           name: 'auto',
-          reasoning: true,
-          input: ['text', 'image'],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 100000,
-          maxTokens: 8192,
-          compat: { supportsUsageInStreaming: true },
+          compat: { supportsUsageInStreaming: true, supportsPromptCacheKey: false },
         },
       ],
     },

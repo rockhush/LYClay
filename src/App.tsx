@@ -147,12 +147,7 @@ function App() {
   const runDeviceAccessCheck = useCallback(async (force = false) => {
     setDeviceAccessLoading(true);
     try {
-      // setDeviceAccess(await checkDeviceAccess(force));
-      setDeviceAccess({
-        success: true,
-        status: 'allowed',
-        allowed: true,
-      });
+      setDeviceAccess(await checkDeviceAccess(force));
     } catch (error) {
       setDeviceAccess({
         success: false,

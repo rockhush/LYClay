@@ -13,6 +13,16 @@ import { JsonRpcNotification, isNotification, isResponse } from './protocol';
 import { logger } from '../utils/logger';
 import { protectMemoryRpcOutput } from '../security/memory-content-policy';
 import { captureTelemetryEvent, trackMetric } from '../utils/telemetry';
+// Dev-only Langfuse chat tracing — uncomment with electron/main/index.ts langfuse import.
+// import {
+//   beginChatSendTrace,
+//   finishChatRunTrace,
+//   finishChatSendRpc,
+//   recordChatRunPending,
+//   recordChatSendPending,
+//   recordChatStreamEvent,
+//   recordGatewayModelUsage,
+// } from '../utils/langfuse-chat-tracing';
 import {
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
@@ -62,6 +72,7 @@ import {
 } from './startup-stderr';
 import { runGatewayStartupSequence } from './startup-orchestrator';
 import { isInvalidConfigSignal } from './startup-recovery';
+import { ensureClawXContext } from '../utils/openclaw-workspace';
 import { handleGatewayExecApprovalRequested } from './exec-approval-bridge';
 import { recoverOrphanedSessionTranscriptLock } from './session-lock-recovery';
 
@@ -152,6 +163,8 @@ export class GatewayManager extends EventEmitter {
   private startLock = false;
   private lastSpawnSummary: string | null = null;
   private recentStartupStderrLines: string[] = [];
+  private lastGatewayDebugSessionId: string | undefined;
+  private lastGatewayDebugProvider: string | undefined;
   private pendingRequests: Map<string, PendingGatewayRequest> = new Map();
   private deviceIdentity: DeviceIdentity | null = null;
   private restartInFlight: Promise<void> | null = null;
@@ -934,12 +947,15 @@ export class GatewayManager extends EventEmitter {
         logger.info('Gateway warmup: triggering AI provider initialization with real chat request');
         this.setStatus({ warmupStatus: 'warming' });
 
+        await ensureClawXContext();
+
         const crypto = await import('crypto');
         // Send a real chat request to trigger AI provider initialization.
         // The RPC returns when the run is accepted, so wait for completion
         // before declaring warmup complete.
         const warmupResult = await this.rpc('chat.send', {
           sessionKey: warmupSessionKey,
+          sessionId: '__warmup__',
           message: '/think off 请只回复 ready。',
           deliver: true,
           idempotencyKey: crypto.randomUUID(),
@@ -1167,8 +1183,56 @@ export class GatewayManager extends EventEmitter {
           recentGatewayStderr: this.recentStartupStderrLines.slice(-20),
           sessionFiles: fileStats,
         });
+        // recordChatSendPending({
+        //   requestId: args.requestId,
+        //   pendingMs: now - args.rpcStart,
+        //   watchdogDelayMs: delayMs,
+        //   sessionKey,
+        // });
       })();
     }, delayMs));
+  }
+
+  private parseGatewayDebugStdoutLine(line: string): void {
+    const jsonStart = line.indexOf('{');
+    if (jsonStart < 0) {
+      return;
+    }
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(line.slice(jsonStart)) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+
+    if (line.includes('[DEBUG-sessionId]')) {
+      const sid = typeof parsed.sid === 'string' ? parsed.sid : undefined;
+      const provider = typeof parsed.provider === 'string' ? parsed.provider : undefined;
+      if (sid) {
+        this.lastGatewayDebugSessionId = sid;
+      }
+      if (provider) {
+        this.lastGatewayDebugProvider = provider;
+      }
+      return;
+    }
+
+    if (!line.includes('[DEBUG-usage]')) {
+      return;
+    }
+
+    const usage = parsed.parsed && typeof parsed.parsed === 'object'
+      ? parsed.parsed as Record<string, unknown>
+      : parsed;
+    // recordGatewayModelUsage({
+    //   sessionId: this.lastGatewayDebugSessionId,
+    //   provider: this.lastGatewayDebugProvider,
+    //   input: typeof usage.input === 'number' ? usage.input : undefined,
+    //   output: typeof usage.output === 'number' ? usage.output : undefined,
+    //   cacheRead: typeof usage.cacheRead === 'number' ? usage.cacheRead : undefined,
+    //   totalTokens: typeof usage.totalTokens === 'number' ? usage.totalTokens : undefined,
+    // });
   }
 
   private scheduleChatRunFirstEventWatchdog(runId: string): NodeJS.Timeout[] {
@@ -1197,6 +1261,13 @@ export class GatewayManager extends EventEmitter {
           recentGatewayStderr: this.recentStartupStderrLines.slice(-20),
           sessionFiles: fileStats,
         });
+        // recordChatRunPending({
+        //   kind: 'first_event',
+        //   runId,
+        //   pendingMs: now - metrics.acceptedAt,
+        //   watchdogDelayMs: delayMs,
+        //   sessionKey: metrics.sessionKey,
+        // });
       })();
     }, delayMs));
   }
@@ -1229,6 +1300,13 @@ export class GatewayManager extends EventEmitter {
           recentGatewayStderr: this.recentStartupStderrLines.slice(-20),
           sessionFiles: fileStats,
         });
+        // recordChatRunPending({
+        //   kind: 'first_visible_progress',
+        //   runId,
+        //   pendingMs: now - metrics.acceptedAt,
+        //   watchdogDelayMs: delayMs,
+        //   sessionKey: metrics.sessionKey,
+        // });
       })();
     }, delayMs));
   }
@@ -1466,6 +1544,13 @@ export class GatewayManager extends EventEmitter {
         sinceRequestedMs: now - metrics.requestedAt,
         rpcDurationMs: metrics.rpcDurationMs,
       });
+      if (metrics.kind === 'user') {
+        // recordChatStreamEvent({
+        //   runId,
+        //   state,
+        //   sessionKey: metrics.sessionKey,
+        // });
+      }
     }
 
     if (state === 'delta' && !metrics.firstDeltaAt) {
@@ -1515,11 +1600,28 @@ export class GatewayManager extends EventEmitter {
         sinceFirstDeltaMs: metrics.firstDeltaAt ? now - metrics.firstDeltaAt : null,
         rpcDurationMs: metrics.rpcDurationMs,
       });
+      if (metrics.kind === 'user') {
+        // recordChatStreamEvent({
+        //   runId,
+        //   state,
+        //   sessionKey: metrics.sessionKey,
+        //   visibleProgressKind: visibleProgress.kind,
+        //   messageBlockTypes: visibleProgress.messageBlockTypes,
+        // });
+      }
       if (metrics.kind === 'user' && !this.isWarmedUp) {
         this.isWarmedUp = true;
         this.hasWarmupFailed = false;
         this.setStatus({ warmupStatus: 'ready' });
       }
+    }
+
+    if (state === 'delta' && metrics.kind === 'user') {
+      // recordChatStreamEvent({
+      //   runId,
+      //   state,
+      //   sessionKey: metrics.sessionKey,
+      // });
     }
 
     if (state === 'final' || state === 'error' || state === 'aborted') {
@@ -1559,6 +1661,15 @@ export class GatewayManager extends EventEmitter {
         firstVisibleProgressKind: metrics.firstVisibleProgressKind,
         rpcDurationMs: metrics.rpcDurationMs,
       });
+      if (metrics.kind === 'user') {
+        // finishChatRunTrace({
+        //   runId,
+        //   state,
+        //   sessionKey: metrics.sessionKey,
+        //   totalSinceRequestedMs: now - metrics.requestedAt,
+        //   totalSinceAcceptedMs: now - metrics.acceptedAt,
+        // });
+      }
       this.chatRunMetrics.delete(runId);
     }
   }
@@ -1690,6 +1801,12 @@ export class GatewayManager extends EventEmitter {
 
       const id = crypto.randomUUID();
       requestId = id;
+      // void beginChatSendTrace({
+      //   requestId: id,
+      //   method,
+      //   params,
+      //   timeoutMs,
+      // });
       this.rpcInflight.set(id, {
         method,
         startedAt: rpcStart,
@@ -1734,6 +1851,14 @@ export class GatewayManager extends EventEmitter {
     }).then((result) => {
       const duration = Date.now() - rpcStart;
       logger.info(`[rpc] ${method} completed in ${duration}ms`);
+      if (requestId) {
+        // finishChatSendRpc({
+        //   requestId,
+        //   success: true,
+        //   runId: this.getRunIdFromRpcResult(result) ?? undefined,
+        //   durationMs: duration,
+        // });
+      }
       this.recordChatSendAccepted({
         method,
         params,
@@ -1749,6 +1874,14 @@ export class GatewayManager extends EventEmitter {
     }).catch((error) => {
       const duration = Date.now() - rpcStart;
       logger.warn(`[rpc] ${method} failed after ${duration}ms: ${String(error)}`);
+      if (requestId) {
+        // finishChatSendRpc({
+        //   requestId,
+        //   success: false,
+        //   durationMs: duration,
+        //   error: String(error),
+        // });
+      }
       if (isTransportRpcFailure(error)) {
         this.recordRpcFailure(method);
       }
@@ -1869,6 +2002,7 @@ export class GatewayManager extends EventEmitter {
         const normalized = line.replace(/\r$/, '').trimEnd();
         if (!normalized.trim()) return;
         logger.debug(`[Gateway stdout] ${normalized.trim()}`);
+        this.parseGatewayDebugStdoutLine(normalized);
         if (isInvalidConfigSignal(normalized)) {
           recordGatewayStartupStderrLine(this.recentStartupStderrLines, normalized);
         }

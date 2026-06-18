@@ -101,6 +101,19 @@ function firstUsageNumber(usage: TranscriptUsageShape | undefined, candidates: s
   return undefined;
 }
 
+function cacheReadFromNestedUsage(usage: TranscriptUsageShape): number | undefined {
+  const details = usage.prompt_tokens_details;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return undefined;
+  }
+  return firstUsageNumber(details as TranscriptUsageShape, [
+    'cached_tokens',
+    'cachedTokens',
+    'cache_read',
+    'cacheRead',
+  ]);
+}
+
 function estimateContentTokens(content: unknown): number {
   if (!content) return 0;
   if (typeof content === 'string') return estimateTokensFromText(content);
@@ -229,7 +242,7 @@ function parseUsageFromShape(usage: unknown): ParsedUsageTokens | undefined {
     'cache_read_tokens',
     'cacheReadTokenCount',
     'cache_read_token_count',
-  ]);
+  ]) ?? cacheReadFromNestedUsage(usageShape);
   const cacheWriteTokens = firstUsageNumber(usageShape, [
     'cacheWrite',
     'cache_write',

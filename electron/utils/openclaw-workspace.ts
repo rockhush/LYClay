@@ -276,30 +276,39 @@ async function mergeClawXContextOnce(): Promise<number> {
         .replace('.clawx.md', '.md');
       const targetPath = join(workspaceDir, targetName);
 
-      if (!(await fileExists(targetPath))) {
-        logger.debug(`Skipping ${targetName} in ${workspaceDir} (file does not exist yet, will be seeded by gateway)`);
-        if (shouldRetryMissingBootstrapFile(workspaceDir)) {
-          skipped++;
-        }
-        continue;
-      }
-
       const section = await readFile(join(contextDir, file), 'utf-8');
-      const originalExisting = await readFile(targetPath, 'utf-8');
-      let existing = originalExisting;
+      let existing: string;
+      let originalExisting: string;
 
-      // Strip unwanted Gateway-seeded sections before merging
-      if (targetName === 'AGENTS.md') {
-        const stripped = stripFirstRunSection(existing);
-        if (stripped !== existing) {
-          existing = stripped;
-          logger.info(`Stripped First Run section from ${targetName} (${workspaceDir})`);
+      if (!(await fileExists(targetPath))) {
+        // For the default workspace, retry later so the Gateway can seed a
+        // full template first (AGENTS.md, SOUL.md, etc.). For other workspaces
+        // (including temporary ones), create the file immediately with just the
+        // LYClaw context section — this ensures a consistent system prompt prefix
+        // so vLLM can reuse the KV cache across conversations.
+        if (shouldRetryMissingBootstrapFile(workspaceDir)) {
+          logger.debug(`Skipping ${targetName} in ${workspaceDir} (file does not exist yet, will be seeded by gateway)`);
+          skipped++;
+          continue;
+        }
+        existing = '';
+        originalExisting = '';
+        await ensureDir(workspaceDir);
+      } else {
+        originalExisting = await readFile(targetPath, 'utf-8');
+        existing = originalExisting;
+
+        // Strip unwanted Gateway-seeded sections before merging
+        if (targetName === 'AGENTS.md') {
+          const stripped = stripFirstRunSection(existing);
+          if (stripped !== existing) {
+            existing = stripped;
+            logger.info(`Stripped First Run section from ${targetName} (${workspaceDir})`);
+          }
         }
       }
 
       const merged = mergeClawXSection(existing, section);
-      // Compare against on-disk content so we persist changes even when only
-      // First Run stripping happened and the LYClaw section stayed identical.
       if (merged !== originalExisting) {
         await writeFile(targetPath, merged, 'utf-8');
         logger.info(`Merged LYClaw context into ${targetName} (${workspaceDir})`);

@@ -22,6 +22,7 @@ import {
   snapshotStreamingAssistantMessage,
   upsertToolStatuses,
 } from './helpers';
+import { buildClearedActiveRunPatch } from './run-lifecycle';
 import { finishFirstSessionPerf, markFirstSessionRuntimeEvent } from './first-session-perf';
 import { extractInvokedSkillIds } from './usage-report-extract';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
@@ -384,11 +385,8 @@ export function handleRuntimeEventState(
               // 如果已经有流式消息，保留它而不是清空
               // 这可以防止 NO_REPLY 消息覆盖已经显示的结果
               set((s) => ({
-                streamingText: '',
-                streamingMessage: s.streamingMessage,  // 保留现有的流式消息
-                sending: false,
-                activeRunId: null,
-                pendingFinal: false,
+                ...buildClearedActiveRunPatch(),
+                streamingMessage: s.streamingMessage,
                 runError: null,
               }));
               // Reload history to surface intermediate tool-use turns (thinking +
@@ -396,7 +394,7 @@ export function handleRuntimeEventState(
               // NO_REPLY itself carries no visible content.
               finishFirstSessionPerf('final', runId);
               clearHistoryPoll();
-              void get().loadHistory(true);
+              void get().loadHistory(true, { force: true });
               break;
             }
             const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);

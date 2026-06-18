@@ -137,9 +137,10 @@ interface SkillDetailDialogProps {
   onClose: () => void;
   onOpenFolder?: (skill: Skill) => Promise<void> | void;
   onUninstall?: (slug: string) => Promise<void>;
+  hideOpenAndUninstall?: boolean;
 }
 
-function SkillDetailDialog({ skill, marketplaceMatch, cachedDisplayMetadata, isOpen, onClose, onOpenFolder, onUninstall }: SkillDetailDialogProps) {
+function SkillDetailDialog({ skill, marketplaceMatch, cachedDisplayMetadata, isOpen, onClose, onOpenFolder, onUninstall, hideOpenAndUninstall = false }: SkillDetailDialogProps) {
   const { t } = useTranslation('skills');
   const [skillMd, setSkillMd] = useState('');
   const [skillMdFile, setSkillMdFile] = useState('SKILL.md');
@@ -359,32 +360,31 @@ function SkillDetailDialog({ skill, marketplaceMatch, cachedDisplayMetadata, isO
           </section>
         </div>
 
-        <div className="mt-4 pt-4 flex justify-between items-center shrink-0">
-          {/* 左下角：打开和卸载按钮 */}
-          <div className="flex gap-2">
-            {/* 打开文件夹按钮 */}
-            <Button
-              type="button"
-              onClick={() => onOpenFolder?.(skill)}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
-            >
-              {t('detail.open')}
-            </Button>
-            {/* 卸载按钮 */}
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={handleUninstall}
-              disabled={uninstalling}
-              className="h-8 text-[13px] font-medium rounded-lg px-4 bg-destructive/10 border border-destructive/20 text-destructive hover:bg-destructive/15 hover:text-destructive transition-colors"
-            >
-              {uninstalling ? (
-                <><LoadingSpinner size="sm" className="mr-1.5" /> 卸载中...</>
-              ) : (
-                '卸载'
-              )}
-            </Button>
-          </div>
+        <div className={cn('mt-4 pt-4 flex items-center shrink-0', hideOpenAndUninstall ? 'justify-end' : 'justify-between')}>
+          {!hideOpenAndUninstall && (
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                onClick={() => onOpenFolder?.(skill)}
+                className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"
+              >
+                {t('detail.open')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handleUninstall}
+                disabled={uninstalling}
+                className="h-8 text-[13px] font-medium rounded-lg px-4 bg-destructive/10 border border-destructive/20 text-destructive hover:bg-destructive/15 hover:text-destructive transition-colors"
+              >
+                {uninstalling ? (
+                  <><LoadingSpinner size="sm" className="mr-1.5" /> 卸载中...</>
+                ) : (
+                  '卸载'
+                )}
+              </Button>
+            </div>
+          )}
           {/* 右下角：返回按钮 */}
           <Button
             type="button"
@@ -2000,6 +2000,14 @@ export function Skills() {
         onClose={() => setSelectedSkill(null)}
         onOpenFolder={handleOpenSkillFolder}
         onUninstall={handleUninstall}
+        hideOpenAndUninstall={
+          activeTab === 'mine'
+          && !!selectedSkill
+          && (
+            selectedSource === 'built-in'
+            || (selectedSource === 'all' && isLyclawBuiltinSkill(selectedSkill))
+          )
+        }
       />
 
       {/* Upload Skill Dialog */}

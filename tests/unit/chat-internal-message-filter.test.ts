@@ -68,6 +68,17 @@ describe('chat internal message filter', () => {
     expect(isInternalMessage({ role: 'assistant', content })).toBe(true);
   });
 
+  it('does not treat OpenClaw subagent completion events as internal filter targets', () => {
+    const content = `[Internal task completion event]
+source: subagent
+session_key: agent:coder:subagent:child-123
+session_id: child-session-id
+status: completed successfully`;
+
+    // Kept in transcript for run-lifecycle detection; hidden from chat bubbles in Chat page.
+    expect(isInternalMessage({ role: 'user', content })).toBe(false);
+  });
+
   it('filters standalone OpenClaw heartbeat poll message', () => {
     expect(isInternalMessage({ role: 'assistant', content: 'OpenClaw heartbeat poll' })).toBe(true);
     expect(isInternalMessage({ role: 'user', content: 'OpenClaw heartbeat poll' })).toBe(true);

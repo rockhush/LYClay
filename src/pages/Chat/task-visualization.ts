@@ -96,8 +96,36 @@ export function parseSubagentCompletionInfo(message: RawMessage): SubagentComple
   return { sessionKey, sessionId, agentId };
 }
 
+/** OpenClaw session orchestration tools — hidden from the execution graph UI. */
+export function isSubagentOrchestrationToolName(name: string | undefined | null): boolean {
+  if (!name) return false;
+  return /^(sessions_spawn|sessions_yield)$/i.test(name.trim());
+}
+
+function isSubagentOrchestrationStep(step: TaskStep): boolean {
+  if (step.kind === 'tool' && isSubagentOrchestrationToolName(step.label)) return true;
+  if (step.kind === 'system' && /\bsubagent\b/i.test(step.label)) return true;
+  if (step.kind === 'system' && /\brun$/i.test(step.label) && /Spawned branch/i.test(step.detail ?? '')) return true;
+  return false;
+}
+
+function isSubagentOrchestrationNarration(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  if (/sessions_(spawn|yield)/i.test(normalized)) return true;
+  if (/调度子\s*agent/i.test(normalized)) return true;
+  if (/(?:spawn|派发|启动|调度).{0,24}sub\s*agent/i.test(normalized)) return true;
+  if (/(?:子\s*agent|子\s*任务).{0,30}(?:执行|派发|调度|spawn|yield)/i.test(normalized)) return true;
+  return false;
+}
+
 function isSpawnLikeStep(label: string): boolean {
+  if (isSubagentOrchestrationToolName(label)) return false;
   return /(spawn|subagent|delegate|parallel)/i.test(label);
+}
+
+export function filterSubagentOrchestrationSteps(steps: TaskStep[]): TaskStep[] {
+  return steps.filter((step) => !isSubagentOrchestrationStep(step));
 }
 
 function tryParseJsonObject(detail: string | undefined): Record<string, unknown> | null {
@@ -201,7 +229,8 @@ function appendDetailSegments(
   const normalizedSegments = segments
     .map((segment) => normalizeText(segment))
     .filter((segment): segment is string => !!segment)
-    .filter((segment) => !isModelCommandApprovalNarration(segment));
+    .filter((segment) => !isModelCommandApprovalNarration(segment))
+    .filter((segment) => !isSubagentOrchestrationNarration(segment));
 
   normalizedSegments.forEach((detail, index) => {
     options.upsertStep({
@@ -296,6 +325,7 @@ export function deriveTaskSteps({
     });
 
     toolUses.forEach((tool, index) => {
+      if (isSubagentOrchestrationToolName(tool.name)) return;
       const input = tool.input as Record<string, unknown>;
       const url = tool.name === 'web_fetch' && typeof input?.url === 'string' ? input.url : undefined;
       upsertStep({
@@ -353,6 +383,7 @@ export function deriveTaskSteps({
   const activeToolIds = new Set<string>();
   const activeToolNamesWithoutIds = new Set<string>();
   streamingTools.forEach((tool, index) => {
+    if (isSubagentOrchestrationToolName(tool.name)) return;
     const id = tool.toolCallId || tool.id || makeToolId('stream-status', tool.name, index);
     activeToolIds.add(id);
     if (!tool.toolCallId && !tool.id) {
@@ -370,6 +401,7 @@ export function deriveTaskSteps({
 
   if (streamMessage) {
     extractToolUse(streamMessage).forEach((tool, index) => {
+      if (isSubagentOrchestrationToolName(tool.name)) return;
       const id = tool.id || makeToolId('stream-tool', tool.name, index);
       if (activeToolIds.has(id) || activeToolNamesWithoutIds.has(tool.name)) return;
       const input = tool.input as Record<string, unknown>;

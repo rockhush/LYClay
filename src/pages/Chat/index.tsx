@@ -19,7 +19,7 @@ import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard } from './ExecutionGraphCard';
 import { ChatToolbar } from './ChatToolbar';
 import { extractImages, extractText, extractThinking, extractToolUse, stripProcessMessagePrefix } from './message-utils';
-import { deriveTaskSteps, findReplyMessageIndex, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
+import { deriveTaskSteps, filterSubagentOrchestrationSteps, findReplyMessageIndex, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { isSuppressedRunError } from '@/stores/chat/helpers';
@@ -188,6 +188,7 @@ export function Chat() {
   const sessionLastActivity = useChatStore((s) => s.sessionLastActivity);
   const loading = useChatStore((s) => s.loading);
   const sending = useChatStore((s) => s.sending);
+  const activeRunId = useChatStore((s) => s.activeRunId);
   const error = useChatStore((s) => s.error);
   const securityCancelNotice = useChatStore((s) => s.securityCancelNotice);
   const streamingMessage = useChatStore((s) => s.streamingMessage);
@@ -457,6 +458,11 @@ export function Chat() {
     const completionInfos = subagentCompletionInfos
       .slice(idx + 1, segmentEnd)
       .filter((value): value is NonNullable<typeof value> => value != null);
+    const hasSpawnedSubagent = segmentMessages.some((m) =>
+      m.role === 'assistant'
+      && extractToolUse(m).some((tool) => isSubagentOrchestrationToolName(tool.name) && /spawn/i.test(tool.name)),
+    );
+    const waitingOnSubagentReturn = hasSpawnedSubagent && completionInfos.length === 0;
     // A run is considered "open" (still active) when it's the last segment
     // AND at least one of:
     //  - sending/pendingFinal/streaming data (normal streaming path)
@@ -503,7 +509,12 @@ export function Chat() {
       const subagentReturnSettled = hasCompletedSubagentReturn && !hasLiveRuntimeSignal;
       const isLatestOpenRun = nextUserIndex === -1
         && !subagentReturnSettled
-        && (sending || pendingFinal || hasAnyStreamContent || (runStillExecutingTools && !error));
+        && (
+          sending
+          || pendingFinal
+          || hasAnyStreamContent
+          || (runStillExecutingTools && !error && (sending || pendingFinal || activeRunId))
+        );
     const replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
     const replyIndex = replyIndexOffset === -1 ? null : idx + 1 + replyIndexOffset;
 
@@ -518,31 +529,18 @@ export function Chat() {
       for (const completion of completionInfos) {
         const childMessages = childTranscripts[completion.sessionId];
         if (!childMessages || childMessages.length === 0) continue;
-        const branchRootId = `subagent:${completion.sessionId}`;
-        const childSteps = deriveTaskSteps({
+        const childSteps = filterSubagentOrchestrationSteps(deriveTaskSteps({
           messages: childMessages,
           streamingMessage: null,
           streamingTools: [],
-        }).map((step) => ({
+        })).map((step) => ({
           ...step,
           id: `${completion.sessionId}:${step.id}`,
-          depth: step.depth + 1,
-          parentId: branchRootId,
+          depth: 1,
+          parentId: 'agent-run',
         }));
 
-        builtSteps = [
-          ...builtSteps,
-          {
-            id: branchRootId,
-            label: `${completion.agentId} subagent`,
-            status: 'completed',
-            kind: 'system' as const,
-            detail: completion.sessionKey,
-            depth: 1,
-            parentId: 'agent-run',
-          },
-          ...childSteps,
-        ];
+        builtSteps = [...builtSteps, ...childSteps];
       }
 
       return builtSteps;
@@ -590,6 +588,33 @@ export function Chat() {
     const segmentSessionLabel = sessionLabels[currentSessionKey] || currentSessionKey;
 
     if (steps.length === 0) {
+      if (subagentReturnSettled) {
+        const cached = graphStepCache[runKey];
+        if (cached) {
+          const cleanedSteps = cached.steps.filter(
+            (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+          );
+          return [{
+            triggerIndex: idx,
+            replyIndex: cached.replyIndex,
+            active: false,
+            agentLabel: cached.agentLabel,
+            sessionLabel: cached.sessionLabel,
+            segmentEnd: nextUserIndex === -1 ? messages.length - 1 : nextUserIndex - 1,
+            steps: cleanedSteps,
+            messageStepTexts: getPrimaryMessageStepTexts(cleanedSteps),
+            streamingReplyText: null,
+            suppressThinking: true,
+            isMimo,
+          }];
+        }
+        return [];
+      }
+      if (waitingOnSubagentReturn) {
+        // Orchestration tools are hidden from the graph; while the child agent
+        // runs, rely on the activity indicator instead of an empty "Thinking…" card.
+        return [];
+      }
       if (isLatestOpenRun && streamingReplyText == null) {
         return [{
           triggerIndex: idx,
@@ -714,6 +739,7 @@ export function Chat() {
     runAborted,
     error,
     sending,
+    activeRunId,
     sessionLabels,
     streamText,
     streamTools,
@@ -840,11 +866,11 @@ export function Chat() {
     const elapsedSeconds = Math.max(0, Math.floor((now - runtimeActivity.startedAt) / 1000));
     const idleSeconds = Math.max(0, Math.floor((now - runtimeActivity.lastUpdateAt) / 1000));
     const runningTools = streamingTools
-      .filter((tool) => tool.status === 'running')
+      .filter((tool) => tool.status === 'running' && !isSubagentOrchestrationToolName(tool.name))
       .map((tool) => tool.name || tool.id || 'tool')
       .slice(0, 3);
     const completedTools = streamingTools
-      .filter((tool) => tool.status === 'completed')
+      .filter((tool) => tool.status === 'completed' && !isSubagentOrchestrationToolName(tool.name))
       .map((tool) => tool.name || tool.id || 'tool')
       .slice(0, 3);
 
@@ -853,8 +879,6 @@ export function Chat() {
       title = `\u6b63\u5728\u8fd0\u884c\u5de5\u5177\uff1a${runningTools.join(', ')}`;
     } else if (hasStreamTools) {
       title = '\u6b63\u5728\u51c6\u5907\u5de5\u5177\u8c03\u7528';
-    } else if (activeDelegation && !hasStreamText) {
-      title = '\u5df2\u6d3e\u53d1\u5b50\u4efb\u52a1\uff0c\u7b49\u5f85\u6267\u884c\u7ed3\u679c';
     } else if (hasStreamText && idleSeconds >= 90) {
       title = '\u4e0a\u4e00\u6b65\u5df2\u5b8c\u6210\uff0c\u7b49\u5f85\u6a21\u578b\u7ee7\u7eed\u8fd4\u56de';
     } else if (hasStreamText) {
@@ -877,18 +901,8 @@ export function Chat() {
       `\u5df2\u8fd0\u884c ${formatDuration(elapsedSeconds)}`,
       idleSeconds <= 1 ? '\u521a\u521a\u6536\u5230\u8fdb\u5ea6' : `${formatDuration(idleSeconds)} \u524d\u6536\u5230\u8fdb\u5ea6`,
     ];
-    if (activeDelegation?.label) {
-      details.push(`\u5b50\u4efb\u52a1\uff1a${activeDelegation.label}`);
-    }
-    if (activeDelegation?.childSessionKey) {
-      details.push(`\u4f1a\u8bdd\uff1a${activeDelegation.childSessionKey}`);
-    } else if (activeDelegation?.runId) {
-      details.push(`Run ID\uff1a${activeDelegation.runId}`);
-    }
     if (pendingFinal && idleSeconds >= 45) {
       details.push('\u6b63\u5728\u81ea\u52a8\u56de\u8bfb\u5386\u53f2\uff0c\u786e\u8ba4\u662f\u5426\u5df2\u7ecf\u6709\u6700\u7ec8\u7ed3\u679c\u3002');
-    } else if (activeDelegation && idleSeconds >= 30) {
-      details.push('Main Agent \u6b63\u5728\u7b49\u5f85\u5b50\u4efb\u52a1\u8fd4\u56de\u3002');
     } else if (sending && !hasAnyStreamContent && !hasActiveExecutionGraph && elapsedSeconds >= 10) {
       details.push('\u8bf7\u6c42\u5df2\u88ab Gateway \u63a5\u53d7\uff0c\u4f46\u8fd8\u6ca1\u6709\u6536\u5230\u6a21\u578b\u7684\u9996\u4e2a delta\u3002');
       if (elapsedSeconds >= 30) {
@@ -1096,6 +1110,7 @@ export function Chat() {
                 <>
                   {messages.map((msg, idx) => {
                     if (foldedNarrationIndices.has(idx)) return null;
+                    if (subagentCompletionInfos[idx]) return null;
                     const suppressToolCards = suppressedToolCardIndices.has(idx);
                     return (
                     <div

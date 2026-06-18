@@ -6,6 +6,7 @@ const {
   chatLoadHistoryMock,
   chatLoadSessionsMock,
   chatHandleEventMock,
+  chatHandleGatewayRunCompletedMock,
   chatSetStateMock,
 } = vi.hoisted(() => ({
   hostApiFetchMock: vi.fn(),
@@ -13,6 +14,7 @@ const {
   chatLoadHistoryMock: vi.fn(),
   chatLoadSessionsMock: vi.fn(),
   chatHandleEventMock: vi.fn(),
+  chatHandleGatewayRunCompletedMock: vi.fn(),
   chatSetStateMock: vi.fn(),
 }));
 
@@ -34,6 +36,7 @@ vi.mock('@/stores/chat', () => ({
       loadHistory: chatLoadHistoryMock,
       loadSessions: chatLoadSessionsMock,
       handleChatEvent: chatHandleEventMock,
+      handleGatewayRunCompleted: chatHandleGatewayRunCompletedMock,
     }),
     setState: chatSetStateMock,
   },
@@ -49,6 +52,7 @@ vi.mock('../../src/stores/chat', () => ({
       loadHistory: chatLoadHistoryMock,
       loadSessions: chatLoadSessionsMock,
       handleChatEvent: chatHandleEventMock,
+      handleGatewayRunCompleted: chatHandleGatewayRunCompletedMock,
     }),
     setState: chatSetStateMock,
   },
@@ -147,6 +151,35 @@ describe('gateway store event wiring', () => {
     await Promise.resolve();
 
     expect(chatSetStateMock).not.toHaveBeenCalled();
+    expect(chatHandleGatewayRunCompletedMock).not.toHaveBeenCalled();
+  });
+
+  it('finalizes active runs on agent lifecycle phase=completed', async () => {
+    hostApiFetchMock.mockResolvedValueOnce({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    handlers.get('gateway:notification')?.({
+      method: 'agent',
+      params: {
+        runId: 'run-1',
+        sessionKey: 'agent:main:main',
+        stream: 'lifecycle',
+        data: { phase: 'completed' },
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chatHandleGatewayRunCompletedMock).toHaveBeenCalledWith('run-1', 'agent:main:main');
   });
 
   it('does not build a generic dedupe key for delta events without seq', async () => {
@@ -164,6 +197,134 @@ describe('gateway store event wiring', () => {
       sessionKey: 'agent:main:main',
       seq: 1,
     })).toBe('run-1|agent:main:main|1|delta');
+  });
+
+  it('maps agent assistant stream text to chat deltas when chat events are missing', async () => {
+    hostApiFetchMock.mockResolvedValueOnce({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    handlers.get('gateway:notification')?.({
+      method: 'agent',
+      params: {
+        runId: 'run-1',
+        sessionKey: 'agent:main:main',
+        stream: 'assistant',
+        aseq: 12,
+        text: "I'll create this PowerPoint",
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chatHandleEventMock).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'delta',
+      runId: 'run-1',
+      message: { role: 'assistant', content: "I'll create this PowerPoint" },
+    }));
+  });
+
+  it('forwards agent lifecycle errors and refreshes history during active sends', async () => {
+    hostApiFetchMock.mockResolvedValueOnce({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    handlers.get('gateway:notification')?.({
+      method: 'agent',
+      params: {
+        runId: 'run-1',
+        sessionKey: 'agent:main:main',
+        stream: 'lifecycle',
+        data: { phase: 'error', error: 'LLM request timed out.' },
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chatHandleEventMock).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'error',
+      runId: 'run-1',
+      errorMessage: 'LLM request timed out.',
+    }));
+    expect(chatLoadHistoryMock).toHaveBeenCalled();
+  });
+
+  it('refreshes history on agent item stream during active sends', async () => {
+    hostApiFetchMock.mockResolvedValueOnce({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    handlers.get('gateway:notification')?.({
+      method: 'agent',
+      params: {
+        runId: 'run-1',
+        sessionKey: 'agent:main:main',
+        stream: 'item',
+        aseq: 3,
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chatLoadHistoryMock).toHaveBeenCalled();
+  });
+
+  it('treats agent lifecycle phase=start as run started', async () => {
+    hostApiFetchMock.mockResolvedValueOnce({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    handlers.get('gateway:notification')?.({
+      method: 'agent',
+      params: {
+        runId: 'run-1',
+        sessionKey: 'agent:main:main',
+        stream: 'lifecycle',
+        data: { phase: 'start' },
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chatHandleEventMock).toHaveBeenCalledWith({
+      state: 'started',
+      runId: 'run-1',
+      sessionKey: 'agent:main:main',
+    });
   });
 
   it('refreshes sessions and current history when local transcript updates arrive', async () => {

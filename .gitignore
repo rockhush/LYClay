@@ -79,3 +79,9 @@ src/extensions/_ext-bridge.generated.ts
 
 # Project documentation (local only)
 docs/
+
+# Local nginx gateway notes/config (deploy separately, not part of Lyclaw app)
+网关/
+
+# Accidental shell redirect artifact (Windows)
+findstr

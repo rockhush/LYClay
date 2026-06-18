@@ -4,6 +4,7 @@
  * message content formats returned by the Gateway.
  */
 import type { RawMessage, ContentBlock } from '@/stores/chat';
+import { stripSilentReplyToken } from '@/stores/chat/helpers';
 
 /**
  * Clean Gateway metadata from user message text for display.
@@ -39,7 +40,8 @@ function normalizeProgressiveText(text: string | undefined): string {
 
 function isInternalText(text: string): boolean {
   const normalized = text.trim();
-  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(normalized)) return true;
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(normalized)) return true;
+  if (/\b(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(normalized) && stripSilentReplyToken(text).trim().length === 0) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(normalized)) return true;
   if (/^\s*System\s*\(untrusted\)\s*:/i.test(normalized)) return true;
   if (/^\s*System\s*:/i.test(normalized)) return true;
@@ -229,6 +231,8 @@ export function extractText(message: RawMessage | unknown): string {
   // Strip Gateway metadata from user messages for clean display
   if (isUser && result) {
     result = cleanUserText(result);
+  } else if (!isUser && result) {
+    result = stripSilentReplyToken(result);
   }
 
   if (result && isInternalText(result)) {

@@ -34,6 +34,10 @@ import {
 } from './chat/types';
 import { attachmentFileNameFromPath, isSuppressedRunError } from './chat/helpers';
 import {
+  buildClearedActiveRunPatch,
+  isRunTerminalAssistantMessage,
+} from './chat/run-lifecycle';
+import {
   clearUserAbortedSession,
   isUserAbortedSession,
   persistUserAbortedSession,
@@ -734,9 +738,10 @@ function getSessionModel(sessions: ChatSession[], sessionKey: string): string | 
 }
 
 const HISTORY_LOAD_MIN_INTERVAL_MS = 800;
-const ACTIVE_SEND_HISTORY_FALLBACK_INITIAL_DELAY_MS = 15_000;
-const ACTIVE_SEND_HISTORY_FALLBACK_DELAYS_MS = [20_000, 30_000];
-const ACTIVE_SEND_HISTORY_FALLBACK_REPEAT_MS = 30_000;
+const ACTIVE_SEND_HISTORY_FALLBACK_INITIAL_DELAY_MS = 5_000;
+const ACTIVE_SEND_HISTORY_FALLBACK_DELAYS_MS = [8_000, 12_000];
+const ACTIVE_SEND_HISTORY_FALLBACK_REPEAT_MS = 15_000;
+const ACTIVE_SEND_HISTORY_FALLBACK_STREAMING_DELAY_MS = 20_000;
 const CHAT_EVENT_DEDUPE_TTL_MS = 30_000;
 const _chatEventDedupe = new Map<string, number>();
 const _lastRuntimeTranscriptProgressSignatureBySession = new Map<string, string>();
@@ -770,24 +775,25 @@ function startActiveSendHistoryFallback(sessionKey: string): void {
       _historyPollTimer = null;
       const state = useChatStore.getState();
       if (state.currentSessionKey !== sessionKey || !state.sending) return;
-      if (hasLiveStreamContent(state)) return;
 
-      try {
-        await state.loadHistory(true);
-      } catch (error) {
-        console.warn('[chat.history-fallback] local transcript refresh failed', {
-          sessionKey,
-          error: String(error),
-        });
+      if (!hasLiveStreamContent(state)) {
+        try {
+          await state.loadHistory(true);
+        } catch (error) {
+          console.warn('[chat.history-fallback] local transcript refresh failed', {
+            sessionKey,
+            error: String(error),
+          });
+        }
       }
 
       const nextState = useChatStore.getState();
       if (nextState.currentSessionKey !== sessionKey || !nextState.sending) return;
-      if (hasLiveStreamContent(nextState)) return;
 
       attempt += 1;
-      const nextDelay = ACTIVE_SEND_HISTORY_FALLBACK_DELAYS_MS[attempt]
-        ?? ACTIVE_SEND_HISTORY_FALLBACK_REPEAT_MS;
+      const nextDelay = hasLiveStreamContent(nextState)
+        ? ACTIVE_SEND_HISTORY_FALLBACK_STREAMING_DELAY_MS
+        : ACTIVE_SEND_HISTORY_FALLBACK_DELAYS_MS[attempt] ?? ACTIVE_SEND_HISTORY_FALLBACK_REPEAT_MS;
       scheduleNext(nextDelay);
     }, delayMs);
   };
@@ -1495,6 +1501,7 @@ function getRuntimeTranscriptProgress(
   let visibleKind: VisibleProgressKind | null = null;
   let latestTimestamp: number | null = null;
   const ids: string[] = [];
+  let contentChars = 0;
 
   for (const message of messages) {
     const timestamp = typeof message.timestamp === 'number' ? toMs(message.timestamp) : null;
@@ -1514,6 +1521,7 @@ function getRuntimeTranscriptProgress(
     if (timestamp != null) {
       latestTimestamp = latestTimestamp == null ? timestamp : Math.max(latestTimestamp, timestamp);
     }
+    contentChars += getMessageText(message.content).length;
     ids.push(String(message.id ?? `${message.role}:${timestamp ?? ids.length}`));
   }
 
@@ -1523,12 +1531,77 @@ function getRuntimeTranscriptProgress(
     assistantCount,
     toolResultCount,
     latestTimestamp,
-    signature: `${messageCount}|${assistantCount}|${toolResultCount}|${toolUseCount}|${thinkingCount}|${assistantTextCount}|${latestTimestamp ?? 'na'}|${ids.join(',')}`,
+    signature: `${messageCount}|${assistantCount}|${toolResultCount}|${toolUseCount}|${thinkingCount}|${assistantTextCount}|${contentChars}|${latestTimestamp ?? 'na'}|${ids.join(',')}`,
     visibleKind,
     toolUseCount,
     thinkingCount,
     assistantTextCount,
   };
+}
+
+function isMessageAfterUserTimestamp(message: RawMessage, userTimestampMs: number | null): boolean {
+  if (!userTimestampMs || !message.timestamp) return true;
+  return toMs(message.timestamp) >= userTimestampMs;
+}
+
+/**
+ * When Gateway stream events are delayed or missing, mirror in-progress assistant
+ * turns from the local JSONL transcript into streaming UI state.
+ */
+function buildSendingUiPatchFromTranscript(
+  rawMessages: RawMessage[],
+  state: Pick<ChatState, 'sending' | 'lastUserMessageAt' | 'streamingMessage' | 'streamingText' | 'streamingTools' | 'pendingFinal'>,
+): Partial<ChatState> | null {
+  if (!state.sending || hasLiveStreamContent(state)) return null;
+
+  const userTs = state.lastUserMessageAt;
+  const progress = getRuntimeTranscriptProgress(rawMessages, userTs);
+  if (!progress) return null;
+
+  const patch: Partial<ChatState> = {};
+  let latestAssistant: RawMessage | null = null;
+  for (let i = rawMessages.length - 1; i >= 0; i -= 1) {
+    const message = rawMessages[i];
+    if (message.role !== 'assistant') continue;
+    if (!isMessageAfterUserTimestamp(message, userTs)) continue;
+    latestAssistant = message;
+    break;
+  }
+
+  if (latestAssistant) {
+    const normalized = normalizeStreamingMessage(latestAssistant) as RawMessage;
+    const progressInfo = classifyVisibleProgress(normalized);
+    if (progressInfo.visible) {
+      const toolUpdates = collectToolUpdates(normalized, 'delta');
+      patch.streamingMessage = normalized;
+      patch.streamingText = getMessageText(normalized.content);
+      if (toolUpdates.length > 0) {
+        patch.streamingTools = upsertToolStatuses(state.streamingTools, toolUpdates);
+      }
+    }
+  }
+
+  const hasTerminalReply = [...rawMessages].reverse().some((message) => {
+    if (!isMessageAfterUserTimestamp(message, userTs)) return false;
+    return isRunTerminalAssistantMessage(message);
+  });
+  if (!hasTerminalReply && (progress.assistantCount > 0 || progress.toolResultCount > 0)) {
+    patch.pendingFinal = true;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function applySendingUiPatchFromTranscript(
+  rawMessages: RawMessage[],
+  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  get: () => ChatState,
+): void {
+  const patch = buildSendingUiPatchFromTranscript(rawMessages, get());
+  if (patch) {
+    _lastChatEventAt = Date.now();
+    set(patch);
+  }
 }
 
 /** Extract media file refs from [media attached: <path> (<mime>) | ...] patterns */
@@ -2394,9 +2467,18 @@ function isToolResultRole(role: unknown): boolean {
 }
 
 function isInternalMessageText(text: string): boolean {
-  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(text.trim())) return true;
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(text.trim())) return true;
+  if (/\b(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(text) && stripSilentReplyToken(text).trim().length === 0) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(text.trim())) return true;
   return isRuntimeSystemInjection(text);
+}
+
+function stripSilentReplyToken(text: string): string {
+  if (!text) return text;
+  const trimmed = text.trim();
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(trimmed)) return '';
+  if (/^\s*(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(trimmed)) return '';
+  return text.replace(/(?:\r?\n|\r|\s)*\b(?:NO_REPLY|HEARTBEAT_OK)\b\s*$/i, '').trimEnd();
 }
 
 /** True for internal plumbing messages that should never be shown in the UI. */
@@ -2747,24 +2829,6 @@ function hasToolInvocation(message: RawMessage | undefined): boolean {
     || block.type === 'tool_result'
     || block.type === 'toolResult'
   ));
-}
-
-function isTerminalAssistantMessage(message: RawMessage | undefined): boolean {
-  if (!message || message.role !== 'assistant') return false;
-  if (!hasNonToolAssistantContent(message)) return false;
-
-  const msg = message as RawMessage & { stopReason?: unknown; stop_reason?: unknown };
-  const stopReason = msg.stopReason ?? msg.stop_reason;
-  // Transcript polling is observational and may catch an assistant message
-  // while it is still being persisted. Only an explicit stop reason is strong
-  // enough to close the active run from history.
-  if (stopReason == null) return false;
-
-  const normalized = String(stopReason).toLowerCase();
-  return normalized !== 'tooluse'
-    && normalized !== 'tool_use'
-    && normalized !== 'tool-call'
-    && normalized !== 'tool_calls';
 }
 
 type PromptErrorRecord = {
@@ -3798,42 +3862,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return toMs(msg.timestamp) >= userMsTs;
       };
 
-      const recentTerminalAssistant = [...finalMessages].reverse().find((msg) => {
+      const recentTerminalAssistant = [...rawMessages].reverse().find((msg) => {
         if (msg.role !== 'assistant') return false;
-        if (!isTerminalAssistantMessage(msg)) return false;
+        if (!isRunTerminalAssistantMessage(msg)) return false;
         return isAfterUserMsg(msg);
       });
 
-      if (isSendingNow && recentTerminalAssistant) {
+      if ((isSendingNow || get().pendingFinal || get().activeRunId) && recentTerminalAssistant) {
         clearHistoryPoll();
         clearErrorRecoveryTimer();
-        set({
-          sending: false,
-          activeRunId: null,
-          pendingFinal: false,
-          streamingText: '',
-          streamingMessage: null,
-          streamingTools: [],
-          pendingToolImages: [],
-          lastUserMessageAt: null,
-          runAborted: false,
-        });
+        set(buildClearedActiveRunPatch());
         finishChatRunPerf('history-final', currentActiveRunId ?? '');
-      } else if (isSendingNow && !pendingFinal && !currentActiveRunId) {
-        const hasRecentAssistantActivity = [...finalMessages].reverse().some((msg) => {
-          if (msg.role !== 'assistant') return false;
-          return isAfterUserMsg(msg);
-        });
-        if (hasRecentAssistantActivity) {
-          set({ pendingFinal: true });
-        }
+      } else if (isSendingNow && !hasLiveStreamContent(get())) {
+        applySendingUiPatchFromTranscript(rawMessages, set, get);
       }
 
       const latestPromptError = getLatestPromptErrorAfterUser(promptErrors, userMsTs);
       if (latestPromptError) {
         const promptErrorAt = getPromptErrorTimestamp(latestPromptError);
-        const terminalAfterPromptError = [...finalMessages].reverse().some((msg) => {
-          if (!isTerminalAssistantMessage(msg)) return false;
+        const terminalAfterPromptError = [...rawMessages].reverse().some((msg) => {
+          if (!isRunTerminalAssistantMessage(msg)) return false;
           if (!promptErrorAt || !msg.timestamp) return false;
           return toMs(msg.timestamp) >= promptErrorAt;
         });
@@ -3886,6 +3934,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             kind: progress.visibleKind,
           });
         }
+        applySendingUiPatchFromTranscript(rawMessages, set, get);
       };
 
       try {
@@ -5064,22 +5113,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
           }
         } else {
-          set({
-            sending: false,
-            activeRunId: null,
-            streamingText: '',
-            streamingMessage: null,
-            streamingTools: [],
-            pendingFinal: false,
-            pendingToolImages: [],
-            lastUserMessageAt: null,
-          });
+          const { activeRunId: currentActiveRunId } = get();
+          if (runId && currentActiveRunId && runId !== currentActiveRunId) {
+            break;
+          }
           void get().loadHistory(true, { force: true });
         }
         break;
       }
       case 'error': {
-        const rawErrorMsg = String(event.errorMessage || 'An error occurred');
+        const eventRecord = event as Record<string, unknown>;
+        const rawErrorMsg = String(
+          event.errorMessage
+          ?? eventRecord.error
+          ?? 'An error occurred',
+        );
 
         // ── User-initiated stop ──
         // When the user clicks the stop button, the runtime may still emit an
@@ -5137,6 +5185,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         const errorMsg = getRuntimeEventErrorMessage(event);
         const wasSending = get().sending;
+        const isGenericError = !rawErrorMsg.trim()
+          || rawErrorMsg === 'An error occurred'
+          || errorMsg === 'An error occurred';
+
         if (isUserSecurityDenialMessage(errorMsg)) {
           clearErrorRecoveryTimer();
           clearHistoryPoll();
@@ -5165,6 +5217,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           break;
         }
 
+        if (wasSending && isGenericError) {
+          void get().loadHistory(true, { force: true });
+        }
+
         // Snapshot the current streaming message into messages[] so partial
         // content ("Let me get that written down...") is preserved in the UI
         // rather than being silently discarded.
@@ -5178,6 +5234,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           set((s) => ({
             messages: [...s.messages, ...errorSnapshot],
           }));
+        }
+
+        if (wasSending && isGenericError) {
+          clearErrorRecoveryTimer();
+          break;
         }
 
         set({
@@ -5265,6 +5326,48 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
     }));
   },
+  handleGatewayRunCompleted: (runId?: string | null, sessionKey?: string | null) => {
+    const state = get();
+    const resolvedSessionKey = sessionKey != null ? String(sessionKey) : state.currentSessionKey;
+    const resolvedRunId = runId != null ? String(runId) : null;
+    const matchesSession = resolvedSessionKey === state.currentSessionKey;
+    const matchesRun = !resolvedRunId || !state.activeRunId || state.activeRunId === resolvedRunId;
+
+    const background = state.sessionStreamingStates[resolvedSessionKey];
+    if (
+      background
+      && (background.sending || background.activeRunId)
+      && (!resolvedRunId || !background.activeRunId || background.activeRunId === resolvedRunId)
+    ) {
+      set((s) => ({
+        sessionStreamingStates: {
+          ...s.sessionStreamingStates,
+          [resolvedSessionKey]: {
+            ...background,
+            ...buildClearedActiveRunPatch(),
+            messagesSnapshot: [],
+          },
+        },
+      }));
+    }
+
+    if (!matchesSession || (!state.sending && !state.pendingFinal && !state.activeRunId)) {
+      return;
+    }
+    if (!matchesRun) return;
+
+    void get().loadHistory(true, { force: true }).finally(() => {
+      const next = get();
+      if (next.currentSessionKey !== resolvedSessionKey) return;
+      if (resolvedRunId && next.activeRunId && next.activeRunId !== resolvedRunId) return;
+      if (!next.sending && !next.pendingFinal && !next.activeRunId) return;
+      clearHistoryPoll();
+      clearErrorRecoveryTimer();
+      finishChatRunPerf('gateway-completed', resolvedRunId ?? next.activeRunId ?? '');
+      set(buildClearedActiveRunPatch());
+    });
+  },
+
   refresh: async () => {
     const { loadHistory, loadSessions } = get();
     await Promise.all([loadHistory(), loadSessions()]);

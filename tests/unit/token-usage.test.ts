@@ -136,6 +136,43 @@ describe('parseUsageEntriesFromJsonl', () => {
     ]);
   });
 
+  it('extracts vLLM prompt_tokens_details.cached_tokens as cacheRead', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'message',
+        timestamp: '2026-06-15T03:10:00.000Z',
+        message: {
+          role: 'assistant',
+          model: 'MiniMax-M2.7',
+          provider: 'custom-customa6',
+          usage: {
+            prompt_tokens: 7134,
+            completion_tokens: 16,
+            total_tokens: 7150,
+            prompt_tokens_details: { cached_tokens: 7120 },
+          },
+        },
+      }),
+    ].join('\n');
+
+    expect(parseUsageEntriesFromJsonl(jsonl, { sessionId: 'abc', agentId: 'main' })).toEqual([
+      {
+        timestamp: '2026-06-15T03:10:00.000Z',
+        sessionId: 'abc',
+        agentId: 'main',
+        model: 'MiniMax-M2.7',
+        provider: 'custom-customa6',
+        usageStatus: 'available',
+        inputTokens: 7134,
+        outputTokens: 16,
+        cacheReadTokens: 7120,
+        cacheWriteTokens: 0,
+        totalTokens: 7150,
+        costUsd: undefined,
+      },
+    ]);
+  });
+
   it('extracts usage fields from snake_case provider payloads', () => {
     const jsonl = [
       JSON.stringify({

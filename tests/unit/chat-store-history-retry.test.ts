@@ -207,6 +207,57 @@ describe('useChatStore startup history retry', () => {
     expect(useChatStore.getState().streamingMessage).toBeNull();
   });
 
+  it('finalizes an active send when quiet local history ends with NO_REPLY', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'hello', id: 'u1', timestamp: 1000 }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-history-noreply',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [{ toolCallId: 't1', name: 'read', status: 'completed', updatedAt: Date.now() }],
+      pendingFinal: true,
+      lastUserMessageAt: 1000,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
+      messages: [
+        { role: 'user', content: 'hello', id: 'u1', timestamp: 1000 },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 't1', name: 'read', input: { filePath: '/tmp/a.txt' } }],
+          id: 'a-tool',
+          timestamp: 1001,
+          stopReason: 'tool_use',
+        },
+        {
+          role: 'assistant',
+          content: 'NO_REPLY',
+          id: 'a-silent',
+          timestamp: 1002,
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    await useChatStore.getState().loadHistory(true, { force: true });
+
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
+    expect(useChatStore.getState().pendingFinal).toBe(false);
+    expect(useChatStore.getState().streamingTools).toEqual([]);
+  });
+
   it('does not finalize an active send from history without an explicit stop reason', async () => {
     const { useChatStore } = await import('@/stores/chat');
     useChatStore.setState({
@@ -452,7 +503,7 @@ describe('useChatStore startup history retry', () => {
       ([url]) => url === expectedHistoryUrl,
     ).length;
 
-    await vi.advanceTimersByTimeAsync(14_999);
+    await vi.advanceTimersByTimeAsync(4_999);
     expect(historyLocalCallCount()).toBe(0);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -462,6 +513,8 @@ describe('useChatStore startup history retry', () => {
       'user-from-transcript',
       'assistant-tool-plan',
     ]);
+    expect(useChatStore.getState().streamingMessage).toBeTruthy();
+    expect(useChatStore.getState().pendingFinal).toBe(true);
     expect(infoSpy).toHaveBeenCalledWith(
       '[perf:chat-run-ui]',
       'transcript.first_progress',

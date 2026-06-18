@@ -20,6 +20,18 @@ import 'zx/globals';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { EXTRA_BUNDLED_PACKAGES } from './openclaw-bundle-config.mjs';
+import {
+  applyOpenClawOpenAITransportPatches,
+  hasOpenClawOpenAITransportPatches,
+} from './openclaw-transport-patches.mjs';
+import {
+  applyOpenClawUsageStreamingPatches,
+  hasOpenClawUsageStreamingPatches,
+} from './openclaw-usage-patches.mjs';
+import {
+  applyOpenClawSilentReplyPatches,
+  hasOpenClawSilentReplyPatches,
+} from './openclaw-silent-reply-patches.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
@@ -526,72 +538,53 @@ function patchBundledOpenClawOpenAITransport(outputDir) {
 
   const filePath = path.join(distDir, transportFiles[0]);
   let source = fs.readFileSync(filePath, 'utf8');
-
-  const alreadyHasParamsPatch = source.includes('model.params && typeof model.params === "object" && !Array.isArray(model.params)');
-  const alreadyHasLyAutoSessionPatch = source.includes('X-LYClaw-Session-Id');
-  if (alreadyHasParamsPatch && alreadyHasLyAutoSessionPatch) {
-    return true;
-  }
-
   let patched = false;
 
-  if (!alreadyHasParamsPatch) {
-    const completionsParamsRegex = /const params = \{\s*\n?\s*model: model\.id,/;
-    if (completionsParamsRegex.test(source)) {
-      source = source.replace(completionsParamsRegex,
-        'const params = {\n\t\t...(model.params && typeof model.params === "object" && !Array.isArray(model.params) ? model.params : {}),\n\t\tmodel: model.id,');
-      patched = true;
-    }
+  const usageResult = applyOpenClawUsageStreamingPatches(source);
+  if (usageResult.patched) {
+    source = usageResult.source;
+    patched = true;
+    echo`   🩹 Patched OpenAI transport to always request stream_options.include_usage`;
   }
 
-  if (!alreadyHasLyAutoSessionPatch) {
-    const sessionHeaderPatches = [
-      [
-        [
-          'function createOpenAICompletionsClient(model, context, apiKey, optionHeaders) {',
-          '\tconst clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);',
-        ].join('\n'),
-        [
-          'function createOpenAICompletionsClient(model, context, apiKey, optionHeaders, turnHeaders) {',
-          '\tconst clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders, turnHeaders);',
-        ].join('\n'),
-      ],
-      [
-        [
-          'function buildOpenAICompletionsClientConfig(model, context, optionHeaders) {',
-          '\tconst headers = buildOpenAIClientHeaders(model, context, optionHeaders);',
-        ].join('\n'),
-        [
-          'function buildOpenAICompletionsClientConfig(model, context, optionHeaders, turnHeaders) {',
-          '\tconst headers = buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders);',
-        ].join('\n'),
-      ],
-      [
-        'const client = createOpenAICompletionsClient(model, context, options?.apiKey || getEnvApiKey(model.provider) || "", options?.headers);',
-        'const client = createOpenAICompletionsClient(model, context, options?.apiKey || getEnvApiKey(model.provider) || "", options?.headers, (() => { const sid = options?.sessionId; resolveProviderTransportTurnState(model, { sessionId: sid, turnId: randomUUID(), attempt: 1, transport: "stream" }); return model.provider === "ly-auto" && sid ? { "X-LYClaw-Session-Id": sid } : {}; })());',
-      ],
-    ];
-
-    let matchedSessionPatch = false;
-    for (const [search, replace] of sessionHeaderPatches) {
-      if (!source.includes(search)) continue;
-      source = source.replace(search, replace);
-      matchedSessionPatch = true;
-      patched = true;
-    }
-    if (!matchedSessionPatch) {
-      echo`   ⚠️ Could not find target patterns for ly-auto session header patch`;
-    }
+  const transportResult = applyOpenClawOpenAITransportPatches(source);
+  if (transportResult.patched) {
+    source = transportResult.source;
+    patched = true;
+    echo`   🩹 Patched OpenAI transport for model.params, session_id body, and session headers`;
   }
 
   if (patched) {
     fs.writeFileSync(filePath, source, 'utf8');
-    echo`   🩹 Patched OpenAI transport for model.params and ly-auto session headers`;
-    return true;
   }
 
-  echo`   ⚠️ Could not find target patterns for OpenAI transport patch`;
-  return false;
+  return hasOpenClawOpenAITransportPatches(source);
+}
+
+function patchBundledOpenClawSilentReply(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return;
+
+  const selectionFiles = fs.readdirSync(distDir).filter((name) => /^selection-.*\.js$/.test(name));
+  if (selectionFiles.length === 0) return;
+
+  let patched = false;
+  for (const selFile of selectionFiles) {
+    const filePath = path.join(distDir, selFile);
+    const source = fs.readFileSync(filePath, 'utf8');
+    if (!source.includes('function normalizeAssistantReplayTextContent(message, replayContent)')) continue;
+    if (hasOpenClawSilentReplyPatches(source)) continue;
+
+    const result = applyOpenClawSilentReplyPatches(source);
+    if (!result.patched) continue;
+    fs.writeFileSync(filePath, result.source, 'utf8');
+    patched = true;
+    echo`   🩹 Patched ${selFile} to strip NO_REPLY from replay context + transcript writes`;
+  }
+
+  if (!patched) {
+    echo`   ✓ selection files already patched for silent-reply hygiene`;
+  }
 }
 
 function patchBundledOpenClawSessionId(outputDir) {
@@ -668,6 +661,7 @@ if (!patchBundledOpenClawAnthropicTransport(OUTPUT)) {
   process.exit(1);
 }
 patchBundledOpenClawOpenAITransport(OUTPUT);
+patchBundledOpenClawSilentReply(OUTPUT);
 patchBundledOpenClawSessionId(OUTPUT);
 patchBundledOpenClawPromptCache(OUTPUT);
 patchBundledExtensionPackageJsons(extensionsDir);

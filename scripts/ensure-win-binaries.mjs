@@ -9,22 +9,34 @@ const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const target = `${process.platform}-${process.arch}`;
 const bundledNpmCli = path.join(ROOT_DIR, 'resources', 'bin', target, 'node_modules', 'npm', 'bin', 'npm-cli.js');
 
+function npmCliFromNodeExe(nodeExe) {
+  return path.join(path.dirname(nodeExe), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+}
+
 function hasSystemNpmCli() {
   if (process.platform !== 'win32') return false;
+
+  if (existsSync(npmCliFromNodeExe(process.execPath))) {
+    return true;
+  }
+
   try {
     const whereOutput = execSync('where.exe node', {
       encoding: 'utf8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    const firstNode = whereOutput.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-    if (!firstNode) return false;
-    const nodeDir = path.dirname(firstNode);
-    const candidate = path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
-    return existsSync(candidate);
+    for (const line of whereOutput.split(/\r?\n/)) {
+      const nodePath = line.trim();
+      if (!nodePath) continue;
+      if (existsSync(npmCliFromNodeExe(nodePath))) {
+        return true;
+      }
+    }
   } catch {
-    return false;
+    // ignore
   }
+  return false;
 }
 
 if (process.platform !== 'win32') {
@@ -42,12 +54,33 @@ if (hasSystemNpmCli()) {
 }
 
 console.log('[ensure-win-binaries] Downloading bundled Node.js for gateway (current arch only)...');
-const result = spawnSync(process.execPath, [path.join(ROOT_DIR, 'scripts', 'download-bundled-node.mjs')], {
-  cwd: ROOT_DIR,
-  env: process.env,
-  stdio: 'inherit',
-  windowsHide: true,
-});
+
+function spawnDownloadScript() {
+  const scriptPath = path.join(ROOT_DIR, 'scripts', 'download-bundled-node.mjs');
+  const zxCmd = path.join(ROOT_DIR, 'node_modules', '.bin', 'zx.cmd');
+  const zxBin = path.join(ROOT_DIR, 'node_modules', '.bin', 'zx');
+
+  if (existsSync(zxCmd) || existsSync(zxBin)) {
+    const zxExecutable = existsSync(zxCmd) ? zxCmd : zxBin;
+    return spawnSync(zxExecutable, [scriptPath], {
+      cwd: ROOT_DIR,
+      env: process.env,
+      stdio: 'inherit',
+      shell: true,
+      windowsHide: true,
+    });
+  }
+
+  return spawnSync('pnpm', ['exec', 'zx', scriptPath], {
+    cwd: ROOT_DIR,
+    env: process.env,
+    stdio: 'inherit',
+    shell: true,
+    windowsHide: true,
+  });
+}
+
+const result = spawnDownloadScript();
 
 if (result.status !== 0 || !existsSync(bundledNpmCli)) {
   console.error(

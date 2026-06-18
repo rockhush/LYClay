@@ -201,6 +201,33 @@ describe('session transcript redaction', () => {
     expect(serialized).not.toContain(bearer);
   });
 
+  it('strips trailing NO_REPLY from history-local assistant messages', async () => {
+    const sessionsDir = join(testOpenClawConfigDir, 'agents', 'main', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, 'sessions.json'),
+      JSON.stringify({
+        'agent:main:main': {
+          id: 'main-session',
+        },
+      }),
+    );
+    writeTranscript('main', 'main-session', [
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: '面试题库已生成。\n\nNO_REPLY' }],
+        },
+      },
+    ]);
+
+    const payload = await request('/api/sessions/history-local?sessionKey=agent%3Amain%3Amain');
+    const messages = payload.messages as Array<{ role?: string; content?: Array<{ text?: string }> }>;
+    expect(messages[0]?.content?.[0]?.text).toBe('面试题库已生成。');
+    expect(JSON.stringify(payload)).not.toContain('NO_REPLY');
+  });
+
   it('redacts nested child-agent transcript messages before returning them', async () => {
     writeTranscript('worker', 'child-session', [
       {

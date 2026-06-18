@@ -470,7 +470,7 @@ describe('deriveTaskSteps', () => {
     expect(stripProcessMessagePrefix(reply, [processBlock])).toBe('最终答案在这里。');
   });
 
-  it('builds a branch for spawned subagents', () => {
+  it('hides subagent orchestration tools from the execution graph', () => {
     const messages: RawMessage[] = [
       {
         role: 'assistant',
@@ -498,25 +498,31 @@ describe('deriveTaskSteps', () => {
       streamingTools: [],
     });
 
-    expect(steps).toEqual([
-      expect.objectContaining({
-        id: 'spawn-1',
-        label: 'sessions_spawn',
-        depth: 1,
-      }),
-      expect.objectContaining({
-        id: 'spawn-1:branch',
-        label: 'coder run',
-        depth: 2,
-        parentId: 'spawn-1',
-      }),
-      expect.objectContaining({
-        id: 'yield-1',
-        label: 'sessions_yield',
-        depth: 3,
-        parentId: 'spawn-1:branch',
-      }),
-    ]);
+    expect(steps).toEqual([]);
+  });
+
+  it('filters subagent orchestration narration from graph message steps', () => {
+    const messages: RawMessage[] = [
+      {
+        role: 'assistant',
+        id: 'assistant-3',
+        content: [{ type: 'text', text: '我先调度子agent 去检查仓库，稍等。' }],
+      },
+      {
+        role: 'assistant',
+        id: 'assistant-4',
+        content: [{ type: 'text', text: '检查完成，结论如下。' }],
+      },
+    ];
+
+    const steps = deriveTaskSteps({
+      messages,
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps.some((step) => step.detail?.includes('调度子agent'))).toBe(false);
+    expect(steps.some((step) => step.detail?.includes('检查完成'))).toBe(true);
   });
 
   it('parses internal subagent completion events from injected user messages', () => {

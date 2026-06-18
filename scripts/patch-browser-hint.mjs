@@ -9,8 +9,10 @@
  * Production builds are separately patched in bundle-openclaw.mjs.
  */
 
-import { readFileSync, writeFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { applyOpenClawOpenAITransportPatches, hasOpenClawOpenAITransportPatches } from './openclaw-transport-patches.mjs';
+import { applyOpenClawUsageStreamingPatches, hasOpenClawUsageStreamingPatches } from './openclaw-usage-patches.mjs';
 
 const BROWSER_HINT_REPLACEMENTS = [
   [
@@ -139,6 +141,9 @@ const REPLACEMENTS = [
 const distDir = join(process.cwd(), 'node_modules', 'openclaw', 'dist');
 
 let patchedCount = 0;
+if (!existsSync(distDir)) {
+  console.warn(`[patch-browser-hint] Skip: ${distDir} not found (run pnpm install)`);
+} else {
 try {
   for (const file of readdirSync(distDir)) {
     if (!file.endsWith('.js')) continue;
@@ -156,11 +161,38 @@ try {
       console.log(`[patch-browser-hint] Patched: ${file}`);
       patchedCount++;
     }
+
+    if (file.startsWith('openai-transport-stream-')) {
+      let transportContent = content;
+      let transportChanged = false;
+
+      const usageResult = applyOpenClawUsageStreamingPatches(transportContent);
+      if (usageResult.patched) {
+        transportContent = usageResult.source;
+        transportChanged = true;
+      }
+
+      const transportResult = applyOpenClawOpenAITransportPatches(transportContent);
+      if (transportResult.patched) {
+        transportContent = transportResult.source;
+        transportChanged = true;
+      }
+
+      if (transportChanged) {
+        writeFileSync(filePath, transportContent, 'utf-8');
+        console.log(`[patch-browser-hint] Patched OpenAI transport (${file}): usage=${hasOpenClawUsageStreamingPatches(transportContent)}, session=${hasOpenClawOpenAITransportPatches(transportContent)}`);
+        patchedCount++;
+      }
+    }
   }
-} catch {
-  // openclaw not installed yet or dist not found — skip silently
+} catch (err) {
+  console.warn(`[patch-browser-hint] Failed: ${err instanceof Error ? err.message : err}`);
+}
 }
 
 if (patchedCount > 0) {
   console.log(`[patch-browser-hint] Done. Patched ${patchedCount} file(s).`);
+} else if (existsSync(distDir)) {
+  console.log('[patch-browser-hint] No changes (already patched or patterns not found).');
+  console.log('[patch-browser-hint] Run: node scripts/patch-openclaw-dev.mjs  for detailed status.');
 }

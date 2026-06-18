@@ -198,6 +198,32 @@ function handleSessionUpdated(payload: SessionUpdatedPayload | undefined): void 
     .catch(() => {});
 }
 
+function forwardAgentEventToChat(normalizedEvent: Record<string, unknown>): void {
+  const normalizedSessionKey = normalizedEvent.sessionKey;
+  if (typeof normalizedSessionKey === 'string' && normalizedSessionKey.includes('__warmup__')) return;
+  if (!shouldProcessGatewayEvent(normalizedEvent)) return;
+  loadChatStoreModule()
+    .then(({ useChatStore }) => {
+      useChatStore.getState().handleChatEvent(normalizedEvent);
+    })
+    .catch(() => {});
+}
+
+function refreshActiveAgentSessionHistory(
+  state: { currentSessionKey: string; activeRunId: string | null; sending: boolean; loadHistory: (quiet?: boolean) => Promise<void> },
+  runId: unknown,
+  sessionKey: unknown,
+  force = false,
+): void {
+  if (runId == null || sessionKey == null) return;
+  const resolvedSessionKey = String(sessionKey);
+  const matchesCurrentSession = resolvedSessionKey === state.currentSessionKey;
+  const matchesActiveRun = state.activeRunId != null && String(runId) === state.activeRunId;
+  if (state.sending && (matchesCurrentSession || matchesActiveRun)) {
+    maybeLoadHistory(state, force);
+  }
+}
+
 function handleGatewayNotification(notification: { method?: string; params?: Record<string, unknown> } | undefined): void {
   const payload = notification;
   if (!payload || payload.method !== 'agent' || !payload.params || typeof payload.params !== 'object') {
@@ -206,33 +232,52 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
 
   const p = payload.params;
   const data = (p.data && typeof p.data === 'object') ? (p.data as Record<string, unknown>) : {};
+  const stream = String(p.stream ?? data.stream ?? '');
   const phase = data.phase ?? p.phase;
+  const runId = p.runId ?? data.runId;
+  const sessionKey = p.sessionKey ?? data.sessionKey;
   const hasChatData = (p.state ?? data.state) || (p.message ?? data.message);
 
   if (hasChatData) {
-    const normalizedEvent: Record<string, unknown> = {
+    forwardAgentEventToChat({
       ...data,
-      runId: p.runId ?? data.runId,
-      sessionKey: p.sessionKey ?? data.sessionKey,
-      stream: p.stream ?? data.stream,
+      runId,
+      sessionKey,
+      stream,
       seq: p.seq ?? data.seq,
       state: p.state ?? data.state,
       message: p.message ?? data.message,
-    };
-    const normalizedSessionKey = normalizedEvent.sessionKey;
-    if (typeof normalizedSessionKey === 'string' && normalizedSessionKey.includes('__warmup__')) return;
-    if (shouldProcessGatewayEvent(normalizedEvent)) {
-      loadChatStoreModule()
-        .then(({ useChatStore }) => {
-          useChatStore.getState().handleChatEvent(normalizedEvent);
-        })
-        .catch(() => {});
-    }
+    });
   }
 
-  const runId = p.runId ?? data.runId;
-  const sessionKey = p.sessionKey ?? data.sessionKey;
-  if (phase === 'started' && runId != null && sessionKey != null) {
+  // Gateway often emits assistant progress on the agent stream while chat events
+  // are dropped (dropIfSlow). Map cumulative assistant text to chat deltas.
+  const assistantText = p.text ?? data.text;
+  if (stream === 'assistant' && typeof assistantText === 'string' && assistantText.trim()) {
+    forwardAgentEventToChat({
+      runId,
+      sessionKey,
+      stream,
+      seq: p.seq ?? data.seq ?? p.aseq ?? data.aseq,
+      state: 'delta',
+      message: { role: 'assistant', content: assistantText },
+    });
+  }
+
+  // Tool/item progress without chat deltas — pull JSONL transcript instead.
+  if (stream === 'item' || stream === 'command_output') {
+    loadChatStoreModule()
+      .then(({ useChatStore }) => {
+        refreshActiveAgentSessionHistory(useChatStore.getState(), runId, sessionKey, true);
+      })
+      .catch(() => {});
+  }
+
+  const lifecyclePhase = stream === 'lifecycle' ? phase : null;
+  const isRunStart = lifecyclePhase === 'start'
+    || lifecyclePhase === 'started'
+    || phase === 'started';
+  if (isRunStart && runId != null && sessionKey != null) {
     loadChatStoreModule()
       .then(({ useChatStore }) => {
         const state = useChatStore.getState();
@@ -253,7 +298,29 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
       .catch(() => {});
   }
 
-  if (phase === 'completed' || phase === 'done' || phase === 'finished' || phase === 'end') {
+  const isRunError = lifecyclePhase === 'error' || phase === 'error';
+  if (isRunError && runId != null && sessionKey != null) {
+    const errorMessage = String(
+      data.error
+      ?? p.error
+      ?? data.errorMessage
+      ?? p.errorMessage
+      ?? 'An error occurred',
+    );
+    forwardAgentEventToChat({
+      state: 'error',
+      runId,
+      sessionKey: String(sessionKey),
+      errorMessage,
+    });
+    loadChatStoreModule()
+      .then(({ useChatStore }) => {
+        refreshActiveAgentSessionHistory(useChatStore.getState(), runId, sessionKey, true);
+      })
+      .catch(() => {});
+  }
+
+  if (phase === 'completed' || phase === 'done' || phase === 'finished') {
     loadChatStoreModule()
       .then(({ useChatStore }) => {
         const state = useChatStore.getState();
@@ -266,11 +333,22 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
           maybeLoadSessions(state);
         }
 
+        useChatStore.getState().handleGatewayRunCompleted(
+          runId != null ? String(runId) : null,
+          resolvedSessionKey,
+        );
+      })
+      .catch(() => {});
+  } else if (phase === 'end') {
+    loadChatStoreModule()
+      .then(({ useChatStore }) => {
+        const state = useChatStore.getState();
+        const resolvedSessionKey = sessionKey != null ? String(sessionKey) : null;
         const matchesCurrentSession = resolvedSessionKey == null || resolvedSessionKey === state.currentSessionKey;
         const matchesActiveRun = runId != null && state.activeRunId != null && String(runId) === state.activeRunId;
 
         if (matchesCurrentSession || matchesActiveRun) {
-          maybeLoadHistory(state);
+          maybeLoadHistory(state, true);
         }
       })
       .catch(() => {});

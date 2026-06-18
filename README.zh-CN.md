@@ -131,24 +131,13 @@ Skills 页面可展示来自多个 OpenClaw 来源的技能（托管目录、wor
 - `TAVILY_API_KEY`：用于 `tavily-search`（上游运行时也可能支持 OAuth）
 
 ### 🔌 MCP 连接器
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> origin/dev_limit
-在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/openclaw.json#mcp.servers`，保存后会尽量触发本机 OpenClaw Gateway 重载。
+在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。启用新增或配置已变化的 MCP 服务时需要明确授权；stdio 服务会启动本地进程，因此按高风险处理。
 
 数字员工广场可通过 Host API 安装数字员工包。渲染进程只传递广场列表项的 `id`，主进程通过 `https://ai.lingyiitech.com/management/agents/download/<id>/` 下载，且不接受渲染进程指定任意包地址。ZIP 下载上限为 512 MiB，解压内容上限为 1 GiB。LYClaw 会校验并解压到 `~/.openclaw/digital-employees/<package-slug>--<short-id>`，自动创建一个 ID 为 `employee-<package-slug>-<short-id>` 的独占本地 OpenClaw Agent，安全应用包内 Agent 模板，将可移植的 Agent 工作空间描述复制到新工作空间，并保留员工包内的专属 Skill 和 MCP 配置。安装阶段不会把员工包内 MCP 注册到全局 `openclaw.json`；后续使用数字员工时由运行时从当前员工目录读取。安装状态与资源归属记录在 `install.json` 中，不依赖 SQLite。
 数字员工广场页面已直接接入该安装流程，卡片会展示安装进度及成功或失败提示，并根据本地数字员工记录判断是否已安装。
 当员工包明确设置 `"allowMultipleInstances": false` 时，LYClaw 会在创建 Agent 前检查同一 `packageId`，已安装则拒绝重复安装；未配置或设置为 `true` 时允许多实例。
 
 已安装数字员工可通过 Host API 原地升级。升级保持 `instanceId`、`agentId`、会话键和运行目录不变，要求新包 `packageId` 一致且版本更高。员工包、包内 Skill、MCP 配置、工作流、资源以及受管的 Agent 工作空间文件会与新包同步，新包已删除的受管文件也会从本地删除；`USER.md`、会话、记忆、认证信息和用户产物始终保留。任一步失败都会恢复旧包、Workspace 和 Agent 配置。
-<<<<<<< HEAD
-=======
-在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。启用新增或配置已变化的 MCP 服务时需要明确授权；stdio 服务会启动本地进程，因此按高风险处理。
->>>>>>> origin/dev
-=======
-在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。启用新增或配置已变化的 MCP 服务时需要明确授权；stdio 服务会启动本地进程，因此按高风险处理。
->>>>>>> origin/dev_limit
 
 ### 🔐 安全的供应商集成
 连接多个 AI 供应商（OpenAI、Anthropic 等），凭证安全存储在系统原生密钥链中。OpenAI 同时支持 API Key 与浏览器 OAuth（Codex 订阅）登录。

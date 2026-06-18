@@ -667,9 +667,52 @@ status: completed successfully`,
 
     render(<Chat />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId('chat-execution-graph')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
+  });
+
+  it('avoids an empty thinking graph while waiting for a spawned subagent', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'user',
+          content: 'Check tomorrow weather',
+        },
+        {
+          role: 'assistant',
+          id: 'spawn-turn',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'spawn-call',
+              name: 'sessions_spawn',
+              input: { agentId: 'subagent', task: 'Check tomorrow weather' },
+            },
+          ],
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: true,
+      activeRunId: 'parent-run',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
     });
+
+    const { Chat } = await import('@/pages/Chat/index');
+
+    render(<Chat />);
 
     expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
   });

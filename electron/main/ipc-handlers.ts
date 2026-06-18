@@ -1422,8 +1422,12 @@ function registerGatewayHandlers(
       await assertTextNetworkAllowed(message, 'chat:sendWithMedia');
       await assertTextFilePathsAllowed(message, 'chat:sendWithMedia');
 
+      const sessionId = params.sessionKey.startsWith('agent:')
+        ? params.sessionKey.split(':').slice(2).join(':') || undefined
+        : undefined;
       const rpcParams: Record<string, unknown> = {
         sessionKey: params.sessionKey,
+        sessionId,
         message,
         deliver: params.deliver ?? false,
         idempotencyKey: params.idempotencyKey,

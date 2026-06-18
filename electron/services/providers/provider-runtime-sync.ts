@@ -22,6 +22,7 @@ import { listAgentsSnapshot, resetAgentModelsForProvider } from '../../utils/age
 import { getSetting } from '../../utils/store';
 import { LY_AUTO_PROVIDER_ID } from '../../shared/providers/types';
 import { proxyAwareFetch } from '../../utils/proxy-fetch';
+import { buildLyAutoModelOverrides, alignVllmCompilePluginState } from './ly-auto-compile-parity';
 
 const GOOGLE_OAUTH_RUNTIME_PROVIDER = 'google-gemini-cli';
 const GOOGLE_OAUTH_DEFAULT_MODEL_REF = `${GOOGLE_OAUTH_RUNTIME_PROVIDER}/gemini-3-pro-preview`;
@@ -29,13 +30,37 @@ const OPENAI_OAUTH_RUNTIME_PROVIDER = 'openai-codex';
 const OPENAI_OAUTH_DEFAULT_MODEL_REF = `${OPENAI_OAUTH_RUNTIME_PROVIDER}/gpt-5.4`;
 const LY_MANAGED_PROVIDER_TYPES = new Set(['ly-auto']);
 
-const LY_AUTO_FALLBACK_OVERRIDES: Record<string, unknown> = {
-  reasoning: true,
-  input: ['text', 'image'],
-  contextWindow: 100000,
-  maxTokens: 8192,
-  compat: { supportsUsageInStreaming: true, supportsPromptCacheKey: true },
+/** vLLM / openai-completions custom providers need streaming usage + no prompt_cache_key. */
+const OPENAI_COMPLETIONS_STREAMING_COMPAT = {
+  supportsUsageInStreaming: true,
+  supportsPromptCacheKey: false,
 };
+
+function withOpenAICompletionsStreamingCompat(
+  modelEntry: Record<string, unknown>,
+): Record<string, unknown> {
+  const existingCompat = modelEntry.compat && typeof modelEntry.compat === 'object' && !Array.isArray(modelEntry.compat)
+    ? modelEntry.compat as Record<string, unknown>
+    : {};
+  return {
+    ...modelEntry,
+    compat: {
+      ...existingCompat,
+      ...OPENAI_COMPLETIONS_STREAMING_COMPAT,
+    },
+  };
+}
+
+function buildCustomOpenAICompletionsModels(
+  modelId: string,
+  registryModel?: Record<string, unknown>,
+): Array<Record<string, unknown> & { id: string; name: string }> {
+  return [withOpenAICompletionsStreamingCompat({
+    ...(registryModel ?? {}),
+    id: modelId,
+    name: typeof registryModel?.name === 'string' ? registryModel.name : modelId,
+  }) as Record<string, unknown> & { id: string; name: string }];
+}
 
 async function fetchNginxModelOverrides(baseUrl: string): Promise<Record<string, unknown> | null> {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
@@ -286,6 +311,12 @@ export async function syncAllProviderAuthToRuntime(): Promise<void> {
       logger.warn(`[provider-runtime] Failed to sync provider ${account.id} to runtime during bulk sync:`, err);
     }
   }
+
+  try {
+    await syncAgentModelsToRuntime();
+  } catch (err) {
+    logger.warn('[provider-runtime] Failed to sync per-agent model registries during bulk sync:', err);
+  }
 }
 
 async function syncProviderSecretToRuntime(
@@ -341,19 +372,14 @@ async function resolveRuntimeSyncContext(config: ProviderConfig): Promise<Runtim
 /**
  * Build headers for ly-auto provider requests.
  *
- * NOTE ON SESSION ID:
- * Ideally, X-LYClaw-Session-Id should be conversation-level (based on sessionKey),
- * but OpenClaw's models.json headers are static and cannot change per-request.
+ * Per-request session routing headers (`X-LYClaw-Session-Id`) and body `session_id`
+ * are injected by the OpenClaw OpenAI transport patch (see scripts/openclaw-transport-patches.mjs)
+ * using `sessionKey` / `sessionId` from `chat.send`.
  *
- * CURRENT SOLUTION: Let HAProxy handle session stickiness automatically.
- * HAProxy config line 657:
+ * HAProxy should also set a machine-level fallback when the header is missing:
  *   http-request set-header X-LYClaw-Session-Id %[src] unless { req.hdr(X-LYClaw-Session-Id) -m found }
  *
- * This means HAProxy will use the source IP as Session ID if the header is missing.
- * This provides machine-level stickiness, which is acceptable until OpenClaw
- * supports request-level dynamic headers.
- *
- * Headers:
+ * Headers synced here:
  * - X-LYClaw-JobNumber: DingTalk job number from user profile (for future usage tracking)
  */
 async function buildLyAutoHeaders(): Promise<Record<string, string>> {
@@ -387,20 +413,21 @@ async function syncRuntimeProviderConfig(
     if (baseUrl) {
       const nginxEntry = await fetchNginxModelOverrides(baseUrl);
       if (nginxEntry) {
-        const merged = { ...LY_AUTO_FALLBACK_OVERRIDES };
-        if (typeof nginxEntry.reasoning === 'boolean') merged.reasoning = nginxEntry.reasoning;
-        if (Array.isArray(nginxEntry.input)) merged.input = nginxEntry.input;
-        if (typeof nginxEntry.contextWindow === 'number') merged.contextWindow = nginxEntry.contextWindow;
-        if (typeof nginxEntry.maxTokens === 'number') merged.maxTokens = nginxEntry.maxTokens;
-        if (nginxEntry.compat && typeof nginxEntry.compat === 'object') {
-          merged.compat = { ...(merged.compat as Record<string, unknown>), ...nginxEntry.compat };
-        }
-        modelOverrides = { [config.model]: merged };
-        logger.info(`[provider-runtime-sync] Fetched nginx model config: maxTokens=${nginxEntry.maxTokens}, contextWindow=${nginxEntry.contextWindow}`);
+        logger.info(
+          `[provider-runtime-sync] Nginx model config (not applied to compile): maxTokens=${nginxEntry.maxTokens}, contextWindow=${nginxEntry.contextWindow}`,
+        );
       } else {
-        logger.warn('[provider-runtime-sync] Failed to fetch nginx model config, using registry defaults');
+        logger.warn('[provider-runtime-sync] Failed to fetch nginx model config, using compile-parity defaults');
       }
     }
+    modelOverrides = { [config.model]: buildLyAutoModelOverrides() };
+  }
+
+  // Custom/ollama vLLM endpoints need explicit streaming usage compat in openclaw.json too.
+  if (isUnregisteredProviderType(config.type) && config.model) {
+    modelOverrides = {
+      [config.model]: withOpenAICompletionsStreamingCompat({}),
+    };
   }
 
   // Build headers: merge static headers from registry/config with dynamic ly-auto headers
@@ -409,7 +436,7 @@ async function syncRuntimeProviderConfig(
   // For ly-auto provider, add dynamic headers (session ID and job number)
   if (config.type === LY_AUTO_PROVIDER_ID) {
     const lyAutoHeaders = await buildLyAutoHeaders();
-  headers = { ...headers, ...lyAutoHeaders };
+    headers = { ...headers, ...lyAutoHeaders };
     logger.info('[provider-runtime-sync] Added ly-auto dynamic headers:', lyAutoHeaders);
   }
 
@@ -420,6 +447,10 @@ async function syncRuntimeProviderConfig(
     headers,
     modelOverrides,
   });
+
+  if (config.type === LY_AUTO_PROVIDER_ID || isUnregisteredProviderType(config.type)) {
+    await alignVllmCompilePluginState();
+  }
 }
 
 function buildModelOverridesFromRegistry(
@@ -454,7 +485,7 @@ async function syncCustomProviderAgentModel(
   await updateAgentModelProvider(runtimeProviderKey, {
     baseUrl: normalizeProviderBaseUrl(config, config.baseUrl, config.apiProtocol || 'openai-completions'),
     api: config.apiProtocol || 'openai-completions',
-    models: modelId ? [{ id: modelId, name: modelId }] : [],
+    models: modelId ? buildCustomOpenAICompletionsModels(modelId) : [],
     apiKey: resolvedKey,
   });
 }
@@ -567,12 +598,19 @@ async function buildAgentModelProviderEntry(
     apiKey = (await getApiKey(config.id)) || undefined;
   }
 
-  const registryModel = meta?.models?.find((model) => model.id === modelId);
+  const registryModel = meta?.models?.find((model) => model.id === modelId) as Record<string, unknown> | undefined;
+  const modelEntry = {
+    ...(registryModel ?? {}),
+    id: modelId,
+    name: typeof registryModel?.name === 'string' ? registryModel.name : modelId,
+  };
 
   return {
     baseUrl,
     api,
-    models: [{ ...(registryModel ?? {}), id: modelId, name: registryModel?.name ?? modelId }],
+    models: isUnregisteredProviderType(config.type) && api === 'openai-completions'
+      ? buildCustomOpenAICompletionsModels(modelId, registryModel)
+      : [modelEntry as Record<string, unknown> & { id: string; name: string }],
     apiKey,
     authHeader,
   };
