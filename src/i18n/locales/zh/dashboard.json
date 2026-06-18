@@ -42,6 +42,7 @@
         "last30Days": "30 天",
         "allTime": "全部",
         "showingLast": "共 {{count}} 条记录",
+        "refresh": "刷新",
         "totalTokens": "总 token",
         "inputShort": "输入",
         "outputShort": "输出",

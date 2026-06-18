@@ -42,6 +42,7 @@
         "last30Days": "30 дней",
         "allTime": "Всё время",
         "showingLast": "{{count}} записей",
+        "refresh": "Обновить",
         "totalTokens": "всего токенов",
         "inputShort": "Ввод",
         "outputShort": "Вывод",

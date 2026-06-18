@@ -25,7 +25,16 @@
         "pinSession": "Закрепить сессию",
         "unpinSession": "Открепить сессию",
         "openClawPage": "Страница OpenClaw",
-        "updateAvailable": " (Доступно обновление)"
+        "updateAvailable": " (Доступно обновление)",
+        "batchDelete": "Массовое удаление",
+        "batchDeleteTitle": "Массовое удаление чатов",
+        "batchDeleteSubtitle": "Чатов: {{count}}",
+        "batchDeleteConfirm": "Удалить выбранные чаты?",
+        "batchDeleteSelectAll": "Выбрать все",
+        "batchDeleteDeselectAll": "Снять выбор",
+        "batchDeleteNoSessions": "Нет чатов для удаления",
+        "batchDeleteSuccess": "Удалено чатов: {{count}}",
+        "batchDeleteWorkspaceGroup": "Рабочая область · {{name}}"
     },
     "actions": {
         "save": "Сохранить",

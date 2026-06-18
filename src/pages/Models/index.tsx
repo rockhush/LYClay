@@ -1,9 +1,10 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useTranslation } from 'react-i18next';
 import {
   ChevronLeft,
   ChevronRight,
+  RefreshCw,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -11,7 +12,7 @@ import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { cn } from '@/lib/utils';
 import { useGatewayStore } from '@/stores/gateway';
 import { useSettingsStore } from '@/stores/settings';
-import { hostApiFetch } from '@/lib/host-api';
+import { useTokenUsageStore } from '@/stores/token-usage';
 import { trackUiEvent } from '@/lib/telemetry';
 import { ProvidersSettings } from '@/components/settings/ProvidersSettings';
 import { FeedbackState } from '@/components/common/FeedbackState';
@@ -19,16 +20,11 @@ import { CenteredLoader } from '@/components/common/LoadingSpinner';
 import {
   filterUsageHistoryByWindow,
   groupUsageHistory,
-  resolveStableUsageHistory,
   resolveVisibleUsageHistory,
   type UsageGroupBy,
   type UsageHistoryEntry,
   type UsageWindow,
 } from './usage-history';
-const DEFAULT_USAGE_FETCH_MAX_ATTEMPTS = 2;
-const WINDOWS_USAGE_FETCH_MAX_ATTEMPTS = 3;
-const USAGE_FETCH_RETRY_DELAY_MS = 1500;
-const USAGE_AUTO_REFRESH_INTERVAL_MS = 15_000;
 
 const HIDDEN_USAGE_MARKERS = ['gateway-injected', 'delivery-mirror'];
 
@@ -43,15 +39,15 @@ export function Models() {
   const gatewayStatus = useGatewayStore((state) => state.status);
   const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
   const isGatewayRunning = gatewayStatus.state === 'running';
-  const usageFetchMaxAttempts = window.electron.platform === 'win32'
-    ? WINDOWS_USAGE_FETCH_MAX_ATTEMPTS
-    : DEFAULT_USAGE_FETCH_MAX_ATTEMPTS;
+  const fetchStateStatus = useTokenUsageStore((state) => state.status);
+  const fetchStateData = useTokenUsageStore((state) => state.entries);
+  const fetchStateStableData = useTokenUsageStore((state) => state.stableEntries);
+  const fetchTokenUsageHistory = useTokenUsageStore((state) => state.fetchTokenUsageHistory);
 
   const [usageGroupBy, setUsageGroupBy] = useState<UsageGroupBy>('model');
   const [usageWindow, setUsageWindow] = useState<UsageWindow>('7d');
   const [usagePage, setUsagePage] = useState(1);
   const [selectedUsageEntry, setSelectedUsageEntry] = useState<UsageHistoryEntry | null>(null);
-  const [usageRefreshNonce, setUsageRefreshNonce] = useState(0);
   function formatUsageSource(source?: string): string | undefined {
     if (!source) return undefined;
 
@@ -69,201 +65,18 @@ export function Models() {
     );
   }
 
-  type FetchState = {
-    status: 'idle' | 'loading' | 'done';
-    data: UsageHistoryEntry[];
-    stableData: UsageHistoryEntry[];
-  };
-  type FetchAction =
-    | { type: 'start' }
-    | { type: 'done'; data: UsageHistoryEntry[] }
-    | { type: 'failed' }
-    | { type: 'reset' };
-
-  const [fetchState, dispatchFetch] = useReducer(
-    (state: FetchState, action: FetchAction): FetchState => {
-      switch (action.type) {
-        case 'start':
-          return { ...state, status: 'loading' };
-        case 'done':
-          return {
-            status: 'done',
-            data: action.data,
-            stableData: resolveStableUsageHistory(state.stableData, action.data),
-          };
-        case 'failed':
-          return { ...state, status: 'done' };
-        case 'reset':
-          return { status: 'idle', data: [], stableData: [] };
-        default:
-          return state;
-      }
-    },
-    { status: 'idle' as const, data: [] as UsageHistoryEntry[], stableData: [] as UsageHistoryEntry[] },
-  );
-
-  const usageFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const usageFetchGenerationRef = useRef(0);
-  const usageFetchStatusRef = useRef<FetchState['status']>('idle');
-
-  useEffect(() => {
-    usageFetchStatusRef.current = fetchState.status;
-  }, [fetchState.status]);
-
   useEffect(() => {
     trackUiEvent('models.page_viewed');
   }, []);
 
-  useEffect(() => {
-    if (!isGatewayRunning) {
-      return;
-    }
-
-    const requestRefresh = () => {
-      if (usageFetchStatusRef.current === 'loading') return;
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      setUsageRefreshNonce((value) => value + 1);
-    };
-
-    const intervalId = window.setInterval(requestRefresh, USAGE_AUTO_REFRESH_INTERVAL_MS);
-    const handleFocus = () => {
-      requestRefresh();
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        requestRefresh();
-      }
-    };
-
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [isGatewayRunning]);
-
-  useEffect(() => {
-    if (usageFetchTimerRef.current) {
-      clearTimeout(usageFetchTimerRef.current);
-      usageFetchTimerRef.current = null;
-    }
-
-    if (!isGatewayRunning) {
-      dispatchFetch({ type: 'reset' });
-      return;
-    }
-
-    dispatchFetch({ type: 'start' });
-    const generation = usageFetchGenerationRef.current + 1;
-    usageFetchGenerationRef.current = generation;
-    const restartMarker = `${gatewayStatus.pid ?? 'na'}:${gatewayStatus.connectedAt ?? 'na'}`;
-    trackUiEvent('models.token_usage_fetch_started', {
-      generation,
-      restartMarker,
-    });
-
-    // Safety timeout: if the fetch cycle hasn't resolved after 30 s,
-    // force-resolve to "done" with empty data to avoid an infinite spinner.
-    const safetyTimeout = setTimeout(() => {
-      if (usageFetchGenerationRef.current !== generation) return;
-      trackUiEvent('models.token_usage_fetch_safety_timeout', {
-        generation,
-        restartMarker,
-      });
-      dispatchFetch({ type: 'failed' });
-    }, 30_000);
-
-    const fetchUsageHistoryWithRetry = async (attempt: number) => {
-      trackUiEvent('models.token_usage_fetch_attempt', {
-        generation,
-        attempt,
-        restartMarker,
-      });
-      try {
-        const entries = await hostApiFetch<UsageHistoryEntry[]>('/api/usage/recent-token-history');
-        if (usageFetchGenerationRef.current !== generation) return;
-
-        const normalized = Array.isArray(entries) ? entries : [];
-        trackUiEvent('models.token_usage_fetch_succeeded', {
-          generation,
-          attempt,
-          records: normalized.length,
-          restartMarker,
-        });
-
-        if (normalized.length === 0 && attempt < usageFetchMaxAttempts) {
-          trackUiEvent('models.token_usage_fetch_retry_scheduled', {
-            generation,
-            attempt,
-            reason: 'empty',
-            restartMarker,
-          });
-          usageFetchTimerRef.current = setTimeout(() => {
-            void fetchUsageHistoryWithRetry(attempt + 1);
-          }, USAGE_FETCH_RETRY_DELAY_MS);
-        } else {
-          if (normalized.length === 0) {
-            trackUiEvent('models.token_usage_fetch_exhausted', {
-              generation,
-              attempt,
-              reason: 'empty',
-              restartMarker,
-            });
-          }
-          dispatchFetch({ type: 'done', data: normalized });
-        }
-      } catch (error) {
-        if (usageFetchGenerationRef.current !== generation) return;
-        trackUiEvent('models.token_usage_fetch_failed_attempt', {
-          generation,
-          attempt,
-          restartMarker,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        if (attempt < usageFetchMaxAttempts) {
-          trackUiEvent('models.token_usage_fetch_retry_scheduled', {
-            generation,
-            attempt,
-            reason: 'error',
-            restartMarker,
-          });
-          usageFetchTimerRef.current = setTimeout(() => {
-            void fetchUsageHistoryWithRetry(attempt + 1);
-          }, USAGE_FETCH_RETRY_DELAY_MS);
-          return;
-        }
-        dispatchFetch({ type: 'failed' });
-        trackUiEvent('models.token_usage_fetch_exhausted', {
-          generation,
-          attempt,
-          reason: 'error',
-          restartMarker,
-        });
-      }
-    };
-
-    void fetchUsageHistoryWithRetry(1);
-
-    return () => {
-      clearTimeout(safetyTimeout);
-      if (usageFetchTimerRef.current) {
-        clearTimeout(usageFetchTimerRef.current);
-        usageFetchTimerRef.current = null;
-      }
-    };
-  }, [isGatewayRunning, gatewayStatus.connectedAt, gatewayStatus.pid, usageFetchMaxAttempts, usageRefreshNonce]);
-
   const usageHistory = isGatewayRunning
-    ? fetchState.data.filter((entry) => !shouldHideUsageEntry(entry))
+    ? fetchStateData.filter((entry) => !shouldHideUsageEntry(entry))
     : [];
   const stableUsageHistory = isGatewayRunning
-    ? fetchState.stableData.filter((entry) => !shouldHideUsageEntry(entry))
+    ? fetchStateStableData.filter((entry) => !shouldHideUsageEntry(entry))
     : [];
   const visibleUsageHistory = resolveVisibleUsageHistory(usageHistory, stableUsageHistory, {
-    preferStableOnEmpty: isGatewayRunning && fetchState.status === 'loading',
+    preferStableOnEmpty: isGatewayRunning && fetchStateStatus === 'loading',
   });
   const filteredUsageHistory = filterUsageHistoryByWindow(visibleUsageHistory, usageWindow);
   const usageGroups = groupUsageHistory(filteredUsageHistory, usageGroupBy);
@@ -271,9 +84,13 @@ export function Models() {
   const usageTotalPages = Math.max(1, Math.ceil(filteredUsageHistory.length / usagePageSize));
   const safeUsagePage = Math.min(usagePage, usageTotalPages);
   const pagedUsageHistory = filteredUsageHistory.slice((safeUsagePage - 1) * usagePageSize, safeUsagePage * usagePageSize);
-  const usageLoading = isGatewayRunning && fetchState.status === 'loading' && visibleUsageHistory.length === 0;
-  const usageRefreshing = isGatewayRunning && fetchState.status === 'loading' && visibleUsageHistory.length > 0;
+  const usageLoading = isGatewayRunning && fetchStateStatus === 'loading' && visibleUsageHistory.length === 0;
+  const usageRefreshing = isGatewayRunning && fetchStateStatus === 'loading' && visibleUsageHistory.length > 0;
   const showUsagePagination = !usageLoading && visibleUsageHistory.length > 0 && filteredUsageHistory.length > 0;
+
+  const handleRefreshTokenUsage = () => {
+    void fetchTokenUsageHistory({ force: true });
+  };
 
   return (
     <div data-testid="models-page" className="flex flex-col -m-6 dark:bg-background h-[calc(100vh-2.5rem)] overflow-hidden">
@@ -401,11 +218,26 @@ export function Models() {
                         </button>
                       </div>
                     </div>
-                    <p className="text-[13px] font-medium text-muted-foreground">
-                      {usageRefreshing
-                        ? t('dashboard:recentTokenHistory.loading')
-                        : t('dashboard:recentTokenHistory.showingLast', { count: filteredUsageHistory.length })}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-[13px] font-medium text-muted-foreground">
+                        {usageRefreshing
+                          ? t('dashboard:recentTokenHistory.loading')
+                          : t('dashboard:recentTokenHistory.showingLast', { count: filteredUsageHistory.length })}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        data-testid="token-usage-refresh"
+                        aria-label={t('dashboard:recentTokenHistory.refresh')}
+                        title={t('dashboard:recentTokenHistory.refresh')}
+                        onClick={handleRefreshTokenUsage}
+                        disabled={usageRefreshing}
+                        className="h-8 w-8 rounded-lg text-muted-foreground hover:text-[#FF922B] hover:bg-[#FFF2E5] dark:hover:bg-[#FF922B]/15"
+                      >
+                        <RefreshCw className={cn('h-4 w-4', usageRefreshing && 'animate-spin')} />
+                      </Button>
+                    </div>
                   </div>
 
                   <UsageBarChart

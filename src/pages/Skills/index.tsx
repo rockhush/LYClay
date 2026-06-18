@@ -63,7 +63,6 @@ import {
   isLyclawBuiltinSkill,
   isCustomSkill,
   isMarketplaceInstalledSkill,
-  normalizeSkillVersionForUpdateCheck,
 } from '@/lib/skill-metadata';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -78,11 +77,22 @@ import {
   seedCachedSkillDisplayMetadata,
   type CachedSkillDisplayMetadata,
 } from '@/lib/skill-display-cache';
+import {
+  clearSkillUpdateFailed,
+  isSkillUpdateFailed,
+  markSkillUpdateFailed,
+  subscribeSkillUpdateFailures,
+} from '@/lib/skill-update-failure-session';
+import {
+  hasSkillVersionMismatch,
+  resolveInstalledVersionForMarketplaceSkill,
+  SKILL_UPDATE_VERIFICATION_FAILED,
+} from '@/lib/skill-update-verification';
 import { UploadSkillDialog } from '@/components/skills/UploadSkillDialog';
 import { BatchUpdateSkillsDialog } from '@/components/skills/BatchUpdateSkillsDialog';
 import { BatchToggleSkillsDialog } from '@/components/skills/BatchToggleSkillsDialog';
 
-const INSTALL_ERROR_CODES = new Set(['installTimeoutError', 'installRateLimitError']);
+const INSTALL_ERROR_CODES = new Set(['installTimeoutError', 'installRateLimitError', SKILL_UPDATE_VERIFICATION_FAILED]);
 const FETCH_ERROR_CODES = new Set(['fetchTimeoutError', 'fetchRateLimitError', 'timeoutError', 'rateLimitError']);
 const SEARCH_ERROR_CODES = new Set(['searchTimeoutError', 'searchRateLimitError', 'timeoutError', 'rateLimitError']);
 
@@ -499,6 +509,7 @@ interface MarketplaceSkillCardProps {
   skill: MarketplaceSkill;
   isInstalled: boolean;
   isLoading: boolean;
+  updateFailed: boolean;
   onInstall: () => void;
   onUninstall: () => void;
   onUpdate: () => void;
@@ -511,6 +522,7 @@ function MarketplaceSkillCard({
   skill,
   isInstalled,
   isLoading,
+  updateFailed,
   onInstall,
   onUninstall,
   onUpdate,
@@ -575,7 +587,16 @@ function MarketplaceSkillCard({
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center shrink-0">
+          {isInstalled && updateFailed && (
+            <span
+              data-testid={`marketplace-skill-update-failed-${skill.slug}`}
+              className="mr-3 text-[12px] font-normal text-[#FF0000] shrink-0 whitespace-nowrap"
+            >
+              更新失败
+            </span>
+          )}
+          <div className="flex items-center gap-1">
           {isInstalled && (
             <Button
               type="button"
@@ -623,6 +644,7 @@ function MarketplaceSkillCard({
               <Download className="h-3.5 w-3.5" />
             )}
           </Button>
+          </div>
         </div>
       </div>
 
@@ -705,6 +727,7 @@ export function Skills() {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [displayCacheRevision, setDisplayCacheRevision] = useState(0);
+  const [, setUpdateFailureRevision] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -719,6 +742,10 @@ export function Skills() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [addMenuOpen]);
+
+  useEffect(() => subscribeSkillUpdateFailures(() => {
+    setUpdateFailureRevision((revision) => revision + 1);
+  }), []);
 
   const isGatewayRunning = gatewayStatus.state === 'running';
   const isGatewayReady = isGatewayRunning && gatewayStatus.gatewayReady === true;
@@ -1216,8 +1243,22 @@ export function Skills() {
   }, [uninstallSkill, fetchSkills, t]);
 
   const performSkillUpdate = useCallback(async (slug: string, latestVersion?: string) => {
+    const marketplaceSkill = resolveMarketplaceSkillBySlug(slug);
     const packageSlug = await updateSkill(slug, latestVersion);
     await fetchSkills();
+
+    if (marketplaceSkill && latestVersion?.trim()) {
+      const { skills, companyInstallMap, companyInstallEntries } = useSkillsStore.getState();
+      if (hasSkillVersionMismatch(
+        marketplaceSkill,
+        skills,
+        companyInstallMap,
+        companyInstallEntries,
+        latestVersion,
+      )) {
+        throw new Error(SKILL_UPDATE_VERIFICATION_FAILED);
+      }
+    }
 
     if (packageSlug) {
       const installed = useSkillsStore.getState().skills.find(
@@ -1227,13 +1268,13 @@ export function Skills() {
     } else {
       await enableSkill(slug);
     }
-  }, [updateSkill, enableSkill, fetchSkills]);
+  }, [updateSkill, enableSkill, fetchSkills, resolveMarketplaceSkillBySlug]);
 
   const checkSkillUpdateForMarketplace = useCallback(async (
     skill: MarketplaceSkill,
   ): Promise<
     | { status: 'updatable'; latestVersion: string; marketplaceId: string }
-    | { status: 'skipped' }
+    | { status: 'skipped'; latestVersion: string }
     | { status: 'failed' }
   > => {
     const marketplaceId = skill.id != null ? String(skill.id).trim() : '';
@@ -1241,10 +1282,11 @@ export function Skills() {
       return { status: 'failed' };
     }
 
-    const installedRecord = findInstalledSkillForMarketplace(skill, safeSkills, companyInstallMap);
-    const registryVersion = useSkillsStore.getState().companyInstallEntries[marketplaceId]?.version;
-    const installedVersion = normalizeSkillVersionForUpdateCheck(
-      installedRecord?.version ?? registryVersion,
+    const installedVersion = resolveInstalledVersionForMarketplaceSkill(
+      skill,
+      safeSkills,
+      companyInstallMap,
+      useSkillsStore.getState().companyInstallEntries,
     );
 
     const params = new URLSearchParams({ skill_ids: marketplaceId });
@@ -1265,15 +1307,16 @@ export function Skills() {
       }>(`/api/clawhub/check-updates?${params.toString()}`);
 
       const item = check.results?.[0];
+      const latestVersion = item?.latest_version?.trim() || '';
       if (!check.success || item?.error) {
         return { status: 'failed' };
       }
       if (!item?.has_update) {
-        return { status: 'skipped' };
+        return { status: 'skipped', latestVersion };
       }
       return {
         status: 'updatable',
-        latestVersion: item.latest_version?.trim() || '',
+        latestVersion,
         marketplaceId,
       };
     } catch (error) {
@@ -1292,10 +1335,24 @@ export function Skills() {
     let latestVersion = '';
     const checkResult = await checkSkillUpdateForMarketplace(marketplaceSkill);
     if (checkResult.status === 'failed') {
+      markSkillUpdateFailed(slug);
       toast.error(t('toast.intranetRequired'));
       return;
     }
     if (checkResult.status === 'skipped') {
+      const { skills, companyInstallMap, companyInstallEntries } = useSkillsStore.getState();
+      if (hasSkillVersionMismatch(
+        marketplaceSkill,
+        skills,
+        companyInstallMap,
+        companyInstallEntries,
+        checkResult.latestVersion,
+      )) {
+        markSkillUpdateFailed(slug);
+        toast.error(t('toast.failedUpdate'));
+        return;
+      }
+      clearSkillUpdateFailed(slug);
       toast.success(t('toast.alreadyLatestVersion'));
       return;
     }
@@ -1305,44 +1362,55 @@ export function Skills() {
     try {
       const currentScroll = listRef.current?.scrollTop || 0;
 
-      await performSkillUpdate(slug, latestVersion);
+      try {
+        await performSkillUpdate(slug, latestVersion);
+        clearSkillUpdateFailed(slug);
+      } catch (err) {
+        markSkillUpdateFailed(slug);
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        if (INSTALL_ERROR_CODES.has(errorMessage)) {
+          toast.error(t(`toast.${errorMessage}`, { path: skillsDirPath }), { duration: 10000 });
+        } else {
+          toast.error(t('toast.failedInstall') + ': ' + errorMessage);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        return;
+      }
 
-      const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
-      await searchSkills(installQuery.trim(), selectedType, sort);
-      await fetchSkills();
+      try {
+        const sort = sortOrder === 'desc' ? `-${sortBy}` : sortBy;
+        await searchSkills(installQuery.trim(), selectedType, sort);
+        await fetchSkills();
 
-      const listTrace = await hostApiFetch<{
-        success: boolean;
-        url?: string | null;
-        listApiResponse?: unknown;
-      }>('/api/clawhub/last-list-response');
-      console.log('[Skills] skill/list after update', {
-        slug,
-        called: Boolean(listTrace.url),
-        requestUrl: listTrace.url,
-        response: listTrace.listApiResponse,
-      });
+        const listTrace = await hostApiFetch<{
+          success: boolean;
+          url?: string | null;
+          listApiResponse?: unknown;
+        }>('/api/clawhub/last-list-response');
+        console.log('[Skills] skill/list after update', {
+          slug,
+          called: Boolean(listTrace.url),
+          requestUrl: listTrace.url,
+          response: listTrace.listApiResponse,
+        });
 
-      const marketplaceSkill = resolveMarketplaceSkillBySlug(slug);
-      await syncDisplayCacheFromMarketplace(slug, {
-        versionOverride: latestVersion,
-        listApiResponse: listTrace.listApiResponse,
-        marketplaceId: marketplaceSkill?.id != null ? String(marketplaceSkill.id) : undefined,
-      });
+        const refreshedMarketplaceSkill = resolveMarketplaceSkillBySlug(slug);
+        await syncDisplayCacheFromMarketplace(slug, {
+          versionOverride: latestVersion,
+          listApiResponse: listTrace.listApiResponse,
+          marketplaceId: refreshedMarketplaceSkill?.id != null
+            ? String(refreshedMarketplaceSkill.id)
+            : undefined,
+        });
 
-      setTimeout(() => {
-        listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
-      }, 0);
+        setTimeout(() => {
+          listRef.current?.scrollTo({ top: currentScroll, behavior: 'smooth' });
+        }, 0);
+      } catch (refreshError) {
+        console.error('[Skills] post-update refresh failed', { slug, error: refreshError });
+      }
 
       toast.success(t('toast.installed'));
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      if (INSTALL_ERROR_CODES.has(errorMessage)) {
-        toast.error(t(`toast.${errorMessage}`, { path: skillsDirPath }), { duration: 10000 });
-      } else {
-        toast.error(t('toast.failedInstall') + ': ' + errorMessage);
-      }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } finally {
       setIsUpdating(false);
@@ -1395,10 +1463,24 @@ export function Skills() {
         const checkResult = await checkSkillUpdateForMarketplace(skill);
         if (checkResult.status === 'failed') {
           summary.failed += 1;
+          markSkillUpdateFailed(skill.slug);
           continue;
         }
         if (checkResult.status === 'skipped') {
-          summary.skipped += 1;
+          const { skills, companyInstallMap, companyInstallEntries } = useSkillsStore.getState();
+          if (hasSkillVersionMismatch(
+            skill,
+            skills,
+            companyInstallMap,
+            companyInstallEntries,
+            checkResult.latestVersion,
+          )) {
+            summary.failed += 1;
+            markSkillUpdateFailed(skill.slug);
+          } else {
+            summary.skipped += 1;
+            clearSkillUpdateFailed(skill.slug);
+          }
           continue;
         }
 
@@ -1410,9 +1492,11 @@ export function Skills() {
             marketplaceId: checkResult.marketplaceId,
           });
           summary.updated += 1;
+          clearSkillUpdateFailed(skill.slug);
         } catch (error) {
           console.error('[Skills] Batch update failed for', skill.slug, error);
           summary.failed += 1;
+          markSkillUpdateFailed(skill.slug);
         }
       }
 
@@ -1870,6 +1954,7 @@ export function Skills() {
                         skill={skill}
                         isInstalled={isInstalled}
                         isLoading={isBusy}
+                        updateFailed={isSkillUpdateFailed(skill.slug)}
                         onInstall={() => handleInstall(skill.slug)}
                         onUninstall={() => handleUninstall(skill.slug)}
                         onUpdate={() => handleUpdate(skill.slug)}

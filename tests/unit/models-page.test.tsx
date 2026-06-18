@@ -1,6 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Models } from '@/pages/Models/index';
+import { resetTokenUsageStoreForTests, useTokenUsageStore } from '@/stores/token-usage';
 
 const hostApiFetchMock = vi.fn();
 const trackUiEventMock = vi.fn();
@@ -66,40 +67,25 @@ function createUsageHistory(count: number) {
   return Array.from({ length: count }, (_, index) => createUsageEntry(index + 1));
 }
 
-describe('Models page auto refresh', () => {
+describe('Models page token usage cache', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     vi.clearAllMocks();
+    resetTokenUsageStoreForTests();
     gatewayState.status = { state: 'running', port: 18789, connectedAt: 1, pid: 1234 };
-    Object.defineProperty(document, 'visibilityState', {
-      configurable: true,
-      value: 'visible',
-    });
     hostApiFetchMock.mockResolvedValue([createUsageEntry(27)]);
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    resetTokenUsageStoreForTests();
   });
 
-  it('refreshes token usage while the page stays open', async () => {
-    render(<Models />);
-
-    await act(async () => {
-      await Promise.resolve();
+  it('does not fetch token usage when opening the models page', async () => {
+    useTokenUsageStore.setState({
+      status: 'done',
+      entries: createUsageHistory(10),
+      stableEntries: createUsageHistory(10),
+      loaded: true,
     });
-    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      vi.advanceTimersByTime(15_000);
-      await Promise.resolve();
-    });
-
-    expect(hostApiFetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('keeps the current usage page after auto refresh', async () => {
-    hostApiFetchMock.mockResolvedValue(createUsageHistory(10));
 
     render(<Models />);
 
@@ -107,8 +93,50 @@ describe('Models page auto refresh', () => {
       await Promise.resolve();
     });
 
+    expect(hostApiFetchMock).not.toHaveBeenCalled();
     expect(screen.getAllByTestId('token-usage-entry')).toHaveLength(5);
-    expect(screen.queryByText('session-6')).not.toBeInTheDocument();
+  });
+
+  it('refreshes token usage only when the refresh button is clicked', async () => {
+    useTokenUsageStore.setState({
+      status: 'done',
+      entries: createUsageHistory(10),
+      stableEntries: createUsageHistory(10),
+      loaded: true,
+    });
+
+    render(<Models />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(hostApiFetchMock).not.toHaveBeenCalled();
+
+    hostApiFetchMock.mockResolvedValueOnce(createUsageHistory(12));
+
+    await act(async () => {
+      screen.getByTestId('token-usage-refresh').click();
+      await Promise.resolve();
+    });
+
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
+    expect(hostApiFetchMock).toHaveBeenCalledWith('/api/usage/recent-token-history');
+  });
+
+  it('keeps the current usage page after manual refresh', async () => {
+    useTokenUsageStore.setState({
+      status: 'done',
+      entries: createUsageHistory(10),
+      stableEntries: createUsageHistory(10),
+      loaded: true,
+    });
+
+    render(<Models />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     await act(async () => {
       screen.getByRole('button', { name: 'dashboard:recentTokenHistory.next' }).click();
@@ -116,15 +144,14 @@ describe('Models page auto refresh', () => {
     });
 
     expect(screen.getByText('session-6')).toBeInTheDocument();
-    expect(screen.queryByText('session-1')).not.toBeInTheDocument();
+
+    hostApiFetchMock.mockResolvedValueOnce(createUsageHistory(10));
 
     await act(async () => {
-      vi.advanceTimersByTime(15_000);
+      screen.getByTestId('token-usage-refresh').click();
       await Promise.resolve();
     });
 
-    expect(hostApiFetchMock).toHaveBeenCalledTimes(2);
     expect(screen.getByText('session-6')).toBeInTheDocument();
-    expect(screen.queryByText('session-1')).not.toBeInTheDocument();
   });
 });

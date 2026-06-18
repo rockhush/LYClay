@@ -123,6 +123,7 @@
         "installTimeoutError": "安装超时，请检查网络或联系管理员。",
         "searchRateLimitError": "搜索请求过于频繁，请稍后再试。",
         "installRateLimitError": "安装请求过于频繁，请稍后再试。", 
+        "skillUpdateVerificationFailed": "更新未完成，本地版本与最新版本不一致",
         "fetchTimeoutError": "获取技能列表超时，请检查网络。",
         "fetchRateLimitError": "获取技能列表请求过于频繁，请稍后再试。",
         "noBatchEnableTargets": "当前可见技能都已启用。",

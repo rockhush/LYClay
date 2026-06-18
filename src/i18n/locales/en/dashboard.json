@@ -42,6 +42,7 @@
         "last30Days": "30 days",
         "allTime": "All",
         "showingLast": "{{count}} records",
+        "refresh": "Refresh",
         "totalTokens": "total tokens",
         "inputShort": "Input",
         "outputShort": "Output",

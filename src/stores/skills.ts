@@ -836,8 +836,8 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
           ? String(marketplaceSkill.id)
           : (/^\d+$/.test(slug) ? slug : undefined);
       const resolvedName = result.name?.trim() || marketplaceSkill?.name || packageSlug;
-      const resolvedVersion = latestVersion?.trim()
-        || result.version?.trim()
+      const resolvedVersion = result.version?.trim()
+        || latestVersion?.trim()
         || marketplaceSkill?.version
         || 'unknown';
       const resolvedDescription = result.description?.trim() || marketplaceSkill?.description || '';
