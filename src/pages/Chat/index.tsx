@@ -1031,6 +1031,7 @@ export function Chat() {
 
   const chatInputElement = (
     <ChatInput
+      key={currentSessionKey}
       onSend={sendMessage}
       onStop={abortRun}
       disabled={!isGatewayRunning}

@@ -21,6 +21,7 @@ import { Channels } from './pages/Channels';
 import { Skills } from './pages/Skills';
 import { Cron } from './pages/Cron';
 import { DigitalEmployee } from './pages/DigitalEmployee';
+import { AiTools } from './pages/AiTools';
 import { Connectors } from './pages/Connectors';
 import { Settings } from './pages/Settings';
 import { McpSettings } from './pages/Settings/McpSettings';
@@ -438,6 +439,7 @@ function App() {
             <Route path="/agents" element={<Agents />} />
             <Route path="/channels" element={<Channels />} />
             <Route path="/skills" element={<Skills />} />
+            <Route path="/ai-tools" element={<AiTools />} />
             <Route path="/connectors" element={<Connectors />} />
             <Route path="/cron" element={<Cron />} />
             <Route path="/cron/digital-employee" element={<DigitalEmployee />} />

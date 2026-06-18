@@ -150,6 +150,7 @@ describe('chat session actions', () => {
       streamingText: 'streaming',
       activeRunId: 'r1',
       pendingFinal: true,
+      prefilledInput: '@PPT生成 请使用这个技能',
     });
     const actions = createSessionActions(h.set as never, h.get as never);
 
@@ -161,6 +162,7 @@ describe('chat session actions', () => {
     expect(next.streamingText).toBe('');
     expect(next.activeRunId).toBeNull();
     expect(next.pendingFinal).toBe(false);
+    expect(next.prefilledInput).toBeNull();
     nowSpy.mockRestore();
   });
 

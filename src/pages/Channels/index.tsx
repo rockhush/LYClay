@@ -756,16 +756,18 @@ export function Channels() {
                                 <button
                                   type="button"
                                   onClick={() => setOpenAgentMenuKey(isAgentMenuOpen ? null : agentMenuKey)}
-                                  className="h-8 min-w-[120px] bg-[#FF922B] hover:bg-[#FE7B00] transition-colors text-white text-[13px] font-medium px-3 rounded-lg flex items-center justify-center gap-1.5 shadow-sm shadow-[#FF922B]/25"
+                                  className="h-8 w-[120px] max-w-[120px] bg-[#FF922B] hover:bg-[#FE7B00] transition-colors text-white text-[13px] font-medium px-3 rounded-lg flex items-center gap-1.5 shadow-sm shadow-[#FF922B]/25"
                                 >
-                                  {account.agentId ? visibleAgents.find((a) => a.id === account.agentId)?.name || account.agentId : t('account.unassigned')}
-                                  <ChevronDown className="h-3.5 w-3.5 opacity-90" />
+                                  <span className="min-w-0 flex-1 truncate text-left">
+                                    {account.agentId ? visibleAgents.find((a) => a.id === account.agentId)?.name || account.agentId : t('account.unassigned')}
+                                  </span>
+                                  <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-90" />
                                 </button>
                                 {isAgentMenuOpen && (
-                                  <div className="absolute right-0 top-full mt-1.5 w-full min-w-[120px] rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
+                                  <div className="absolute left-0 top-full mt-1.5 w-[205px] rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
                                     <button
                                       type="button"
-                                      className="w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5"
+                                      className="w-full px-3 py-2 text-left text-sm truncate whitespace-nowrap hover:bg-black/5 dark:hover:bg-white/5"
                                       onClick={() => {
                                         void handleBindAgent(group.channelType, account.accountId, '');
                                         setOpenAgentMenuKey(null);
@@ -777,7 +779,7 @@ export function Channels() {
                                       <button
                                         key={agent.id}
                                         type="button"
-                                        className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${account.agentId === agent.id ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
+                                        className={`w-full px-3 py-2 text-left text-sm truncate whitespace-nowrap hover:bg-black/5 dark:hover:bg-white/5 ${account.agentId === agent.id ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
                                         onClick={() => {
                                           void handleBindAgent(group.channelType, account.accountId, agent.id);
                                           setOpenAgentMenuKey(null);

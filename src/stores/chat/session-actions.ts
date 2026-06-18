@@ -1,6 +1,7 @@
 import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
 import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
+import { isSubagentSessionKey, pickUserFacingSession } from '@/lib/session-key-utils';
 import { useGatewayStore } from '@/stores/gateway';
 import { getCanonicalPrefixFromSessions, toMs } from './helpers';
 import { DEFAULT_CANONICAL_PREFIX, DEFAULT_SESSION_KEY, type ChatSession } from './types';
@@ -193,11 +194,16 @@ export function createSessionActions(
               nextSessionKey = canonicalMatch;
             }
           }
+          if (isSubagentSessionKey(nextSessionKey)) {
+            const redirected = pickUserFacingSession(dedupedSessions, currentSessionKey);
+            if (redirected) nextSessionKey = redirected.key;
+          }
           if (!dedupedSessions.find((s) => s.key === nextSessionKey) && dedupedSessions.length > 0) {
             // Current session not found in the backend list
             const isNewEmptySession = get().messages.length === 0;
             if (!isNewEmptySession) {
-              nextSessionKey = dedupedSessions[0].key;
+              const fallback = pickUserFacingSession(dedupedSessions);
+              if (fallback) nextSessionKey = fallback.key;
             }
           }
 
@@ -377,6 +383,7 @@ export function createSessionActions(
         pendingFinal: false,
         lastUserMessageAt: null,
         pendingToolImages: [],
+        prefilledInput: null,
       }));
     },
 

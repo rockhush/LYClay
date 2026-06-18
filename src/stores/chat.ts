@@ -51,6 +51,10 @@ import { prepareContextBeforeSend } from './chat/context-send-guard';
 import { filterLargeToolResults, applyTimeDecayStrategy } from './chat/history-time-decay';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
+import {
+  isSubagentSessionKey,
+  pickUserFacingSession,
+} from '@/lib/session-key-utils';
 
 export type {
   AttachedFileMeta,
@@ -3233,12 +3237,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
               nextSessionKey = canonicalMatch;
             }
           }
+          if (isSubagentSessionKey(nextSessionKey)) {
+            const redirected = pickUserFacingSession(mergedWithPreserved, currentSessionKey);
+            if (redirected) nextSessionKey = redirected.key;
+          }
           if (!mergedWithPreserved.find((s) => s.key === nextSessionKey) && mergedWithPreserved.length > 0) {
             // Preserve only locally-created pending sessions. On initial boot the
             // default ghost key (`agent:main:main`) should yield to real history.
             const hasLocalPendingSession = localSessions.some((session) => session.key === nextSessionKey);
             if (!hasLocalPendingSession) {
-              nextSessionKey = mergedWithPreserved[0].key;
+              const fallback = pickUserFacingSession(mergedWithPreserved);
+              if (fallback) nextSessionKey = fallback.key;
             }
           }
 
@@ -3533,6 +3542,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         pendingToolImages: [],
         runAborted: false,
         sending: false,
+        prefilledInput: null,
       };
     });
     syncWorkspacePickerToSession(get().sessionWorkspaceIds, newKey);

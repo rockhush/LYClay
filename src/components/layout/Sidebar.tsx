@@ -22,6 +22,7 @@ import {
   Pencil,
   FolderOutput,
   Cpu,
+  Wrench,
   Folder,
   FolderOpen,
   ChevronRight,
@@ -65,6 +66,7 @@ import {
 } from '@/lib/session-sidebar-order';
 import { buildBatchDeleteSessionGroups } from '@/lib/session-batch-delete-groups';
 import { BatchDeleteSessionsDialog } from '@/components/chat/BatchDeleteSessionsDialog';
+import { isSubagentSessionKey } from '@/lib/session-key-utils';
 import logoSvg from '@/assets/1.png';
 
 /** While Chat shows first-response preparing, block switching sessions (sidebar + workspace). */
@@ -282,7 +284,10 @@ export function Sidebar() {
 
   const orderedSidebarSessions = useMemo(() => {
     const eligible = sessions.filter(
-      (session) => !isPendingNewSession(session.key) && !isEmptyGhostSession(session),
+      (session) =>
+        !isSubagentSessionKey(session.key)
+        && !isPendingNewSession(session.key)
+        && !isEmptyGhostSession(session),
     );
     const nextOrder = buildStableSessionOrder(
       eligible,
@@ -887,6 +892,7 @@ export function Sidebar() {
     { to: '/models', icon: <Cpu className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
     { to: '/cron/digital-employee', icon: <Briefcase className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.digitalEmployee'), testId: 'sidebar-nav-digital-employee', end: true },
     { to: '/skills', icon: <Puzzle className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
+    { to: '/ai-tools', icon: <Wrench className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.aiTools'), testId: 'sidebar-nav-ai-tools' },
     { to: '/channels', icon: <Network className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
     { to: '/connectors', icon: <Link2 className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.connectors'), testId: 'sidebar-nav-connectors' },
   ];
@@ -954,11 +960,16 @@ export function Sidebar() {
             // welcome screen regardless of which page they were on or what
             // history the previously-selected session still has on disk.
             if (blockSessionSwitchIfFirstResponsePreparing()) return;
-            const { messages: ms, currentSessionKey: ck, sessionLastActivity: sla, sessionLabels: sl } =
-              useChatStore.getState();
+            const {
+              messages: ms,
+              currentSessionKey: ck,
+              sessionLastActivity: sla,
+              sessionLabels: sl,
+              prefilledInput,
+            } = useChatStore.getState();
             const currentIsAlreadyFreshEmpty =
               ms.length === 0 && !sla[ck] && !sl[ck];
-            if (!currentIsAlreadyFreshEmpty || ck.endsWith(':main')) {
+            if (!currentIsAlreadyFreshEmpty || ck.endsWith(':main') || prefilledInput) {
               newSession();
             }
             navigate('/');
