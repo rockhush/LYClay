@@ -80,6 +80,36 @@ export async function handleGatewayRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/sessions/empty-final-diagnostic' && req.method === 'GET') {
+    const sessionKey = url.searchParams.get('sessionKey')?.trim();
+    if (!sessionKey) {
+      sendJson(res, 400, { success: false, error: 'sessionKey is required' });
+      return true;
+    }
+    sendJson(res, 200, {
+      success: true,
+      diagnostic: ctx.gatewayManager.getLatestEmptyFinalDiagnostic(sessionKey),
+      hasTrackedActiveRun: ctx.gatewayManager.hasTrackedUserRunForSession(sessionKey),
+    });
+    return true;
+  }
+
+  if (url.pathname === '/api/sessions/recover-stale' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody<{ sessionKey?: string }>(req);
+      const sessionKey = body.sessionKey?.trim();
+      if (!sessionKey) {
+        sendJson(res, 400, { success: false, error: 'sessionKey is required' });
+        return true;
+      }
+      const result = await ctx.gatewayManager.recoverStaleSessionAfterEmptyFinal(sessionKey);
+      sendJson(res, 200, { success: true, result });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
   if (url.pathname === '/api/chat/send-with-media' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{

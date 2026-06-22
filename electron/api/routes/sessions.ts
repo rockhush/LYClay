@@ -530,6 +530,81 @@ export async function handleSessionRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/sessions/token-usage' && req.method === 'GET') {
+    try {
+      const sessionKey = url.searchParams.get('sessionKey')?.trim() || '';
+      const agentId = url.searchParams.get('agentId')?.trim() || 'main';
+      if (!SAFE_SESSION_SEGMENT.test(agentId) || !sessionKey) {
+        sendJson(res, 200, { totalTokens: 0, jsonlTokens: 0 });
+        return true;
+      }
+
+      const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
+      const sessionsJsonPath = join(sessionsDir, 'sessions.json');
+
+      // 1) Try the authoritative totalTokens from sessions.json (Gateway writes this
+      //    after a model call completes).
+      let sessionsJson: Record<string, unknown> | null = null;
+      try {
+        sessionsJson = await readSessionsJsonSafe(sessionsJsonPath, {
+          label: 'sessions:token-usage',
+          allowMissing: true,
+        });
+      } catch { /* fall through to jsonl estimate */ }
+
+      if (sessionsJson) {
+        const entry = (sessionsJson as Record<string, Record<string, unknown>>)[sessionKey];
+        const totalTokens = typeof entry?.totalTokens === 'number' && Number.isFinite(entry.totalTokens) ? entry.totalTokens : 0;
+        const contextTokens = typeof entry?.contextTokens === 'number' && Number.isFinite(entry.contextTokens) ? entry.contextTokens : 0;
+        if (totalTokens > 0) {
+          sendJson(res, 200, { totalTokens, contextTokens, jsonlTokens: 0, source: 'sessions-json' });
+          return true;
+        }
+      }
+
+      // 2) Fallback: estimate from JSONL transcript file size.
+      //    Each JSONL line corresponds to one message-like entry; the file IS the
+      //    context that gets sent to the model. A rough chars/2 estimate is good
+      //    enough for the 70K-vs-95K threshold decision.
+      const fsP = await import('node:fs/promises');
+      const sessions = await readSessionsJsonSafe(sessionsJsonPath, {
+        label: 'sessions:token-usage-jsonl',
+        allowMissing: true,
+      });
+      const entry = (sessions as Record<string, Record<string, unknown>>)?.[sessionKey];
+      const sessionFile = typeof entry?.sessionFile === 'string' ? entry.sessionFile : null;
+      const sessionId = typeof entry?.sessionId === 'string' ? entry.sessionId : null;
+
+      let jsonlTokens = 0;
+      const candidates: string[] = [];
+      if (sessionFile) candidates.push(sessionFile);
+      if (sessionId) {
+        candidates.push(join(sessionsDir, `${sessionId}.jsonl`));
+        // Also try the timestamped variant
+        const dirFiles = await fsP.readdir(sessionsDir).catch(() => [] as string[]);
+        const match = dirFiles.find((f) => f.endsWith(`_${sessionId}.jsonl`));
+        if (match) candidates.push(join(sessionsDir, match));
+      }
+
+      for (const candidate of candidates) {
+        try {
+          const stat = await fsP.stat(candidate);
+          if (stat.isFile() && stat.size > 0) {
+            // Rough token estimate: UTF-8 chars / 2 (conservative for mixed CJK/ASCII)
+            jsonlTokens = Math.max(jsonlTokens, Math.ceil(stat.size / 2));
+          }
+        } catch { /* file doesn't exist */ }
+      }
+
+      sendJson(res, 200, { totalTokens: 0, jsonlTokens, contextTokens: 0, source: 'jsonl-estimate' });
+      return true;
+    } catch (error) {
+      logger.warn('[sessions:token-usage] Error:', error);
+      sendJson(res, 200, { totalTokens: 0, jsonlTokens: 0 });
+      return true;
+    }
+  }
+
   if (url.pathname === '/api/sessions/transcript' && req.method === 'GET') {
     try {
       const agentId = url.searchParams.get('agentId')?.trim() || '';

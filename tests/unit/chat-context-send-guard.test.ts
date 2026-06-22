@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RawMessage } from '@/stores/chat/types';
 
 const hostApiFetchMock = vi.hoisted(() => vi.fn());
 const agentsState = vi.hoisted(() => ({
@@ -26,19 +25,15 @@ vi.mock('@/stores/settings', () => ({
   },
 }));
 
-function makeMessages(count: number, contentLength: number): RawMessage[] {
-  return Array.from({ length: count }, (_, index) => ({
-    role: index % 2 === 0 ? 'user' : 'assistant',
-    content: '测'.repeat(contentLength),
-    id: `msg-${index}`,
-  }));
-}
-
 describe('prepareContextBeforeSend', () => {
   beforeEach(() => {
     vi.resetModules();
     hostApiFetchMock.mockReset();
-    hostApiFetchMock.mockResolvedValue({ contextWindow: 130000 });
+    // Default: model-context returns 130K, token-usage returns 0 (no data yet)
+    hostApiFetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('token-usage')) return Promise.resolve({ totalTokens: 0 });
+      return Promise.resolve({ contextWindow: 130000 });
+    });
     settingsState.contextCompressionEnabled = true;
   });
 
@@ -59,48 +54,71 @@ describe('prepareContextBeforeSend', () => {
     expect(invokeCompactorRpc).not.toHaveBeenCalled();
   });
 
-  it('compresses old history before sending when dynamic trigger is exceeded', async () => {
-    const { prepareContextBeforeSend } = await import('@/stores/chat/context-send-guard');
-    const invokeCompactorRpc = vi.fn().mockResolvedValue({
-      success: true,
-      result: { message: { content: '结构化摘要' } },
+  it('triggers sessions.compact when gateway reports tokens above threshold', async () => {
+    hostApiFetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('token-usage')) return Promise.resolve({ totalTokens: 80000 });
+      return Promise.resolve({ contextWindow: 130000 });
     });
+
+    const { prepareContextBeforeSend } = await import('@/stores/chat/context-send-guard');
+    const invokeCompactorRpc = vi.fn().mockResolvedValue({ compacted: true, ok: true });
+    const statusUpdates = vi.fn();
 
     const result = await prepareContextBeforeSend({
       sessionKey: 'agent:main:main',
-      messages: makeMessages(12, 14000),
-      pendingUserMessage: { role: 'user', content: '继续' },
-      runtimeMessage: '继续',
+      messages: [{ role: 'user', content: 'hello' }],
+      pendingUserMessage: { role: 'user', content: 'hi' },
+      runtimeMessage: 'hi',
       isInternalStagedExecution: false,
       invokeCompactorRpc,
+      onCompressionStatus: statusUpdates,
     });
 
     expect(result.error).toBeUndefined();
     expect(result.compressed).toBe(true);
-    expect(invokeCompactorRpc).toHaveBeenCalledWith(
-      'chat.send',
-      expect.objectContaining({ sessionKey: '__compactor__', deliver: false }),
-      60000,
-    );
-    expect(result.messages[0].role).toBe('system');
-    expect(String(result.messages[0].content)).toContain('结构化摘要');
+    expect(result.gatewayCompacted).toBe(true);
+    expect(invokeCompactorRpc).toHaveBeenCalledWith('sessions.compact', { key: 'agent:main:main' }, 120_000);
   });
 
-  it('blocks sending when final context exceeds the hard limit', async () => {
-    settingsState.contextCompressionEnabled = false;
+  it('skips compaction when gateway tokens are below threshold', async () => {
+    hostApiFetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('token-usage')) return Promise.resolve({ totalTokens: 30000 });
+      return Promise.resolve({ contextWindow: 130000 });
+    });
+
     const { prepareContextBeforeSend } = await import('@/stores/chat/context-send-guard');
     const invokeCompactorRpc = vi.fn();
 
     const result = await prepareContextBeforeSend({
       sessionKey: 'agent:main:main',
-      messages: makeMessages(12, 50000),
-      pendingUserMessage: { role: 'user', content: '继续' },
-      runtimeMessage: '继续',
+      messages: [{ role: 'user', content: 'hello' }],
+      pendingUserMessage: { role: 'user', content: 'hi' },
+      runtimeMessage: 'hi',
       isInternalStagedExecution: false,
       invokeCompactorRpc,
     });
 
-    expect(result.error).toBe('contextTooLarge');
+    expect(result.error).toBeUndefined();
+    expect(result.compressed).toBe(false);
+    // sessions.compact NOT called because 30K < 69,888 threshold
+    expect(invokeCompactorRpc).not.toHaveBeenCalled();
+  });
+
+  it('skips compaction when gateway has no token data (returns 0)', async () => {
+    const { prepareContextBeforeSend } = await import('@/stores/chat/context-send-guard');
+    const invokeCompactorRpc = vi.fn();
+
+    const result = await prepareContextBeforeSend({
+      sessionKey: 'agent:main:main',
+      messages: [{ role: 'user', content: 'hello' }],
+      pendingUserMessage: { role: 'user', content: 'hi' },
+      runtimeMessage: 'hi',
+      isInternalStagedExecution: false,
+      invokeCompactorRpc,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.compressed).toBe(false);
     expect(invokeCompactorRpc).not.toHaveBeenCalled();
   });
 

@@ -15,6 +15,7 @@ const hasNonToolAssistantContent = vi.fn(() => true);
 const isAbortedChatRun = vi.fn(() => false);
 const isInternalMessage = vi.fn(() => false);
 const isInternalMessageText = vi.fn(() => false);
+const isSuppressedRunError = vi.fn(() => false);
 const isUserSecurityDenialMessage = vi.fn((message: unknown) =>
   typeof message === 'string' && /NETWORK_ACCESS_DENIED_BY_USER|Network access denied:/i.test(message));
 const buildSecurityCancelNotice = vi.fn(() => 'Cancelled: you declined the security confirmation.');
@@ -33,7 +34,6 @@ const makeAttachedFile = vi.fn((ref: { filePath: string; mimeType: string }, sou
   source,
 }));
 const normalizeStreamingMessage = vi.fn((message: unknown) => message);
-const isAbortedChatRun = vi.fn(() => false);
 const setErrorRecoveryTimer = vi.fn();
 const snapshotStreamingAssistantMessage = vi.fn((currentStream: unknown) => currentStream ? [currentStream] : []);
 const upsertToolStatuses = vi.fn((_current, updates) => updates);
@@ -53,6 +53,7 @@ vi.mock('@/stores/chat/helpers', () => ({
   isAbortedChatRun: (...args: unknown[]) => isAbortedChatRun(...args),
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
   isInternalMessageText: (...args: unknown[]) => isInternalMessageText(...args),
+  isSuppressedRunError: (...args: unknown[]) => isSuppressedRunError(...args),
   isUserSecurityDenialMessage: (...args: unknown[]) => isUserSecurityDenialMessage(...args),
   buildSecurityCancelNotice: (...args: unknown[]) => buildSecurityCancelNotice(...args),
   isTerminalAssistantErrorMessage: (...args: unknown[]) => isTerminalAssistantErrorMessage(...args),
@@ -63,6 +64,12 @@ vi.mock('@/stores/chat/helpers', () => ({
   setErrorRecoveryTimer: (...args: unknown[]) => setErrorRecoveryTimer(...args),
   snapshotStreamingAssistantMessage: (...args: unknown[]) => snapshotStreamingAssistantMessage(...args),
   upsertToolStatuses: (...args: unknown[]) => upsertToolStatuses(...args),
+}));
+
+vi.mock('@/stores/chat/runtime-send-actions', () => ({
+  buildComplexTaskExecutionRequest: vi.fn((message: string, plan: string) => `${message}\n${plan}`),
+  clearPendingComplexTaskPlan: vi.fn(),
+  getPendingComplexTaskPlan: vi.fn(() => null),
 }));
 
 type ChatLikeState = {
@@ -79,6 +86,7 @@ type ChatLikeState = {
   pendingFinal: boolean;
   lastUserMessageAt: number | null;
   streamingText: string;
+  contextCompressionStatus: unknown | null;
   loadHistory: ReturnType<typeof vi.fn>;
   sessionStreamingStates: Record<string, unknown>;
 };
@@ -98,6 +106,7 @@ function makeHarness(initial?: Partial<ChatLikeState>) {
     pendingFinal: false,
     lastUserMessageAt: null,
     streamingText: '',
+    contextCompressionStatus: null,
     loadHistory: vi.fn(),
     sessionStreamingStates: {},
     ...initial,
@@ -166,6 +175,55 @@ describe('chat runtime event handlers', () => {
     expect(next.runError).toBeNull();
     expect(next.streamingMessage).toEqual(event.message);
     expect(next.streamingTools).toEqual([{ name: 'tool-a', status: 'running', updatedAt: 1 }]);
+  });
+
+  it('surfaces OpenClaw runtime compaction notices', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({
+      currentSessionKey: 'agent:main:main',
+      sending: true,
+      activeRunId: 'run-compact',
+    });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      message: {
+        role: 'assistant',
+        content: '🧹 Compacting context...',
+        isCompactionNotice: true,
+      },
+    }, 'delta', 'run-compact');
+
+    expect(h.read().contextCompressionStatus).toEqual(expect.objectContaining({
+      status: 'compressing',
+      phase: 'runtime',
+      sessionKey: 'agent:main:main',
+      message: expect.stringContaining('正在压缩上下文'),
+    }));
+  });
+
+  it('surfaces tool output truncation as runtime context protection', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({
+      currentSessionKey: 'agent:main:main',
+      sending: true,
+      activeRunId: 'run-truncate',
+    });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      message: {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        content: [{ type: 'text', text: 'partial output\n[... 22000 more characters truncated]]' }],
+      },
+    }, 'final', 'run-truncate');
+
+    expect(h.read().contextCompressionStatus).toEqual(expect.objectContaining({
+      status: 'fallback',
+      phase: 'runtime',
+      sessionKey: 'agent:main:main',
+      isTruncation: true,
+      message: expect.stringContaining('工具输出已截断'),
+    }));
   });
 
   it('finalizes when final event has no message and reloads history', async () => {
@@ -282,7 +340,8 @@ describe('chat runtime event handlers', () => {
     }, 'final', 'run-err');
 
     const next = h.read();
-    expect(next.error).toBe('404 Resource not found');
+    expect(next.error).toBeNull();
+    expect(next.runError).toBe('404 Resource not found');
     expect(next.pendingFinal).toBe(false);
     expect(next.streamingMessage).toBeNull();
     expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
@@ -443,6 +502,11 @@ describe('chat runtime event handlers', () => {
           { type: 'text', text: '1 2 3' },
         ],
       },
+      expect.objectContaining({
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'read',
+      }),
     ]);
   });
 

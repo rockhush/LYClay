@@ -37,10 +37,10 @@ export function resolveContextBudget(
   options: ContextBudgetOptions = {},
 ): ContextBudget {
   const contextWindow = normalizeContextWindow(contextWindowInput);
-  const compressionTriggerRatio = options.compressionTriggerRatio ?? 0.75;
+  const compressionTriggerRatio = options.compressionTriggerRatio ?? 0.90;
   const recentRawRatio = options.recentRawRatio ?? 0.35;
   const summaryRatio = options.summaryRatio ?? 0.12;
-  const hardLimitRatio = options.hardLimitRatio ?? 0.95;
+  const hardLimitRatio = options.hardLimitRatio ?? 0.99;
   const maxSingleMessageRatio = options.maxSingleMessageRatio ?? 0.18;
 
   const reservedOutputTokens = clamp(Math.floor(contextWindow * 0.08), 4096, 32000);

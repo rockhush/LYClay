@@ -43,26 +43,121 @@ describe('ensureOpenClawSessionDefaults', () => {
 });
 
 describe('ensureOpenClawAgentDefaults', () => {
-  it('sets maxConcurrent=8 when agents.defaults is missing', () => {
+  it('sets agent and compaction defaults when agents.defaults is missing', () => {
     const config: Record<string, unknown> = {};
     expect(ensureOpenClawAgentDefaults(config)).toBe(true);
-    expect(config.agents).toEqual({ defaults: { maxConcurrent: 8 } });
+    expect(config.agents).toEqual({
+      defaults: {
+        maxConcurrent: 8,
+        contextTokens: 128000,
+        contextLimits: {
+          toolResultMaxChars: 8000,
+        },
+        compaction: {
+          mode: 'safeguard',
+          notifyUser: true,
+          reserveTokens: 32768,
+          reserveTokensFloor: 32768,
+          keepRecentTokens: 16000,
+          truncateAfterCompaction: true,
+          maxActiveTranscriptBytes: '8mb',
+          midTurnPrecheck: { enabled: true },
+        },
+      },
+    });
   });
 
-  it('preserves existing agents.defaults while adding maxConcurrent', () => {
+  it('preserves existing agents.defaults while adding LYClaw defaults', () => {
     const config: Record<string, unknown> = { agents: { defaults: { thinkingDefault: 'off' } } };
     expect(ensureOpenClawAgentDefaults(config)).toBe(true);
-    expect(config.agents).toEqual({ defaults: { thinkingDefault: 'off', maxConcurrent: 8 } });
+    expect(config.agents).toEqual({
+      defaults: {
+        thinkingDefault: 'off',
+        maxConcurrent: 8,
+        contextTokens: 128000,
+        contextLimits: {
+          toolResultMaxChars: 8000,
+        },
+        compaction: {
+          mode: 'safeguard',
+          notifyUser: true,
+          reserveTokens: 32768,
+          reserveTokensFloor: 32768,
+          keepRecentTokens: 16000,
+          truncateAfterCompaction: true,
+          maxActiveTranscriptBytes: '8mb',
+          midTurnPrecheck: { enabled: true },
+        },
+      },
+    });
   });
 
-  it('returns false when maxConcurrent is already 8', () => {
-    const config: Record<string, unknown> = { agents: { defaults: { maxConcurrent: 8 } } };
+  it('returns false when LYClaw agent defaults already match', () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        defaults: {
+          maxConcurrent: 8,
+          contextTokens: 128000,
+          contextLimits: {
+            toolResultMaxChars: 8000,
+          },
+          compaction: {
+            mode: 'safeguard',
+            notifyUser: true,
+            reserveTokens: 32768,
+            reserveTokensFloor: 32768,
+            keepRecentTokens: 16000,
+            truncateAfterCompaction: true,
+            maxActiveTranscriptBytes: '8mb',
+            midTurnPrecheck: { enabled: true },
+          },
+        },
+      },
+    };
     expect(ensureOpenClawAgentDefaults(config)).toBe(false);
   });
 
-  it('overrides a non-default value to the product default', () => {
-    const config: Record<string, unknown> = { agents: { defaults: { maxConcurrent: 4 } } };
+  it('overrides non-default LYClaw values to the product defaults', () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        defaults: {
+          maxConcurrent: 4,
+          contextTokens: 200000,
+          contextLimits: {
+            toolResultMaxChars: 32000,
+            memoryGetMaxChars: 64000,
+          },
+          compaction: {
+            mode: 'default',
+            notifyUser: false,
+            reserveTokens: 10000,
+            reserveTokensFloor: 10000,
+            midTurnPrecheck: { enabled: false, other: 'kept' },
+            keepRecentTokens: 20000,
+            truncateAfterCompaction: false,
+            maxActiveTranscriptBytes: '64mb',
+          },
+        },
+      },
+    };
     expect(ensureOpenClawAgentDefaults(config)).toBe(true);
-    expect(config.agents.defaults).toEqual({ maxConcurrent: 8 });
+    expect(config.agents.defaults).toEqual({
+      maxConcurrent: 8,
+      contextTokens: 128000,
+      contextLimits: {
+        toolResultMaxChars: 8000,
+        memoryGetMaxChars: 64000,
+      },
+      compaction: {
+        mode: 'safeguard',
+        notifyUser: true,
+        reserveTokens: 32768,
+        reserveTokensFloor: 32768,
+        midTurnPrecheck: { enabled: true, other: 'kept' },
+        keepRecentTokens: 16000,
+        truncateAfterCompaction: true,
+        maxActiveTranscriptBytes: '8mb',
+      },
+    });
   });
 });

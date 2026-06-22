@@ -5,7 +5,7 @@
  */
 import { create } from 'zustand';
 import i18n from '@/i18n';
-import { hostApiFetch } from '@/lib/host-api';
+import { hostApiFetch, recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
 import { toUserMessage, normalizeAppError } from '@/lib/api-client';
 import { useGatewayStore } from './gateway';
 import { useAgentsStore } from './agents';
@@ -26,6 +26,7 @@ import {
   type ChatSession,
   type ChatState,
   type CompressionStateEntry,
+  type ContextCompressionStatus,
   type ContentBlock,
   type ReasoningMode,
   type RawMessage,
@@ -52,7 +53,15 @@ import {
   markChatRunVisibleProgress,
 } from './chat/chat-run-perf';
 import { prepareContextBeforeSend } from './chat/context-send-guard';
+import { maybeCompressRuntimeContext } from './chat/runtime-context-monitor';
 import { filterLargeToolResults, applyTimeDecayStrategy } from './chat/history-time-decay';
+import {
+  bindRunIdToObservation,
+  createRunawayToolObservation,
+  detectTaskWorkflowKind,
+  observeRunawayToolEvent,
+} from './chat/runaway-tool-observer';
+import { buildInitialConvergenceSystemPrompt } from './chat/task-convergence-strategy';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
 import {
@@ -63,6 +72,7 @@ import {
 export type {
   AttachedFileMeta,
   ChatSession,
+  ContextCompressionStatus,
   ContentBlock,
   ReasoningMode,
   RawMessage,
@@ -2717,6 +2727,36 @@ function collectToolUpdates(message: unknown, eventState: string): ToolStatus[] 
   return updates;
 }
 
+function recordRunawayToolObservationForStore(
+  state: ChatState,
+  event: Record<string, unknown>,
+  resolvedState: string,
+  runId: string,
+  sessionKey: string,
+  toolUpdates?: ToolStatus[],
+): Partial<ChatState> | null {
+  const currentObservation = sessionKey === state.currentSessionKey
+    ? state.runawayToolObservation
+    : state.sessionRunawayToolObservations[sessionKey] ?? null;
+  const nextObservation = observeRunawayToolEvent({
+    observation: currentObservation,
+    event,
+    resolvedState,
+    runId,
+    sessionKey,
+    toolUpdates: toolUpdates ?? collectToolUpdates(event.message, resolvedState),
+  });
+  if (!nextObservation || nextObservation === currentObservation) return null;
+
+  return {
+    runawayToolObservation: sessionKey === state.currentSessionKey ? nextObservation : state.runawayToolObservation,
+    sessionRunawayToolObservations: {
+      ...state.sessionRunawayToolObservations,
+      [sessionKey]: nextObservation,
+    },
+  };
+}
+
 function hasNonToolAssistantContent(message: RawMessage | undefined): boolean {
   if (!message) return false;
   if (typeof message.content === 'string' && message.content.trim()) return true;
@@ -3095,6 +3135,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loading: false,
   error: null,
   runError: null,
+  emptyFinalRecovery: { status: 'idle' },
   securityCancelNotice: null,
   prefilledInput: null,
   sending: false,
@@ -3106,6 +3147,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingFinal: false,
   lastUserMessageAt: null,
   pendingToolImages: [],
+  runawayToolObservation: null,
+  sessionRunawayToolObservations: {},
   runAborted: false,
   sessions: [],
   currentSessionKey: DEFAULT_SESSION_KEY,
@@ -3117,6 +3160,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionPinnedAt: loadSessionPinnedAtFromStorage(),
   sessionStreamingStates: {},
   sessionCompressionState: {},
+  contextCompressionStatus: null,
   thinkingLevel: null,
   reasoningMode: loadStoredReasoningMode(),
 
@@ -4245,6 +4289,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const attachmentCount = attachments?.length ?? 0;
     const originalRuntimeMessage = trimmed || (attachmentCount > 0 ? 'Process the attached file(s).' : '');
+    const taskKind = detectTaskWorkflowKind(originalRuntimeMessage, attachments ?? []);
+    const convergenceSystemPrompt = buildInitialConvergenceSystemPrompt(taskKind);
     const isInternalStagedExecution = trimmed.includes(COMPLEX_TASK_EXECUTION_MARKER);
 
     if (!isInternalStagedExecution && !_deIsDigital) {
@@ -4298,6 +4344,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isInternalStagedExecution,
       invokeCompactorRpc: (method, params, timeoutMs) => useGatewayStore.getState().rpc(method, params as Record<string, unknown>, timeoutMs),
       persistedCompressionState: get().sessionCompressionState?.[currentSessionKey] ?? null,
+      onCompressionStatus: (status: ContextCompressionStatus | null) => {
+        set({ contextCompressionStatus: status });
+        // Auto-clear terminal states after 5 seconds
+        if (status && (status.status === 'compressed' || status.status === 'fallback' || status.status === 'failed')) {
+          setTimeout(() => {
+            const s = get();
+            if (s.contextCompressionStatus === status) {
+              set({ contextCompressionStatus: null });
+            }
+          }, 5000);
+        }
+      },
     });
 
     if (contextGuard.error) {
@@ -4325,6 +4383,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const boundWorkspaceId = s.sessionWorkspaceIds[currentSessionKey] ?? selectedWorkspaceId ?? null;
       const nextMessages = isInternalStagedExecution ? s.messages : [...s.messages, userMsg];
       const prevStream = s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState();
+      const runawayToolObservation = createRunawayToolObservation({
+        sessionKey: currentSessionKey,
+        taskKind,
+        initialStrategyInjected: Boolean(convergenceSystemPrompt),
+        now: nowMs,
+      });
       return {
         messages: nextMessages,
         sending: true,
@@ -4334,6 +4398,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamingTools: [],
         pendingFinal: false,
         lastUserMessageAt: nowMs,
+        runawayToolObservation,
+        sessionRunawayToolObservations: {
+          ...s.sessionRunawayToolObservations,
+          [currentSessionKey]: runawayToolObservation,
+        },
         isFirstMessageEver: _isFirstMessageEver, // Store flag in state for UI access
         runAborted: false,
         activeRunId: null,
@@ -4533,6 +4602,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               message: messageForGateway,
               deliver: false,
               idempotencyKey,
+              extraSystemPrompt: convergenceSystemPrompt ?? undefined,
               ...executeAsParams,
               media: (attachments ?? []).map((a) => ({
                 filePath: a.stagedPath,
@@ -4548,6 +4618,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           message: messageForGateway,
           deliver: false,
           idempotencyKey,
+          extraSystemPrompt: convergenceSystemPrompt ?? undefined,
           ...executeAsParams,
         };
         const rpcResult = await useGatewayStore.getState().rpc<{ runId?: string }>(
@@ -4599,8 +4670,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
             planningRunId: runId,
           });
         }
+        const boundObservation = bindRunIdToObservation(
+          get().sessionRunawayToolObservations[currentSessionKey] ?? get().runawayToolObservation,
+          runId,
+        );
         set((s) => ({
           activeRunId: runId,
+          runawayToolObservation: boundObservation,
+          sessionRunawayToolObservations: {
+            ...s.sessionRunawayToolObservations,
+            [currentSessionKey]: boundObservation,
+          },
           sessionStreamingStates: {
             ...s.sessionStreamingStates,
             [currentSessionKey]: {
@@ -4732,6 +4812,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
 
+      const backgroundObservationPatch = recordRunawayToolObservationForStore(
+        get(),
+        event,
+        backgroundState,
+        runId,
+        eventSessionKey,
+      );
+      if (backgroundObservationPatch) {
+        set(backgroundObservationPatch);
+      }
+
       const nextSessionStreamingStates = applyBackgroundChatEvent(get(), eventSessionKey, event, backgroundState, runId);
       if (nextSessionStreamingStates) {
         set({ sessionStreamingStates: nextSessionStreamingStates });
@@ -4790,6 +4881,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { runAborted, sending: isSending } = get();
     if (runAborted && !isSending && (resolvedState === 'delta' || resolvedState === 'started')) {
       return;
+    }
+
+    const observationPatch = recordRunawayToolObservationForStore(
+      get(),
+      event,
+      resolvedState,
+      runId,
+      currentSessionKey,
+    );
+    if (observationPatch) {
+      set(observationPatch);
     }
 
     markChatRunRuntimeEvent({
@@ -4878,6 +4980,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           })(),
           streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
         }));
+        maybeCompressRuntimeContext(set, get, runId);
         break;
       }
       case 'final': {
@@ -4890,6 +4993,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
             normalizeStreamingMessage(finalMsg) as RawMessage,
             runId,
           ) as RawMessage;
+
+          console.log('[DEBUG] [context-compress] handleChatEvent final', {
+            role: normalizedFinalMessage.role,
+            toolCallId: (normalizedFinalMessage as Record<string, unknown>).toolCallId,
+            isToolResult: isToolResultRole(normalizedFinalMessage.role),
+            contentSize: JSON.stringify(normalizedFinalMessage.content).length,
+          });
 
           // ── Silent retry for tool stream errors ──
           if (
@@ -5011,6 +5121,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 if (!mediaRefPaths.has(ref.filePath)) toolFiles.push(makeAttachedFile(ref, 'tool-result'));
               }
             }
+            console.log('[DEBUG] [context-compress] tool_result final, adding to messages', {
+              toolCallId: normalizedFinalMessage.toolCallId,
+              contentSize: JSON.stringify(normalizedFinalMessage.content).length,
+            });
             set((s) => {
               // Snapshot the current streaming assistant message (thinking + tool_use) into
               // messages[] before clearing it. The Gateway does NOT send separate 'final'
@@ -5019,8 +5133,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
               // would be overwritten by the next turn's deltas and never appear in the UI.
               const currentStream = s.streamingMessage as RawMessage | null;
               const snapshotMsgs = snapshotStreamingAssistantMessage(currentStream, s.messages, runId);
+              // Also add the tool result itself so token estimation includes tool outputs.
+              // Without this, estimateHistoryTokens ignores the bulk of context (tool results
+              // can be 10-100x larger than assistant text), and compression never triggers.
+              const toolResultMsg = { ...normalizedFinalMessage, id: normalizedFinalMessage.id || `tool-result-${runId}-${Date.now()}` };
+              const alreadyHasToolResult = s.messages.some((m) => m.id === toolResultMsg.id);
               return {
-                messages: snapshotMsgs.length > 0 ? [...s.messages, ...snapshotMsgs] : s.messages,
+                messages: [
+                  ...s.messages,
+                  ...snapshotMsgs,
+                  ...(alreadyHasToolResult ? [] : [toolResultMsg]),
+                ],
                 streamingText: '',
                 streamingMessage: null,
                 pendingFinal: true,
@@ -5030,6 +5153,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
               };
             });
+            maybeCompressRuntimeContext(set, get, runId);
             break;
           }
           const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
@@ -5090,10 +5214,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...clearPendingImages,
             };
           });
+          maybeCompressRuntimeContext(set, get, runId);
           // After the final response, quietly reload history to surface all intermediate
           // tool-use turns (thinking + tool blocks) from the Gateway's authoritative record.
           if (hasOutput && !intermediateToolStep) {
             clearHistoryPoll();
+            maybeCompressRuntimeContext(set, get, { requireActiveRun: false, throttle: false });
             void get().loadHistory(true, { force: true });
             const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
             const finalText = getMessageText(normalizedFinalMessage.content);
@@ -5374,6 +5500,78 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  recoverCurrentSession: async () => {
+    const { currentSessionKey, emptyFinalRecovery } = get();
+    const previous = emptyFinalRecovery.status === 'stale' || emptyFinalRecovery.status === 'failed'
+      ? emptyFinalRecovery
+      : null;
+    set({
+      emptyFinalRecovery: {
+        status: 'recovering',
+        sessionKey: currentSessionKey,
+        runId: previous && 'runId' in previous ? previous.runId : null,
+        reason: previous?.reason ?? 'stale-empty-final',
+        diagnostic: previous?.diagnostic ?? null,
+      },
+    });
+
+    try {
+      const response = await recoverStaleSessionAfterEmptyFinal(currentSessionKey);
+      const result = response.result;
+      if (!response.success || !result) {
+        const reason = response.error || 'recover-failed';
+        set({
+          emptyFinalRecovery: {
+            status: 'failed',
+            sessionKey: currentSessionKey,
+            reason,
+            diagnostic: previous?.diagnostic ?? null,
+          },
+          runError: reason,
+        });
+        return;
+      }
+
+      if (result.ok && result.recovered) {
+        set({
+          emptyFinalRecovery: {
+            status: 'recovered',
+            sessionKey: currentSessionKey,
+            reason: result.reason,
+          },
+          error: null,
+          runError: null,
+          sending: false,
+          activeRunId: null,
+          pendingFinal: false,
+        });
+        return;
+      }
+
+      const reason = result.ok ? result.reason : result.error;
+      set({
+        emptyFinalRecovery: {
+          status: 'failed',
+          sessionKey: currentSessionKey,
+          reason,
+          diagnostic: previous?.diagnostic ?? null,
+        },
+        runError: reason,
+      });
+    } catch (error) {
+      const reason = String(error);
+      set({
+        emptyFinalRecovery: {
+          status: 'failed',
+          sessionKey: currentSessionKey,
+          reason,
+          diagnostic: previous?.diagnostic ?? null,
+        },
+        runError: reason,
+      });
+    }
+  },
 
   clearSecurityCancelNotice: () => set({ securityCancelNotice: null }),
 }));

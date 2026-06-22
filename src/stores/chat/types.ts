@@ -71,6 +71,56 @@ export interface ToolStatus {
   updatedAt: number;
 }
 
+export type TaskWorkflowKind =
+  | 'general'
+  | 'spreadsheet'
+  | 'pdf'
+  | 'word'
+  | 'presentation'
+  | 'data-analysis'
+  | 'batch-files';
+
+export type RunawayToolRiskState =
+  | 'normal'
+  | 'needs_convergence'
+  | 'debug_loop'
+  | 'tool_heavy'
+  | 'must_summarize'
+  | 'needs_pause';
+
+export type ConvergenceDirectiveLevel = 'none' | 'light' | 'medium' | 'force';
+
+export interface RunawayToolObservation {
+  runId: string | null;
+  sessionKey: string;
+  taskKind: TaskWorkflowKind;
+  startedAt: number;
+  updatedAt: number;
+  toolCallCount: number;
+  toolResultCount: number;
+  writeExecPairCount: number;
+  repeatedExecCommandCount: number;
+  repeatedWriteTargetCount: number;
+  lastToolCallAt: number | null;
+  lastToolResultAt: number | null;
+  lastVisibleProgressAt: number | null;
+  lastFinalAssistantAt: number | null;
+  pendingFinal: boolean;
+  riskState: RunawayToolRiskState;
+  riskReasons: string[];
+  convergenceDirectiveLevel: ConvergenceDirectiveLevel;
+  convergenceDirective: string | null;
+  convergenceDirectiveUpdatedAt: number | null;
+  initialStrategyInjected: boolean;
+  /** Serializable de-dupe keys for observed tool calls. Kept bounded by the observer. */
+  seenToolCallKeys: string[];
+  /** Serializable de-dupe keys for observed tool results. Kept bounded by the observer. */
+  seenToolResultKeys: string[];
+  recentToolNames: string[];
+  recentExecCommands: string[];
+  recentWriteTargets: string[];
+}
+
 /** Streaming state per session - preserved when switching between sessions */
 export interface SessionStreamingState {
   activeRunId: string | null;
@@ -101,7 +151,33 @@ export interface CompressionStateEntry {
   compressedAt: number;
   /** Whether this was a truncation fallback (not LLM summarization) */
   isTruncation: boolean;
+  /** Whether Gateway JSONL was compacted (sessions.compact RPC succeeded) */
+  gatewayCompacted?: boolean;
 }
+
+export interface ContextCompressionStatus {
+  status: 'idle' | 'compressing' | 'compressed' | 'fallback' | 'failed';
+  phase: 'before-send' | 'runtime';
+  sessionKey: string;
+  startedAt?: number;
+  finishedAt?: number;
+  estimatedTokens?: number;
+  triggerTokens?: number;
+  hardLimitTokens?: number;
+  compressedCount?: number;
+  compressedTokens?: number;
+  isTruncation?: boolean;
+  message?: string;
+}
+
+export type EmptyFinalRecoveryState =
+  | { status: 'idle' }
+  | { status: 'checking'; sessionKey: string; runId: string | null }
+  | { status: 'waiting'; sessionKey: string; runId: string | null; reason: string; diagnostic?: Record<string, unknown> | null }
+  | { status: 'stale'; sessionKey: string; runId: string | null; reason: string; diagnostic?: Record<string, unknown> | null }
+  | { status: 'recovering'; sessionKey: string; runId: string | null; reason: string; diagnostic?: Record<string, unknown> | null }
+  | { status: 'recovered'; sessionKey: string; reason: string }
+  | { status: 'failed'; sessionKey: string; reason: string; diagnostic?: Record<string, unknown> | null };
 
 export interface ChatState {
   // Messages
@@ -110,6 +186,7 @@ export interface ChatState {
   error: string | null;
   /** Error surfaced from an in-flight run (mid-stream / final), shown distinctly from send errors. */
   runError: string | null;
+  emptyFinalRecovery: EmptyFinalRecoveryState;
   /**
    * 用户主动拒绝安全确认（读取 workspace 外文件、网络、命令等）后的温和提示。
    * 这不是错误，独立于 `error`/`runError`，以中性样式呈现，让用户知道操作已被取消。
@@ -130,6 +207,10 @@ export interface ChatState {
   lastUserMessageAt: number | null;
   /** Images collected from tool results, attached to the next assistant message */
   pendingToolImages: AttachedFileMeta[];
+  /** Runtime-only observer for long tool loops. PR1 only records state; it does not steer the model. */
+  runawayToolObservation: RunawayToolObservation | null;
+  /** Last observer snapshot per session, used for diagnostics across session switches. */
+  sessionRunawayToolObservations: Record<string, RunawayToolObservation | null>;
   /** True if this is the first message sent since app/gateway startup */
   isFirstMessageEver?: boolean;
   /** True if the current run was manually aborted by the user */
@@ -157,6 +238,8 @@ export interface ChatState {
   sessionStreamingStates: Record<string, SessionStreamingState>;
   /** Compression state per session, persisted to disk and restored on reload/switch */
   sessionCompressionState: Record<string, CompressionStateEntry | null>;
+  /** User-visible status for automatic context compression. */
+  contextCompressionStatus: ContextCompressionStatus | null;
 
   // Thinking
   thinkingLevel: string | null;
@@ -200,6 +283,7 @@ export interface ChatState {
     targetAgentId?: string | null,
   ) => Promise<void>;
   abortRun: () => Promise<void>;
+  recoverCurrentSession: () => Promise<void>;
   setReasoningMode: (mode: ReasoningMode) => Promise<void>;
   setCurrentSessionModel: (model: string | null) => Promise<void>;
   handleChatEvent: (event: Record<string, unknown>) => void;

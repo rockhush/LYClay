@@ -1,4 +1,4 @@
-import { readFile, stat, unlink } from 'fs/promises';
+import { readFile, stat, unlink, writeFile } from 'fs/promises';
 import path from 'path';
 
 type LoggerLike = {
@@ -9,6 +9,8 @@ type LoggerLike = {
 type SessionStoreEntry = {
   sessionFile?: unknown;
   status?: unknown;
+  recoveredAt?: unknown;
+  recoveryReason?: unknown;
 };
 
 type LockOwner = {
@@ -17,10 +19,48 @@ type LockOwner = {
 };
 
 export type SessionTranscriptLockRecoveryResult =
-  | { recovered: true; lockPath: string; sessionFile: string; lockAgeMs: number }
-  | { recovered: false; reason: string; lockPath?: string; sessionFile?: string; lockAgeMs?: number };
+  | { recovered: true; lockPath: string; sessionFile: string; lockAgeMs: number; lockPid?: unknown; lockPidAlive?: boolean | null }
+  | { recovered: false; reason: string; lockPath?: string; sessionFile?: string; lockAgeMs?: number; details?: Record<string, unknown> };
+
+export type StaleSessionRecoveryReason =
+  | 'missing-session-key'
+  | 'missing-diagnostic'
+  | 'tracked-active-run'
+  | 'lock-owned-by-live-process'
+  | 'session-recently-active'
+  | 'lock-missing'
+  | 'session-entry-missing'
+  | 'session-file-missing'
+  | 'session-file-outside-root'
+  | 'unsupported-session-key'
+  | 'unsafe-state'
+  | 'lock-owner-unreadable'
+  | 'lock-stat-failed';
+
+export type StaleSessionRecoveryResult =
+  | {
+      ok: true;
+      recovered: true;
+      sessionKey: string;
+      previousStatus: string | null;
+      nextStatus: string;
+      removedLockPath: string | null;
+      reason: 'stale-empty-final';
+    }
+  | {
+      ok: true;
+      recovered: false;
+      sessionKey: string;
+      reason: StaleSessionRecoveryReason;
+      details?: Record<string, unknown>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
 const DEFAULT_MIN_LOCK_AGE_MS = 10_000;
+const DEFAULT_STALE_THRESHOLD_MS = 2 * 60_000;
 const ACTIVE_SESSION_STATUSES = new Set(['running', 'processing', 'queued', 'pending']);
 
 function parseAgentId(sessionKey: string): string | null {
@@ -49,6 +89,26 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function isPidAlive(pid: unknown): boolean | null {
+  if (!Number.isInteger(pid) || (pid as number) <= 0) return null;
+  try {
+    process.kill(pid as number, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getLockCreatedAtMs(lockOwner: LockOwner | null, lockMtimeMs: number, nowMs: number): number {
+  const parsed = typeof lockOwner?.createdAt === 'string' ? Date.parse(lockOwner.createdAt) : NaN;
+  if (Number.isFinite(parsed)) return parsed;
+  return Number.isFinite(lockMtimeMs) ? lockMtimeMs : nowMs;
 }
 
 export async function recoverOrphanedSessionTranscriptLock(params: {
@@ -100,16 +160,22 @@ export async function recoverOrphanedSessionTranscriptLock(params: {
   }
 
   const currentPid = params.currentPid ?? process.pid;
-  if (lockOwner.pid !== currentPid) {
-    return { recovered: false, reason: 'lock-owned-by-other-process', lockPath, sessionFile };
+  const nowMs = params.nowMs ?? Date.now();
+  const lockPid = lockOwner.pid;
+  const lockPidAlive = isPidAlive(lockPid);
+  const lockBelongsToCurrentGateway = lockPid === currentPid;
+  const lockOwnerIsDead = lockPidAlive === false;
+  if (!lockBelongsToCurrentGateway && !lockOwnerIsDead) {
+    return {
+      recovered: false,
+      reason: 'lock-owned-by-live-process',
+      lockPath,
+      sessionFile,
+      details: { lockPid, lockPidAlive, currentPid },
+    };
   }
 
-  const createdAtMs = typeof lockOwner.createdAt === 'string'
-    ? Date.parse(lockOwner.createdAt)
-    : NaN;
-  const fallbackCreatedAtMs = Number.isFinite(lockStat.mtimeMs) ? lockStat.mtimeMs : Date.now();
-  const lockCreatedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : fallbackCreatedAtMs;
-  const nowMs = params.nowMs ?? Date.now();
+  const lockCreatedAtMs = getLockCreatedAtMs(lockOwner, lockStat.mtimeMs, nowMs);
   const lockAgeMs = Math.max(0, nowMs - lockCreatedAtMs);
   const minLockAgeMs = params.minLockAgeMs ?? DEFAULT_MIN_LOCK_AGE_MS;
   if (lockAgeMs < minLockAgeMs) {
@@ -123,7 +189,168 @@ export async function recoverOrphanedSessionTranscriptLock(params: {
     sessionFile,
     lockPath,
     lockAgeMs,
-    pid: currentPid,
+    lockPid,
+    lockPidAlive,
+    currentPid,
   });
-  return { recovered: true, lockPath, sessionFile, lockAgeMs };
+  return { recovered: true, lockPath, sessionFile, lockAgeMs, lockPid, lockPidAlive };
+}
+
+export async function recoverStaleSessionAfterEmptyFinal(params: {
+  sessionKey: string | null | undefined;
+  openclawDir: string;
+  currentPid?: number;
+  nowMs?: number;
+  staleThresholdMs?: number;
+  hasRecentEmptyFinalNoOutput: boolean;
+  hasTrackedActiveRun: boolean;
+  lastVisibleProgressAt?: number | null;
+  logger: LoggerLike;
+}): Promise<StaleSessionRecoveryResult> {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) return { ok: true, recovered: false, sessionKey: '', reason: 'missing-session-key' };
+  if (!params.hasRecentEmptyFinalNoOutput) {
+    return { ok: true, recovered: false, sessionKey, reason: 'missing-diagnostic' };
+  }
+  if (params.hasTrackedActiveRun) {
+    return { ok: true, recovered: false, sessionKey, reason: 'tracked-active-run' };
+  }
+
+  const nowMs = params.nowMs ?? Date.now();
+  const staleThresholdMs = params.staleThresholdMs ?? DEFAULT_STALE_THRESHOLD_MS;
+  if (params.lastVisibleProgressAt && nowMs - params.lastVisibleProgressAt < staleThresholdMs) {
+    return {
+      ok: true,
+      recovered: false,
+      sessionKey,
+      reason: 'session-recently-active',
+      details: { lastVisibleProgressAt: params.lastVisibleProgressAt, staleThresholdMs },
+    };
+  }
+
+  const agentId = parseAgentId(sessionKey);
+  if (!agentId) return { ok: true, recovered: false, sessionKey, reason: 'unsupported-session-key' };
+
+  const sessionsDir = path.join(params.openclawDir, 'agents', agentId, 'sessions');
+  const sessionsJsonPath = path.join(sessionsDir, 'sessions.json');
+  const sessionsJson = await readJsonFile<Record<string, SessionStoreEntry>>(sessionsJsonPath);
+  const entry = sessionsJson?.[sessionKey];
+  if (!sessionsJson || !entry) {
+    return { ok: true, recovered: false, sessionKey, reason: 'session-entry-missing' };
+  }
+
+  const previousStatus = typeof entry.status === 'string' ? entry.status : null;
+  if (!isActiveSessionStatus(entry.status)) {
+    return {
+      ok: true,
+      recovered: false,
+      sessionKey,
+      reason: 'unsafe-state',
+      details: { status: entry.status },
+    };
+  }
+
+  const rawSessionFile = typeof entry.sessionFile === 'string' ? entry.sessionFile : '';
+  if (!rawSessionFile) return { ok: true, recovered: false, sessionKey, reason: 'session-file-missing' };
+
+  const sessionFile = path.isAbsolute(rawSessionFile)
+    ? rawSessionFile
+    : path.join(sessionsDir, rawSessionFile);
+  if (!isJsonlSessionFile(sessionFile, sessionsDir)) {
+    return { ok: true, recovered: false, sessionKey, reason: 'session-file-outside-root', details: { sessionFile } };
+  }
+
+  const lockPath = `${sessionFile}.lock`;
+  let transcriptStat;
+  let lockStat;
+  try {
+    [transcriptStat, lockStat] = await Promise.all([stat(sessionFile), stat(lockPath)]);
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'ENOENT') {
+      return { ok: true, recovered: false, sessionKey, reason: 'lock-missing', details: { lockPath, sessionFile } };
+    }
+    return { ok: true, recovered: false, sessionKey, reason: 'lock-stat-failed', details: { lockPath, sessionFile, error: String(error) } };
+  }
+
+  const transcriptAgeMs = nowMs - transcriptStat.mtimeMs;
+  const lockMtimeAgeMs = nowMs - lockStat.mtimeMs;
+  if (transcriptAgeMs < staleThresholdMs || lockMtimeAgeMs < staleThresholdMs) {
+    return {
+      ok: true,
+      recovered: false,
+      sessionKey,
+      reason: 'session-recently-active',
+      details: { transcriptAgeMs, lockMtimeAgeMs, staleThresholdMs },
+    };
+  }
+
+  const lockOwner = await readJsonFile<LockOwner>(lockPath);
+  if (!lockOwner || typeof lockOwner !== 'object') {
+    return { ok: true, recovered: false, sessionKey, reason: 'lock-owner-unreadable', details: { lockPath } };
+  }
+
+  const currentPid = params.currentPid ?? process.pid;
+  const lockPid = lockOwner.pid;
+  const lockPidAlive = isPidAlive(lockPid);
+  const lockCreatedAtMs = getLockCreatedAtMs(lockOwner, lockStat.mtimeMs, nowMs);
+  const lockAgeMs = Math.max(0, nowMs - lockCreatedAtMs);
+  const lockBelongsToCurrentGateway = lockPid === currentPid;
+  const lockOwnerIsDead = lockPidAlive === false;
+  if (!lockOwnerIsDead && !lockBelongsToCurrentGateway) {
+    return {
+      ok: true,
+      recovered: false,
+      sessionKey,
+      reason: 'lock-owned-by-live-process',
+      details: { lockPid, lockPidAlive, currentPid, lockPath },
+    };
+  }
+  if (lockBelongsToCurrentGateway && lockAgeMs < staleThresholdMs) {
+    return {
+      ok: true,
+      recovered: false,
+      sessionKey,
+      reason: 'session-recently-active',
+      details: { lockAgeMs, staleThresholdMs, currentPid, lockPath },
+    };
+  }
+
+  await unlink(lockPath);
+  const nextStatus = 'stale-recovered';
+  const nextEntry: SessionStoreEntry & Record<string, unknown> = {
+    ...entry,
+    status: nextStatus,
+    recoveredAt: new Date(nowMs).toISOString(),
+    recoveryReason: 'stale-empty-final',
+  };
+  sessionsJson[sessionKey] = nextEntry;
+  await writeJsonFile(sessionsJsonPath, sessionsJson);
+
+  params.logger.warn('[gateway:session-stale-recovery] recovered stale empty-final session', {
+    sessionKey,
+    sessionFile,
+    lockPath,
+    previousStatus,
+    nextStatus,
+    recoveryReason: 'stale-empty-final',
+    evidence: {
+      transcriptAgeMs,
+      lockMtimeAgeMs,
+      lockAgeMs,
+      lockPid,
+      lockPidAlive,
+      currentPid,
+    },
+  });
+
+  return {
+    ok: true,
+    recovered: true,
+    sessionKey,
+    previousStatus,
+    nextStatus,
+    removedLockPath: lockPath,
+    reason: 'stale-empty-final',
+  };
 }

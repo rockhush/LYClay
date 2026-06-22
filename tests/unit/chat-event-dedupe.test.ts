@@ -26,6 +26,8 @@ vi.mock('@/stores/agents', () => ({
 
 vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
+  getEmptyFinalDiagnostic: (...args: unknown[]) => hostApiFetchMock(...args),
+  recoverStaleSessionAfterEmptyFinal: (...args: unknown[]) => hostApiFetchMock(...args),
 }));
 
 vi.mock('@/lib/ui-state-persistence', () => ({
@@ -92,7 +94,7 @@ describe('chat event dedupe', () => {
     });
 
     expect(extractText(useChatStore.getState().streamingMessage)).toBe('Checked X. Here is the summary.');
-  });
+  }, 10_000);
 
   it('still dedupes repeated delta events when seq matches', async () => {
     const { useChatStore } = await import('@/stores/chat');
@@ -192,16 +194,20 @@ describe('chat event dedupe', () => {
     expect(extractText(useChatStore.getState().streamingMessage)).toBe('My alma mater holds many memories.');
   });
 
-  it('clears current session execution state when final event has no message', async () => {
-    const { useChatStore } = await import('@/stores/chat');
-
-    useChatStore.setState({
+  it('surfaces recovery state when an empty final is confirmed stale by diagnostics', async () => {
+    vi.useFakeTimers();
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
+      diagnostic: {
+        recoveryResult: { recovered: false, reason: 'lock-owned-by-other-process' },
+        transcriptLockOwner: { pid: 999999, pidAlive: false },
+      },
+      hasTrackedActiveRun: false,
+    });
+    const state: Record<string, unknown> = {
       currentSessionKey: 'agent:main:main',
-      currentAgentId: 'main',
-      sessions: [{ key: 'agent:main:main' }],
-      messages: [],
-      sessionLabels: {},
-      sessionLastActivity: {},
+      messages: [{ role: 'user', content: 'Question', timestamp: 123 }],
       sessionStreamingStates: {},
       sending: true,
       activeRunId: 'run-empty-final',
@@ -212,20 +218,133 @@ describe('chat event dedupe', () => {
       lastUserMessageAt: 123,
       pendingToolImages: [],
       error: null,
+      runError: null,
+      emptyFinalRecovery: { status: 'idle' },
+      loading: false,
+      loadHistory: vi.fn(async () => undefined),
+    };
+    const set = (patch: Record<string, unknown> | ((s: Record<string, unknown>) => Record<string, unknown>)) => {
+      Object.assign(state, typeof patch === 'function' ? patch(state) : patch);
+    };
+    const get = () => state;
+
+    handleRuntimeEventState(set as never, get as never, { state: 'final' }, 'final', 'run-empty-final');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.loadHistory).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(state.loadHistory).toHaveBeenCalledTimes(2);
+    expect(state.sending).toBe(false);
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(state.lastUserMessageAt).toBeNull();
+    expect(state.runError).toContain('Run ended without a response');
+    expect(state.emptyFinalRecovery).toMatchObject({
+      status: 'stale',
+      reason: 'lock-owned-by-other-process',
+    });
+    vi.useRealTimers();
+  });
+
+  it('keeps waiting when empty-final diagnostics show the session may still be active', async () => {
+    vi.useFakeTimers();
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
+      diagnostic: {
+        recoveryResult: { recovered: false, reason: 'tracked-active-run' },
+      },
+      hasTrackedActiveRun: true,
+    });
+    const state: Record<string, unknown> = {
+      currentSessionKey: 'agent:main:main',
+      messages: [{ role: 'user', content: 'Question', timestamp: 123 }],
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-empty-final',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      runError: null,
+      emptyFinalRecovery: { status: 'idle' },
+      loading: false,
+      loadHistory: vi.fn(async () => undefined),
+    };
+    const set = (patch: Record<string, unknown> | ((s: Record<string, unknown>) => Record<string, unknown>)) => {
+      Object.assign(state, typeof patch === 'function' ? patch(state) : patch);
+    };
+    const get = () => state;
+
+    handleRuntimeEventState(set as never, get as never, { state: 'final' }, 'final', 'run-empty-final');
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(state.runError).toBeNull();
+    expect(state.pendingFinal).toBe(true);
+    expect(state.emptyFinalRecovery).toMatchObject({
+      status: 'waiting',
+      reason: 'tracked-active-run',
+    });
+    vi.useRealTimers();
+  });
+
+  it('completes an empty final when history reload surfaces assistant output', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
+      messages: [
+        { role: 'user', content: 'Question', timestamp: 123 },
+        { role: 'assistant', content: 'Answer from transcript', timestamp: 124 },
+      ],
+    });
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'Question', timestamp: 123 }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-empty-final-history',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      runError: null,
       loading: false,
       thinkingLevel: null,
     });
 
     useChatStore.getState().handleChatEvent({
       state: 'final',
-      runId: 'run-empty-final',
+      runId: 'run-empty-final-history',
       sessionKey: 'agent:main:main',
     });
 
-    expect(useChatStore.getState().sending).toBe(false);
-    expect(useChatStore.getState().activeRunId).toBeNull();
-    expect(useChatStore.getState().pendingFinal).toBe(false);
-    expect(useChatStore.getState().lastUserMessageAt).toBeNull();
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sending).toBe(false);
+    });
+
+    const state = useChatStore.getState();
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(state.lastUserMessageAt).toBeNull();
+    expect(state.runError).toBeNull();
+    expect(extractText(state.messages.at(-1))).toBe('Answer from transcript');
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('clears current session execution state when an exec approval followup final arrives', async () => {

@@ -26,8 +26,8 @@ export const DEFAULT_COMPRESSION_THRESHOLD = 150000;
 /** Target tokens to keep after compression (~30K) */
 const KEEP_RECENT_TOKENS = 30000;
 
-/** Minimum rounds between compressions (to avoid frequent compressions) */
-const MIN_ROUNDS_BETWEEN_COMPRESSION = 5;
+/** Minimum cooldown between automatic compressions (30s) */
+const DEFAULT_COMPRESSION_COOLDOWN_MS = 30000;
 
 const SUMMARY_PROMPT_TEMPLATE = `请将以下对话历史压缩为结构化摘要，保留后续继续对话和执行任务所需的关键信息。
 
@@ -71,16 +71,14 @@ const SUMMARY_PROMPT_TEMPLATE = `请将以下对话历史压缩为结构化摘�
 export interface CompactorOptions {
   /** Token threshold to trigger compression */
   threshold: number;
-  /** Minimum message count to consider compression */
-  minMessageCount?: number;
   /** Target tokens to keep after compression */
   keepRecentTokens?: number;
   /** Target tokens for generated summary */
   summaryTokens?: number;
   /** Hard input limit after compression */
   hardLimitTokens?: number;
-  /** Minimum rounds between compressions */
-  minRoundsBetweenCompression?: number;
+  /** Minimum cooldown between compressions (ms), 0 to skip */
+  compressionCooldownMs?: number;
 }
 
 export interface InvokeRpcFn {
@@ -96,17 +94,16 @@ export function checkNeedsCompression(
   options: CompactorOptions,
   persistedCompressionState?: CompressionStateEntry | null,
 ): boolean {
-  const { threshold, minMessageCount = 10 } = options;
+  const { threshold, compressionCooldownMs = DEFAULT_COMPRESSION_COOLDOWN_MS } = options;
 
-  // Check if enough rounds have passed since last compression
   if (persistedCompressionState && !persistedCompressionState.isTruncation) {
-    const roundsSinceLastCompression = messages.length - persistedCompressionState.totalMessagesAtCompression;
-    if (roundsSinceLastCompression < MIN_ROUNDS_BETWEEN_COMPRESSION) {
+    const msSinceLastCompression = Date.now() - persistedCompressionState.compressedAt;
+    if (msSinceLastCompression < compressionCooldownMs) {
       return false;
     }
   }
 
-  return needsCompression(messages, threshold, minMessageCount);
+  return needsCompression(messages, threshold);
 }
 
 /**
@@ -288,4 +285,27 @@ function createSimpleTruncationByTokens(messages: RawMessage[], keepTokens: numb
 export function resetCompactorSession(_sessionKey: string): void {
   // Compression state is now persisted in sessionCompressionState store field.
   // No module-level state to reset.
+}
+
+/**
+ * Invoke Gateway's sessions.compact RPC to compact the JSONL transcript.
+ * This is the "real" compaction — it reduces what gets sent to the model
+ * on the next chat.send. Falls back gracefully on failure.
+ */
+export async function invokeSessionCompact(
+  sessionKey: string,
+  invokeRpc: InvokeRpcFn,
+): Promise<{ compacted: boolean; reason?: string; tokensAfter?: number }> {
+  try {
+    const data = await invokeRpc('sessions.compact', { key: sessionKey }, 120_000) as Record<string, unknown>;
+    const inner = (data?.result ?? data) as Record<string, unknown> | undefined;
+    return {
+      compacted: Boolean(data?.compacted ?? data?.ok),
+      reason: typeof data?.reason === 'string' ? data.reason : undefined,
+      tokensAfter: typeof inner?.tokensAfter === 'number' ? inner.tokensAfter : undefined,
+    };
+  } catch (error) {
+    console.warn('[context-compactor] sessions.compact RPC failed:', error);
+    return { compacted: false, reason: String(error) };
+  }
 }

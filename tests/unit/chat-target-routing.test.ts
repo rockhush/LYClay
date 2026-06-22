@@ -327,6 +327,145 @@ describe('chat target routing', () => {
     expect(sendCall?.[1]).not.toHaveProperty('model');
   });
 
+  it('injects convergence strategy for text-only document/data tasks on the real chat store', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+    });
+
+    await useChatStore.getState().sendMessage('Summarize report.pdf and extract the key table', undefined, null);
+
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect(sendCall?.[1]).toEqual(expect.objectContaining({
+      extraSystemPrompt: expect.stringContaining('PDF tasks'),
+    }));
+    expect(useChatStore.getState().runawayToolObservation).toEqual(expect.objectContaining({
+      runId: 'run-text',
+      taskKind: 'pdf',
+      initialStrategyInjected: true,
+    }));
+  });
+
+  it('updates real chat store convergence directive from repeated write/exec events', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+    });
+
+    await useChatStore.getState().sendMessage('Please calculate VMI replenishment from vmi.xlsx', undefined, null);
+    const sessionKey = useChatStore.getState().currentSessionKey;
+
+    for (let i = 0; i < 4; i += 1) {
+      useChatStore.getState().handleChatEvent({
+        state: 'delta',
+        runId: 'run-text',
+        sessionKey,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: `write-${i}`, name: 'write', input: { path: `vmi_debug_${i}.py` } }],
+        },
+      });
+      useChatStore.getState().handleChatEvent({
+        state: 'delta',
+        runId: 'run-text',
+        sessionKey,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: `exec-${i}`, name: 'exec', input: { command: 'uv run python vmi_debug.py' } }],
+        },
+      });
+    }
+
+    expect(useChatStore.getState().runawayToolObservation).toEqual(expect.objectContaining({
+      riskState: 'debug_loop',
+      convergenceDirectiveLevel: 'medium',
+      convergenceDirective: expect.stringContaining('complete processing script'),
+    }));
+  });
+
+  it('passes convergence strategy through real media send requests', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+    });
+
+    await useChatStore.getState().sendMessage('Calculate replenishment', [
+      {
+        fileName: 'vmi.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        fileSize: 128,
+        stagedPath: '/tmp/vmi.xlsx',
+        preview: null,
+      },
+    ], null);
+
+    const sendWithMediaCall = hostApiFetchMock.mock.calls.find(([path]) => path === '/api/chat/send-with-media');
+    const payload = JSON.parse(
+      (sendWithMediaCall?.[1] as { body: string }).body,
+    ) as { extraSystemPrompt?: string };
+
+    expect(payload.extraSystemPrompt).toContain('Spreadsheet tasks');
+    expect(useChatStore.getState().runawayToolObservation).toEqual(expect.objectContaining({
+      runId: 'run-media',
+      taskKind: 'spreadsheet',
+      initialStrategyInjected: true,
+    }));
+  });
+
   it('persists the current session model with sessions.patch', async () => {
     const { useChatStore } = await import('@/stores/chat');
 

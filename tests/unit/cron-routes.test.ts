@@ -99,6 +99,7 @@ describe('handleCronRoutes', () => {
       id: 'job-2',
       patch: {
         payload: { kind: 'agentTurn', message: 'Updated prompt' },
+        sessionTarget: 'isolated',
         delivery: { mode: 'announce', channel: 'feishu', to: 'user:ou_next' },
       },
     });

@@ -173,8 +173,10 @@ export function applyTimeDecayStrategy(
     processed = limitMessageCount(messages, limits.messageLimit);
   }
 
-  // 第二层：过滤大型工具结果
-  processed = filterLargeToolResults(processed);
+  // 第二层：过滤大型工具结果 — 已移除。
+  // Gateway 通过 truncateOversizedToolResultsInSession 处理 tool result 截断，
+  // 渲染器需要完整的 tool result 来准确估算上下文 token 数，否则压缩永远不触发。
+  // 消息展示层有自己的虚拟滚动和内容截断，无需在此过滤。
   const filteredCount = processed.length;
 
   // 第三层：Token 预算截断（有缓存压缩时跳过）

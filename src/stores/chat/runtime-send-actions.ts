@@ -1,5 +1,6 @@
 import i18n from '@/i18n';
 import { invokeIpc } from '@/lib/api-client';
+import { recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
 import { useAgentsStore } from '@/stores/agents';
 import { resetCompactorSession } from './context-compactor';
 import {
@@ -20,14 +21,20 @@ import {
   markAbortedChatRun,
   isUserSecurityDenialMessage,
   buildSecurityCancelNotice,
-  setHistoryPollTimer,
   setLastChatEventAt,
   upsertImageCacheEntry,
 } from './helpers';
+
+import type { ChatSession, ContextCompressionStatus, RawMessage, ReasoningMode } from './types';
 import { buildClearedActiveRunPatch } from './run-lifecycle';
-import type { ChatSession, RawMessage, ReasoningMode } from './types';
 import { prepareContextBeforeSend } from './context-send-guard';
 import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
+import {
+  bindRunIdToObservation,
+  createRunawayToolObservation,
+  detectTaskWorkflowKind,
+} from './runaway-tool-observer';
+import { buildInitialConvergenceSystemPrompt } from './task-convergence-strategy';
 
 function normalizeAgentId(value: string | undefined | null): string {
   return (value ?? '').trim().toLowerCase() || 'main';
@@ -286,7 +293,7 @@ function ensureSessionEntry(sessions: ChatSession[], sessionKey: string): ChatSe
   return [...sessions, { key: sessionKey, displayName: sessionKey }];
 }
 
-export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<RuntimeActions, 'sendMessage' | 'abortRun'> {
+export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<RuntimeActions, 'sendMessage' | 'abortRun' | 'recoverCurrentSession'> {
   return {
     sendMessage: async (
       text: string,
@@ -297,6 +304,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       if (!trimmed && (!attachments || attachments.length === 0)) return;
 
       clearAbortedChatRuns();
+      set({ emptyFinalRecovery: { status: 'idle' } });
 
       const targetSessionKey = resolveMainSessionKeyForAgent(targetAgentId) ?? get().currentSessionKey;
       if (targetSessionKey !== get().currentSessionKey) {
@@ -334,6 +342,8 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       applySessionThinkingLevelInBackground(currentSessionKey, reasoningMode, set, get);
       const attachmentCount = attachments?.length ?? 0;
       const originalRuntimeMessage = trimmed || (attachmentCount > 0 ? 'Process the attached file(s).' : '');
+      const taskKind = detectTaskWorkflowKind(originalRuntimeMessage, attachments ?? []);
+      const convergenceSystemPrompt = buildInitialConvergenceSystemPrompt(taskKind);
       const isInternalStagedExecution = trimmed.includes(COMPLEX_TASK_EXECUTION_MARKER);
       const usePlanningPhase = looksLikeComplexBuildTask(originalRuntimeMessage, attachmentCount);
       const runtimeMessage = usePlanningPhase
@@ -381,6 +391,18 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         workspaceContext: '',
         isInternalStagedExecution,
         invokeCompactorRpc: (method, params, timeoutMs) => invokeIpc('gateway:rpc', method, params, timeoutMs),
+        persistedCompressionState: get().sessionCompressionState?.[currentSessionKey] ?? null,
+        onCompressionStatus: (status: ContextCompressionStatus | null) => {
+          set({ contextCompressionStatus: status });
+          if (status && (status.status === 'compressed' || status.status === 'fallback' || status.status === 'failed')) {
+            setTimeout(() => {
+              const s = get();
+              if (s.contextCompressionStatus === status) {
+                set({ contextCompressionStatus: null });
+              }
+            }, 5000);
+          }
+        },
       });
 
       if (contextGuard.error) {
@@ -389,7 +411,10 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       }
 
       if (contextGuard.compressed) {
-        set({ messages: contextGuard.messages });
+        const nextCompressionState = contextGuard.compressionMeta
+          ? { ...get().sessionCompressionState, [currentSessionKey]: contextGuard.compressionMeta }
+          : get().sessionCompressionState;
+        set({ messages: contextGuard.messages, sessionCompressionState: nextCompressionState });
       }
       set((s) => ({
         messages: isInternalStagedExecution ? s.messages : [...s.messages, userMsg],
@@ -425,6 +450,19 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       setLastChatEventAt(Date.now());
       clearHistoryPoll();
       clearErrorRecoveryTimer();
+      const runawayToolObservation = createRunawayToolObservation({
+        sessionKey: currentSessionKey,
+        taskKind,
+        initialStrategyInjected: Boolean(convergenceSystemPrompt),
+        now: nowMs,
+      });
+      set((s) => ({
+        runawayToolObservation,
+        sessionRunawayToolObservations: {
+          ...s.sessionRunawayToolObservations,
+          [currentSessionKey]: runawayToolObservation,
+        },
+      }));
 
       const SOFT_NO_RESPONSE_NOTICE_MS = 90_000;
       const HARD_NO_RESPONSE_TIMEOUT_MS = 15 * 60_000;
@@ -535,6 +573,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
               message: withThinkingDirective(runtimeMessage, effectiveReasoningMode),
               deliver: false,
               idempotencyKey,
+              extraSystemPrompt: convergenceSystemPrompt ?? undefined,
               media: attachments!.map((a) => ({
                 filePath: a.stagedPath,
                 mimeType: a.mimeType,
@@ -555,6 +594,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
               message: withThinkingDirective(runtimeMessage, effectiveReasoningMode),
               deliver: false,
               idempotencyKey,
+              extraSystemPrompt: convergenceSystemPrompt ?? undefined,
             },
             CHAT_SEND_TIMEOUT_MS,
           ) as { success: boolean; result?: { runId?: string }; error?: string };
@@ -604,8 +644,13 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         } else if (result.result?.runId) {
           const runId = result.result.runId;
           markPendingComplexTaskPlanningRun(currentSessionKey, runId);
+          const boundObservation = bindRunIdToObservation(
+            get().sessionRunawayToolObservations[currentSessionKey] ?? get().runawayToolObservation,
+            runId,
+          );
           set((s) => ({
             activeRunId: runId,
+            runawayToolObservation: boundObservation,
             sessionStreamingStates: {
               ...s.sessionStreamingStates,
               [currentSessionKey]: {
@@ -628,6 +673,10 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
                   ? [...s.messages]
                   : (s.sessionStreamingStates[currentSessionKey]?.messagesSnapshot ?? []),
               },
+            },
+            sessionRunawayToolObservations: {
+              ...s.sessionRunawayToolObservations,
+              [currentSessionKey]: boundObservation,
             },
           }));
         }
@@ -704,6 +753,76 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
     },
 
     // ── Handle incoming chat events from Gateway ──
+    recoverCurrentSession: async () => {
+      const { currentSessionKey, emptyFinalRecovery } = get();
+      const previous = emptyFinalRecovery.status === 'stale' || emptyFinalRecovery.status === 'failed'
+        ? emptyFinalRecovery
+        : null;
+      set({
+        emptyFinalRecovery: {
+          status: 'recovering',
+          sessionKey: currentSessionKey,
+          runId: previous && 'runId' in previous ? previous.runId : null,
+          reason: previous?.reason ?? 'stale-empty-final',
+          diagnostic: previous?.diagnostic ?? null,
+        },
+      });
 
+      try {
+        const response = await recoverStaleSessionAfterEmptyFinal(currentSessionKey);
+        const result = response.result;
+        if (!response.success || !result) {
+          const reason = response.error || 'recover-failed';
+          set({
+            emptyFinalRecovery: {
+              status: 'failed',
+              sessionKey: currentSessionKey,
+              reason,
+              diagnostic: previous?.diagnostic ?? null,
+            },
+            runError: reason,
+          });
+          return;
+        }
+
+        if (result.ok && result.recovered) {
+          set({
+            emptyFinalRecovery: {
+              status: 'recovered',
+              sessionKey: currentSessionKey,
+              reason: result.reason,
+            },
+            runError: null,
+            error: null,
+            sending: false,
+            activeRunId: null,
+            pendingFinal: false,
+          });
+          return;
+        }
+
+        const reason = result.ok ? result.reason : result.error;
+        set({
+          emptyFinalRecovery: {
+            status: 'failed',
+            sessionKey: currentSessionKey,
+            reason,
+            diagnostic: previous?.diagnostic ?? null,
+          },
+          runError: reason,
+        });
+      } catch (error) {
+        const reason = String(error);
+        set({
+          emptyFinalRecovery: {
+            status: 'failed',
+            sessionKey: currentSessionKey,
+            reason,
+            diagnostic: previous?.diagnostic ?? null,
+          },
+          runError: reason,
+        });
+      }
+    },
   };
 }

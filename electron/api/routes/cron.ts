@@ -346,6 +346,7 @@ function buildCronUpdatePatch(input: Record<string, unknown>): Record<string, un
 
   if (typeof patch.message === 'string') {
     patch.payload = { kind: 'agentTurn', message: patch.message };
+    patch.sessionTarget = 'isolated';
     delete patch.message;
   }
 
@@ -358,7 +359,7 @@ function buildCronUpdatePatch(input: Record<string, unknown>): Record<string, un
       ? patch.agentId.trim()
       : 'main';
     patch.agentId = agentId;
-    // Keep sessionTarget as isolated when agentId changes
+    patch.sessionTarget = 'isolated';
   }
 
   return patch;

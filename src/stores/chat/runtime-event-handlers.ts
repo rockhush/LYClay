@@ -5,10 +5,12 @@ import {
   extractImagesAsAttachedFiles,
   extractMediaRefs,
   extractRawFilePaths,
+  forgetAbortedChatRun,
   getMessageText,
   getToolCallFilePath,
   hasErrorRecoveryTimer,
   hasNonToolAssistantContent,
+  isAbortedChatRun,
   isToolOnlyMessage,
   isToolResultRole,
   isInternalMessageText,
@@ -26,9 +28,17 @@ import { buildClearedActiveRunPatch } from './run-lifecycle';
 import { finishFirstSessionPerf, markFirstSessionRuntimeEvent } from './first-session-perf';
 import { extractInvokedSkillIds } from './usage-report-extract';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
-import type { AttachedFileMeta, RawMessage } from './types';
+
+import type { AttachedFileMeta, ContextCompressionStatus, RawMessage } from './types';
+import { getEmptyFinalDiagnostic } from '@/lib/host-api';
 import type { ChatGet, ChatSet } from './store-api';
 import { markChatRunRuntimeEvent } from './chat-run-perf';
+import { maybeCompressRuntimeContext } from './runtime-context-monitor';
+import {
+  buildComplexTaskExecutionRequest,
+  clearPendingComplexTaskPlan,
+  getPendingComplexTaskPlan,
+} from './runtime-send-actions';
 // De-dup guard for the management/claw/report uploader. We may receive the
 // same `final` event twice during recovery (gateway resend, reconnect race);
 // without this guard a single tool_use turn could double-count skill
@@ -50,6 +60,66 @@ function getMessageErrorMessage(message: RawMessage | undefined): string {
   const msg = message as (RawMessage & { errorMessage?: unknown; error_message?: unknown }) | undefined;
   const value = msg?.errorMessage ?? msg?.error_message;
   return typeof value === 'string' && value.trim() ? value : 'An error occurred';
+}
+
+function buildRuntimeCompressionStatus(
+  status: ContextCompressionStatus['status'],
+  sessionKey: string,
+  message?: string,
+): ContextCompressionStatus {
+  return {
+    status,
+    phase: 'runtime',
+    sessionKey,
+    finishedAt: status === 'compressing' ? undefined : Date.now(),
+    startedAt: status === 'compressing' ? Date.now() : undefined,
+    isTruncation: status === 'fallback',
+    message,
+  };
+}
+
+function resolveRuntimeCompressionStatusFromMessage(
+  message: RawMessage | undefined,
+  sessionKey: string,
+): ContextCompressionStatus | null {
+  if (!message) return null;
+  const raw = message as RawMessage & {
+    isCompactionNotice?: unknown;
+    isFallbackNotice?: unknown;
+  };
+  const text = getMessageText(message.content);
+  const normalized = text.toLowerCase();
+
+  if (raw.isCompactionNotice === true) {
+    if (normalized.includes('complete')) {
+      return buildRuntimeCompressionStatus('compressed', sessionKey, '上下文已压缩，任务会继续执行。');
+    }
+    if (normalized.includes('incomplete') || normalized.includes('failed')) {
+      return buildRuntimeCompressionStatus('failed', sessionKey, '上下文压缩没有完成，后续可能需要减少上下文。');
+    }
+    return buildRuntimeCompressionStatus('compressing', sessionKey, '正在压缩上下文，任务会在压缩完成后继续。');
+  }
+
+  if (raw.isFallbackNotice === true) {
+    return buildRuntimeCompressionStatus('fallback', sessionKey, '上下文已进入降级保护模式，系统会尽量保留最近内容继续。');
+  }
+
+  if (/\[\.\.\.\s*[\d,]+\s+more characters truncated\]\]/i.test(text)) {
+    return buildRuntimeCompressionStatus('fallback', sessionKey, '工具输出已截断以保护上下文，任务会继续执行。');
+  }
+
+  return null;
+}
+
+function surfaceRuntimeCompressionStatus(
+  set: ChatSet,
+  message: RawMessage | undefined,
+  sessionKey: string,
+): void {
+  const status = resolveRuntimeCompressionStatusFromMessage(message, sessionKey);
+  if (status) {
+    set({ contextCompressionStatus: status });
+  }
 }
 function noteReported(set: Set<string>, key: string): boolean {
   if (set.has(key)) return false;
@@ -106,12 +176,163 @@ function reportUsageFromFinalAssistant(message: RawMessage | undefined, runId: s
     }
   }
 }
-import { forgetAbortedChatRun, isAbortedChatRun } from './helpers';
-import {
-  buildComplexTaskExecutionRequest,
-  clearPendingComplexTaskPlan,
-  getPendingComplexTaskPlan,
-} from './runtime-send-actions';
+const EMPTY_FINAL_HISTORY_RETRY_MS = 2_000;
+const EMPTY_FINAL_NO_RESPONSE_ERROR =
+  'Run ended without a response. The current session may have a stale active run or transcript lock. Stop the run, retry, or start a new session.';
+
+function countAssistantOutputs(messages: RawMessage[]): number {
+  return messages.filter((message) => message.role === 'assistant' && hasNonToolAssistantContent(message)).length;
+}
+
+function hasNewAssistantOutput(beforeMessages: RawMessage[], afterMessages: RawMessage[]): boolean {
+  if (countAssistantOutputs(afterMessages) > countAssistantOutputs(beforeMessages)) {
+    return true;
+  }
+  const beforeLastRole = beforeMessages.at(-1)?.role;
+  const afterLast = afterMessages.at(-1);
+  return beforeLastRole === 'user'
+    && afterLast?.role === 'assistant'
+    && hasNonToolAssistantContent(afterLast);
+}
+
+function waitForEmptyFinalRetry(): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, EMPTY_FINAL_HISTORY_RETRY_MS);
+  });
+}
+
+function getRecoverySkipReason(diagnostic: Record<string, unknown> | null | undefined): string {
+  const recoveryResult = diagnostic?.recoveryResult;
+  if (recoveryResult && typeof recoveryResult === 'object') {
+    const reason = (recoveryResult as Record<string, unknown>).reason;
+    if (typeof reason === 'string' && reason.trim()) return reason;
+  }
+  return 'empty-final-no-output';
+}
+
+function isDiagnosticRecoverable(diagnostic: Record<string, unknown> | null | undefined): boolean {
+  const recoveryResult = diagnostic?.recoveryResult;
+  if (recoveryResult && typeof recoveryResult === 'object') {
+    const reason = (recoveryResult as Record<string, unknown>).reason;
+    if (reason === 'lock-too-new' || reason === 'session-active') return false;
+  }
+
+  const lockOwner = diagnostic?.transcriptLockOwner;
+  if (lockOwner && typeof lockOwner === 'object') {
+    const pidAlive = (lockOwner as Record<string, unknown>).pidAlive;
+    if (pidAlive === true) return false;
+  }
+
+  return true;
+}
+
+function isStillConfirmingEmptyFinal(get: ChatGet, sessionKey: string, runId: string): boolean {
+  const state = get();
+  return state.currentSessionKey === sessionKey
+    && (!runId || !state.activeRunId || state.activeRunId === runId);
+}
+
+function completeEmptyFinalFromHistory(set: ChatSet, get: ChatGet, sessionKey: string, runId: string): void {
+  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
+  clearHistoryPoll();
+  finishFirstSessionPerf('final', runId);
+  set({
+    sending: false,
+    activeRunId: null,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingFinal: false,
+    pendingToolImages: [],
+    lastUserMessageAt: null,
+    runError: null,
+  });
+}
+
+async function confirmEmptyFinalWithHistory(set: ChatSet, get: ChatGet, runId: string): Promise<void> {
+  const sessionKey = get().currentSessionKey;
+  const beforeMessages = [...get().messages];
+
+  set({
+    streamingText: '',
+    streamingMessage: null,
+    pendingFinal: true,
+    runError: null,
+  });
+
+  await get().loadHistory(true);
+  if (isStillConfirmingEmptyFinal(get, sessionKey, runId) && hasNewAssistantOutput(beforeMessages, get().messages)) {
+    completeEmptyFinalFromHistory(set, get, sessionKey, runId);
+    return;
+  }
+
+  await waitForEmptyFinalRetry();
+  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
+
+  await get().loadHistory(true);
+  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
+  if (hasNewAssistantOutput(beforeMessages, get().messages)) {
+    completeEmptyFinalFromHistory(set, get, sessionKey, runId);
+    return;
+  }
+
+  set({
+    emptyFinalRecovery: {
+      status: 'checking',
+      sessionKey,
+      runId,
+    },
+  });
+  let diagnostic: Record<string, unknown> | null = null;
+  let hasTrackedActiveRun = false;
+  try {
+    const response = await getEmptyFinalDiagnostic(sessionKey);
+    diagnostic = response.diagnostic ?? null;
+    hasTrackedActiveRun = Boolean(response.hasTrackedActiveRun);
+  } catch (error) {
+    diagnostic = { error: String(error) };
+  }
+  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
+
+  if (hasTrackedActiveRun || !diagnostic || !isDiagnosticRecoverable(diagnostic)) {
+    set({
+      emptyFinalRecovery: {
+        status: 'waiting',
+        sessionKey,
+        runId,
+        reason: hasTrackedActiveRun ? 'tracked-active-run' : diagnostic ? getRecoverySkipReason(diagnostic) : 'missing-diagnostic',
+        diagnostic,
+      },
+      runError: null,
+      pendingFinal: true,
+      sending: false,
+      activeRunId: null,
+    });
+    return;
+  }
+
+  clearHistoryPoll();
+  finishFirstSessionPerf('error', runId);
+  set({
+    error: null,
+    runError: EMPTY_FINAL_NO_RESPONSE_ERROR,
+    emptyFinalRecovery: {
+      status: 'stale',
+      sessionKey,
+      runId,
+      reason: getRecoverySkipReason(diagnostic),
+      diagnostic,
+    },
+    sending: false,
+    activeRunId: null,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingFinal: false,
+    pendingToolImages: [],
+    lastUserMessageAt: null,
+  });
+}
 
 export function handleRuntimeEventState(
   set: ChatSet,
@@ -234,10 +455,12 @@ export function handleRuntimeEventState(
             return normalizeStreamingMessage(event.message ?? currentStream);
           };
           if (isForegroundEvent) {
+            surfaceRuntimeCompressionStatus(set, event.message as RawMessage | undefined, targetSessionKey);
             set((s) => ({
               streamingMessage: computeNewStreamingMessage(s.streamingMessage),
               streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
             }));
+            maybeCompressRuntimeContext(set, get, runId);
           } else {
             const prev = getBackgroundSessionState();
             patchBackgroundSessionState({
@@ -266,6 +489,7 @@ export function handleRuntimeEventState(
             }
 
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
+            surfaceRuntimeCompressionStatus(set, normalizedFinalMessage, targetSessionKey);
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
               const messageError = getMessageErrorMessage(normalizedFinalMessage);
               if (isSuppressedRunError(messageError)) {
@@ -337,6 +561,7 @@ export function handleRuntimeEventState(
 
           if (finalMsg) {
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
+            surfaceRuntimeCompressionStatus(set, normalizedFinalMessage, targetSessionKey);
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
               const messageError = getMessageErrorMessage(normalizedFinalMessage);
               if (isUserSecurityDenialMessage(messageError)) {
@@ -443,8 +668,15 @@ export function handleRuntimeEventState(
                 // would be overwritten by the next turn's deltas and never appear in the UI.
                 const currentStream = s.streamingMessage as RawMessage | null;
                 const snapshotMsgs = snapshotStreamingAssistantMessage(currentStream, s.messages, runId);
+                // Also add the tool result itself so token estimation includes tool outputs.
+                const toolResultMsg = { ...normalizedFinalMessage, id: normalizedFinalMessage.id || `tool-result-${runId}-${Date.now()}` };
+                const alreadyHasToolResult = s.messages.some((m) => m.id === toolResultMsg.id);
                 return {
-                  messages: snapshotMsgs.length > 0 ? [...s.messages, ...snapshotMsgs] : s.messages,
+                  messages: [
+                    ...s.messages,
+                    ...snapshotMsgs,
+                    ...(alreadyHasToolResult ? [] : [toolResultMsg]),
+                  ],
                   streamingText: '',
                   streamingMessage: null,
                   pendingFinal: true,
@@ -454,6 +686,7 @@ export function handleRuntimeEventState(
                   streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
                 };
               });
+              maybeCompressRuntimeContext(set, get, runId);
               break;
             }
             const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
@@ -514,6 +747,7 @@ export function handleRuntimeEventState(
                 ...clearPendingImages,
               };
             });
+            maybeCompressRuntimeContext(set, get, runId);
             // Queue management/claw/report records for token consume + skill invoke
             // before the message is shipped off to history reload — we operate on
             // the normalized payload so usage / tool_use blocks are stable.
@@ -524,6 +758,7 @@ export function handleRuntimeEventState(
             if (hasOutput && !toolOnly) {
               finishFirstSessionPerf('final', runId);
               clearHistoryPoll();
+              maybeCompressRuntimeContext(set, get, { requireActiveRun: false, throttle: false });
               void get().loadHistory(true);
               const pendingPlan = getPendingComplexTaskPlan(get().currentSessionKey);
               const finalText = getMessageText(normalizedFinalMessage.content);
@@ -545,8 +780,19 @@ export function handleRuntimeEventState(
             }
           } else {
             // No message in final event - reload history to get complete data
-            set({ streamingText: '', streamingMessage: null, pendingFinal: true, runError: null });
-            get().loadHistory();
+            set({
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              sending: false,
+              activeRunId: null,
+              pendingFinal: false,
+              pendingToolImages: [],
+              lastUserMessageAt: null,
+              runError: null,
+            });
+            clearHistoryPoll();
+            void get().loadHistory(true);
           }
           break;
         }

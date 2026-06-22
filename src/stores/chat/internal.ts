@@ -22,7 +22,12 @@ export const initialChatState: Pick<
   | 'messages'
   | 'loading'
   | 'error'
+  | 'runError'
+  | 'emptyFinalRecovery'
+  | 'securityCancelNotice'
+  | 'prefilledInput'
   | 'sending'
+  | 'aborting'
   | 'activeRunId'
   | 'streamingText'
   | 'streamingMessage'
@@ -30,17 +35,30 @@ export const initialChatState: Pick<
   | 'pendingFinal'
   | 'lastUserMessageAt'
   | 'pendingToolImages'
+  | 'runawayToolObservation'
+  | 'sessionRunawayToolObservations'
+  | 'runAborted'
   | 'sessions'
   | 'currentSessionKey'
   | 'currentAgentId'
   | 'sessionLabels'
+  | 'sessionCompressionState'
+  | 'contextCompressionStatus'
+  | 'customSessionLabels'
   | 'sessionLastActivity'
+  | 'sessionWorkspaceIds'
+  | 'sessionPinnedAt'
+  | 'sessionStreamingStates'
   | 'thinkingLevel'
   | 'reasoningMode'
 > = {
   messages: [],
   loading: false,
   error: null,
+  runError: null,
+  emptyFinalRecovery: { status: 'idle' },
+  securityCancelNotice: null,
+  prefilledInput: null,
 
   sending: false,
   aborting: false,
@@ -51,12 +69,21 @@ export const initialChatState: Pick<
   pendingFinal: false,
   lastUserMessageAt: null,
   pendingToolImages: [],
+  runawayToolObservation: null,
+  sessionRunawayToolObservations: {},
+  runAborted: false,
 
   sessions: [],
   currentSessionKey: DEFAULT_SESSION_KEY,
   currentAgentId: 'main',
   sessionLabels: {},
+  contextCompressionStatus: null,
+  customSessionLabels: {},
   sessionLastActivity: {},
+  sessionWorkspaceIds: {},
+  sessionPinnedAt: {},
+  sessionStreamingStates: {},
+  sessionCompressionState: {},
 
   thinkingLevel: null,
   reasoningMode: loadStoredReasoningMode(),
@@ -75,6 +102,7 @@ export function createChatActions(
   | 'loadHistory'
   | 'sendMessage'
   | 'abortRun'
+  | 'recoverCurrentSession'
   | 'setReasoningMode'
   | 'handleChatEvent'
   | 'refresh'

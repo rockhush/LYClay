@@ -855,11 +855,20 @@ function buildCronUpdatePatch(input: Record<string, unknown>): Record<string, un
 
   if (typeof patch.message === 'string') {
     patch.payload = { kind: 'agentTurn', message: patch.message };
+    patch.sessionTarget = 'isolated';
     delete patch.message;
   }
 
   if ('delivery' in patch) {
     patch.delivery = normalizeCronDeliveryPatch(patch.delivery);
+  }
+
+  if ('agentId' in patch) {
+    const agentId = typeof patch.agentId === 'string' && patch.agentId.trim()
+      ? patch.agentId.trim()
+      : 'main';
+    patch.agentId = agentId;
+    patch.sessionTarget = 'isolated';
   }
 
   return patch;
@@ -1370,6 +1379,7 @@ function registerGatewayHandlers(
     deliver?: boolean;
     idempotencyKey: string;
     media?: Array<{ filePath: string; mimeType: string; fileName: string }>;
+    extraSystemPrompt?: string;
     executeAsAgentId?: string;
     executedByAgentName?: string;
   }) => {
@@ -1435,6 +1445,9 @@ function registerGatewayHandlers(
 
       if (imageAttachments.length > 0) {
         rpcParams.attachments = imageAttachments;
+      }
+      if (params.extraSystemPrompt) {
+        rpcParams.extraSystemPrompt = params.extraSystemPrompt;
       }
       if (params.executeAsAgentId) {
         rpcParams.executeAsAgentId = params.executeAsAgentId;

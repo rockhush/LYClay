@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Info, Loader2, Sparkles } from 'lucide-react';
 import chatDoubleIcon from '@/assets/chat-double.svg';
-import { useChatStore, type RawMessage } from '@/stores/chat';
+import { useChatStore, type ContextCompressionStatus, type RawMessage } from '@/stores/chat';
 import { useGatewayStore } from '@/stores/gateway';
 import { useProviderStore } from '@/stores/providers';
 import { useAgentsStore } from '@/stores/agents';
@@ -25,8 +25,7 @@ import { cn } from '@/lib/utils';
 import { isSuppressedRunError } from '@/stores/chat/helpers';
 import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
 import { useMinLoading } from '@/hooks/use-min-loading';
-import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
-import { getChatWaitingMode, isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
+import { getChatWaitingMode } from '@/lib/chat-first-response-preparing';
 import { useSkillsStore } from '@/stores/skills';
 import { toast } from 'sonner';
 import { formatWelcomeDisplayName } from '@/lib/welcome-display-name';
@@ -176,7 +175,6 @@ export function Chat() {
   const { t } = useTranslation('chat');
   const gatewayStatus = useGatewayStore((s) => s.status);
   const isGatewayRunning = gatewayStatus.state === 'running';
-  const warmupStatus = gatewayStatus.warmupStatus;
 
   const [editingText, setEditingText] = useState<string | null>(null);
   const prefilledInput = useChatStore((s) => s.prefilledInput);
@@ -190,13 +188,16 @@ export function Chat() {
   const sending = useChatStore((s) => s.sending);
   const activeRunId = useChatStore((s) => s.activeRunId);
   const error = useChatStore((s) => s.error);
+  const emptyFinalRecovery = useChatStore((s) => s.emptyFinalRecovery);
   const securityCancelNotice = useChatStore((s) => s.securityCancelNotice);
+  const contextCompressionStatus = useChatStore((s) => s.contextCompressionStatus);
   const streamingMessage = useChatStore((s) => s.streamingMessage);
   const streamingText = useChatStore((s) => s.streamingText);
   const streamingTools = useChatStore((s) => s.streamingTools);
   const pendingFinal = useChatStore((s) => s.pendingFinal);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const abortRun = useChatStore((s) => s.abortRun);
+  const recoverCurrentSession = useChatStore((s) => s.recoverCurrentSession);
   const clearError = useChatStore((s) => s.clearError);
   const newSession = useChatStore((s) => s.newSession);
   const clearSecurityCancelNotice = useChatStore((s) => s.clearSecurityCancelNotice);
@@ -398,6 +399,7 @@ export function Chat() {
   const [activityClock, setActivityClock] = useState(0);
 
   const showFirstResponseProgress = false;
+  const firstResponseProgress = 0;
 
   const chatWaitingMode = getChatWaitingMode({
     gatewayStatus,
@@ -1212,8 +1214,11 @@ export function Chat() {
                   {showFirstResponseProgress && (
                     <FirstResponsePreparing
                       progress={firstResponseProgress}
-                      warmupStatus={warmupStatus}
                     />
+                  )}
+
+                  {contextCompressionStatus && contextCompressionStatus.sessionKey === currentSessionKey && (
+                    <ContextCompressionNotice status={contextCompressionStatus} />
                   )}
 
                   {/* Activity indicator: waiting for next AI turn after tool execution */}
@@ -1247,6 +1252,57 @@ export function Chat() {
             >
               {t('common:actions.dismiss')}
             </button>
+          </div>
+        </div>
+      )}
+
+      {emptyFinalRecovery.status !== 'idle' && emptyFinalRecovery.status !== 'checking' && (
+        <div className="px-4 py-2 bg-muted/60 border-t border-border">
+          <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground flex items-center gap-2 min-w-0">
+              {emptyFinalRecovery.status === 'recovering' ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              ) : (
+                <Info className="h-4 w-4 shrink-0" />
+              )}
+              <span className="truncate">
+                {emptyFinalRecovery.status === 'stale'
+                  ? 'Session appears stale after an empty response. Recover it, then retry manually.'
+                  : emptyFinalRecovery.status === 'waiting'
+                    ? 'Session state is still being confirmed. Wait a moment, stop the run, or start a new session.'
+                    : emptyFinalRecovery.status === 'recovered'
+                      ? 'Session recovered. Retry your last message when ready.'
+                      : emptyFinalRecovery.status === 'failed'
+                        ? `Session recovery unavailable: ${emptyFinalRecovery.reason}`
+                        : 'Recovering session...'}
+              </span>
+            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              {(emptyFinalRecovery.status === 'stale' || emptyFinalRecovery.status === 'failed') && (
+                <button
+                  onClick={() => void recoverCurrentSession()}
+                  className="text-xs px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  Recover session
+                </button>
+              )}
+              {emptyFinalRecovery.status === 'waiting' && (
+                <button
+                  onClick={() => void abortRun()}
+                  className="text-xs px-3 py-1 rounded bg-muted-foreground/10 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Stop run
+                </button>
+              )}
+              {(emptyFinalRecovery.status === 'waiting' || emptyFinalRecovery.status === 'failed') && (
+                <button
+                  onClick={newSession}
+                  className="text-xs text-muted-foreground/70 hover:text-foreground underline"
+                >
+                  {t('common:actions.newSession')}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1391,10 +1447,8 @@ function WelcomeScreen() {
 
 function FirstResponsePreparing({
   progress,
-  warmupStatus,
 }: {
   progress: number;
-  warmupStatus?: 'idle' | 'warming' | 'ready' | 'failed';
 }) {
   const { t } = useTranslation('chat');
   const [mascotSrc, setMascotSrc] = useState<string | null>(null);
@@ -1522,6 +1576,67 @@ function RunTerminationNotice({ summary }: { summary: { title: string; detail: s
       </div>
       <div className="mt-1 text-xs text-destructive/80">
         {summary.detail}
+      </div>
+    </div>
+  );
+}
+
+function formatApproxTokens(tokens?: number): string | null {
+  if (!tokens || !Number.isFinite(tokens)) return null;
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}k tokens`;
+  return `${Math.round(tokens)} tokens`;
+}
+
+function ContextCompressionNotice({ status }: { status: ContextCompressionStatus }) {
+  const isRunning = status.status === 'compressing';
+  const isFallback = status.status === 'fallback';
+  const isFailed = status.status === 'failed';
+  const phaseText = status.phase === 'before-send' ? '发送前' : '运行中';
+  const tokenText = formatApproxTokens(status.estimatedTokens);
+  const compressedText = status.compressedCount
+    ? `已压缩 ${status.compressedCount} 条早期消息`
+    : null;
+
+  const title = isRunning
+    ? `${phaseText}正在压缩上下文`
+    : isFallback
+      ? '上下文已降级压缩'
+      : isFailed
+        ? '上下文压缩失败'
+        : '上下文已压缩';
+
+  const detail = isRunning
+    ? (status.message || '任务会在压缩完成后继续处理。')
+    : isFallback
+      ? (status.message || '摘要生成不可用，已仅保留最近对话继续。')
+      : isFailed
+        ? (status.message || '压缩没有完成，后续可能需要新建会话或减少上下文。')
+        : (status.message || '已用摘要替换早期对话，继续保留最近上下文。');
+
+  return (
+    <div
+      className={cn(
+        'ml-10 rounded-lg border px-3 py-2 text-sm',
+        isFailed
+          ? 'border-destructive/25 bg-destructive/5 text-destructive/90'
+          : 'border-[#FF922B]/25 bg-[#FF922B]/5 text-foreground',
+      )}
+      data-testid="chat-context-compression-notice"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-2">
+        {isRunning ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#FF922B] shrink-0" />
+        ) : isFailed ? (
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <Info className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
+        )}
+        <span className="font-medium">{title}</span>
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">
+        {[detail, tokenText, compressedText].filter(Boolean).join(' | ')}
       </div>
     </div>
   );

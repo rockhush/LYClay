@@ -12,16 +12,27 @@ import { assertCommandAllowedWithConfirmation } from '../security/confirmation-s
  * Get the path to the bundled uv binary
  */
 function getBundledUvPath(): string {
+  return getBundledUvPathCandidates()[0];
+}
+
+function getBundledUvPathCandidates(): string[] {
   const platform = process.platform;
   const arch = process.arch;
   const target = `${platform}-${arch}`;
   const binName = platform === 'win32' ? 'uv.exe' : 'uv';
 
   if (app.isPackaged) {
-    return join(process.resourcesPath, 'bin', binName);
-  } else {
-    return join(process.cwd(), 'resources', 'bin', target, binName);
+    return [
+      join(process.resourcesPath, 'bin', binName),
+      join(process.resourcesPath, 'resources', 'bin', target, binName),
+      join(process.resourcesPath, 'resources', 'bin', 'uv', target, binName),
+    ];
   }
+
+  return [
+    join(process.cwd(), 'resources', 'bin', target, binName),
+    join(process.cwd(), 'resources', 'bin', 'uv', target, binName),
+  ];
 }
 
 function getBundledPythonDir(): string | null {
@@ -37,21 +48,23 @@ function getBundledPythonDir(): string | null {
  * In dev we fall through to the system PATH for convenience.
  */
 function resolveUvBin(): { bin: string; source: 'bundled' | 'path' | 'bundled-fallback' } {
-  const bundled = getBundledUvPath();
+  const bundledCandidates = getBundledUvPathCandidates();
+  const bundled = bundledCandidates[0];
+  const existingBundled = bundledCandidates.find((candidate) => existsSync(candidate));
 
   if (app.isPackaged) {
-    if (existsSync(bundled)) {
-      return { bin: bundled, source: 'bundled' };
+    if (existingBundled) {
+      return { bin: existingBundled, source: 'bundled' };
     }
-    logger.warn(`Bundled uv binary not found at ${bundled}, falling back to system PATH`);
+    logger.warn(`Bundled uv binary not found at ${bundledCandidates.join(', ')}, falling back to system PATH`);
   }
 
   // Dev mode or missing bundled binary — check system PATH
   const found = findUvInPathSync();
   if (found) return { bin: 'uv', source: 'path' };
 
-  if (existsSync(bundled)) {
-    return { bin: bundled, source: 'bundled-fallback' };
+  if (existingBundled) {
+    return { bin: existingBundled, source: 'bundled-fallback' };
   }
 
   return { bin: 'uv', source: 'path' };

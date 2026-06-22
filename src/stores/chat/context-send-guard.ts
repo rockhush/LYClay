@@ -2,9 +2,9 @@ import i18n from '@/i18n';
 import { hostApiFetch } from '@/lib/host-api';
 import { estimateHistoryTokens, estimateMessageTokens } from '@/lib/token-estimator';
 import { useAgentsStore } from '@/stores/agents';
-import { compressHistory, type InvokeRpcFn } from './context-compactor';
+import { invokeSessionCompact, type InvokeRpcFn } from './context-compactor';
 import { DEFAULT_CONTEXT_WINDOW, resolveContextBudget, type ContextBudget } from './context-budget';
-import type { CompressionStateEntry, RawMessage } from './types';
+import type { CompressionStateEntry, ContextCompressionStatus, RawMessage } from './types';
 
 export type ContextSendGuardError = 'contextTooLarge' | 'currentMessageTooLarge';
 
@@ -15,6 +15,7 @@ export interface ContextSendGuardResult {
   error?: ContextSendGuardError;
   errorMessage?: string;
   compressionMeta?: CompressionStateEntry;
+  gatewayCompacted?: boolean;
 }
 
 export interface PrepareContextBeforeSendInput {
@@ -26,7 +27,11 @@ export interface PrepareContextBeforeSendInput {
   isInternalStagedExecution: boolean;
   invokeCompactorRpc: InvokeRpcFn;
   persistedCompressionState?: CompressionStateEntry | null;
+  onCompressionStatus?: (status: ContextCompressionStatus | null) => void;
 }
+
+const COMPACTION_COOLDOWN_MS = 30000;
+const lastCompactionAttemptAt = new Map<string, number>();
 
 interface ModelContextResponse {
   modelRef?: string | null;
@@ -48,7 +53,7 @@ function getModelRefForSession(sessionKey: string): string | null {
   return agent?.modelRef ?? state.defaultModelRef ?? null;
 }
 
-async function resolveContextWindowForSession(sessionKey: string): Promise<number> {
+export async function resolveContextWindowForSession(sessionKey: string): Promise<number> {
   const modelRef = getModelRefForSession(sessionKey);
   if (!modelRef) return DEFAULT_CONTEXT_WINDOW;
   if (modelContextWindowCache.has(modelRef)) {
@@ -94,11 +99,13 @@ function buildResult(
   budget: ContextBudget,
   compressed: boolean,
   error?: ContextSendGuardError,
+  gatewayCompacted = false,
 ): ContextSendGuardResult {
   return {
     messages,
     budget,
     compressed,
+    gatewayCompacted,
     error,
     errorMessage: error === 'currentMessageTooLarge'
       ? getCurrentMessageTooLargeMessage()
@@ -106,6 +113,24 @@ function buildResult(
         ? getContextTooLargeMessage()
         : undefined,
   };
+}
+
+/**
+ * Read Gateway's authoritative token count for a session.
+ * Priority: 1) totalTokens from sessions.json (post-model-call),
+ *           2) jsonlTokens estimated from JSONL file size (real-time).
+ */
+async function fetchGatewayTokenCount(sessionKey: string): Promise<number> {
+  try {
+    const res = await hostApiFetch<{ totalTokens?: number; jsonlTokens?: number }>(
+      `/api/sessions/token-usage?sessionKey=${encodeURIComponent(sessionKey)}`,
+    );
+    if (typeof res?.totalTokens === 'number' && res.totalTokens > 0) return Math.ceil(res.totalTokens);
+    if (typeof res?.jsonlTokens === 'number' && res.jsonlTokens > 0) return res.jsonlTokens;
+    return 0;
+  } catch {
+    return 0;
+  }
 }
 
 export async function prepareContextBeforeSend(input: PrepareContextBeforeSendInput): Promise<ContextSendGuardResult> {
@@ -123,50 +148,86 @@ export async function prepareContextBeforeSend(input: PrepareContextBeforeSendIn
     return buildResult(input.messages, budget, false, 'currentMessageTooLarge');
   }
 
-  let nextMessages = input.messages;
+  // Use Gateway's authoritative totalTokens from sessions.json.
+  // Falls back to renderer estimate when Gateway hasn't written usage yet.
+  const gatewayTokens = await fetchGatewayTokenCount(input.sessionKey);
+  const rendererEstimate = estimateHistoryTokens([...input.messages, pendingRuntimeMessage]);
+  let estimatedTokens = gatewayTokens > 0 ? gatewayTokens : rendererEstimate;
+
+  console.log('[context-compress] send-guard check', {
+    sessionKey: input.sessionKey,
+    gatewayTokens,
+    rendererEstimate,
+    estimatedTokens,
+    triggerTokens: budget.compressionTriggerTokens,
+    hardLimitTokens: budget.hardLimitTokens,
+  });
+
   let compressed = false;
+  let gatewayCompacted = false;
   let compressionMeta: CompressionStateEntry | undefined;
-  let estimatedTokens = estimateHistoryTokens([...nextMessages, pendingRuntimeMessage]);
 
-  if (nextMessages.length >= 10 && estimatedTokens >= budget.compressionTriggerTokens) {
-    const compression = await compressHistory(
-      nextMessages,
-      input.sessionKey,
-      input.invokeCompactorRpc,
-      {
-        threshold: budget.compressionTriggerTokens,
-        keepRecentTokens: budget.recentRawTokens,
-        summaryTokens: budget.summaryTokens,
-        hardLimitTokens: budget.hardLimitTokens,
-      },
-      input.persistedCompressionState,
-    );
-
-    if (compression) {
-      nextMessages = [compression.summaryMessage, ...compression.compressedMessages];
-      compressed = true;
-      compressionMeta = {
-        summaryText: compression.summaryMessage.content as string,
-        compressedCount: compression.compressedCount,
-        totalMessagesAtCompression: compression.totalMessagesAtCompression,
-        compressedTokens: compression.compressedTokens,
-        compressedAt: Date.now(),
-        isTruncation: compression.isTruncation,
-      };
-      estimatedTokens = estimateHistoryTokens([...nextMessages, pendingRuntimeMessage]);
-      console.log('[context-send-guard] compressed context before send', {
+  if (estimatedTokens >= budget.compressionTriggerTokens) {
+    // Cooldown guard
+    const now = Date.now();
+    const lastAttempt = lastCompactionAttemptAt.get(input.sessionKey) ?? 0;
+    if (now - lastAttempt < COMPACTION_COOLDOWN_MS) {
+      console.log('[context-compress] send-guard skipped (cooldown)', {
         sessionKey: input.sessionKey,
-        originalCount: compression.originalCount,
-        estimatedTokens,
-        hardLimitTokens: budget.hardLimitTokens,
-        contextWindow: budget.contextWindow,
+        msSinceLast: now - lastAttempt,
       });
+    } else {
+      lastCompactionAttemptAt.set(input.sessionKey, now);
+
+      input.onCompressionStatus?.({
+        status: 'compressing',
+        phase: 'before-send',
+        sessionKey: input.sessionKey,
+        startedAt: now,
+        estimatedTokens,
+        triggerTokens: budget.compressionTriggerTokens,
+        hardLimitTokens: budget.hardLimitTokens,
+      });
+
+      try {
+        const gwResult = await invokeSessionCompact(input.sessionKey, input.invokeCompactorRpc);
+        gatewayCompacted = gwResult.compacted;
+        console.log('[context-compress] sessions.compact result:', {
+          sessionKey: input.sessionKey,
+          compacted: gwResult.compacted,
+          reason: gwResult.reason,
+          tokensAfter: gwResult.tokensAfter,
+        });
+      } catch (_err) {
+        // invokeSessionCompact already logs
+      }
+
+      if (gatewayCompacted) {
+        compressed = true;
+        compressionMeta = {
+          summaryText: '',
+          compressedCount: 0,
+          totalMessagesAtCompression: input.messages.length,
+          compressedTokens: estimatedTokens,
+          compressedAt: now,
+          isTruncation: false,
+          gatewayCompacted: true,
+        };
+        input.onCompressionStatus?.({
+          status: 'compressed',
+          phase: 'before-send',
+          sessionKey: input.sessionKey,
+          startedAt: now,
+          finishedAt: Date.now(),
+          estimatedTokens,
+          triggerTokens: budget.compressionTriggerTokens,
+          hardLimitTokens: budget.hardLimitTokens,
+        });
+      } else {
+        input.onCompressionStatus?.(null);
+      }
     }
   }
 
-  if (estimatedTokens > budget.hardLimitTokens) {
-    return { ...buildResult(nextMessages, budget, compressed, 'contextTooLarge'), compressionMeta };
-  }
-
-  return { ...buildResult(nextMessages, budget, compressed), compressionMeta };
+  return { ...buildResult(input.messages, budget, compressed, undefined, gatewayCompacted), compressionMeta };
 }

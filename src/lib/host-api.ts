@@ -334,3 +334,48 @@ export async function checkDeviceAccess(force = false): Promise<DeviceAccessResu
     method: force ? 'POST' : 'GET',
   });
 }
+
+export type EmptyFinalDiagnosticResponse = {
+  success: boolean;
+  diagnostic: Record<string, unknown> | null;
+  hasTrackedActiveRun?: boolean;
+  error?: string;
+};
+
+export type SessionRecoveryResult =
+  | {
+      ok: true;
+      recovered: true;
+      sessionKey: string;
+      previousStatus: string | null;
+      nextStatus: string;
+      removedLockPath: string | null;
+      reason: 'stale-empty-final';
+    }
+  | {
+      ok: true;
+      recovered: false;
+      sessionKey: string;
+      reason: string;
+      details?: Record<string, unknown>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export async function getEmptyFinalDiagnostic(sessionKey: string): Promise<EmptyFinalDiagnosticResponse> {
+  return hostApiFetch<EmptyFinalDiagnosticResponse>(
+    `/api/sessions/empty-final-diagnostic?sessionKey=${encodeURIComponent(sessionKey)}`,
+  );
+}
+
+export async function recoverStaleSessionAfterEmptyFinal(sessionKey: string): Promise<{ success: boolean; result?: SessionRecoveryResult; error?: string }> {
+  return hostApiFetch<{ success: boolean; result?: SessionRecoveryResult; error?: string }>(
+    '/api/sessions/recover-stale',
+    {
+      method: 'POST',
+      body: JSON.stringify({ sessionKey }),
+    },
+  );
+}

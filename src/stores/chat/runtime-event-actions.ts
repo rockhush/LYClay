@@ -12,10 +12,10 @@ import {
   setLastChatEventAt,
   upsertToolStatuses,
 } from './helpers';
-import type { RawMessage } from './types';
 import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
 import { handleRuntimeEventState } from './runtime-event-handlers';
 import type { RawMessage, SessionStreamingState } from './types';
+import { observeRunawayToolEvent } from './runaway-tool-observer';
 
 function createEmptySessionStreamingState(): SessionStreamingState {
   return {
@@ -28,6 +28,7 @@ function createEmptySessionStreamingState(): SessionStreamingState {
     pendingToolImages: [],
     runAborted: false,
     sending: false,
+    runError: null,
     messagesSnapshot: [],
   };
 }
@@ -44,6 +45,7 @@ function snapshotCurrentStreamingState(get: ChatGet): SessionStreamingState {
     pendingToolImages: state.pendingToolImages,
     runAborted: state.runAborted,
     sending: state.sending,
+    runError: state.runError,
     messagesSnapshot: state.messages.length > 0
       ? [...state.messages]
       : (state.sessionStreamingStates[state.currentSessionKey]?.messagesSnapshot ?? []),
@@ -84,6 +86,7 @@ function applyBackgroundChatEvent(
     case 'started':
       next.sending = true;
       next.runAborted = false;
+      next.runError = null;
       break;
     case 'delta': {
       if (event.message && typeof event.message === 'object') {
@@ -101,6 +104,7 @@ function applyBackgroundChatEvent(
       next.streamingTools = updates.length > 0 ? upsertToolStatuses(next.streamingTools, updates) : next.streamingTools;
       next.sending = true;
       next.runAborted = false;
+      next.runError = null;
       break;
     }
     case 'final': {
@@ -136,6 +140,7 @@ function applyBackgroundChatEvent(
       next.pendingToolImages = [];
       next.lastUserMessageAt = null;
       next.runAborted = false;
+      next.runError = null;
       break;
     }
     case 'error':
@@ -238,10 +243,44 @@ function finalizeBackgroundSessionRunIfCompleted(
         lastUserMessageAt: null,
         pendingToolImages: [],
         runAborted: aborted,
+        runError: null,
         // Drop the snapshot so switching back triggers a fresh loadHistory()
         // that surfaces the authoritative, completed transcript.
         messagesSnapshot: [],
       },
+    },
+  }));
+}
+
+function recordRunawayToolObservation(
+  set: ChatSet,
+  get: ChatGet,
+  event: Record<string, unknown>,
+  resolvedState: string,
+  runId: string,
+  sessionKey: string,
+): void {
+  const state = get();
+  const currentObservation = sessionKey === state.currentSessionKey
+    ? state.runawayToolObservation
+    : state.sessionRunawayToolObservations[sessionKey] ?? null;
+  const toolUpdates = collectToolUpdates(event.message, resolvedState);
+  const nextObservation = observeRunawayToolEvent({
+    observation: currentObservation,
+    event,
+    resolvedState,
+    runId,
+    sessionKey,
+    toolUpdates,
+  });
+
+  if (!nextObservation || nextObservation === currentObservation) return;
+
+  set((s) => ({
+    runawayToolObservation: sessionKey === s.currentSessionKey ? nextObservation : s.runawayToolObservation,
+    sessionRunawayToolObservations: {
+      ...s.sessionRunawayToolObservations,
+      [sessionKey]: nextObservation,
     },
   }));
 }
@@ -305,6 +344,7 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
       // finalize that background session's saved state so switching back shows
       // the completed answer instead of a frozen "thinking…" state.
       if (eventSessionKey != null && eventSessionKey !== currentSessionKey) {
+        recordRunawayToolObservation(set, get, event, resolvedState, runId, eventSessionKey);
         finalizeBackgroundSessionRunIfCompleted(set, get, eventSessionKey, event, resolvedState, runId);
         return;
       }
@@ -322,6 +362,9 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
         const nextSessionStreamingStates = applyBackgroundChatEvent(get, eventSessionKey, event, resolvedState, runId);
         if (nextSessionStreamingStates) {
           set({ sessionStreamingStates: nextSessionStreamingStates });
+        }
+        if (eventSessionKey) {
+          recordRunawayToolObservation(set, get, event, resolvedState, runId, eventSessionKey);
         }
         return;
       }
@@ -350,6 +393,7 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
         }
       }
 
+      recordRunawayToolObservation(set, get, event, resolvedState, runId, currentSessionKey);
       handleRuntimeEventState(set, get, event, resolvedState, runId);
       set((s) => ({
         sessionStreamingStates: {

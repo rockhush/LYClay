@@ -62,6 +62,7 @@ describe('createRuntimeSendActions', () => {
       sessions: [{ key: 'agent:main:session-test', displayName: 'test' }],
       sessionLabels: {},
       sessionLastActivity: {},
+      sessionStreamingStates: {},
       streamingText: '',
       streamingMessage: null,
       streamingTools: [],
@@ -72,6 +73,8 @@ describe('createRuntimeSendActions', () => {
       pendingToolImages: [],
       sending: false,
       lastUserMessageAt: null,
+      runawayToolObservation: null,
+      sessionRunawayToolObservations: {},
       loadHistory: vi.fn(),
     };
     const set = vi.fn((partial: unknown) => {
@@ -121,5 +124,67 @@ describe('createRuntimeSendActions', () => {
     expect(h.state.sending).toBe(false);
     expect(h.state.activeRunId).toBeNull();
     expect(h.state.securityCancelNotice).toBeTruthy();
+  });
+  it('initializes and binds runaway tool observation for document/data tasks', async () => {
+    invokeIpc.mockResolvedValue({
+      success: true,
+      result: { runId: 'run-observed' },
+    });
+    const { createRuntimeSendActions } = await import('@/stores/chat/runtime-send-actions');
+    const h = makeHarness();
+    const actions = createRuntimeSendActions(h.set as never, h.get as never);
+
+    await actions.sendMessage('Please calculate VMI replenishment from the spreadsheet', [
+      {
+        fileName: 'vmi.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        fileSize: 1024,
+        stagedPath: 'C:\\tmp\\vmi.xlsx',
+        preview: null,
+      },
+    ]);
+
+    expect(invokeIpc).toHaveBeenCalledWith(
+      'chat:sendWithMedia',
+      expect.objectContaining({
+        extraSystemPrompt: expect.stringContaining('Spreadsheet tasks'),
+      }),
+    );
+    expect(h.state.runawayToolObservation).toEqual(expect.objectContaining({
+      runId: 'run-observed',
+      sessionKey: 'agent:main:session-test',
+      taskKind: 'spreadsheet',
+      toolCallCount: 0,
+      initialStrategyInjected: true,
+    }));
+    expect((h.state.sessionRunawayToolObservations as Record<string, unknown>)['agent:main:session-test']).toEqual(
+      expect.objectContaining({ runId: 'run-observed', taskKind: 'spreadsheet' }),
+    );
+  });
+
+  it('injects convergence strategy for text-only document tasks', async () => {
+    invokeIpc.mockResolvedValue({
+      success: true,
+      result: { runId: 'run-pdf' },
+    });
+    const { createRuntimeSendActions } = await import('@/stores/chat/runtime-send-actions');
+    const h = makeHarness();
+    const actions = createRuntimeSendActions(h.set as never, h.get as never);
+
+    await actions.sendMessage('Summarize report.pdf and extract the key table');
+
+    expect(invokeIpc).toHaveBeenCalledWith(
+      'gateway:rpc',
+      'chat.send',
+      expect.objectContaining({
+        extraSystemPrompt: expect.stringContaining('PDF tasks'),
+      }),
+      expect.any(Number),
+    );
+    expect(h.state.runawayToolObservation).toEqual(expect.objectContaining({
+      runId: 'run-pdf',
+      taskKind: 'pdf',
+      initialStrategyInjected: true,
+    }));
   });
 });

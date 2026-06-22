@@ -3,7 +3,7 @@
  * Manages the OpenClaw Gateway process lifecycle
  */
 import { app } from 'electron';
-import { stat } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import path from 'path';
 import { homedir } from 'os';
 import { EventEmitter } from 'events';
@@ -74,7 +74,12 @@ import { runGatewayStartupSequence } from './startup-orchestrator';
 import { isInvalidConfigSignal } from './startup-recovery';
 import { ensureClawXContext } from '../utils/openclaw-workspace';
 import { handleGatewayExecApprovalRequested } from './exec-approval-bridge';
-import { recoverOrphanedSessionTranscriptLock } from './session-lock-recovery';
+import {
+  recoverOrphanedSessionTranscriptLock,
+  recoverStaleSessionAfterEmptyFinal,
+  type SessionTranscriptLockRecoveryResult,
+  type StaleSessionRecoveryResult,
+} from './session-lock-recovery';
 
 export interface GatewayStatus {
   state: GatewayLifecycleState;
@@ -123,6 +128,39 @@ export interface GatewayDiagnosticsSnapshot {
   lastSocketCloseCode?: number;
   consecutiveRpcFailures: number;
 }
+
+type TrackedChatRunSnapshot = Array<{
+  runId: string;
+  kind: 'user' | 'warmup';
+  sessionKey?: string;
+  ageSinceAcceptedMs: number;
+  ageSinceRequestedMs: number;
+  hasFirstDelta: boolean;
+  hasFirstVisibleProgress: boolean;
+  firstVisibleProgressKind?: string;
+}>;
+
+export type EmptyFinalDiagnostic = {
+  runId: string;
+  sessionKey?: string;
+  recordedAt: number;
+  totalSinceAcceptedMs: number;
+  totalSinceRequestedMs: number;
+  timeToFirstEventMs: number | null;
+  timeToFirstDeltaMs: number | null;
+  timeToFirstVisibleProgressMs: number | null;
+  firstVisibleProgressKind?: string;
+  rpcDurationMs: number;
+  trackedChatRunsBeforeCompletion: TrackedChatRunSnapshot;
+  gatewayPid: number;
+  recoveryResult?: SessionTranscriptLockRecoveryResult;
+  sessionStoreEntry?: unknown;
+  sessionFiles?: unknown;
+  transcriptFile?: unknown;
+  transcriptLock?: unknown;
+  transcriptLockOwner?: unknown;
+  sessionStoreReadError?: string;
+};
 
 function isTransportRpcFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -192,6 +230,7 @@ export class GatewayManager extends EventEmitter {
   public static readonly RESTART_COOLDOWN_MS = 5_000;
   private static readonly GATEWAY_READY_FALLBACK_MS = 2_000;
   private static readonly GATEWAY_READY_PROBE_TIMEOUT_MS = 1_500;
+  private static readonly TERMINAL_LOCK_AUDIT_DELAY_MS = 5_000;
   private lastRestartAt = 0;
   /** Set by scheduleReconnect() before calling start() to signal auto-reconnect. */
   private isAutoReconnectStart = false;
@@ -221,6 +260,8 @@ export class GatewayManager extends EventEmitter {
     firstEventWatchdogTimers?: NodeJS.Timeout[];
     firstVisibleProgressWatchdogTimers?: NodeJS.Timeout[];
   }>();
+  private readonly emptyFinalDiagnosticsBySession = new Map<string, EmptyFinalDiagnostic>();
+  private readonly terminalLockAuditTimersBySession = new Map<string, NodeJS.Timeout>();
   private warmupRunWaiters = new Map<string, {
     resolve: (state: string) => void;
     reject: (error: Error) => void;
@@ -815,6 +856,10 @@ export class GatewayManager extends EventEmitter {
     }
     this.clearWarmupTimer();
     this.clearGatewayReadyFallback();
+    for (const timer of this.terminalLockAuditTimersBySession.values()) {
+      clearTimeout(timer);
+    }
+    this.terminalLockAuditTimersBySession.clear();
   }
 
   private clearWarmupTimer(): void {
@@ -1086,16 +1131,7 @@ export class GatewayManager extends EventEmitter {
       .slice(0, 20);
   }
 
-  private getTrackedChatRunSnapshot(now = Date.now()): Array<{
-    runId: string;
-    kind: 'user' | 'warmup';
-    sessionKey?: string;
-    ageSinceAcceptedMs: number;
-    ageSinceRequestedMs: number;
-    hasFirstDelta: boolean;
-    hasFirstVisibleProgress: boolean;
-    firstVisibleProgressKind?: string;
-  }> {
+  private getTrackedChatRunSnapshot(now = Date.now()): TrackedChatRunSnapshot {
     return [...this.chatRunMetrics.entries()].map(([runId, run]) => ({
       runId,
       kind: run.kind,
@@ -1132,6 +1168,24 @@ export class GatewayManager extends EventEmitter {
     }
   }
 
+  private async readJsonSnapshot<T>(filePath: string): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+    try {
+      return { ok: true, value: JSON.parse(await readFile(filePath, 'utf8')) as T };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  private isPidAlive(pid: unknown): boolean | null {
+    if (!Number.isInteger(pid) || (pid as number) <= 0) return null;
+    try {
+      process.kill(pid as number, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private getSessionDiagnosticsPaths(sessionKey?: string): string[] {
     const openclawDir = path.join(homedir(), '.openclaw');
     const agentId = sessionKey?.startsWith('agent:')
@@ -1149,6 +1203,76 @@ export class GatewayManager extends EventEmitter {
       paths.push(path.join(sessionsDir, `${sessionId}.jsonl`));
     }
     return paths;
+  }
+
+  private async getEmptyFinalSessionSnapshot(sessionKey?: string): Promise<Record<string, unknown>> {
+    const openclawDir = path.join(homedir(), '.openclaw');
+    const agentId = sessionKey?.startsWith('agent:')
+      ? sessionKey.split(':')[1] || 'main'
+      : 'main';
+    const sessionsDir = path.join(openclawDir, 'agents', agentId, 'sessions');
+    const sessionsJsonPath = path.join(sessionsDir, 'sessions.json');
+    const sessionFiles = await Promise.all(
+      this.getSessionDiagnosticsPaths(sessionKey).map((filePath) => this.getPathStatSnapshot(filePath)),
+    );
+
+    const snapshot: Record<string, unknown> = {
+      sessionFiles,
+    };
+
+    if (!sessionKey) {
+      return snapshot;
+    }
+
+    const sessionsJson = await this.readJsonSnapshot<Record<string, { sessionFile?: unknown; status?: unknown }>>(sessionsJsonPath);
+    if (!sessionsJson.ok) {
+      snapshot.sessionStoreReadError = sessionsJson.error;
+      return snapshot;
+    }
+
+    const sessionEntry = sessionsJson.value[sessionKey];
+    snapshot.sessionStoreEntry = sessionEntry
+      ? {
+        status: sessionEntry.status,
+        sessionFile: sessionEntry.sessionFile,
+      }
+      : null;
+
+    const rawSessionFile = typeof sessionEntry?.sessionFile === 'string' ? sessionEntry.sessionFile : '';
+    if (!rawSessionFile) {
+      return snapshot;
+    }
+
+    const transcriptPath = path.isAbsolute(rawSessionFile)
+      ? rawSessionFile
+      : path.join(sessionsDir, rawSessionFile);
+    const lockPath = `${transcriptPath}.lock`;
+    const [transcriptStat, lockStat] = await Promise.all([
+      this.getPathStatSnapshot(transcriptPath),
+      this.getPathStatSnapshot(lockPath),
+    ]);
+    snapshot.transcriptFile = transcriptStat;
+    snapshot.transcriptLock = lockStat;
+
+    if (lockStat.exists) {
+      const lockOwner = await this.readJsonSnapshot<{ pid?: unknown; createdAt?: unknown }>(lockPath);
+      if (lockOwner.ok) {
+        const createdAtMs = typeof lockOwner.value.createdAt === 'string'
+          ? Date.parse(lockOwner.value.createdAt)
+          : NaN;
+        snapshot.transcriptLockOwner = {
+          pid: lockOwner.value.pid,
+          createdAt: lockOwner.value.createdAt,
+          lockAgeMs: Number.isFinite(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : null,
+          pidAlive: this.isPidAlive(lockOwner.value.pid),
+          currentGatewayPid: this.process?.pid ?? this.status.pid ?? process.pid,
+        };
+      } else {
+        snapshot.transcriptLockOwner = { readError: lockOwner.error };
+      }
+    }
+
+    return snapshot;
   }
 
   private scheduleChatSendWatchdog(args: {
@@ -1406,6 +1530,79 @@ export class GatewayManager extends EventEmitter {
     });
   }
 
+  private async recordEmptyUserChatFinalDiagnostic(args: {
+    runId: string;
+    sessionKey?: string;
+    totalSinceAcceptedMs: number;
+    totalSinceRequestedMs: number;
+    timeToFirstEventMs: number | null;
+    timeToFirstDeltaMs: number | null;
+    timeToFirstVisibleProgressMs: number | null;
+    firstVisibleProgressKind?: string;
+    rpcDurationMs: number;
+    trackedChatRunsBeforeCompletion: TrackedChatRunSnapshot;
+  }): Promise<void> {
+    const [sessionSnapshot, recoveryResult] = await Promise.all([
+      this.getEmptyFinalSessionSnapshot(args.sessionKey),
+      this.recoverSessionTranscriptLock(args.sessionKey, 'empty-user-chat-final'),
+    ]);
+
+    const diagnostic: EmptyFinalDiagnostic = {
+      ...args,
+      recordedAt: Date.now(),
+      gatewayPid: this.process?.pid ?? this.status.pid ?? process.pid,
+      recoveryResult,
+      ...sessionSnapshot,
+    };
+    if (args.sessionKey) {
+      this.emptyFinalDiagnosticsBySession.set(args.sessionKey, diagnostic);
+    }
+
+    logger.warn('[gateway:session-lock-recovery] user chat run completed without a message', diagnostic);
+  }
+
+  getLatestEmptyFinalDiagnostic(sessionKey: string | null | undefined): EmptyFinalDiagnostic | null {
+    const key = sessionKey?.trim();
+    if (!key) return null;
+    return this.emptyFinalDiagnosticsBySession.get(key) ?? null;
+  }
+
+  hasTrackedUserRunForSession(sessionKey: string | null | undefined): boolean {
+    const key = sessionKey?.trim();
+    if (!key) return false;
+    return [...this.chatRunMetrics.values()].some((run) => run.kind === 'user' && run.sessionKey === key);
+  }
+
+  async recoverStaleSessionAfterEmptyFinal(sessionKey: string | null | undefined): Promise<StaleSessionRecoveryResult> {
+    const key = sessionKey?.trim();
+    if (!key) {
+      return { ok: true, recovered: false, sessionKey: '', reason: 'missing-session-key' };
+    }
+    const diagnostic = this.getLatestEmptyFinalDiagnostic(key);
+    const owner = diagnostic?.transcriptLockOwner as Record<string, unknown> | undefined;
+    const lastProgressAt = typeof diagnostic?.recordedAt === 'number' && diagnostic.timeToFirstVisibleProgressMs != null
+      ? diagnostic.recordedAt
+      : null;
+
+    return await recoverStaleSessionAfterEmptyFinal({
+      sessionKey: key,
+      openclawDir: path.join(homedir(), '.openclaw'),
+      currentPid: this.process?.pid ?? this.status.pid ?? process.pid,
+      hasRecentEmptyFinalNoOutput: Boolean(diagnostic),
+      hasTrackedActiveRun: this.hasTrackedUserRunForSession(key),
+      lastVisibleProgressAt: lastProgressAt,
+      logger,
+    }).then((result) => {
+      if (result.ok && result.recovered) {
+        this.emptyFinalDiagnosticsBySession.delete(key);
+      }
+      return {
+        ...result,
+        ...(result.ok && !result.recovered && owner ? { details: { ...(result.details ?? {}), lastLockOwner: owner } } : {}),
+      } as StaleSessionRecoveryResult;
+    });
+  }
+
   private getRunIdFromRpcResult(result: unknown): string | null {
     if (!result || typeof result !== 'object') {
       return null;
@@ -1625,14 +1822,7 @@ export class GatewayManager extends EventEmitter {
     }
 
     if (state === 'final' || state === 'error' || state === 'aborted') {
-      if (state === 'final' && metrics.kind === 'user' && !event.message) {
-        logger.warn('[gateway:session-lock-recovery] user chat run completed without a message', {
-          runId,
-          sessionKey: metrics.sessionKey,
-          totalSinceAcceptedMs: now - metrics.acceptedAt,
-        });
-        void this.recoverSessionTranscriptLock(metrics.sessionKey, 'empty-user-chat-final');
-      }
+      const shouldRecoverEmptyFinal = state === 'final' && metrics.kind === 'user' && !event.message;
       if (metrics.kind === 'warmup') {
         this.resolveWarmupCompletion(runId, state);
       }
@@ -1661,17 +1851,78 @@ export class GatewayManager extends EventEmitter {
         firstVisibleProgressKind: metrics.firstVisibleProgressKind,
         rpcDurationMs: metrics.rpcDurationMs,
       });
-      if (metrics.kind === 'user') {
-        // finishChatRunTrace({
-        //   runId,
-        //   state,
-        //   sessionKey: metrics.sessionKey,
-        //   totalSinceRequestedMs: now - metrics.requestedAt,
-        //   totalSinceAcceptedMs: now - metrics.acceptedAt,
-        // });
-      }
+      const emptyFinalDiagnostic = shouldRecoverEmptyFinal
+        ? {
+          runId,
+          sessionKey: metrics.sessionKey,
+          totalSinceAcceptedMs: now - metrics.acceptedAt,
+          totalSinceRequestedMs: now - metrics.requestedAt,
+          timeToFirstEventMs: metrics.firstEventAt ? metrics.firstEventAt - metrics.acceptedAt : null,
+          timeToFirstDeltaMs: metrics.firstDeltaAt ? metrics.firstDeltaAt - metrics.acceptedAt : null,
+          timeToFirstVisibleProgressMs: metrics.firstVisibleProgressAt ? metrics.firstVisibleProgressAt - metrics.acceptedAt : null,
+          firstVisibleProgressKind: metrics.firstVisibleProgressKind,
+          rpcDurationMs: metrics.rpcDurationMs,
+          trackedChatRunsBeforeCompletion: this.getTrackedChatRunSnapshot(now),
+        }
+        : null;
       this.chatRunMetrics.delete(runId);
+      if (metrics.kind === 'user') {
+        this.scheduleTerminalSessionLockAudit(metrics.sessionKey, runId, state);
+      }
+      if (emptyFinalDiagnostic) {
+        void this.recordEmptyUserChatFinalDiagnostic(emptyFinalDiagnostic);
+      }
     }
+  }
+
+  private scheduleTerminalSessionLockAudit(
+    sessionKey: string | undefined,
+    runId: string,
+    state: string,
+  ): void {
+    const key = sessionKey?.trim();
+    if (!key) return;
+
+    const existing = this.terminalLockAuditTimersBySession.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    const timer = setTimeout(() => {
+      this.terminalLockAuditTimersBySession.delete(key);
+      void this.auditTerminalSessionTranscriptLock(key, runId, state).catch((error) => {
+        logger.warn('[gateway:session-lock-recovery] terminal lock audit failed', {
+          sessionKey: key,
+          runId,
+          state,
+          error: String(error),
+        });
+      });
+    }, GatewayManager.TERMINAL_LOCK_AUDIT_DELAY_MS);
+    this.terminalLockAuditTimersBySession.set(key, timer);
+  }
+
+  private async auditTerminalSessionTranscriptLock(
+    sessionKey: string,
+    runId: string,
+    state: string,
+  ): Promise<void> {
+    const result = await this.recoverSessionTranscriptLock(
+      sessionKey,
+      `terminal-user-chat-${state}`,
+    );
+    if (!result) return;
+
+    logger.info('[gateway:session-lock-recovery] terminal lock audit completed', {
+      sessionKey,
+      runId,
+      state,
+      recovered: result.recovered,
+      reason: result.recovered ? 'recovered' : result.reason,
+      lockPath: result.lockPath,
+      lockAgeMs: result.lockAgeMs,
+      details: !result.recovered ? result.details : undefined,
+    });
   }
 
   private async prepareForUserChatSend(method: string, params?: unknown): Promise<void> {
@@ -1735,8 +1986,11 @@ export class GatewayManager extends EventEmitter {
     await this.recoverSessionTranscriptLock(sessionKey, reason);
   }
 
-  private async recoverSessionTranscriptLock(sessionKey: string | undefined, reason: string): Promise<void> {
-    if (!sessionKey) return;
+  private async recoverSessionTranscriptLock(
+    sessionKey: string | undefined,
+    reason: string,
+  ): Promise<SessionTranscriptLockRecoveryResult | undefined> {
+    if (!sessionKey) return undefined;
     const hasTrackedActiveRun = [...this.chatRunMetrics.values()].some(
       (run) => run.kind === 'user' && run.sessionKey === sessionKey,
     );
@@ -1746,13 +2000,13 @@ export class GatewayManager extends EventEmitter {
         sessionKey,
         skipReason: 'tracked-active-run',
       });
-      return;
+      return { recovered: false, reason: 'tracked-active-run' };
     }
     try {
       const result = await recoverOrphanedSessionTranscriptLock({
         sessionKey,
         openclawDir: path.join(homedir(), '.openclaw'),
-        currentPid: process.pid,
+        currentPid: this.process?.pid ?? this.status.pid ?? process.pid,
         reason,
         logger,
       });
@@ -1763,14 +2017,17 @@ export class GatewayManager extends EventEmitter {
           skipReason: result.reason,
           lockPath: result.lockPath,
           lockAgeMs: result.lockAgeMs,
+          details: result.details,
         });
       }
+      return result;
     } catch (error) {
       logger.warn('[gateway:session-lock-recovery] failed', {
         reason,
         sessionKey,
         error: String(error),
       });
+      return { recovered: false, reason: 'recovery-failed' };
     }
   }
 
