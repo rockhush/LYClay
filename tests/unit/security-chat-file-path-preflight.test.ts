@@ -190,6 +190,12 @@ describe('chat local file path preflight', () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
+  it('does not treat mime types inside [media attached: ...] as part of the file path', () => {
+    const outbound = 'C:\\Users\\peng.xue\\.openclaw\\media\\outbound\\419af6a5-1111-2222-3333-444444444444.jpg';
+    const message = `Describe this\n\n[media attached: ${outbound} (image/jpeg) | ${outbound}]`;
+    expect(extractLocalFilePathReferences(message)).toEqual([outbound]);
+  });
+
   it('allows a directory reference inside the current workspace', async () => {
     const workspace = await makeTempRoot();
     const dirPath = join(workspace, 'docs');

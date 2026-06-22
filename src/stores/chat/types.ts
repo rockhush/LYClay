@@ -28,6 +28,8 @@ export interface RawMessage {
   executedByAgentId?: string;
   /** Local-only: display name for the executing digital employee. */
   executedByAgentName?: string;
+  /** Local-only: wall time since the previous transcript event when this assistant turn arrived. */
+  _modelCallDurationMs?: number;
 }
 
 /** Content block inside a message */
@@ -238,7 +240,9 @@ export interface ChatState {
   sessionStreamingStates: Record<string, SessionStreamingState>;
   /** Compression state per session, persisted to disk and restored on reload/switch */
   sessionCompressionState: Record<string, CompressionStateEntry | null>;
-  /** User-visible status for automatic context compression. */
+  /** Tool execution durations keyed by toolCallId, derived from local JSONL toolResult rows. */
+  sessionToolDurations: Record<string, Record<string, number>>;
+  /** Live context compression indicator for the active session. */
   contextCompressionStatus: ContextCompressionStatus | null;
 
   // Thinking

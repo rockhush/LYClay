@@ -526,4 +526,87 @@ describe('useChatStore startup history retry', () => {
     );
     infoSpy.mockRestore();
   });
+
+  it('merges transcript tool progress and longer assistant text while live stream content exists', async () => {
+    vi.setSystemTime(new Date('2026-05-18T05:10:57.000Z'));
+    const { useChatStore } = await import('@/stores/chat');
+    const userTs = Date.now() / 1000;
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:session-live',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:session-live' }],
+      messages: [
+        {
+          role: 'user',
+          id: 'user-1',
+          timestamp: userTs,
+          content: 'Run the report',
+        },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-live',
+      streamingText: '好的，先检查',
+      streamingMessage: {
+        role: 'assistant',
+        id: 'stream-1',
+        timestamp: userTs + 1,
+        content: [{ type: 'text', text: '好的，先检查' }],
+      },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTs,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+      runAborted: false,
+    });
+
+    hostApiFetchMock.mockResolvedValue({
+      success: true,
+      messages: [
+        {
+          role: 'user',
+          id: 'user-1',
+          timestamp: userTs,
+          content: 'Run the report',
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-1',
+          timestamp: userTs + 1,
+          content: [{ type: 'text', text: '好的，先检查' }],
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-2',
+          timestamp: userTs + 2,
+          content: [
+            { type: 'toolCall', id: 'call-exec', name: 'exec', arguments: { command: 'ls' } },
+          ],
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-3',
+          timestamp: userTs + 3,
+          content: [{ type: 'text', text: '好的，先检查文件结构和数据情况。' }],
+        },
+      ],
+    });
+
+    await useChatStore.getState().loadHistory(true);
+
+    const state = useChatStore.getState();
+    expect(state.streamingText).toBe('好的，先检查文件结构和数据情况。');
+    expect(state.streamingTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ toolCallId: 'call-exec', name: 'exec' }),
+      ]),
+    );
+    expect(state.pendingFinal).toBe(true);
+  });
 });

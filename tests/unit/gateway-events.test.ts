@@ -125,7 +125,7 @@ describe('gateway store event wiring', () => {
     expect(status.state === 'running' && status.gatewayReady !== false).toBe(true);
   });
 
-  it('does not finalize active chat state on agent phase end notifications', async () => {
+  it('refreshes transcript on agent lifecycle phase=end without finalizing', async () => {
     hostApiFetchMock.mockResolvedValueOnce({ state: 'running', port: 18789 });
 
     const handlers = new Map<string, (payload: unknown) => void>();
@@ -140,17 +140,15 @@ describe('gateway store event wiring', () => {
     handlers.get('gateway:notification')?.({
       method: 'agent',
       params: {
-        runId: 'run-1',
+        runId: 'run-end',
         sessionKey: 'agent:main:main',
         data: { phase: 'end' },
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(chatSetStateMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(chatLoadHistoryMock).toHaveBeenCalled();
+    });
     expect(chatHandleGatewayRunCompletedMock).not.toHaveBeenCalled();
   });
 
@@ -176,10 +174,9 @@ describe('gateway store event wiring', () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(chatHandleGatewayRunCompletedMock).toHaveBeenCalledWith('run-1', 'agent:main:main');
+    await vi.waitFor(() => {
+      expect(chatHandleGatewayRunCompletedMock).toHaveBeenCalledWith('run-1', 'agent:main:main');
+    });
   });
 
   it('does not build a generic dedupe key for delta events without seq', async () => {
@@ -222,14 +219,13 @@ describe('gateway store event wiring', () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(chatHandleEventMock).toHaveBeenCalledWith(expect.objectContaining({
-      state: 'delta',
-      runId: 'run-1',
-      message: { role: 'assistant', content: "I'll create this PowerPoint" },
-    }));
+    await vi.waitFor(() => {
+      expect(chatHandleEventMock).toHaveBeenCalledWith(expect.objectContaining({
+        state: 'delta',
+        runId: 'run-1',
+        message: { role: 'assistant', content: "I'll create this PowerPoint" },
+      }));
+    });
   });
 
   it('forwards agent lifecycle errors and refreshes history during active sends', async () => {
@@ -254,16 +250,14 @@ describe('gateway store event wiring', () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(chatHandleEventMock).toHaveBeenCalledWith(expect.objectContaining({
-      state: 'error',
-      runId: 'run-1',
-      errorMessage: 'LLM request timed out.',
-    }));
-    expect(chatLoadHistoryMock).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(chatHandleEventMock).toHaveBeenCalledWith(expect.objectContaining({
+        state: 'error',
+        runId: 'run-1',
+        errorMessage: 'LLM request timed out.',
+      }));
+      expect(chatLoadHistoryMock).toHaveBeenCalled();
+    });
   });
 
   it('refreshes history on agent item stream during active sends', async () => {
@@ -288,11 +282,9 @@ describe('gateway store event wiring', () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(chatLoadHistoryMock).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(chatLoadHistoryMock).toHaveBeenCalled();
+    });
   });
 
   it('treats agent lifecycle phase=start as run started', async () => {
@@ -317,13 +309,12 @@ describe('gateway store event wiring', () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(chatHandleEventMock).toHaveBeenCalledWith({
-      state: 'started',
-      runId: 'run-1',
-      sessionKey: 'agent:main:main',
+    await vi.waitFor(() => {
+      expect(chatHandleEventMock).toHaveBeenCalledWith({
+        state: 'started',
+        runId: 'run-1',
+        sessionKey: 'agent:main:main',
+      });
     });
   });
 

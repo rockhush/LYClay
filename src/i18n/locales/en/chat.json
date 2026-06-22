@@ -42,6 +42,7 @@
         "title": "Execution Graph",
         "branchLabel": "branch",
         "thinkingLabel": "Thinking",
+        "modelCallLabel": "Model call",
         "agentRun": "{{agent}} execution",
         "collapsedSummary": "{{toolCount}} tool calls · {{processCount}} process messages",
         "collapseAction": "Collapse execution graph"
@@ -109,6 +110,8 @@
     "errors": {
         "modelResponseTimeout": "No assistant reply was received for a while, so this request was stopped. Check your network, AI provider settings, or try again later.",
         "modelResponseTimeoutLong": "No assistant reply was received after a long wait, so this request was stopped. The model may still be queued or warming up, the provider may be unavailable or rate-limited, or the AI provider settings may be incorrect. Check Settings → AI Providers or switch models, then try again.",
+        "backendRunStopped": "The backend agent stopped responding (model call timeout or service interruption). This task did not finish. Try again later or narrow the task scope.",
+        "toolExecutionTimeout": "A tool call stopped responding for too long, so this run was stopped. Check whether the command is stuck, or retry with a smaller task.",
         "contextTooLarge": "This conversation is too large. Automatic compression still exceeds the current model limit. Use stronger compression, switch to a larger-context model, or start a new chat.",
         "currentMessageTooLarge": "This message is too long for the current model's safe context budget. Split the input or provide the content as a file/attachment.",
         "contextCompressionFailedRecentOnly": "Context compression failed. Only recent conversation turns were kept for this request; earlier history was not included."

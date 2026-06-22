@@ -11,12 +11,16 @@ import {
   hasErrorRecoveryTimer,
   hasNonToolAssistantContent,
   isAbortedChatRun,
+  isBackendRunFailureError,
   isToolOnlyMessage,
   isToolResultRole,
   isInternalMessageText,
   isUserSecurityDenialMessage,
   buildSecurityCancelNotice,
   isSuppressedRunError,
+  isRecoverableRuntimeError,
+  resolveRunFailureErrorMessage,
+  truncateRunErrorMessage,
   makeAttachedFile,
   attachmentFileNameFromPath,
   normalizeStreamingMessage,
@@ -481,10 +485,11 @@ export function handleRuntimeEventState(
             const prev = getBackgroundSessionState();
             if (!finalMsg) {
               patchBackgroundSessionState({
-                streamingText: '',
-                streamingMessage: null,
-                pendingFinal: true,
+                ...buildClearedActiveRunPatch(),
+                runError: null,
               });
+              clearHistoryPoll();
+              void get().loadHistory(true, { force: true });
               break;
             }
 
@@ -607,16 +612,10 @@ export function handleRuntimeEventState(
             }
             const finalMsgContent = getMessageText(normalizedFinalMessage.content);
             if (finalMsgContent.trim() && isInternalMessageText(finalMsgContent)) {
-              // 如果已经有流式消息，保留它而不是清空
-              // 这可以防止 NO_REPLY 消息覆盖已经显示的结果
-              set((s) => ({
+              set({
                 ...buildClearedActiveRunPatch(),
-                streamingMessage: s.streamingMessage,
                 runError: null,
-              }));
-              // Reload history to surface intermediate tool-use turns (thinking +
-              // tool blocks) from the Gateway's authoritative record, since
-              // NO_REPLY itself carries no visible content.
+              });
               finishFirstSessionPerf('final', runId);
               clearHistoryPoll();
               void get().loadHistory(true, { force: true });
@@ -797,7 +796,9 @@ export function handleRuntimeEventState(
           break;
         }
         case 'error': {
-          const errorMsg = String(event.errorMessage || 'An error occurred');
+          const rawError = String(event.errorMessage || 'An error occurred');
+          const errorMsg = truncateRunErrorMessage(rawError);
+          const displayError = resolveRunFailureErrorMessage(rawError);
 
           // 仅当用户主动终止（点击停止按钮）时才静默处理 abort error，
           // 系统侧 abort（如上下文溢出、provider 中断）应正常展示错误
@@ -874,38 +875,42 @@ export function handleRuntimeEventState(
           }
 
           set({
-            error: errorMsg,
+            error: displayError,
+            runError: displayError,
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
             pendingFinal: false,
             pendingToolImages: [],
+            ...(isRecoverableRuntimeError(errorMsg) ? {} : {
+              sending: false,
+              activeRunId: null,
+              lastUserMessageAt: null,
+              runAborted: isBackendRunFailureError(rawError),
+            }),
           });
 
-          // Don't immediately give up: the Gateway often retries internally
-          // after transient API failures (e.g. "terminated"). Keep `sending`
-          // true for a grace period so that recovery events are processed and
-          // the agent-phase-completion handler can still trigger loadHistory.
-          if (wasSending) {
+          if (wasSending && isRecoverableRuntimeError(errorMsg)) {
             clearErrorRecoveryTimer();
-            const ERROR_RECOVERY_GRACE_MS = 15_000;
+            const ERROR_RECOVERY_GRACE_MS = 5_000;
             setErrorRecoveryTimer(setTimeout(() => {
               setErrorRecoveryTimer(null);
               const state = get();
               if (state.sending && !state.streamingMessage) {
                 clearHistoryPoll();
                 finishFirstSessionPerf('error', runId);
-                // Grace period expired with no recovery — finalize the error
                 set({
                   sending: false,
                   activeRunId: null,
                   lastUserMessageAt: null,
                 });
-                // One final history reload in case the Gateway completed in the
-                // background and we just missed the event.
                 state.loadHistory(true);
               }
             }, ERROR_RECOVERY_GRACE_MS));
+          } else if (wasSending) {
+            clearHistoryPoll();
+            finishFirstSessionPerf('error', runId);
+            void get().loadHistory(true, { force: true });
           } else {
             clearHistoryPoll();
             finishFirstSessionPerf('error', runId);
@@ -916,6 +921,26 @@ export function handleRuntimeEventState(
         case 'aborted': {
           clearHistoryPoll();
           clearErrorRecoveryTimer();
+          const isUserAbort = Boolean(runId && isAbortedChatRun(runId));
+          if (isUserAbort) {
+            set({
+              sending: false,
+              aborting: false,
+              activeRunId: null,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              lastUserMessageAt: null,
+              pendingToolImages: [],
+              error: null,
+              runError: null,
+            });
+            forgetAbortedChatRun(runId!);
+            break;
+          }
+
+          const displayError = resolveRunFailureErrorMessage('This operation was aborted');
           set({
             sending: false,
             aborting: false,
@@ -926,7 +951,11 @@ export function handleRuntimeEventState(
             pendingFinal: false,
             lastUserMessageAt: null,
             pendingToolImages: [],
+            error: displayError,
+            runError: displayError,
+            runAborted: true,
           });
+          void get().loadHistory(true, { force: true });
           break;
         }
         default: {

@@ -22,4 +22,8 @@ describe('extractSessionIdFromTranscriptFileName', () => {
     expect(extractSessionIdFromTranscriptFileName('sessions.json')).toBeUndefined();
     expect(extractSessionIdFromTranscriptFileName('abc-123.log')).toBeUndefined();
   });
+
+  it('returns undefined for trajectory transcript names', () => {
+    expect(extractSessionIdFromTranscriptFileName('abc-123.trajectory.jsonl')).toBeUndefined();
+  });
 });

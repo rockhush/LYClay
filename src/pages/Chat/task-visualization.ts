@@ -7,8 +7,9 @@ export interface TaskStep {
   id: string;
   label: string;
   status: TaskStepStatus;
-  kind: 'thinking' | 'tool' | 'system' | 'message';
+  kind: 'thinking' | 'tool' | 'system' | 'message' | 'model';
   detail?: string;
+  durationMs?: number;
   depth: number;
   parentId?: string;
   /** Extracted URL for web_fetch tool, used to render a clickable link icon. */
@@ -48,6 +49,16 @@ interface DeriveTaskStepsInput {
   streamingMessage: unknown | null;
   streamingTools: ToolStatus[];
   omitLastStreamingMessageSegment?: boolean;
+  toolDurationByToolCallId?: ReadonlyMap<string, number> | Record<string, number>;
+}
+
+function lookupToolDuration(
+  toolCallId: string | undefined,
+  toolDurationByToolCallId?: ReadonlyMap<string, number> | Record<string, number>,
+): number | undefined {
+  if (!toolCallId || !toolDurationByToolCallId) return undefined;
+  if (toolDurationByToolCallId instanceof Map) return toolDurationByToolCallId.get(toolCallId);
+  return toolDurationByToolCallId[toolCallId];
 }
 
 export interface SubagentCompletionInfo {
@@ -94,6 +105,78 @@ export function parseSubagentCompletionInfo(message: RawMessage): SubagentComple
   const agentId = parseAgentIdFromSessionKey(sessionKey);
   if (!agentId) return null;
   return { sessionKey, sessionId, agentId };
+}
+
+export interface InFlightChildDelegation {
+  label: string | null;
+  childSessionKey: string;
+  runId: string | null;
+}
+
+function isToolResultMessage(message: RawMessage | undefined): boolean {
+  if (!message) return false;
+  const role = String(message.role || '').toLowerCase();
+  return role === 'toolresult' || role === 'tool_result' || role === 'tool';
+}
+
+/**
+ * Detect a spawned subagent that is still running (spawn accepted, no completion
+ * event in history yet). Used to poll child transcripts and surface progress
+ * while the parent run is waiting on the delegate.
+ */
+export function findInFlightChildDelegation(
+  messages: RawMessage[],
+  completedChildSessionKeys: ReadonlySet<string>,
+  runtimeActive: boolean,
+): InFlightChildDelegation | null {
+  if (!runtimeActive) return null;
+
+  type SpawnCall = { toolCallId: string | null; label: string | null; messageIndex: number };
+  let latestSpawn: SpawnCall | null = null;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || message.role !== 'assistant') continue;
+    for (const tool of extractToolUse(message)) {
+      if (!/sessions_spawn/i.test(tool.name)) continue;
+      const input = tool.input && typeof tool.input === 'object'
+        ? tool.input as Record<string, unknown>
+        : null;
+      latestSpawn = {
+        toolCallId: tool.id || null,
+        label: typeof input?.label === 'string' ? input.label : null,
+        messageIndex: i,
+      };
+      break;
+    }
+    if (latestSpawn) break;
+  }
+  if (!latestSpawn) return null;
+
+  let childSessionKey: string | null = null;
+  let runId: string | null = null;
+  for (let i = messages.length - 1; i > latestSpawn.messageIndex; i -= 1) {
+    const message = messages[i];
+    if (!isToolResultMessage(message)) continue;
+    if (latestSpawn.toolCallId && message.toolCallId && message.toolCallId !== latestSpawn.toolCallId) {
+      continue;
+    }
+    const parsed = tryParseJsonObject(extractText(message));
+    if (!parsed) continue;
+    if (typeof parsed.childSessionKey === 'string') {
+      childSessionKey = parsed.childSessionKey;
+    }
+    if (typeof parsed.runId === 'string') {
+      runId = parsed.runId;
+    }
+    if (childSessionKey || runId) break;
+  }
+
+  if (!childSessionKey || completedChildSessionKeys.has(childSessionKey)) return null;
+  return {
+    label: latestSpawn.label,
+    childSessionKey,
+    runId,
+  };
 }
 
 /** OpenClaw session orchestration tools — hidden from the execution graph UI. */
@@ -187,7 +270,7 @@ function attachTopology(steps: TaskStep[]): TaskStep[] {
       continue;
     }
 
-    if (step.kind === 'thinking' || step.kind === 'message') {
+    if (step.kind === 'thinking' || step.kind === 'message' || step.kind === 'model') {
       withTopology.push({
         ...step,
         depth: activeBranchNodeId ? 3 : 1,
@@ -266,6 +349,7 @@ export function deriveTaskSteps({
   streamingMessage,
   streamingTools,
   omitLastStreamingMessageSegment = false,
+  toolDurationByToolCallId,
 }: DeriveTaskStepsInput): TaskStep[] {
   const steps: TaskStep[] = [];
   const stepIndexById = new Map<string, number>();
@@ -297,6 +381,18 @@ export function deriveTaskSteps({
 
   for (const [messageIndex, message] of messages.entries()) {
     if (!message || message.role !== 'assistant') continue;
+
+    const modelCallDurationMs = message._modelCallDurationMs;
+    if (typeof modelCallDurationMs === 'number' && modelCallDurationMs > 0) {
+      upsertStep({
+        id: `history-model-${message.id || messageIndex}`,
+        label: 'Model',
+        status: 'completed',
+        kind: 'model',
+        durationMs: modelCallDurationMs,
+        depth: 1,
+      });
+    }
 
     appendDetailSegments(extractThinkingSegments(message), {
       idPrefix: `history-thinking-${message.id || messageIndex}`,
@@ -334,6 +430,7 @@ export function deriveTaskSteps({
         status: 'completed',
         kind: 'tool',
         detail: normalizeText(JSON.stringify(tool.input, null, 2)),
+        durationMs: lookupToolDuration(tool.id, toolDurationByToolCallId),
         depth: 1,
         url,
       });
@@ -395,6 +492,7 @@ export function deriveTaskSteps({
       status: tool.status,
       kind: 'tool',
       detail: normalizeText(tool.summary),
+      durationMs: tool.durationMs,
       depth: 1,
     });
   });
