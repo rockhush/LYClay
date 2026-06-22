@@ -33,7 +33,15 @@ import {
   type SessionStreamingState,
   type ToolStatus,
 } from './chat/types';
-import { attachmentFileNameFromPath, isSuppressedRunError } from './chat/helpers';
+import {
+  areEquivalentAttachmentOnlyUserTexts,
+  attachmentFileNameFromPath,
+  dedupeEquivalentAttachmentUserMessages,
+  isSuppressedRunError,
+  matchesOptimisticUserMessage,
+  normalizeComparableUserText,
+  stripGatewayUserMetadata,
+} from './chat/helpers';
 import {
   buildClearedActiveRunPatch,
   isRunTerminalAssistantMessage,
@@ -1058,76 +1066,6 @@ function normalizeStreamingMessage(message: unknown): unknown {
     : message;
 }
 
-/**
- * Strip Gateway-injected metadata that does NOT exist on the renderer's
- * optimistic user message but is echoed back when the Gateway persists it:
- *   - leading timestamp `[Wed 2026-04-22 10:30 GMT+8] `
- *   - `[message_id: uuid]` tags sprinkled throughout the text
- *   - `[media attached: path (mime) | path]` references appended when the
- *     renderer sends attachments via `chat:sendWithMedia`
- *   - `[Working Directory: path]` workspace context injected by the renderer
- *   - Gateway-injected "Conversation info (untrusted metadata): ..." blocks
- *
- * Keeping this aligned with `cleanUserText` in `pages/Chat/message-utils.ts`
- * is important: the user bubble renders the cleaned text, so the comparison
- * used to dedupe optimistic vs server echoes must operate on the same
- * cleaned form — otherwise the same visible message renders twice.
- */
-function stripGatewayUserMetadata(text: string): string {
-  return text
-    .replace(/\s*\[media attached:[^\]]*\]/g, '')
-    .replace(/\s*\[message_id:\s*[^\]]+\]/g, '')
-    .replace(/\s*\[Working Directory:[^\]]*\]/g, '')
-    .replace(/Sender\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
-    .replace(/Sender\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
-    .replace(/Conversation info\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
-    .replace(/Conversation info\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
-    .replace(/\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[^\]]+\]\s*/gi, '')
-    .trim();
-}
-
-function normalizeComparableUserText(content: unknown): string {
-  let text = stripGatewayUserMetadata(getMessageText(content));
-  text = maybeStripMimoDirective(text); // Strip mimo directive before comparison
-  text = text.replace(/\/think\s+(off|medium|high)\s+/i, '');
-  return text.replace(/\s+/g, ' ').trim();
-}
-
-function getComparableAttachmentSignature(message: Pick<RawMessage, '_attachedFiles'>): string {
-  const files = (message._attachedFiles || [])
-    .map((file) => file.filePath || `${file.fileName}|${file.mimeType}|${file.fileSize}`)
-    .filter(Boolean)
-    .sort();
-  return files.join('::');
-}
-
-function matchesOptimisticUserMessage(
-  candidate: RawMessage,
-  optimistic: RawMessage,
-  optimisticTimestampMs: number,
-): boolean {
-  if (candidate.role !== 'user') return false;
-
-  const optimisticText = normalizeComparableUserText(optimistic.content);
-  const candidateText = normalizeComparableUserText(candidate.content);
-  const sameText = optimisticText.length > 0 && optimisticText === candidateText;
-
-  const optimisticAttachments = getComparableAttachmentSignature(optimistic);
-  const candidateAttachments = getComparableAttachmentSignature(candidate);
-  const sameAttachments = optimisticAttachments.length > 0 && optimisticAttachments === candidateAttachments;
-
-  const hasOptimisticTimestamp = Number.isFinite(optimisticTimestampMs) && optimisticTimestampMs > 0;
-  const hasCandidateTimestamp = candidate.timestamp != null;
-  const timestampMatches = hasOptimisticTimestamp && hasCandidateTimestamp
-    ? Math.abs(toMs(candidate.timestamp as number) - optimisticTimestampMs) < 5000
-    : false;
-
-  if (sameText && sameAttachments) return true;
-  if (sameText && (!optimisticAttachments || !candidateAttachments) && (timestampMatches || !hasCandidateTimestamp)) return true;
-  if (sameAttachments && (!optimisticText || !candidateText) && (timestampMatches || !hasCandidateTimestamp)) return true;
-  return false;
-}
-
 function snapshotStreamingAssistantMessage(
   currentStream: RawMessage | null,
   existingMessages: RawMessage[],
@@ -1166,10 +1104,9 @@ function mergeMissingLocalUserMessages(
   let merged = [...pipelineMessages];
   for (const localMsg of localMessages) {
     if (localMsg.role !== 'user') continue;
-    const localText = normalizeComparableUserText(localMsg.content);
-    if (!localText) continue;
-    const exists = merged.some(
-      (message) => message.role === 'user' && normalizeComparableUserText(message.content) === localText,
+    const localTimestampMs = localMsg.timestamp != null ? toMs(localMsg.timestamp as number) : 0;
+    const exists = merged.some((message) =>
+      matchesOptimisticUserMessage(message, localMsg, localTimestampMs || Date.now()),
     );
     if (!exists) {
       merged.push(localMsg);
@@ -1359,24 +1296,25 @@ function resolveFinalMessagesWithLocalPreservation(
     const userMsMs = toMs(userMsgAt);
     const optimistic = getLatestOptimisticUserMessage(state.messages, userMsMs);
     if (optimistic) {
-      const optimisticText = normalizeComparableUserText(optimistic.content);
-      const hasMatchingUser = optimisticText.length > 0
-        ? finalMessages.some((message) => {
-            if (message.role !== 'user') return false;
-            return normalizeComparableUserText(message.content) === optimisticText;
-          })
-        : false;
+      const optimisticTimestampMs = optimistic.timestamp != null
+        ? toMs(optimistic.timestamp as number)
+        : userMsMs;
+      const hasMatchingUser = finalMessages.some((message) =>
+        matchesOptimisticUserMessage(message, optimistic, optimisticTimestampMs),
+      );
       if (!hasMatchingUser) {
         finalMessages = [...finalMessages, optimistic];
       }
     }
   }
 
+  finalMessages = dedupeEquivalentAttachmentUserMessages(finalMessages);
+
   if (finalMessages.length > 0) return finalMessages;
-  if (state.messages.length > 0) return state.messages;
+  if (state.messages.length > 0) return dedupeEquivalentAttachmentUserMessages(state.messages);
 
   const snapshot = state.sessionStreamingStates[sessionKey]?.messagesSnapshot;
-  if (snapshot && snapshot.length > 0) return snapshot;
+  if (snapshot && snapshot.length > 0) return dedupeEquivalentAttachmentUserMessages(snapshot);
 
   const label = state.sessionLabels[sessionKey];
   if (label) {
@@ -2918,9 +2856,10 @@ function getLastRealUserSnapshot(messages: RawMessage[]): RawMessage | null {
 
 function userMessagesLikelySame(a: RawMessage, b: RawMessage): boolean {
   if (a.id && b.id && a.id === b.id) return true;
-  const ta = getMessageText(a.content).trim();
-  const tb = getMessageText(b.content).trim();
-  return Boolean(ta && tb && ta === tb);
+  const ta = normalizeComparableUserText(a.content);
+  const tb = normalizeComparableUserText(b.content);
+  if (ta && tb && ta === tb) return true;
+  return areEquivalentAttachmentOnlyUserTexts(ta, tb);
 }
 
 /** Text/image reply only — excludes thinking-only snapshots so we can still show “waiting” UI. */
@@ -4381,7 +4320,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     set((s) => {
       const boundWorkspaceId = s.sessionWorkspaceIds[currentSessionKey] ?? selectedWorkspaceId ?? null;
-      const nextMessages = isInternalStagedExecution ? s.messages : [...s.messages, userMsg];
+      const nextMessages = isInternalStagedExecution
+        ? s.messages
+        : dedupeEquivalentAttachmentUserMessages([...s.messages, userMsg]);
       const prevStream = s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState();
       const runawayToolObservation = createRunawayToolObservation({
         sessionKey: currentSessionKey,
@@ -4730,9 +4671,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       _interruptedSendSession = null;
     }
     const lastUser = getLastRealUserSnapshot(messages);
+    const dedupedMessages = dedupeEquivalentAttachmentUserMessages(messages);
     const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
     set((s) => ({
       ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
+      messages: dedupedMessages,
       sending: false,
       activeRunId: null,
       streamingText: '',
@@ -4746,7 +4689,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...s.sessionStreamingStates,
         [currentSessionKey]: {
           ...(s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState()),
-          messagesSnapshot: messages.length > 0 ? [...messages] : (s.sessionStreamingStates[currentSessionKey]?.messagesSnapshot ?? []),
+          messagesSnapshot: dedupedMessages.length > 0 ? [...dedupedMessages] : (s.sessionStreamingStates[currentSessionKey]?.messagesSnapshot ?? []),
           sending: false,
           runAborted: true,
           activeRunId: null,

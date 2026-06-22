@@ -17,6 +17,7 @@ import {
   clearAbortedChatRuns,
   clearErrorRecoveryTimer,
   clearHistoryPoll,
+  dedupeEquivalentAttachmentUserMessages,
   getLastChatEventAt,
   markAbortedChatRun,
   isUserSecurityDenialMessage,
@@ -417,7 +418,9 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         set({ messages: contextGuard.messages, sessionCompressionState: nextCompressionState });
       }
       set((s) => ({
-        messages: isInternalStagedExecution ? s.messages : [...s.messages, userMsg],
+        messages: isInternalStagedExecution
+          ? s.messages
+          : dedupeEquivalentAttachmentUserMessages([...s.messages, userMsg]),
         sending: true,
         error: null,
         securityCancelNotice: null,

@@ -313,6 +313,7 @@ function stripGatewayUserMetadata(text: string): string {
   return text
     .replace(/\s*\[media attached:[^\]]*\]/g, '')
     .replace(/\s*\[message_id:\s*[^\]]+\]/g, '')
+    .replace(/\s*\[Working Directory:[^\]]*\]/g, '')
     .replace(/Sender\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
     .replace(/Sender\s*\([^)]*\):\s*\{[\s\S]*?\}\s*/gi, '')
     .replace(/Conversation info\s*\([^)]*\):\s*```[a-z]*\n[\s\S]*?```\s*/gi, '')
@@ -321,10 +322,47 @@ function stripGatewayUserMetadata(text: string): string {
     .trim();
 }
 
-function normalizeComparableUserText(content: unknown): string {
-  return stripGatewayUserMetadata(getMessageText(content))
-    .replace(/\s+/g, ' ')
-    .trim();
+function maybeStripMimoDirective(text: string): string {
+  const directiveMarker = '[系统指令]';
+  const directiveStart = text.lastIndexOf(directiveMarker);
+  if (directiveStart < 0) return text;
+
+  const endMarkers = ['必须使用中文输出内容。', '必须全程使用中文。'];
+  if (endMarkers.some((marker) => text.indexOf(marker, directiveStart) >= 0)) {
+    return text.slice(0, directiveStart).trimEnd();
+  }
+
+  return text;
+}
+
+export function normalizeComparableUserText(content: unknown): string {
+  let text = stripGatewayUserMetadata(getMessageText(content));
+  text = maybeStripMimoDirective(text);
+  text = stripAttachmentPlaceholderPrefix(text);
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+const ATTACHMENT_ONLY_UI_TEXT = '(file attached)';
+const ATTACHMENT_ONLY_RUNTIME_TEXT = 'Process the attached file(s).';
+
+function stripAttachmentPlaceholderPrefix(text: string): string {
+  return text.replace(/\/think\s+(?:off|medium|high)\s+/i, '').trim();
+}
+
+export function isAttachmentOnlyPlaceholderText(text: string): boolean {
+  const normalized = stripAttachmentPlaceholderPrefix(text.replace(/\s+/g, ' ').trim());
+  return normalized === ATTACHMENT_ONLY_UI_TEXT || normalized === ATTACHMENT_ONLY_RUNTIME_TEXT;
+}
+
+export function areEquivalentAttachmentOnlyUserTexts(a: string, b: string): boolean {
+  const normalizedA = stripAttachmentPlaceholderPrefix(a.replace(/\s+/g, ' ').trim());
+  const normalizedB = stripAttachmentPlaceholderPrefix(b.replace(/\s+/g, ' ').trim());
+  if (!normalizedA || !normalizedB) return false;
+  if (normalizedA === normalizedB) return isAttachmentOnlyPlaceholderText(normalizedA);
+  return (
+    (normalizedA === ATTACHMENT_ONLY_UI_TEXT && normalizedB === ATTACHMENT_ONLY_RUNTIME_TEXT)
+    || (normalizedA === ATTACHMENT_ONLY_RUNTIME_TEXT && normalizedB === ATTACHMENT_ONLY_UI_TEXT)
+  );
 }
 
 function extractOriginalMessageFromComplexTaskPrompt(text: string): string {
@@ -392,6 +430,7 @@ function matchesOptimisticUserMessage(
   const optimisticText = normalizeComparableUserText(optimistic.content);
   const candidateText = normalizeComparableUserText(candidate.content);
   const sameText = optimisticText.length > 0 && optimisticText === candidateText;
+  const equivalentAttachmentOnlyTexts = areEquivalentAttachmentOnlyUserTexts(optimisticText, candidateText);
 
   const optimisticAttachments = getComparableAttachmentSignature(optimistic);
   const candidateAttachments = getComparableAttachmentSignature(candidate);
@@ -402,11 +441,117 @@ function matchesOptimisticUserMessage(
   const timestampMatches = hasOptimisticTimestamp && hasCandidateTimestamp
     ? Math.abs(toMs(candidate.timestamp as number) - optimisticTimestampMs) < 5000
     : false;
+  const timestampCompatible = timestampMatches || !hasCandidateTimestamp || !hasOptimisticTimestamp;
 
   if (sameText && sameAttachments) return true;
-  if (sameText && (!optimisticAttachments || !candidateAttachments) && (timestampMatches || !hasCandidateTimestamp)) return true;
-  if (sameAttachments && (!optimisticText || !candidateText) && (timestampMatches || !hasCandidateTimestamp)) return true;
+  if (sameText && (!optimisticAttachments || !candidateAttachments) && timestampCompatible) return true;
+  if (sameAttachments && (!optimisticText || !candidateText) && timestampCompatible) return true;
+  if (equivalentAttachmentOnlyTexts) return true;
   return false;
+}
+
+export function areEquivalentUserMessageTexts(a: RawMessage, b: RawMessage): boolean {
+  if (a.role !== 'user' || b.role !== 'user') return false;
+
+  const textA = normalizeComparableUserText(a.content);
+  const textB = normalizeComparableUserText(b.content);
+  if (textA && textB && textA === textB) return true;
+  if (areEquivalentAttachmentOnlyUserTexts(textA, textB)) return true;
+
+  if (!textA && !textB) {
+    const signatureA = getComparableAttachmentSignature(a);
+    const signatureB = getComparableAttachmentSignature(b);
+    return signatureA.length > 0 && signatureA === signatureB;
+  }
+
+  return false;
+}
+
+export function dedupeConsecutiveEquivalentUserMessages(messages: RawMessage[]): RawMessage[] {
+  if (messages.length < 2) return messages;
+
+  const result: RawMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user') {
+      result.push(message);
+      continue;
+    }
+
+    const previous = result.length > 0 ? result[result.length - 1] : null;
+    if (previous?.role === 'user' && areEquivalentUserMessageTexts(previous, message)) {
+      result[result.length - 1] = mergeAttachmentOnlyUserMessage(previous, message);
+      continue;
+    }
+
+    result.push(message);
+  }
+
+  return result.length === messages.length ? messages : result;
+}
+
+function dedupeEchoedUserMessages(messages: RawMessage[]): RawMessage[] {
+  if (messages.length < 2) return messages;
+
+  const result: RawMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user') {
+      result.push(message);
+      continue;
+    }
+
+    const existingTimestampMs = (existing: RawMessage) => (
+      existing.timestamp != null ? toMs(existing.timestamp as number) : Date.now()
+    );
+    const duplicateIndex = result.findIndex((existing) => (
+      existing.role === 'user'
+      && matchesOptimisticUserMessage(message, existing, existingTimestampMs(existing))
+    ));
+
+    if (duplicateIndex < 0) {
+      result.push(message);
+      continue;
+    }
+
+    result[duplicateIndex] = mergeAttachmentOnlyUserMessage(result[duplicateIndex]!, message);
+  }
+
+  return result.length === messages.length ? messages : result;
+}
+
+export function dedupeEquivalentAttachmentUserMessages(messages: RawMessage[]): RawMessage[] {
+  if (messages.length < 2) return messages;
+  const echoed = dedupeEchoedUserMessages(messages);
+  return dedupeConsecutiveEquivalentUserMessages(echoed);
+}
+
+function mergeAttachmentOnlyUserMessage(existing: RawMessage, incoming: RawMessage): RawMessage {
+  const existingFiles = existing._attachedFiles ?? [];
+  const incomingFiles = incoming._attachedFiles ?? [];
+  const mergedFiles = existingFiles.length > 0 ? existingFiles : incomingFiles;
+  const existingText = normalizeComparableUserText(existing.content);
+  const incomingText = normalizeComparableUserText(incoming.content);
+  const base = incomingFiles.length > 0 ? incoming : existingFiles.length > 0 ? existing : incoming;
+  const other = base === incoming ? existing : incoming;
+
+  let content = base.content;
+  const baseText = base === incoming ? incomingText : existingText;
+  const otherText = base === incoming ? existingText : incomingText;
+  if (isAttachmentOnlyPlaceholderText(String(baseText)) && otherText && !isAttachmentOnlyPlaceholderText(otherText)) {
+    content = other.content;
+  } else if (!baseText && otherText) {
+    content = other.content;
+  } else if (isAttachmentOnlyPlaceholderText(String(baseText)) && isAttachmentOnlyPlaceholderText(otherText)) {
+    content = other.content ?? base.content;
+  }
+
+  return {
+    ...other,
+    ...base,
+    id: base.id ?? other.id,
+    timestamp: base.timestamp ?? other.timestamp,
+    content,
+    _attachedFiles: mergedFiles.length > 0 ? mergedFiles : undefined,
+  };
 }
 
 function snapshotStreamingAssistantMessage(

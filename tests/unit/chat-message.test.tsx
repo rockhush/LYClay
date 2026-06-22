@@ -66,6 +66,49 @@ describe('ChatMessage attachment dedupe', () => {
     expect(screen.getByText('报告助手')).toBeInTheDocument();
     expect(screen.queryByText('employee-report-abc')).not.toBeInTheDocument();
   });
+
+  it('hides attachment-only placeholder text while keeping image attachments visible', () => {
+    const message: RawMessage = {
+      role: 'user',
+      content: '(file attached)',
+      _attachedFiles: [
+        {
+          fileName: 'shot.png',
+          mimeType: 'image/png',
+          fileSize: 123,
+          preview: 'data:image/png;base64,abc',
+          filePath: '/tmp/shot.png',
+        },
+      ],
+    };
+
+    render(<ChatMessage message={message} />);
+
+    expect(screen.getByAltText('shot.png')).toBeInTheDocument();
+    expect(screen.queryByText('(file attached)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Process the attached file(s).')).not.toBeInTheDocument();
+  });
+
+  it('hides runtime attachment placeholder text from user bubbles', () => {
+    const message: RawMessage = {
+      role: 'user',
+      content: '/think off Process the attached file(s).',
+      _attachedFiles: [
+        {
+          fileName: 'shot.png',
+          mimeType: 'image/png',
+          fileSize: 123,
+          preview: 'data:image/png;base64,abc',
+          filePath: '/tmp/shot.png',
+        },
+      ],
+    };
+
+    render(<ChatMessage message={message} />);
+
+    expect(screen.getByAltText('shot.png')).toBeInTheDocument();
+    expect(screen.queryByText(/Process the attached file\(s\)\./)).not.toBeInTheDocument();
+  });
 });
 
 describe('ChatMessage LaTeX rendering', () => {

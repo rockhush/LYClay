@@ -341,7 +341,7 @@ function buildCronUpdatePatch(input: Record<string, unknown>): Record<string, un
   const patch = { ...input };
 
   if (typeof patch.schedule === 'string') {
-    patch.schedule = { kind: 'cron', expr: patch.schedule };
+    patch.schedule = { kind: 'cron', expr: patch.schedule, tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
   }
 
   if (typeof patch.message === 'string') {
@@ -620,7 +620,7 @@ export async function handleCronRoutes(
       }
       const result = await ctx.gatewayManager.rpc('cron.add', {
         name: input.name,
-        schedule: { kind: 'cron', expr: input.schedule },
+        schedule: { kind: 'cron', expr: input.schedule, tz: Intl.DateTimeFormat().resolvedOptions().timeZone },
         payload: { kind: 'agentTurn', message: input.message },
         enabled: input.enabled ?? true,
         wakeMode: 'next-heartbeat',

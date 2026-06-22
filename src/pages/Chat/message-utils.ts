@@ -4,7 +4,7 @@
  * message content formats returned by the Gateway.
  */
 import type { RawMessage, ContentBlock } from '@/stores/chat';
-import { stripSilentReplyToken } from '@/stores/chat/helpers';
+import { isAttachmentOnlyPlaceholderText, stripSilentReplyToken } from '@/stores/chat/helpers';
 
 /**
  * Clean Gateway metadata from user message text for display.
@@ -231,6 +231,9 @@ export function extractText(message: RawMessage | unknown): string {
   // Strip Gateway metadata from user messages for clean display
   if (isUser && result) {
     result = cleanUserText(result);
+    if (isAttachmentOnlyPlaceholderText(result)) {
+      result = '';
+    }
   } else if (!isUser && result) {
     result = stripSilentReplyToken(result);
   }
@@ -270,7 +273,7 @@ export function extractTextSegments(message: RawMessage | unknown): string[] {
 
   return segments
     .map((segment) => cleanUserText(segment))
-    .filter((segment) => segment.length > 0 && !isInternalText(segment));
+    .filter((segment) => segment.length > 0 && !isInternalText(segment) && !isAttachmentOnlyPlaceholderText(segment));
 }
 
 /**

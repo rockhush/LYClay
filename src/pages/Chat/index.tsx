@@ -22,7 +22,7 @@ import { extractImages, extractText, extractThinking, extractToolUse, stripProce
 import { deriveTaskSteps, filterSubagentOrchestrationSteps, findReplyMessageIndex, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
-import { isSuppressedRunError } from '@/stores/chat/helpers';
+import { areEquivalentUserMessageTexts, isSuppressedRunError } from '@/stores/chat/helpers';
 import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
 import { useMinLoading } from '@/hooks/use-min-loading';
 import { getChatWaitingMode } from '@/lib/chat-first-response-preparing';
@@ -211,6 +211,17 @@ export function Chat() {
     () => messages.map((message) => parseSubagentCompletionInfo(message)),
     [messages],
   );
+  const hiddenConsecutiveDuplicateUserIndices = useMemo(() => {
+    const hidden = new Set<number>();
+    for (let i = 1; i < messages.length; i += 1) {
+      const current = messages[i];
+      const previous = messages[i - 1];
+      if (current.role === 'user' && previous.role === 'user' && areEquivalentUserMessageTexts(previous, current)) {
+        hidden.add(i);
+      }
+    }
+    return hidden;
+  }, [messages]);
 
   const cleanupEmptySession = useChatStore((s) => s.cleanupEmptySession);
   const [childTranscripts, setChildTranscripts] = useState<Record<string, RawMessage[]>>({});
@@ -226,6 +237,10 @@ export function Chat() {
   // Otherwise the Welcome screen flashes and looks 鈥渟tuck鈥?until messages arrive.
   const minLoading = useMinLoading(loading);
   const { contentRef, scrollRef } = useStickToBottomInstant(currentSessionKey);
+
+  useEffect(() => {
+    setEditingText(null);
+  }, [currentSessionKey]);
 
   // Auto scroll to bottom during sending/streaming, and when new messages arrive.
   // Runtime deltas update `streamingMessage`; `streamingText` is only a legacy
@@ -1113,6 +1128,7 @@ export function Chat() {
                   {messages.map((msg, idx) => {
                     if (foldedNarrationIndices.has(idx)) return null;
                     if (subagentCompletionInfos[idx]) return null;
+                    if (hiddenConsecutiveDuplicateUserIndices.has(idx)) return null;
                     const suppressToolCards = suppressedToolCardIndices.has(idx);
                     return (
                     <div

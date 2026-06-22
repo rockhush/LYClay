@@ -550,7 +550,7 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             if (!input) throw new Error('Invalid cron.create payload');
             const gatewayInput = {
               name: input.name,
-              schedule: { kind: 'cron', expr: input.schedule },
+              schedule: { kind: 'cron', expr: input.schedule, tz: Intl.DateTimeFormat().resolvedOptions().timeZone },
               payload: { kind: 'agentTurn', message: input.message },
               enabled: input.enabled ?? true,
               wakeMode: 'next-heartbeat',
@@ -850,7 +850,7 @@ function buildCronUpdatePatch(input: Record<string, unknown>): Record<string, un
   const patch = { ...input };
 
   if (typeof patch.schedule === 'string') {
-    patch.schedule = { kind: 'cron', expr: patch.schedule };
+    patch.schedule = { kind: 'cron', expr: patch.schedule, tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
   }
 
   if (typeof patch.message === 'string') {
@@ -988,7 +988,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
     try {
       const gatewayInput = {
         name: input.name,
-        schedule: { kind: 'cron', expr: input.schedule },
+        schedule: { kind: 'cron', expr: input.schedule, tz: Intl.DateTimeFormat().resolvedOptions().timeZone },
         payload: { kind: 'agentTurn', message: input.message },
         enabled: input.enabled ?? true,
         wakeMode: 'next-heartbeat',
