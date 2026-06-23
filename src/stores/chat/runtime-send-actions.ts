@@ -470,33 +470,11 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       const SOFT_NO_RESPONSE_NOTICE_MS = 90_000;
       const HARD_NO_RESPONSE_TIMEOUT_MS = 15 * 60_000;
       const PENDING_FINAL_STUCK_MS = 90_000;
-      const TOOL_EXECUTION_STALE_MS = 2 * 60_000;
       let slowResponseNoticeLogged = false;
       const checkStuck = () => {
         const state = get();
         if (!state.sending) return;
-        const idleMs = Date.now() - getLastChatEventAt();
-        const hasRunningTools = state.streamingTools.some((tool) => tool.status === 'running');
-        if (hasRunningTools && idleMs >= TOOL_EXECUTION_STALE_MS) {
-          clearHistoryPoll();
-          abortGatewayRun(currentSessionKey);
-          clearPendingComplexTaskPlan(currentSessionKey);
-          set({
-            error: i18n.t('chat:errors.toolExecutionTimeout'),
-            streamingText: '',
-            streamingMessage: null,
-            streamingTools: [],
-            sending: false,
-            activeRunId: null,
-            pendingFinal: false,
-            lastUserMessageAt: null,
-          });
-          return;
-        }
-        if (state.streamingMessage || state.streamingText) {
-          setTimeout(checkStuck, 10_000);
-          return;
-        }
+        if (state.streamingMessage || state.streamingText) return;
         if (state.pendingFinal) {
           const idleMs = Date.now() - getLastChatEventAt();
           if (idleMs >= PENDING_FINAL_STUCK_MS) {

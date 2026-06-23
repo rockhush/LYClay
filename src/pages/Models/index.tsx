@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { cn } from '@/lib/utils';
+import { useGatewayStore } from '@/stores/gateway';
 import { useSettingsStore } from '@/stores/settings';
 import { useTokenUsageStore } from '@/stores/token-usage';
 import { trackUiEvent } from '@/lib/telemetry';
@@ -35,7 +36,9 @@ function isHiddenUsageSource(source?: string): boolean {
 
 export function Models() {
   const { t } = useTranslation(['dashboard', 'settings']);
+  const gatewayStatus = useGatewayStore((state) => state.status);
   const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
+  const isGatewayRunning = gatewayStatus.state === 'running';
   const fetchStateStatus = useTokenUsageStore((state) => state.status);
   const fetchStateData = useTokenUsageStore((state) => state.entries);
   const fetchStateStableData = useTokenUsageStore((state) => state.stableEntries);
@@ -64,13 +67,16 @@ export function Models() {
 
   useEffect(() => {
     trackUiEvent('models.page_viewed');
-    void fetchTokenUsageHistory({ force: true });
-  }, [fetchTokenUsageHistory]);
+  }, []);
 
-  const usageHistory = fetchStateData.filter((entry) => !shouldHideUsageEntry(entry));
-  const stableUsageHistory = fetchStateStableData.filter((entry) => !shouldHideUsageEntry(entry));
+  const usageHistory = isGatewayRunning
+    ? fetchStateData.filter((entry) => !shouldHideUsageEntry(entry))
+    : [];
+  const stableUsageHistory = isGatewayRunning
+    ? fetchStateStableData.filter((entry) => !shouldHideUsageEntry(entry))
+    : [];
   const visibleUsageHistory = resolveVisibleUsageHistory(usageHistory, stableUsageHistory, {
-    preferStableOnEmpty: fetchStateStatus === 'loading',
+    preferStableOnEmpty: isGatewayRunning && fetchStateStatus === 'loading',
   });
   const filteredUsageHistory = filterUsageHistoryByWindow(visibleUsageHistory, usageWindow);
   const usageGroups = groupUsageHistory(filteredUsageHistory, usageGroupBy);
@@ -78,8 +84,8 @@ export function Models() {
   const usageTotalPages = Math.max(1, Math.ceil(filteredUsageHistory.length / usagePageSize));
   const safeUsagePage = Math.min(usagePage, usageTotalPages);
   const pagedUsageHistory = filteredUsageHistory.slice((safeUsagePage - 1) * usagePageSize, safeUsagePage * usagePageSize);
-  const usageLoading = fetchStateStatus === 'loading' && visibleUsageHistory.length === 0;
-  const usageRefreshing = fetchStateStatus === 'loading' && visibleUsageHistory.length > 0;
+  const usageLoading = isGatewayRunning && fetchStateStatus === 'loading' && visibleUsageHistory.length === 0;
+  const usageRefreshing = isGatewayRunning && fetchStateStatus === 'loading' && visibleUsageHistory.length > 0;
   const showUsagePagination = !usageLoading && visibleUsageHistory.length > 0 && filteredUsageHistory.length > 0;
 
   const handleRefreshTokenUsage = () => {

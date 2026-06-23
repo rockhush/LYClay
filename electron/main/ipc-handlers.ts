@@ -9,6 +9,7 @@ import { join, extname, basename } from 'node:path';
 import crypto from 'node:crypto';
 import { GatewayManager } from '../gateway/manager';
 import { ClawHubService, ClawHubSearchParams, ClawHubInstallParams, ClawHubUninstallParams } from '../gateway/clawhub';
+import { triggerCronJobManually } from '../gateway/cron-supervisor';
 import {
   type ProviderConfig,
 } from '../utils/secure-storage';
@@ -609,7 +610,7 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             const payload = request.payload as { id?: string } | string | undefined;
             const id = typeof payload === 'string' ? payload : payload?.id;
             if (!id) throw new Error('Invalid cron.trigger payload');
-            data = await gatewayManager.rpc('cron.run', { id, mode: 'force' });
+            data = await triggerCronJobManually(gatewayManager, id);
             break;
           }
           return {
@@ -1065,7 +1066,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
   // Trigger a cron job manually
   ipcMain.handle('cron:trigger', async (_, id: string) => {
     try {
-      const result = await gatewayManager.rpc('cron.run', { id, mode: 'force' });
+      const result = await triggerCronJobManually(gatewayManager, id);
       return result;
     } catch (error) {
       console.error('Failed to trigger cron job:', error);

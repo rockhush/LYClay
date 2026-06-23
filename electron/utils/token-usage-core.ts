@@ -20,7 +20,6 @@ export interface TokenUsageHistoryEntry {
 }
 
 export function extractSessionIdFromTranscriptFileName(fileName: string): string | undefined {
-  if (fileName.endsWith('.trajectory.jsonl')) return undefined;
   if (!fileName.endsWith('.jsonl') && !fileName.includes('.jsonl.reset.')) return undefined;
   return fileName
     .replace(/\.reset\..+$/, '')

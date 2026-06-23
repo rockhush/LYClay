@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, GitBranch, Link, MessageSquare, Wrench, XCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
@@ -39,66 +39,27 @@ function GraphStatusIcon({ status }: { status: TaskStep['status'] }) {
   return <CircleDashed className="h-4 w-4" />;
 }
 
-function formatStepDuration(durationMs?: number): string | null {
-  if (!durationMs || !Number.isFinite(durationMs)) return null;
-  if (durationMs < 1000) return `${Math.max(1, Math.round(durationMs))}ms`;
-  return `${(durationMs / 1000).toFixed(1)}s`;
-}
-
-function useRunningElapsed(status: TaskStep['status']): number | null {
-  const startedAtRef = useRef<number | null>(null);
-  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (status !== 'running') {
-      startedAtRef.current = null;
-      setElapsedMs(null);
-      return;
-    }
-
-    if (startedAtRef.current == null) {
-      startedAtRef.current = Date.now();
-    }
-
-    const tick = () => {
-      if (startedAtRef.current != null) {
-        setElapsedMs(Date.now() - startedAtRef.current);
-      }
-    };
-    tick();
-    const timer = window.setInterval(tick, 1000);
-    return () => window.clearInterval(timer);
-  }, [status]);
-
-  return elapsedMs;
-}
-
 function StepDetailCard({ step }: { step: TaskStep }) {
   const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(false);
   const hasDetail = !!step.detail;
+  // Narration steps (intermediate pure-text assistant messages folded from
+  // the chat stream) are rendered without a label/status pill: the message
+  // text IS the primary content.
   const isNarration = step.kind === 'message';
   const isTool = step.kind === 'tool';
   const isThinking = step.kind === 'thinking';
-  const isModel = step.kind === 'model';
-  const runningElapsedMs = useRunningElapsed(step.status);
-  const stepDuration = formatStepDuration(step.durationMs)
-    ?? (step.status === 'running' ? formatStepDuration(runningElapsedMs ?? undefined) : null);
-  const showRunningDots = (isTool || isThinking || isModel) && step.status === 'running';
-  const hideStatusText = (isTool || isModel) && step.status === 'completed';
+  const showRunningDots = (isTool || isThinking) && step.status === 'running';
+  const hideStatusText = isTool && step.status === 'completed';
   const detailPreview = step.detail?.replace(/\s+/g, ' ').trim();
   const canExpand = hasDetail;
-    const displayLabel = isThinking
-      ? t('executionGraph.thinkingLabel')
-      : isModel
-        ? t('executionGraph.modelCallLabel')
-        : step.label;
+    const displayLabel = isThinking ? t('executionGraph.thinkingLabel') : step.label;
 
   return (
     <div
       className={cn(
         'min-w-0 flex-1 text-muted-foreground',
-        isTool || isNarration || isThinking || isModel
+        isTool || isNarration || isThinking
           ? 'px-0 py-0'
           : 'rounded-xl border border-black/10 bg-white/40 px-3 py-2 dark:border-white/10 dark:bg-white/[0.03]',
       )}
@@ -107,7 +68,7 @@ function StepDetailCard({ step }: { step: TaskStep }) {
         type="button"
         className={cn(
           'flex w-full gap-2 text-left',
-          isTool || isModel ? 'items-center' : 'items-start',
+          isTool ? 'items-center' : 'items-start',
           canExpand ? 'cursor-pointer' : 'cursor-default',
         )}
         onClick={() => {
@@ -116,7 +77,7 @@ function StepDetailCard({ step }: { step: TaskStep }) {
         }}
       >
         <div className="min-w-0 flex-1">
-          {(!isNarration && (!isThinking || isModel) || expanded) && (
+          {(!isNarration && !isThinking || expanded) && (
             <div className="flex min-w-0 items-center gap-2">
               <p className="shrink-0 text-sm font-medium text-muted-foreground">{displayLabel}</p>
               {isTool && step.label === 'web_fetch' && step.url && (
@@ -135,9 +96,6 @@ function StepDetailCard({ step }: { step: TaskStep }) {
                 <p className="min-w-0 truncate text-[12px] leading-4 text-muted-foreground/80">
                   {detailPreview}
                 </p>
-              )}
-              {stepDuration && (
-                <span className="text-[11px] opacity-60">{stepDuration}</span>
               )}
               {!hideStatusText && !showRunningDots && (
                 <span className="rounded-full bg-black/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground dark:bg-white/10">
@@ -234,8 +192,6 @@ export function ExecutionGraphCard({
   const toolCount = steps.filter((step) => step.kind === 'tool').length;
   const processCount = steps.length - toolCount;
   const shouldShowTrailingThinking = active && !suppressThinking;
-  const trailingElapsedMs = useRunningElapsed(shouldShowTrailingThinking ? 'running' : 'completed');
-  const trailingDuration = formatStepDuration(trailingElapsedMs ?? undefined);
 
   if (!expanded) {
     return (
@@ -345,9 +301,6 @@ export function ExecutionGraphCard({
               <div className="w-6 shrink-0" />
               <div className="min-w-0 flex-1 text-sm text-muted-foreground">
                 <span className="font-medium">{t('executionGraph.thinkingLabel')}</span>
-                {trailingDuration && (
-                  <span className="ml-2 text-[12px] tabular-nums text-muted-foreground/80">{trailingDuration}</span>
-                )}
                 <AnimatedDots className="ml-1 inline-flex text-[14px]" />
               </div>
             </div>

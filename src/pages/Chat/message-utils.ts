@@ -6,13 +6,44 @@
 import type { RawMessage, ContentBlock } from '@/stores/chat';
 import { isAttachmentOnlyPlaceholderText, stripSilentReplyToken } from '@/stores/chat/helpers';
 
+const CRON_MONTH_INDEX: Record<string, number> = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+};
+
+/**
+ * Reformat the Gateway-injected cron time block into a readable Chinese line.
+ * Source looks like:
+ *   "Current time: Tuesday, June 23rd, 2026 - 13:22 (Asia/Shanghai)"
+ *   "Reference UTC: 2026-06-23 05:22 UTC"
+ * becomes "时间：2026年6月23日 13:22:00" (local time kept, UTC reference dropped).
+ *
+ * The "Reference UTC:" line is required so this only matches the cron block and
+ * never the single-line heartbeat time ping (which is filtered elsewhere).
+ */
+function reformatCronTimeBlock(text: string): string {
+  const pattern = /Current time:\s*[A-Za-z]+,\s*([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s*-\s*(\d{1,2}):(\d{2})\s*\([^)]*\)\s*\r?\n\s*Reference UTC:[^\n]*/gi;
+  return text.replace(pattern, (match, monthName: string, day: string, year: string, hh: string, mm: string) => {
+    const month = CRON_MONTH_INDEX[monthName.toLowerCase()];
+    if (!month) return match;
+    const pad2 = (v: string | number) => String(v).padStart(2, '0');
+    return `时间：${year}年${month}月${Number(day)}日 ${pad2(hh)}:${pad2(mm)}:00`;
+  });
+}
+
 /**
  * Clean Gateway metadata from user message text for display.
- * Strips: [media attached: ... | ...], [message_id: ...],
- * [Working Directory: ...], and the timestamp prefix [Day Date Time Timezone].
+ * Strips: [cron: id], [media attached: ... | ...], [message_id: ...],
+ * [Working Directory: ...], the timestamp prefix [Day Date Time Timezone],
+ * reformats the cron time block into Chinese, and removes the English cron
+ * delivery instruction so customers see only the actionable content.
  */
 function cleanUserText(text: string): string {
-  return text
+  return reformatCronTimeBlock(text)
+    // Remove [cron: uuid] scheduled-task id prefix
+    .replace(/\s*\[cron:[^\]]*\]\s*/gi, ' ')
+    // Remove the English cron delivery instruction boilerplate (trailing block)
+    .replace(/Use the message tool if you need to notify the user[\s\S]*$/i, '')
     // Remove [media attached: path (mime) | path] references
     .replace(/\s*\[media attached:[^\]]*\]/g, '')
     // Remove [message_id: uuid]

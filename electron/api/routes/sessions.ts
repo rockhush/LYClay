@@ -482,16 +482,11 @@ export async function handleSessionRoutes(
             const entry = JSON.parse(line) as {
               type?: string;
               customType?: string;
-              timestamp?: string;
               message?: unknown;
               data?: PromptErrorRecord;
             };
             if (entry.type === 'message' && entry.message) {
-              const message = redactStructuredSecrets(sanitizeTranscriptMessageForDisplay(entry.message));
-              const withTimestamp = typeof entry.timestamp === 'string' && entry.timestamp.trim()
-                ? { ...(message as Record<string, unknown>), timestamp: entry.timestamp }
-                : message;
-              return [{ kind: 'message' as const, value: withTimestamp }];
+              return [{ kind: 'message' as const, value: redactStructuredSecrets(sanitizeTranscriptMessageForDisplay(entry.message)) }];
             }
             if (entry.type === 'custom' && entry.customType === 'openclaw:prompt-error') {
               return [{ kind: 'promptError' as const, value: redactStructuredSecrets(entry.data ?? {}) }];
@@ -518,25 +513,6 @@ export async function handleSessionRoutes(
         }
       }
 
-      let modelCallTimings: Array<{
-        runId: string;
-        submittedAt: string;
-        completedAt: string;
-        durationMs: number;
-        model?: string;
-        provider?: string;
-      }> = [];
-      const trajectoryPath = resolvedSrcPath.replace(/\.jsonl$/, '.trajectory.jsonl');
-      try {
-        const { parseTrajectoryModelCallTimings } = await import('../../utils/model-call-timing-from-trajectory');
-        const trajectoryRaw = await fsP.readFile(trajectoryPath, 'utf8');
-        modelCallTimings = parseTrajectoryModelCallTimings(trajectoryRaw);
-      } catch (trajectoryError) {
-        if (typeof trajectoryError === 'object' && trajectoryError !== null && 'code' in trajectoryError && trajectoryError.code !== 'ENOENT') {
-          logger.debug(`[sessions:history-local] Trajectory timing read skipped: ${String(trajectoryError)}`);
-        }
-      }
-
       const durationMs = Date.now() - requestStart;
       if (durationMs >= HISTORY_LOCAL_SLOW_MS) {
         logger.info(`[sessions:history-local] Returning ${messages.length} messages in ${durationMs}ms`);
@@ -545,7 +521,7 @@ export async function handleSessionRoutes(
       }
 
       logger.info(`[sessions:history-local] Returning ${messages.length} messages`);
-      sendJson(res, 200, { success: true, messages, promptErrors, modelCallTimings });
+      sendJson(res, 200, { success: true, messages, promptErrors });
     } catch (error) {
       const { logger } = await import('../../utils/logger');
       logger.error(`[sessions:history-local] Fatal error:`, error);

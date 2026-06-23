@@ -7,6 +7,7 @@ import { getOpenClawConfigDir } from '../../utils/paths';
 import { resolveAccountIdFromSessionHistory } from '../../utils/session-util';
 import { toOpenClawChannelType, toUiChannelType } from '../../utils/channel-alias';
 import { resolveAgentIdFromChannel } from '../../utils/agent-config';
+import { triggerCronJobManually } from '../../gateway/cron-supervisor';
 
 /**
  * Find agentId from session history by delivery "to" address.
@@ -685,7 +686,7 @@ export async function handleCronRoutes(
   if (url.pathname === '/api/cron/trigger' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{ id: string }>(req);
-      sendJson(res, 200, await ctx.gatewayManager.rpc('cron.run', { id: body.id, mode: 'force' }));
+      sendJson(res, 200, await triggerCronJobManually(ctx.gatewayManager, body.id));
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }

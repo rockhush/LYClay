@@ -8,9 +8,8 @@ const TRAILING_PUNCTUATION = /[)\]),.;!?，。！？；、]+$/;
 const WRAPPING_BRACKETS = /^[[(](.*?)[)\]]$/;
 const FILE_URL_PATTERN = /\bfile:\/\/[^\s<>"'`]+/gi;
 const QUOTED_PATH_PATTERN = /["'`]([^"'`]*(?:[A-Za-z]:[\\/]|file:\/\/|\/(?:Users|home|etc|var|tmp)\/)[^"'`]*)["'`]/gi;
-const WINDOWS_FILE_PATH_PATTERN = /\b[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n\s,;!?，。！？；、"'`()]+[\\/])*[^\\/:*?"<>|\r\n\s,;!?，。！？；、"'`()]*?\.[A-Za-z0-9][A-Za-z0-9_-]{0,15}\b/g;
-const WINDOWS_DIRECTORY_PATH_PATTERN = /\b[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n,;!?，。！？；、"'`()]+[\\/])+[^\\/:*?"<>|\r\n\s,;!?，。！？；、"'`()]*/g;
-const MEDIA_ATTACHED_PATTERN = /\[media attached:\s*([^\s(]+)\s*\(([^)]+)\)\s*\|([^\]]+)\]/g;
+const WINDOWS_FILE_PATH_PATTERN = /\b[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n\s,;!?，。！？；、"'`]+[\\/])*[^\\/:*?"<>|\r\n\s,;!?，。！？；、"'`]*?\.[A-Za-z0-9][A-Za-z0-9_-]{0,15}\b/g;
+const WINDOWS_DIRECTORY_PATH_PATTERN = /\b[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n,;!?，。！？；、"'`]+[\\/])+[^\\/:*?"<>|\r\n\s,;!?，。！？；、"'`]*/g;
 const POSIX_FILE_PATH_PATTERN = /(?:^|[\s(["'`])((?:\/Users|\/home|\/etc|\/var|\/tmp)\/[^\s<>"'`]*?\.[A-Za-z0-9][A-Za-z0-9_-]{0,15}\b)/g;
 
 function toError(message: string, code: string): Error & { code?: string } {
@@ -62,45 +61,26 @@ function dedupePathCandidates(paths: string[]): string[] {
   }));
 }
 
-function stripMediaAttachedBlocks(text: string): string {
-  return text.replace(/\s*\[media attached:[^\]]*\]/g, '');
-}
-
-function extractMediaAttachedPaths(text: string): string[] {
-  const paths: string[] = [];
-  for (const match of text.matchAll(MEDIA_ATTACHED_PATTERN)) {
-    addCandidate(paths, match[1]);
-    addCandidate(paths, match[3]);
-  }
-  return paths;
-}
-
 export function extractLocalFilePathReferences(text: string): string[] {
   const paths: string[] = [];
 
-  for (const path of extractMediaAttachedPaths(text)) {
-    paths.push(path);
-  }
-
-  const stripped = stripMediaAttachedBlocks(text);
-
-  for (const match of stripped.matchAll(FILE_URL_PATTERN)) {
+  for (const match of text.matchAll(FILE_URL_PATTERN)) {
     addCandidate(paths, match[0]);
   }
 
-  for (const match of stripped.matchAll(QUOTED_PATH_PATTERN)) {
+  for (const match of text.matchAll(QUOTED_PATH_PATTERN)) {
     addCandidate(paths, match[1]);
   }
 
-  for (const match of stripped.matchAll(WINDOWS_FILE_PATH_PATTERN)) {
+  for (const match of text.matchAll(WINDOWS_FILE_PATH_PATTERN)) {
     addCandidate(paths, match[0]);
   }
 
-  for (const match of stripped.matchAll(WINDOWS_DIRECTORY_PATH_PATTERN)) {
+  for (const match of text.matchAll(WINDOWS_DIRECTORY_PATH_PATTERN)) {
     addCandidate(paths, match[0]);
   }
 
-  for (const match of stripped.matchAll(POSIX_FILE_PATH_PATTERN)) {
+  for (const match of text.matchAll(POSIX_FILE_PATH_PATTERN)) {
     addCandidate(paths, match[1]);
   }
 

@@ -320,15 +320,6 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
       .catch(() => {});
   }
 
-  // Gateway emits phase=end after each tool round; that is not a full run completion.
-  if (phase === 'end') {
-    loadChatStoreModule()
-      .then(({ useChatStore }) => {
-        refreshActiveAgentSessionHistory(useChatStore.getState(), runId, sessionKey, true);
-      })
-      .catch(() => {});
-  }
-
   if (phase === 'completed' || phase === 'done' || phase === 'finished') {
     loadChatStoreModule()
       .then(({ useChatStore }) => {
@@ -348,10 +339,17 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
         );
       })
       .catch(() => {});
+  } else if (phase === 'end') {
+    loadChatStoreModule()
+      .then(({ useChatStore }) => {
+        const state = useChatStore.getState();
+        const resolvedSessionKey = sessionKey != null ? String(sessionKey) : null;
+        const matchesCurrentSession = resolvedSessionKey == null || resolvedSessionKey === state.currentSessionKey;
+        const matchesActiveRun = runId != null && state.activeRunId != null && String(runId) === state.activeRunId;
 
-    void import('@/stores/token-usage')
-      .then(({ scheduleTokenUsageRefreshAfterRun }) => {
-        scheduleTokenUsageRefreshAfterRun();
+        if (matchesCurrentSession || matchesActiveRun) {
+          maybeLoadHistory(state, true);
+        }
       })
       .catch(() => {});
   }

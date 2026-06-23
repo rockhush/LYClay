@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveTaskSteps, findInFlightChildDelegation, parseSubagentCompletionInfo } from '@/pages/Chat/task-visualization';
+import { deriveTaskSteps, parseSubagentCompletionInfo } from '@/pages/Chat/task-visualization';
 import { stripProcessMessagePrefix } from '@/pages/Chat/message-utils';
 import type { RawMessage, ToolStatus } from '@/stores/chat';
 
@@ -543,48 +543,5 @@ status: completed successfully`,
       sessionId: 'child-session-id',
       agentId: 'coder',
     });
-  });
-});
-
-describe('findInFlightChildDelegation', () => {
-  it('returns child session info after spawn until completion event arrives', () => {
-    const messages: RawMessage[] = [
-      { role: 'user', content: 'Research labor law' },
-      {
-        role: 'assistant',
-        content: [{
-          type: 'tool_use',
-          id: 'spawn-1',
-          name: 'sessions_spawn',
-          input: { label: 'legal-research', task: 'collect statutes' },
-        }],
-      },
-      {
-        role: 'toolResult',
-        toolCallId: 'spawn-1',
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            status: 'accepted',
-            childSessionKey: 'agent:main:subagent:child-123',
-            runId: 'child-run-id',
-          }),
-        }],
-      },
-    ];
-
-    const delegation = findInFlightChildDelegation(messages, new Set(), true);
-    expect(delegation).toEqual({
-      label: 'legal-research',
-      childSessionKey: 'agent:main:subagent:child-123',
-      runId: 'child-run-id',
-    });
-
-    const completed = findInFlightChildDelegation(
-      messages,
-      new Set(['agent:main:subagent:child-123']),
-      true,
-    );
-    expect(completed).toBeNull();
   });
 });

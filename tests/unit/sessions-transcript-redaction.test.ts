@@ -201,44 +201,6 @@ describe('session transcript redaction', () => {
     expect(serialized).not.toContain(bearer);
   });
 
-  it('attaches jsonl envelope timestamps to history-local messages', async () => {
-    const sessionsDir = join(testOpenClawConfigDir, 'agents', 'main', 'sessions');
-    mkdirSync(sessionsDir, { recursive: true });
-    writeFileSync(
-      join(sessionsDir, 'sessions.json'),
-      JSON.stringify({
-        'agent:main:main': {
-          id: 'main-session',
-        },
-      }),
-    );
-    writeTranscript('main', 'main-session', [
-      {
-        type: 'message',
-        timestamp: '2026-06-22T03:09:01.083Z',
-        message: {
-          role: 'assistant',
-          id: 'a1',
-          content: [{ type: 'thinking', thinking: 'phase 1' }],
-        },
-      },
-      {
-        type: 'message',
-        timestamp: '2026-06-22T03:09:52.702Z',
-        message: {
-          role: 'assistant',
-          id: 'a2',
-          content: [{ type: 'thinking', thinking: 'phase 2' }],
-        },
-      },
-    ]);
-
-    const payload = await request('/api/sessions/history-local?sessionKey=agent%3Amain%3Amain');
-    const messages = payload.messages as Array<{ timestamp?: string }>;
-    expect(messages[0]?.timestamp).toBe('2026-06-22T03:09:01.083Z');
-    expect(messages[1]?.timestamp).toBe('2026-06-22T03:09:52.702Z');
-  });
-
   it('strips trailing NO_REPLY from history-local assistant messages', async () => {
     const sessionsDir = join(testOpenClawConfigDir, 'agents', 'main', 'sessions');
     mkdirSync(sessionsDir, { recursive: true });

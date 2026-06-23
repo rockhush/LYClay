@@ -19,15 +19,13 @@ import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard } from './ExecutionGraphCard';
 import { ChatToolbar } from './ChatToolbar';
 import { extractImages, extractText, extractThinking, extractToolUse, stripProcessMessagePrefix } from './message-utils';
-import { deriveTaskSteps, filterSubagentOrchestrationSteps, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
+import { deriveTaskSteps, filterSubagentOrchestrationSteps, findReplyMessageIndex, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
 import { useTranslation } from 'react-i18next';
-import i18n from '@/i18n';
 import { cn } from '@/lib/utils';
-import { areEquivalentUserMessageTexts,isSuppressedRunError, truncateRunErrorMessage, isBackendRunFailureError } from '@/stores/chat/helpers';
+import { areEquivalentUserMessageTexts, isSuppressedRunError } from '@/stores/chat/helpers';
 import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
 import { useMinLoading } from '@/hooks/use-min-loading';
-import { getChatWaitingMode, isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
-import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
+import { getChatWaitingMode } from '@/lib/chat-first-response-preparing';
 import { useSkillsStore } from '@/stores/skills';
 import { toast } from 'sonner';
 import { formatWelcomeDisplayName } from '@/lib/welcome-display-name';
@@ -78,6 +76,13 @@ type RuntimeActivity = {
   signature: string;
 };
 
+type ActiveDelegation = {
+  label: string | null;
+  childSessionKey: string | null;
+  childSessionId: string | null;
+  runId: string | null;
+};
+
 function getPrimaryMessageStepTexts(steps: TaskStep[]): string[] {
   return steps
     .filter((step) => step.kind === 'message' && step.parentId === 'agent-run' && !!step.detail)
@@ -105,13 +110,6 @@ function describeRunTermination(error: string | null): { title: string; detail: 
   if (!error) return null;
   if (shouldHideRunError(error)) return null;
   const normalized = error.toLowerCase();
-  const backendStoppedMessage = i18n.t('chat:errors.backendRunStopped');
-  if (isBackendRunFailureError(error) || error === backendStoppedMessage) {
-    return {
-      title: '后端服务已停止',
-      detail: error === backendStoppedMessage ? error : backendStoppedMessage,
-    };
-  }
   if (normalized.includes('llm idle timeout')) {
     return {
       title: 'Run ended',
@@ -142,16 +140,28 @@ function describeRunTermination(error: string | null): { title: string; detail: 
       detail: '会话消息过多导致超出模型上下文窗口限制。建议开始新会话，或手动 /reset（/new）以刷新上下文。',
     };
   }
-  if (normalized.includes('toolexecutiontimeout') || normalized.includes('tool execution')) {
-    return {
-      title: '工具执行超时',
-      detail: '工具长时间无响应，任务已自动停止。请检查命令是否卡住，或缩小任务范围后重试。',
-    };
-  }
   return {
     title: 'Run ended',
-    detail: truncateRunErrorMessage(error),
+    detail: error,
   };
+}
+
+function isToolResultMessage(message: RawMessage | undefined): boolean {
+  if (!message || typeof message.role !== 'string') return false;
+  const normalized = message.role.toLowerCase();
+  return normalized === 'toolresult' || normalized === 'tool_result';
+}
+
+function tryParseJsonObject(text: string | null | undefined): Record<string, unknown> | null {
+  if (!text) return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
 }
 
 // Keep the last non-empty execution-graph snapshot per session/run outside
@@ -160,7 +170,6 @@ function describeRunTermination(error: string | null): { title: string; detail: 
 const graphStepCacheStore = new Map<string, Record<string, GraphStepCacheEntry>>();
 const streamingTimestampStore = new Map<string, number>();
 const EMPTY_GRAPH_STEP_CACHE: Record<string, GraphStepCacheEntry> = {};
-const EMPTY_TOOL_DURATIONS: Record<string, number> = {};
 
 export function Chat() {
   const { t } = useTranslation('chat');
@@ -196,7 +205,6 @@ export function Chat() {
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const agents = useAgentsStore((s) => s.agents);
   const runAborted = useChatStore((s) => s.runAborted);
-  const sessionToolDurations = useChatStore((s) => s.sessionToolDurations[currentSessionKey] ?? EMPTY_TOOL_DURATIONS);
   const defaultAccountId = useProviderStore((s) => s.defaultAccountId);
   const isMimo = defaultAccountId === 'ly-mimo';
   const subagentCompletionInfos = useMemo(
@@ -366,54 +374,6 @@ export function Chat() {
     };
   }, [subagentCompletionInfos, childTranscripts]);
 
-  const completedChildSessionKeys = useMemo(
-    () => new Set(
-      subagentCompletionInfos
-        .filter((info): info is NonNullable<typeof info> => info != null)
-        .map((info) => info.sessionKey),
-    ),
-    [subagentCompletionInfos],
-  );
-
-  const inFlightChildDelegation = useMemo(
-    () => findInFlightChildDelegation(
-      messages,
-      completedChildSessionKeys,
-      sending || pendingFinal,
-    ),
-    [messages, completedChildSessionKeys, sending, pendingFinal],
-  );
-
-  useEffect(() => {
-    const childSessionKey = inFlightChildDelegation?.childSessionKey;
-    if (!childSessionKey) return;
-
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const result = await hostApiFetch<{ success: boolean; messages?: RawMessage[] }>(
-          `/api/sessions/history-local?sessionKey=${encodeURIComponent(childSessionKey)}`,
-        );
-        if (cancelled || !result.success) return;
-        const nextMessages = result.messages || [];
-        setChildTranscripts((current) => {
-          const existing = current[childSessionKey];
-          if (existing && existing.length === nextMessages.length) return current;
-          return { ...current, [childSessionKey]: nextMessages };
-        });
-      } catch (error) {
-        console.warn('Failed to poll in-flight child transcript:', { childSessionKey, error });
-      }
-    };
-
-    void poll();
-    const timer = window.setInterval(poll, 3000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [inFlightChildDelegation?.childSessionKey]);
-
   const streamMsg = streamingMessage && typeof streamingMessage === 'object'
     ? streamingMessage as unknown as { role?: string; content?: unknown; timestamp?: number }
     : null;
@@ -453,28 +413,8 @@ export function Chat() {
   const [runtimeActivity, setRuntimeActivity] = useState<RuntimeActivity | null>(null);
   const [activityClock, setActivityClock] = useState(0);
 
-  const showFirstResponseProgress = isFirstResponsePreparing({
-    gatewayStatus,
-    sending,
-    streamingMessage: streamingMessage as RawMessage | string | null,
-    streamingText,
-    streamingTools,
-  });
-
-  const [firstResponseBarSeconds, setFirstResponseBarSeconds] = useState(0);
-  useEffect(() => {
-    if (!showFirstResponseProgress) return;
-    setFirstResponseBarSeconds(0);
-    const id = window.setInterval(() => {
-      setFirstResponseBarSeconds((seconds) => seconds + 1);
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [showFirstResponseProgress]);
-
-  const firstResponseProgress = estimateGatewayWarmupProgress(
-    gatewayStatus,
-    firstResponseBarSeconds,
-  );
+  const showFirstResponseProgress = false;
+  const firstResponseProgress = 0;
 
   const chatWaitingMode = getChatWaitingMode({
     gatewayStatus,
@@ -584,17 +524,13 @@ export function Chat() {
       // quiet parent run should not keep the graph alive solely because stale
       // sending/pendingFinal state has not been cleared yet.
       const subagentReturnSettled = hasCompletedSubagentReturn && !hasLiveRuntimeSignal;
-      const hasActiveRunSignal = sending || pendingFinal || Boolean(activeRunId);
       const isLatestOpenRun = nextUserIndex === -1
         && !subagentReturnSettled
         && (
           sending
           || pendingFinal
           || hasAnyStreamContent
-          // Keep the graph open between tool rounds only while the runtime still
-          // owns the turn. Stale transcript tool calls alone must not resurrect
-          // "thinking" after the backend has already stopped.
-          || (runStillExecutingTools && !error && !hasFinalReply && hasActiveRunSignal)
+          || (runStillExecutingTools && !error && (sending || pendingFinal || activeRunId))
         );
     const replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
     const replyIndex = replyIndexOffset === -1 ? null : idx + 1 + replyIndexOffset;
@@ -605,7 +541,6 @@ export function Chat() {
         streamingMessage: isLatestOpenRun ? streamingMessage : null,
         streamingTools: isLatestOpenRun ? streamingTools : [],
         omitLastStreamingMessageSegment: isLatestOpenRun ? omitLastStreamingMessageSegment : false,
-        toolDurationByToolCallId: sessionToolDurations,
       });
 
       for (const completion of completionInfos) {
@@ -623,27 +558,6 @@ export function Chat() {
         }));
 
         builtSteps = [...builtSteps, ...childSteps];
-      }
-
-      if (
-        isLatestOpenRun
-        && inFlightChildDelegation?.childSessionKey
-        && !completionInfos.some((info) => info.sessionKey === inFlightChildDelegation.childSessionKey)
-      ) {
-        const childMessages = childTranscripts[inFlightChildDelegation.childSessionKey];
-        if (childMessages && childMessages.length > 0) {
-          const childSteps = filterSubagentOrchestrationSteps(deriveTaskSteps({
-            messages: childMessages,
-            streamingMessage: null,
-            streamingTools: [],
-          })).map((step) => ({
-            ...step,
-            id: `${inFlightChildDelegation.childSessionKey}:${step.id}`,
-            depth: 1,
-            parentId: 'agent-run',
-          }));
-          builtSteps = [...builtSteps, ...childSteps];
-        }
       }
 
       return builtSteps;
@@ -718,7 +632,7 @@ export function Chat() {
         // runs, rely on the activity indicator instead of an empty "Thinking…" card.
         return [];
       }
-      if (isLatestOpenRun && streamingReplyText == null && !showFirstResponseProgress) {
+      if (isLatestOpenRun && streamingReplyText == null) {
         return [{
           triggerIndex: idx,
           replyIndex,
@@ -788,15 +702,6 @@ export function Chat() {
     // When runAborted is true, card should not be active (user manually stopped)
     const cardActive = isLatestOpenRun && !runAborted;
 
-    if (!isLatestOpenRun && runStillExecutingTools && !hasFinalReply && !hasActiveRunSignal) {
-      const hasAnyAssistantNarration = segmentMessages.some(
-        (message) => message.role === 'assistant' && extractText(message).trim().length > 0,
-      );
-      if (!hasAnyAssistantNarration) {
-        return [];
-      }
-    }
-
     // Suppress the trailing "Thinking..." indicator only when the live stream is
     // currently rendered AS a streaming step inside this card's graph. In
     // that case the streaming step itself is the activity signal, and the
@@ -839,7 +744,6 @@ export function Chat() {
     currentAgentId,
     currentSessionKey,
     graphStepCache,
-    inFlightChildDelegation,
     hasAnyStreamContent,
     hasRunningStreamToolStatus,
     hasStreamImages,
@@ -854,8 +758,6 @@ export function Chat() {
     sending,
     activeRunId,
     sessionLabels,
-    sessionToolDurations,
-    showFirstResponseProgress,
     streamText,
     streamTools,
     streamingMessage,
@@ -864,7 +766,66 @@ export function Chat() {
   ]);
   const hasActiveExecutionGraph = userRunCards.some((card) => card.active);
   const hasVisibleRuntimeActivity = sending || hasActiveExecutionGraph;
-  const activeDelegation = inFlightChildDelegation;
+  const activeDelegation = useMemo<ActiveDelegation | null>(() => {
+    const activeCard = [...userRunCards].reverse().find((card) => card.active);
+    if (!activeCard) return null;
+
+    const segmentMessages = messages.slice(activeCard.triggerIndex + 1, activeCard.segmentEnd + 1);
+    const completionInfos = subagentCompletionInfos
+      .slice(activeCard.triggerIndex + 1, activeCard.segmentEnd + 1)
+      .filter((value): value is NonNullable<typeof value> => value != null);
+
+    type SpawnCallInfo = {
+      toolCallId: string | null;
+      label: string | null;
+    };
+
+    const spawnCalls: SpawnCallInfo[] = [];
+    for (const message of segmentMessages) {
+      if (!message || message.role !== 'assistant') continue;
+      for (const tool of extractToolUse(message)) {
+        if (!/sessions_spawn/i.test(tool.name)) continue;
+        const input = (tool.input && typeof tool.input === 'object') ? tool.input as Record<string, unknown> : null;
+        spawnCalls.push({
+          toolCallId: tool.id || null,
+          label: typeof input?.label === 'string' ? input.label : null,
+        });
+      }
+    }
+    if (spawnCalls.length === 0) return null;
+
+    const latestSpawn = spawnCalls[spawnCalls.length - 1]!;
+    let childSessionKey: string | null = null;
+    let runId: string | null = null;
+
+    for (let idx = segmentMessages.length - 1; idx >= 0; idx -= 1) {
+      const message = segmentMessages[idx];
+      if (!isToolResultMessage(message)) continue;
+      if (latestSpawn.toolCallId && message.toolCallId && message.toolCallId !== latestSpawn.toolCallId) continue;
+      const parsed = tryParseJsonObject(extractText(message));
+      if (!parsed) continue;
+      if (typeof parsed.childSessionKey === 'string') {
+        childSessionKey = parsed.childSessionKey;
+      }
+      if (typeof parsed.runId === 'string') {
+        runId = parsed.runId;
+      }
+      if (childSessionKey || runId) break;
+    }
+
+    const completion = childSessionKey
+      ? completionInfos.find((info) => info.sessionKey === childSessionKey) ?? null
+      : completionInfos.at(-1) ?? null;
+
+    if (completion) return null;
+
+    return {
+      label: latestSpawn.label,
+      childSessionKey,
+      childSessionId: null,
+      runId,
+    };
+  }, [messages, subagentCompletionInfos, userRunCards]);
   const activitySignature = useMemo(() => JSON.stringify({
     sending,
     hasActiveExecutionGraph,
@@ -931,11 +892,7 @@ export function Chat() {
       .slice(0, 3);
 
     let title = '\u6b63\u5728\u6267\u884c';
-    if (activeDelegation) {
-      title = activeDelegation.label
-        ? `\u5b50\u4efb\u52a1\u6267\u884c\u4e2d\uff1a${activeDelegation.label}`
-        : '\u5b50\u4efb\u52a1\u6267\u884c\u4e2d';
-    } else if (runningTools.length > 0) {
+    if (runningTools.length > 0) {
       title = `\u6b63\u5728\u8fd0\u884c\u5de5\u5177\uff1a${runningTools.join(', ')}`;
     } else if (hasStreamTools) {
       title = '\u6b63\u5728\u51c6\u5907\u5de5\u5177\u8c03\u7528';
@@ -1286,7 +1243,7 @@ export function Chat() {
                   )}
 
                   {/* Typing indicator when sending but no stream content yet */}
-                  {sending && !showFirstResponseProgress && !pendingFinal && !hasAnyStreamContent && !hasActiveExecutionGraph && (
+                  {sending && !pendingFinal && !hasAnyStreamContent && !hasActiveExecutionGraph && (
                     <TypingIndicator summary={activitySummary} mode={chatWaitingMode} />
                   )}
                 </>
@@ -1372,7 +1329,7 @@ export function Chat() {
           <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
             <p className="text-sm text-destructive flex items-center gap-2 min-w-0">
               <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              <span className="truncate">{truncateRunErrorMessage(error)}</span>
+              <span className="truncate">{error}</span>
             </p>
             <div className="flex items-center gap-2 flex-shrink-0">
               {error.toLowerCase().includes('context overflow') && (

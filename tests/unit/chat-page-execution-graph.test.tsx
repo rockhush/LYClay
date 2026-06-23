@@ -5,7 +5,7 @@ const hostApiFetchMock = vi.fn();
 
 const { gatewayState, agentsState, chatScrollRef } = vi.hoisted(() => ({
   gatewayState: {
-    status: { state: 'running', port: 18789, warmupStatus: 'ready' } as Record<string, unknown>,
+    status: { state: 'running', port: 18789 } as Record<string, unknown>,
   },
   agentsState: {
     agents: [{ id: 'main', name: 'main' }] as Array<Record<string, unknown>>,
@@ -113,7 +113,7 @@ describe('Chat execution graph lifecycle', () => {
     hostApiFetchMock.mockReset();
     hostApiFetchMock.mockResolvedValue({ success: true, messages: [] });
     agentsState.fetchAgents.mockReset();
-    gatewayState.status = { state: 'running', port: 18789, warmupStatus: 'ready' };
+    gatewayState.status = { state: 'running', port: 18789 };
     chatScrollRef.current = null;
 
     const { useChatStore } = await import('@/stores/chat');
@@ -714,54 +714,6 @@ status: completed successfully`,
 
     render(<Chat />);
 
-    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
-  });
-
-  it('does not keep the execution graph active from stale tool history after the run has stopped', async () => {
-    const { useChatStore } = await import('@/stores/chat');
-    useChatStore.setState({
-      messages: [
-        {
-          role: 'user',
-          content: 'Run a script',
-        },
-        {
-          role: 'assistant',
-          id: 'tool-turn',
-          content: [
-            {
-              type: 'tool_use',
-              id: 'exec-call',
-              name: 'exec',
-              input: { command: 'python slow.py' },
-            },
-          ],
-        },
-      ],
-      loading: false,
-      error: null,
-      runError: null,
-      sending: false,
-      activeRunId: null,
-      streamingText: '',
-      streamingMessage: null,
-      streamingTools: [],
-      pendingFinal: false,
-      lastUserMessageAt: null,
-      pendingToolImages: [],
-      sessions: [{ key: 'agent:main:main' }],
-      currentSessionKey: 'agent:main:main',
-      currentAgentId: 'main',
-      sessionLabels: {},
-      sessionLastActivity: {},
-      thinkingLevel: null,
-    });
-
-    const { Chat } = await import('@/pages/Chat/index');
-
-    render(<Chat />);
-
-    expect(screen.queryByTestId('chat-execution-graph')).not.toBeInTheDocument();
     expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
   });
 });

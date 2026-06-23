@@ -160,16 +160,6 @@ export const useTokenUsageStore = create<TokenUsageState>((set, get) => ({
   },
 }));
 
-const TOKEN_USAGE_POST_RUN_REFRESH_DELAY_MS = 2000;
-
-/** Refresh token usage after a chat run so Models page picks up new JSONL records. */
-export function scheduleTokenUsageRefreshAfterRun(): void {
-  void useTokenUsageStore.getState().fetchTokenUsageHistory({ force: true });
-  setTimeout(() => {
-    void useTokenUsageStore.getState().fetchTokenUsageHistory({ force: true });
-  }, TOKEN_USAGE_POST_RUN_REFRESH_DELAY_MS);
-}
-
 /** Test helper */
 export function resetTokenUsageStoreForTests(): void {
   clearFetchTimer();
