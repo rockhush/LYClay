@@ -27,7 +27,6 @@ export const initialChatState: Pick<
   | 'securityCancelNotice'
   | 'prefilledInput'
   | 'sending'
-  | 'aborting'
   | 'activeRunId'
   | 'streamingText'
   | 'streamingMessage'

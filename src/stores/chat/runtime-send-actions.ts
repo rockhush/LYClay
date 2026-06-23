@@ -392,18 +392,6 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         workspaceContext: '',
         isInternalStagedExecution,
         invokeCompactorRpc: (method, params, timeoutMs) => invokeIpc('gateway:rpc', method, params, timeoutMs),
-        persistedCompressionState: get().sessionCompressionState?.[currentSessionKey] ?? null,
-        onCompressionStatus: (status: ContextCompressionStatus | null) => {
-          set({ contextCompressionStatus: status });
-          if (status && (status.status === 'compressed' || status.status === 'fallback' || status.status === 'failed')) {
-            setTimeout(() => {
-              const s = get();
-              if (s.contextCompressionStatus === status) {
-                set({ contextCompressionStatus: null });
-              }
-            }, 5000);
-          }
-        },
       });
 
       if (contextGuard.error) {
@@ -412,10 +400,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       }
 
       if (contextGuard.compressed) {
-        const nextCompressionState = contextGuard.compressionMeta
-          ? { ...get().sessionCompressionState, [currentSessionKey]: contextGuard.compressionMeta }
-          : get().sessionCompressionState;
-        set({ messages: contextGuard.messages, sessionCompressionState: nextCompressionState });
+        set({ messages: contextGuard.messages });
       }
       set((s) => ({
         messages: isInternalStagedExecution

@@ -6,9 +6,9 @@
 
 /**
  * Estimate tokens for a text string.
- * - Chinese/CJK characters: ~1 token each (conservative for context guards)
- * - ASCII/Latin characters: ~0.5 tokens each
- * - Whitespace: ~0.25 tokens each
+ * - Chinese characters: ~0.5 tokens each (GPT-4o tokenizer approximation)
+ * - ASCII/Latin characters: ~0.25 tokens each
+ * - Whitespace: ~0.1 tokens each
  */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
@@ -18,11 +18,11 @@ export function estimateTokens(text: string): number {
     const code = char.charCodeAt(0);
     // Chinese/CJK range
     if (code >= 0x4e00 && code <= 0x9fff) {
-      count += 1;
-    } else if (/\s/.test(char)) {
-      count += 0.25;
-    } else {
       count += 0.5;
+    } else if (/\s/.test(char)) {
+      count += 0.1;
+    } else {
+      count += 0.25;
     }
   }
   return Math.ceil(count);
@@ -84,6 +84,7 @@ export function estimateHistoryTokens(messages: Array<{ role: string; content: u
 export function needsCompression(
   messages: Array<{ role: string; content: unknown }>,
   threshold: number,
+  minMessageCount = 10,
 ): boolean {
-  return estimateHistoryTokens(messages) >= threshold;
+  return messages.length >= minMessageCount && estimateHistoryTokens(messages) >= threshold;
 }

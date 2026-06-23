@@ -26,7 +26,6 @@ import {
   type ChatSession,
   type ChatState,
   type CompressionStateEntry,
-  type ContextCompressionStatus,
   type ContentBlock,
   type ReasoningMode,
   type RawMessage,
@@ -61,7 +60,6 @@ import {
   markChatRunVisibleProgress,
 } from './chat/chat-run-perf';
 import { prepareContextBeforeSend } from './chat/context-send-guard';
-import { maybeCompressRuntimeContext } from './chat/runtime-context-monitor';
 import { filterLargeToolResults, applyTimeDecayStrategy } from './chat/history-time-decay';
 import {
   bindRunIdToObservation,
@@ -80,7 +78,6 @@ import {
 export type {
   AttachedFileMeta,
   ChatSession,
-  ContextCompressionStatus,
   ContentBlock,
   ReasoningMode,
   RawMessage,
@@ -3099,7 +3096,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionPinnedAt: loadSessionPinnedAtFromStorage(),
   sessionStreamingStates: {},
   sessionCompressionState: {},
-  contextCompressionStatus: null,
   thinkingLevel: null,
   reasoningMode: loadStoredReasoningMode(),
 
@@ -4283,18 +4279,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isInternalStagedExecution,
       invokeCompactorRpc: (method, params, timeoutMs) => useGatewayStore.getState().rpc(method, params as Record<string, unknown>, timeoutMs),
       persistedCompressionState: get().sessionCompressionState?.[currentSessionKey] ?? null,
-      onCompressionStatus: (status: ContextCompressionStatus | null) => {
-        set({ contextCompressionStatus: status });
-        // Auto-clear terminal states after 5 seconds
-        if (status && (status.status === 'compressed' || status.status === 'fallback' || status.status === 'failed')) {
-          setTimeout(() => {
-            const s = get();
-            if (s.contextCompressionStatus === status) {
-              set({ contextCompressionStatus: null });
-            }
-          }, 5000);
-        }
-      },
     });
 
     if (contextGuard.error) {
@@ -4923,10 +4907,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
           })(),
           streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
         }));
-        maybeCompressRuntimeContext(set, get, runId);
         break;
       }
       case 'final': {
+        const finalBeforeState = get();
+        console.info('[chat.final.before]', {
+          runId,
+          eventSessionKey,
+          currentSessionKey: finalBeforeState.currentSessionKey,
+          activeRunId: finalBeforeState.activeRunId,
+          sending: finalBeforeState.sending,
+          pendingFinal: finalBeforeState.pendingFinal,
+          hasStreamingMessage: Boolean(finalBeforeState.streamingMessage),
+          streamingTextLength: finalBeforeState.streamingText.length,
+          streamingTools: finalBeforeState.streamingTools.map((tool) => ({
+            id: tool.id,
+            name: tool.name,
+            status: tool.status,
+          })),
+          sessionStreamingState: (() => {
+            const state = finalBeforeState.sessionStreamingStates[eventSessionKey ?? finalBeforeState.currentSessionKey];
+            return state ? {
+              activeRunId: state.activeRunId,
+              sending: state.sending,
+              pendingFinal: state.pendingFinal,
+              hasStreamingMessage: Boolean(state.streamingMessage),
+              streamingTools: state.streamingTools.length,
+            } : null;
+          })(),
+        });
         clearErrorRecoveryTimer();
         if (get().error) set({ error: null });
         // Message complete - add to history and clear streaming
@@ -4939,7 +4948,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           console.log('[DEBUG] [context-compress] handleChatEvent final', {
             role: normalizedFinalMessage.role,
-            toolCallId: (normalizedFinalMessage as Record<string, unknown>).toolCallId,
+            toolCallId: (normalizedFinalMessage as unknown as Record<string, unknown>).toolCallId,
             isToolResult: isToolResultRole(normalizedFinalMessage.role),
             contentSize: JSON.stringify(normalizedFinalMessage.content).length,
           });
@@ -5064,10 +5073,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 if (!mediaRefPaths.has(ref.filePath)) toolFiles.push(makeAttachedFile(ref, 'tool-result'));
               }
             }
-            console.log('[DEBUG] [context-compress] tool_result final, adding to messages', {
-              toolCallId: normalizedFinalMessage.toolCallId,
-              contentSize: JSON.stringify(normalizedFinalMessage.content).length,
-            });
             set((s) => {
               // Snapshot the current streaming assistant message (thinking + tool_use) into
               // messages[] before clearing it. The Gateway does NOT send separate 'final'
@@ -5076,17 +5081,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               // would be overwritten by the next turn's deltas and never appear in the UI.
               const currentStream = s.streamingMessage as RawMessage | null;
               const snapshotMsgs = snapshotStreamingAssistantMessage(currentStream, s.messages, runId);
-              // Also add the tool result itself so token estimation includes tool outputs.
-              // Without this, estimateHistoryTokens ignores the bulk of context (tool results
-              // can be 10-100x larger than assistant text), and compression never triggers.
-              const toolResultMsg = { ...normalizedFinalMessage, id: normalizedFinalMessage.id || `tool-result-${runId}-${Date.now()}` };
-              const alreadyHasToolResult = s.messages.some((m) => m.id === toolResultMsg.id);
               return {
-                messages: [
-                  ...s.messages,
-                  ...snapshotMsgs,
-                  ...(alreadyHasToolResult ? [] : [toolResultMsg]),
-                ],
+                messages: snapshotMsgs.length > 0 ? [...s.messages, ...snapshotMsgs] : s.messages,
                 streamingText: '',
                 streamingMessage: null,
                 pendingFinal: true,
@@ -5096,7 +5092,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
               };
             });
-            maybeCompressRuntimeContext(set, get, runId);
             break;
           }
           const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
@@ -5157,12 +5152,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...clearPendingImages,
             };
           });
-          maybeCompressRuntimeContext(set, get, runId);
           // After the final response, quietly reload history to surface all intermediate
           // tool-use turns (thinking + tool blocks) from the Gateway's authoritative record.
           if (hasOutput && !intermediateToolStep) {
             clearHistoryPoll();
-            maybeCompressRuntimeContext(set, get, { requireActiveRun: false, throttle: false });
             void get().loadHistory(true, { force: true });
             const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
             const finalText = getMessageText(normalizedFinalMessage.content);
@@ -5184,10 +5177,48 @@ export const useChatStore = create<ChatState>((set, get) => ({
         } else {
           const { activeRunId: currentActiveRunId } = get();
           if (runId && currentActiveRunId && runId !== currentActiveRunId) {
+            const skippedState = get();
+            console.info('[chat.final.after]', {
+              runId,
+              skipped: true,
+              reason: 'active-run-mismatch',
+              currentSessionKey: skippedState.currentSessionKey,
+              activeRunId: skippedState.activeRunId,
+              sending: skippedState.sending,
+              pendingFinal: skippedState.pendingFinal,
+              hasStreamingMessage: Boolean(skippedState.streamingMessage),
+              streamingTextLength: skippedState.streamingText.length,
+              streamingTools: skippedState.streamingTools.length,
+            });
             break;
           }
           void get().loadHistory(true, { force: true });
         }
+        const finalAfterState = get();
+        console.info('[chat.final.after]', {
+          runId,
+          currentSessionKey: finalAfterState.currentSessionKey,
+          activeRunId: finalAfterState.activeRunId,
+          sending: finalAfterState.sending,
+          pendingFinal: finalAfterState.pendingFinal,
+          hasStreamingMessage: Boolean(finalAfterState.streamingMessage),
+          streamingTextLength: finalAfterState.streamingText.length,
+          streamingTools: finalAfterState.streamingTools.map((tool) => ({
+            id: tool.id,
+            name: tool.name,
+            status: tool.status,
+          })),
+          sessionStreamingState: (() => {
+            const state = finalAfterState.sessionStreamingStates[eventSessionKey ?? finalAfterState.currentSessionKey];
+            return state ? {
+              activeRunId: state.activeRunId,
+              sending: state.sending,
+              pendingFinal: state.pendingFinal,
+              hasStreamingMessage: Boolean(state.streamingMessage),
+              streamingTools: state.streamingTools.length,
+            } : null;
+          })(),
+        });
         break;
       }
       case 'error': {

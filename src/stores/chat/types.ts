@@ -151,23 +151,6 @@ export interface CompressionStateEntry {
   compressedAt: number;
   /** Whether this was a truncation fallback (not LLM summarization) */
   isTruncation: boolean;
-  /** Whether Gateway JSONL was compacted (sessions.compact RPC succeeded) */
-  gatewayCompacted?: boolean;
-}
-
-export interface ContextCompressionStatus {
-  status: 'idle' | 'compressing' | 'compressed' | 'fallback' | 'failed';
-  phase: 'before-send' | 'runtime';
-  sessionKey: string;
-  startedAt?: number;
-  finishedAt?: number;
-  estimatedTokens?: number;
-  triggerTokens?: number;
-  hardLimitTokens?: number;
-  compressedCount?: number;
-  compressedTokens?: number;
-  isTruncation?: boolean;
-  message?: string;
 }
 
 export type EmptyFinalRecoveryState =
@@ -238,8 +221,6 @@ export interface ChatState {
   sessionStreamingStates: Record<string, SessionStreamingState>;
   /** Compression state per session, persisted to disk and restored on reload/switch */
   sessionCompressionState: Record<string, CompressionStateEntry | null>;
-  /** User-visible status for automatic context compression. */
-  contextCompressionStatus: ContextCompressionStatus | null;
 
   // Thinking
   thinkingLevel: string | null;

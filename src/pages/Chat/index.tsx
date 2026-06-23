@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Info, Loader2, Sparkles } from 'lucide-react';
 import chatDoubleIcon from '@/assets/chat-double.svg';
-import { useChatStore, type ContextCompressionStatus, type RawMessage } from '@/stores/chat';
+import { useChatStore, type RawMessage } from '@/stores/chat';
 import { useGatewayStore } from '@/stores/gateway';
 import { useProviderStore } from '@/stores/providers';
 import { useAgentsStore } from '@/stores/agents';
@@ -190,7 +190,6 @@ export function Chat() {
   const error = useChatStore((s) => s.error);
   const emptyFinalRecovery = useChatStore((s) => s.emptyFinalRecovery);
   const securityCancelNotice = useChatStore((s) => s.securityCancelNotice);
-  const contextCompressionStatus = useChatStore((s) => s.contextCompressionStatus);
   const streamingMessage = useChatStore((s) => s.streamingMessage);
   const streamingText = useChatStore((s) => s.streamingText);
   const streamingTools = useChatStore((s) => s.streamingTools);
@@ -855,6 +854,46 @@ export function Chat() {
   ]);
 
   useEffect(() => {
+    if (sending || pendingFinal || hasActiveExecutionGraph || hasAnyStreamContent || activeRunId) {
+      console.info('[chat.active-state]', {
+        currentSessionKey,
+        activeRunId,
+        sending,
+        pendingFinal,
+        hasAnyStreamContent,
+        hasActiveExecutionGraph,
+        activeRunCards: userRunCards.filter((card) => card.active).length,
+        hasStreamingMessage: Boolean(streamingMessage),
+        streamTextLength: streamText.length,
+        hasStreamThinking,
+        streamTools: streamTools.map((tool) => ({
+          id: tool.id,
+          name: tool.name,
+        })),
+        streamingTools: streamingTools.map((tool) => ({
+          id: tool.id,
+          name: tool.name,
+          status: tool.status,
+        })),
+      });
+    }
+  }, [
+    activeRunId,
+    activitySignature,
+    currentSessionKey,
+    hasActiveExecutionGraph,
+    hasAnyStreamContent,
+    hasStreamThinking,
+    pendingFinal,
+    sending,
+    streamText.length,
+    streamTools,
+    streamingMessage,
+    streamingTools,
+    userRunCards,
+  ]);
+
+  useEffect(() => {
     if (!hasVisibleRuntimeActivity) {
       setRuntimeActivity(null);
       return;
@@ -1233,10 +1272,6 @@ export function Chat() {
                     />
                   )}
 
-                  {contextCompressionStatus && contextCompressionStatus.sessionKey === currentSessionKey && (
-                    <ContextCompressionNotice status={contextCompressionStatus} />
-                  )}
-
                   {/* Activity indicator: waiting for next AI turn after tool execution */}
                   {sending && pendingFinal && !shouldRenderStreaming && !hasActiveExecutionGraph && activitySummary && (
                     <ActivityIndicator summary={activitySummary} />
@@ -1592,67 +1627,6 @@ function RunTerminationNotice({ summary }: { summary: { title: string; detail: s
       </div>
       <div className="mt-1 text-xs text-destructive/80">
         {summary.detail}
-      </div>
-    </div>
-  );
-}
-
-function formatApproxTokens(tokens?: number): string | null {
-  if (!tokens || !Number.isFinite(tokens)) return null;
-  if (tokens >= 1000) return `${Math.round(tokens / 1000)}k tokens`;
-  return `${Math.round(tokens)} tokens`;
-}
-
-function ContextCompressionNotice({ status }: { status: ContextCompressionStatus }) {
-  const isRunning = status.status === 'compressing';
-  const isFallback = status.status === 'fallback';
-  const isFailed = status.status === 'failed';
-  const phaseText = status.phase === 'before-send' ? '发送前' : '运行中';
-  const tokenText = formatApproxTokens(status.estimatedTokens);
-  const compressedText = status.compressedCount
-    ? `已压缩 ${status.compressedCount} 条早期消息`
-    : null;
-
-  const title = isRunning
-    ? `${phaseText}正在压缩上下文`
-    : isFallback
-      ? '上下文已降级压缩'
-      : isFailed
-        ? '上下文压缩失败'
-        : '上下文已压缩';
-
-  const detail = isRunning
-    ? (status.message || '任务会在压缩完成后继续处理。')
-    : isFallback
-      ? (status.message || '摘要生成不可用，已仅保留最近对话继续。')
-      : isFailed
-        ? (status.message || '压缩没有完成，后续可能需要新建会话或减少上下文。')
-        : (status.message || '已用摘要替换早期对话，继续保留最近上下文。');
-
-  return (
-    <div
-      className={cn(
-        'ml-10 rounded-lg border px-3 py-2 text-sm',
-        isFailed
-          ? 'border-destructive/25 bg-destructive/5 text-destructive/90'
-          : 'border-[#FF922B]/25 bg-[#FF922B]/5 text-foreground',
-      )}
-      data-testid="chat-context-compression-notice"
-      role="status"
-      aria-live="polite"
-    >
-      <div className="flex items-center gap-2">
-        {isRunning ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#FF922B] shrink-0" />
-        ) : isFailed ? (
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <Info className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
-        )}
-        <span className="font-medium">{title}</span>
-      </div>
-      <div className="mt-1 text-xs text-muted-foreground">
-        {[detail, tokenText, compressedText].filter(Boolean).join(' | ')}
       </div>
     </div>
   );

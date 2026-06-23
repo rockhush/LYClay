@@ -66,7 +66,7 @@ import {
 } from '@/lib/session-sidebar-order';
 import { buildBatchDeleteSessionGroups } from '@/lib/session-batch-delete-groups';
 import { BatchDeleteSessionsDialog } from '@/components/chat/BatchDeleteSessionsDialog';
-import { isSubagentSessionKey } from '@/lib/session-key-utils';
+import { isUserFacingSessionKey } from '@/lib/session-key-utils';
 import logoSvg from '@/assets/1.png';
 
 /** While Chat shows first-response preparing, block switching sessions (sidebar + workspace). */
@@ -285,7 +285,7 @@ export function Sidebar() {
   const orderedSidebarSessions = useMemo(() => {
     const eligible = sessions.filter(
       (session) =>
-        !isSubagentSessionKey(session.key)
+        isUserFacingSessionKey(session.key)
         && !isPendingNewSession(session.key)
         && !isEmptyGhostSession(session),
     );

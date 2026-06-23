@@ -10,6 +10,7 @@ touchedAreas:
   - electron/main/ipc-handlers.ts
   - tests/unit/security-network-policy.test.ts
 expectedUserBehavior:
+  - 固定内部系统 `10.120.52.2` 作为精确主机白名单直接放行，不扩展到相邻 IP 或整个私网网段。
   - 允许访问明确白名单内的公网 HTTPS 域名。
   - 未知公网域名会被标记为需要用户确认，而不是默认静默外联。
   - file、data、javascript 等非 HTTP(S) 协议会被阻断。

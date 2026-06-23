@@ -79,6 +79,20 @@ describe('open target security policy', () => {
     });
   });
 
+  it('allows the fixed internal HTTP host without confirmation', async () => {
+    await expect(evaluateOpenTargetPolicy({
+      target: 'http://10.120.52.2/report',
+      capability: 'open-external',
+      source: 'renderer:shell.openExternal',
+    })).resolves.toMatchObject({
+      targetType: 'url',
+      action: 'open-url',
+      hostname: '10.120.52.2',
+      matchedRule: 'trusted-internal-host',
+      decision: { action: 'allow' },
+    });
+  });
+
   it.each([
     ['plain HTTP', 'http://www.theverge.com/ai', 'public-read-insecure-http'],
     ['short URL', 'https://bit.ly/example', 'public-read-short-url'],

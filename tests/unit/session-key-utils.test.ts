@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isChannelMirrorSessionKey,
   isSubagentSessionKey,
   isUserFacingSessionKey,
   pickUserFacingSession,
@@ -15,6 +16,18 @@ describe('session-key-utils', () => {
     expect(isUserFacingSessionKey('agent:main:main')).toBe(true);
     expect(isUserFacingSessionKey('agent:main:session-1717848000000')).toBe(true);
     expect(isUserFacingSessionKey('agent:main:subagent:child-123')).toBe(false);
+    expect(isUserFacingSessionKey('agent:dingtalk:dingtalk:group:11236149')).toBe(false);
+    expect(isUserFacingSessionKey('agent:dingtalk:dingtalk:default:direct:11427192')).toBe(true);
+    expect(isUserFacingSessionKey('agent:dingtalk:session-1717848000000')).toBe(true);
+  });
+
+  it('detects OpenClaw channel mirror session keys', () => {
+    expect(isChannelMirrorSessionKey('agent:dingtalk:dingtalk:group:11236149')).toBe(true);
+    expect(isChannelMirrorSessionKey('agent:support:feishu:group:oc_xxx')).toBe(true);
+    expect(isChannelMirrorSessionKey('agent:dingtalk:dingtalk:default:direct:11427192')).toBe(false);
+    expect(isChannelMirrorSessionKey('agent:dingtalk:session-1717848000000')).toBe(false);
+    expect(isChannelMirrorSessionKey('agent:dingtalk:main')).toBe(false);
+    expect(isChannelMirrorSessionKey('agent:main:subagent:child-123')).toBe(false);
   });
 
   it('picks the first user-facing session as fallback', () => {

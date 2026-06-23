@@ -61,66 +61,6 @@ function getMessageErrorMessage(message: RawMessage | undefined): string {
   const value = msg?.errorMessage ?? msg?.error_message;
   return typeof value === 'string' && value.trim() ? value : 'An error occurred';
 }
-
-function buildRuntimeCompressionStatus(
-  status: ContextCompressionStatus['status'],
-  sessionKey: string,
-  message?: string,
-): ContextCompressionStatus {
-  return {
-    status,
-    phase: 'runtime',
-    sessionKey,
-    finishedAt: status === 'compressing' ? undefined : Date.now(),
-    startedAt: status === 'compressing' ? Date.now() : undefined,
-    isTruncation: status === 'fallback',
-    message,
-  };
-}
-
-function resolveRuntimeCompressionStatusFromMessage(
-  message: RawMessage | undefined,
-  sessionKey: string,
-): ContextCompressionStatus | null {
-  if (!message) return null;
-  const raw = message as RawMessage & {
-    isCompactionNotice?: unknown;
-    isFallbackNotice?: unknown;
-  };
-  const text = getMessageText(message.content);
-  const normalized = text.toLowerCase();
-
-  if (raw.isCompactionNotice === true) {
-    if (normalized.includes('complete')) {
-      return buildRuntimeCompressionStatus('compressed', sessionKey, '上下文已压缩，任务会继续执行。');
-    }
-    if (normalized.includes('incomplete') || normalized.includes('failed')) {
-      return buildRuntimeCompressionStatus('failed', sessionKey, '上下文压缩没有完成，后续可能需要减少上下文。');
-    }
-    return buildRuntimeCompressionStatus('compressing', sessionKey, '正在压缩上下文，任务会在压缩完成后继续。');
-  }
-
-  if (raw.isFallbackNotice === true) {
-    return buildRuntimeCompressionStatus('fallback', sessionKey, '上下文已进入降级保护模式，系统会尽量保留最近内容继续。');
-  }
-
-  if (/\[\.\.\.\s*[\d,]+\s+more characters truncated\]\]/i.test(text)) {
-    return buildRuntimeCompressionStatus('fallback', sessionKey, '工具输出已截断以保护上下文，任务会继续执行。');
-  }
-
-  return null;
-}
-
-function surfaceRuntimeCompressionStatus(
-  set: ChatSet,
-  message: RawMessage | undefined,
-  sessionKey: string,
-): void {
-  const status = resolveRuntimeCompressionStatusFromMessage(message, sessionKey);
-  if (status) {
-    set({ contextCompressionStatus: status });
-  }
-}
 function noteReported(set: Set<string>, key: string): boolean {
   if (set.has(key)) return false;
   set.add(key);
@@ -455,12 +395,10 @@ export function handleRuntimeEventState(
             return normalizeStreamingMessage(event.message ?? currentStream);
           };
           if (isForegroundEvent) {
-            surfaceRuntimeCompressionStatus(set, event.message as RawMessage | undefined, targetSessionKey);
             set((s) => ({
               streamingMessage: computeNewStreamingMessage(s.streamingMessage),
               streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
             }));
-            maybeCompressRuntimeContext(set, get, runId);
           } else {
             const prev = getBackgroundSessionState();
             patchBackgroundSessionState({
@@ -489,7 +427,6 @@ export function handleRuntimeEventState(
             }
 
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
-            surfaceRuntimeCompressionStatus(set, normalizedFinalMessage, targetSessionKey);
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
               const messageError = getMessageErrorMessage(normalizedFinalMessage);
               if (isSuppressedRunError(messageError)) {
@@ -561,7 +498,6 @@ export function handleRuntimeEventState(
 
           if (finalMsg) {
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
-            surfaceRuntimeCompressionStatus(set, normalizedFinalMessage, targetSessionKey);
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
               const messageError = getMessageErrorMessage(normalizedFinalMessage);
               if (isUserSecurityDenialMessage(messageError)) {
@@ -668,15 +604,8 @@ export function handleRuntimeEventState(
                 // would be overwritten by the next turn's deltas and never appear in the UI.
                 const currentStream = s.streamingMessage as RawMessage | null;
                 const snapshotMsgs = snapshotStreamingAssistantMessage(currentStream, s.messages, runId);
-                // Also add the tool result itself so token estimation includes tool outputs.
-                const toolResultMsg = { ...normalizedFinalMessage, id: normalizedFinalMessage.id || `tool-result-${runId}-${Date.now()}` };
-                const alreadyHasToolResult = s.messages.some((m) => m.id === toolResultMsg.id);
                 return {
-                  messages: [
-                    ...s.messages,
-                    ...snapshotMsgs,
-                    ...(alreadyHasToolResult ? [] : [toolResultMsg]),
-                  ],
+                  messages: snapshotMsgs.length > 0 ? [...s.messages, ...snapshotMsgs] : s.messages,
                   streamingText: '',
                   streamingMessage: null,
                   pendingFinal: true,
@@ -686,7 +615,6 @@ export function handleRuntimeEventState(
                   streamingTools: updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools,
                 };
               });
-              maybeCompressRuntimeContext(set, get, runId);
               break;
             }
             const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
@@ -747,7 +675,6 @@ export function handleRuntimeEventState(
                 ...clearPendingImages,
               };
             });
-            maybeCompressRuntimeContext(set, get, runId);
             // Queue management/claw/report records for token consume + skill invoke
             // before the message is shipped off to history reload — we operate on
             // the normalized payload so usage / tool_use blocks are stable.
@@ -758,7 +685,6 @@ export function handleRuntimeEventState(
             if (hasOutput && !toolOnly) {
               finishFirstSessionPerf('final', runId);
               clearHistoryPoll();
-              maybeCompressRuntimeContext(set, get, { requireActiveRun: false, throttle: false });
               void get().loadHistory(true);
               const pendingPlan = getPendingComplexTaskPlan(get().currentSessionKey);
               const finalText = getMessageText(normalizedFinalMessage.content);
@@ -780,19 +706,8 @@ export function handleRuntimeEventState(
             }
           } else {
             // No message in final event - reload history to get complete data
-            set({
-              streamingText: '',
-              streamingMessage: null,
-              streamingTools: [],
-              sending: false,
-              activeRunId: null,
-              pendingFinal: false,
-              pendingToolImages: [],
-              lastUserMessageAt: null,
-              runError: null,
-            });
-            clearHistoryPoll();
-            void get().loadHistory(true);
+            set({ streamingText: '', streamingMessage: null, pendingFinal: true, runError: null });
+            get().loadHistory();
           }
           break;
         }

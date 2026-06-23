@@ -17,6 +17,13 @@ const DEFAULT_ALLOWED_DOMAINS = [
   'raw.githubusercontent.com',
 ];
 
+// Fixed company-internal systems that are intentionally trusted even when
+// they use private addressing and plain HTTP. Keep this list host-specific;
+// never widen it to an RFC1918 subnet.
+const DEFAULT_TRUSTED_INTERNAL_HOSTS = new Set([
+  '10.120.52.2',
+]);
+
 const PUBLIC_READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const URL_SHORTENER_DOMAINS = new Set([
   'bit.ly',
@@ -325,6 +332,14 @@ export async function evaluateNetworkPolicy(request: NetworkPolicyRequest): Prom
         [`Outbound network request contains sensitive data: ${secretTypes.join(', ')}`],
         'critical',
       ),
+    };
+  }
+
+  if (DEFAULT_TRUSTED_INTERNAL_HOSTS.has(hostname)) {
+    return {
+      ...base,
+      matchedRule: 'trusted-internal-host',
+      decision: allow([`Allowed trusted internal host ${hostname}`]),
     };
   }
 

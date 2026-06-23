@@ -350,6 +350,26 @@ describe('network security policy', () => {
     expect(metadataResult.decision.action).toBe('deny');
   });
 
+  it('allows only the fixed trusted internal host without confirmation', async () => {
+    const trusted = await evaluateNetworkPolicy({
+      url: 'http://10.120.52.2/report',
+      source: 'renderer:shell.openExternal',
+      intent: 'public-read',
+      method: 'GET',
+    });
+    const neighboringHost = await evaluateNetworkPolicy({
+      url: 'http://10.120.52.3/report',
+      source: 'renderer:shell.openExternal',
+      intent: 'public-read',
+      method: 'GET',
+    });
+
+    expect(trusted.decision.action).toBe('allow');
+    expect(trusted.matchedRule).toBe('trusted-internal-host');
+    expect(neighboringHost.decision.action).toBe('prompt');
+    expect(neighboringHost.matchedRule).toBe('public-read-insecure-http');
+  });
+
   it('allows explicitly granted intranet IPv4 hosts but still blocks metadata addresses', async () => {
     await grantDomainAccess('10.0.1.83', {
       persistent: true,

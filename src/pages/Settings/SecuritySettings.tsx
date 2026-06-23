@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ComponentProps } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, ChevronLeft, ChevronRight, Clock3, FolderLock, Globe2, Plus, RefreshCw, Shield, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, Clock3, FolderLock, Globe2, Plus, RefreshCw, Shield, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { hostApiFetch } from '@/lib/host-api';
+import { cn } from '@/lib/utils';
 
 type FileCapability = 'metadata' | 'read' | 'write' | 'delete' | 'execute' | 'stage' | 'open';
 type NetworkCapability = 'connect';
@@ -129,6 +130,21 @@ function formatDate(timestamp?: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(timestamp));
+}
+
+const auditSelectClassName =
+  'h-9 rounded-lg border-black/10 dark:border-white/10 bg-white dark:bg-muted hover:bg-black/5 dark:hover:bg-white/5 text-[13px] font-medium py-0 pr-10 [background-image:none]';
+
+/** Audit-log filter select styled like the Cron dialog agent picker (36px, external chevron). */
+function AuditSelectField({ className, children, ...props }: ComponentProps<typeof Select>) {
+  return (
+    <div className="relative flex items-center">
+      <Select className={cn(auditSelectClassName, className)} {...props}>
+        {children}
+      </Select>
+      <ChevronDown className="pointer-events-none absolute right-3 h-4 w-4 text-muted-foreground" aria-hidden />
+    </div>
+  );
 }
 
 function GrantBadges({ grant }: { grant: Pick<PathGrant | DomainGrant, 'scope' | 'source' | 'capabilities'> }) {
@@ -279,6 +295,7 @@ export function SecuritySettings() {
         <Button
           variant="outline"
           size="sm"
+          className="h-8"
           onClick={() => {
             void loadGrants();
             void loadAuditEvents();
@@ -323,7 +340,7 @@ export function SecuritySettings() {
             <Switch size="sm" checked={persistent} onCheckedChange={setPersistent} />
             <Label className="text-sm">永久</Label>
           </div>
-          <Button onClick={addDomainGrant} disabled={savingDomain || !domainDraft.trim()}>
+          <Button onClick={addDomainGrant} disabled={savingDomain || !domainDraft.trim()} className="h-8">
             <Plus className="mr-2 h-4 w-4" />
             添加
           </Button>
@@ -342,7 +359,7 @@ export function SecuritySettings() {
                 <GrantBadges grant={grant} />
                 <p className="text-xs text-muted-foreground">创建：{formatDate(grant.createdAt)}</p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => void revokeGrant('domain', grant.id)}>
+              <Button variant="outline" size="sm" className="h-8" onClick={() => void revokeGrant('domain', grant.id)}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 撤销
               </Button>
@@ -371,7 +388,7 @@ export function SecuritySettings() {
                 <p className="break-all text-xs text-muted-foreground">realpath：{grant.realPath}</p>
                 <p className="text-xs text-muted-foreground">创建：{formatDate(grant.createdAt)}</p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => void revokeGrant('path', grant.id)}>
+              <Button variant="outline" size="sm" className="h-8" onClick={() => void revokeGrant('path', grant.id)}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 撤销
               </Button>
@@ -391,7 +408,7 @@ export function SecuritySettings() {
               <div className="grid gap-2 sm:grid-cols-[140px_150px_130px_auto] sm:items-end">
                 <div className="space-y-1.5">
                   <Label htmlFor="audit-capability">能力</Label>
-                  <Select
+                  <AuditSelectField
                     id="audit-capability"
                     value={auditCapability}
                     onChange={(event) => {
@@ -402,11 +419,11 @@ export function SecuritySettings() {
                     {capabilityOptions.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
-                  </Select>
+                  </AuditSelectField>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="audit-decision">结果</Label>
-                  <Select
+                  <AuditSelectField
                     id="audit-decision"
                     value={auditDecision}
                     onChange={(event) => {
@@ -417,11 +434,11 @@ export function SecuritySettings() {
                     {decisionOptions.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
-                  </Select>
+                  </AuditSelectField>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="audit-page-size">每页</Label>
-                  <Select
+                  <AuditSelectField
                     id="audit-page-size"
                     value={auditPageSize}
                     onChange={(event) => {
@@ -432,7 +449,7 @@ export function SecuritySettings() {
                     <option value="10">10 条</option>
                     <option value="20">20 条</option>
                     <option value="50">50 条</option>
-                  </Select>
+                  </AuditSelectField>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void loadAuditEvents()} disabled={auditLoading}>
                   <RefreshCw className={`mr-2 h-4 w-4${auditLoading ? ' animate-spin' : ''}`} />
