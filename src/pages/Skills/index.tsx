@@ -1264,7 +1264,7 @@ export function Skills() {
   ): Promise<
     | { status: 'updatable'; latestVersion: string; marketplaceId: string }
     | { status: 'skipped'; latestVersion: string }
-    | { status: 'failed' }
+    | { status: 'failed'; error?: string }
   > => {
     const marketplaceId = skill.id != null ? String(skill.id).trim() : '';
     if (!marketplaceId || !/^\d+$/.test(marketplaceId)) {
@@ -1298,7 +1298,7 @@ export function Skills() {
       const item = check.results?.[0];
       const latestVersion = item?.latest_version?.trim() || '';
       if (!check.success || item?.error) {
-        return { status: 'failed' };
+        return { status: 'failed', error: (item?.error || check.error || '').trim() || undefined };
       }
       if (!item?.has_update) {
         return { status: 'skipped', latestVersion };
@@ -1438,12 +1438,12 @@ export function Skills() {
     setBatchUpdateProgress({ current: 0, total: selectedSkills.length });
     const currentScroll = listRef.current?.scrollTop || 0;
     const summary = { updated: 0, skipped: 0, failed: 0 };
-    const failedNames: string[] = [];
-    const recordFailedName = (skill: MarketplaceSkill) => {
+    const failures: Array<{ name: string; reason: string }> = [];
+    const recordFailure = (skill: MarketplaceSkill, reason: string) => {
       const name = resolveCachedSkillDisplayMetadata({ marketplaceSkill: skill })?.name
         ?? skill.name
         ?? skill.slug;
-      if (name) failedNames.push(name);
+      if (name) failures.push({ name, reason });
     };
     const updatedSkills: Array<{
       slug: string;
@@ -1459,7 +1459,7 @@ export function Skills() {
         const checkResult = await checkSkillUpdateForMarketplace(skill);
         if (checkResult.status === 'failed') {
           summary.failed += 1;
-          recordFailedName(skill);
+          recordFailure(skill, checkResult.error?.trim() || t('toast.failReasonCheckFailed'));
           markSkillUpdateFailed(skill.slug);
           continue;
         }
@@ -1473,7 +1473,7 @@ export function Skills() {
             checkResult.latestVersion,
           )) {
             summary.failed += 1;
-            recordFailedName(skill);
+            recordFailure(skill, t('toast.failReasonVersionMismatch'));
             markSkillUpdateFailed(skill.slug);
           } else {
             summary.skipped += 1;
@@ -1494,7 +1494,11 @@ export function Skills() {
         } catch (error) {
           console.error('[Skills] Batch update failed for', skill.slug, error);
           summary.failed += 1;
-          recordFailedName(skill);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const reason = INSTALL_ERROR_CODES.has(errorMessage)
+            ? t(`toast.${errorMessage}`)
+            : (errorMessage.trim() || t('toast.failReasonUnknown'));
+          recordFailure(skill, reason);
           markSkillUpdateFailed(skill.slug);
         }
       }
@@ -1531,11 +1535,17 @@ export function Skills() {
 
       const summaryMessage = t('toast.batchUpdateSummary', summary);
       if (summary.failed > 0) {
-        const failedListMessage = failedNames.length > 0
-          ? t('toast.batchUpdateFailedList', { names: failedNames.join('、') })
-          : undefined;
+        const failedDescription = failures.length > 0 ? (
+          <div className="mt-1 max-h-48 overflow-y-auto pr-1 flex flex-col gap-0.5 text-[12px] leading-5">
+            {failures.map((failure, idx) => (
+              <div key={`${failure.name}-${idx}`} className="whitespace-normal break-words">
+                <span className="font-medium">{failure.name}</span>：{failure.reason}
+              </div>
+            ))}
+          </div>
+        ) : undefined;
         toast.warning(summaryMessage, {
-          ...(failedListMessage ? { description: failedListMessage } : {}),
+          ...(failedDescription ? { description: failedDescription } : {}),
           duration: Infinity,
           closeButton: true,
         });
