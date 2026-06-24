@@ -1,6 +1,18 @@
 export const DEFAULT_OPENCLAW_DM_SCOPE = 'per-account-channel-peer';
 export const DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT = 8;
 
+export const DEFAULT_OPENCLAW_COMPACTION_CONFIG: Record<string, unknown> = {
+  mode: 'default',
+  reserveTokensFloor: 30000,
+  keepRecentTokens: 40000,
+  timeoutSeconds: 900,
+  notifyUser: true,
+  memoryFlush: {
+    enabled: true,
+    softThresholdTokens: 8000,
+  },
+};
+
 export type OpenClawDmScope =
   | 'main'
   | 'per-peer'
@@ -40,13 +52,59 @@ export function ensureOpenClawAgentDefaults(config: Record<string, unknown>): bo
   const defaults = isRecord(previousDefaults) ? previousDefaults : {};
   const previousMaxConcurrent = defaults.maxConcurrent;
 
-  if (previousMaxConcurrent === DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT) {
-    return false;
+  let changed = false;
+
+  if (previousMaxConcurrent !== DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT) {
+    defaults.maxConcurrent = DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT;
+    changed = true;
   }
 
-  defaults.maxConcurrent = DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT;
+  // Ensure compaction defaults are applied, fixing any broken legacy config
+  const previousCompaction = defaults.compaction;
+  const compaction = isRecord(previousCompaction) ? { ...previousCompaction } : {};
+
+  let compactionChanged = false;
+
+  // Fix: "safeguard" mode requires an external compaction provider. If no
+  // provider is configured, force back to "default" so Pi's built-in auto-
+  // compaction takes over. Also fill in missing fields with safe defaults.
+  if (compaction.mode !== 'default') {
+    compaction.mode = 'default';
+    compactionChanged = true;
+  }
+
+  if (!compaction.notifyUser) {
+    compaction.notifyUser = true;
+    compactionChanged = true;
+  }
+
+  if (typeof compaction.reserveTokensFloor !== 'number' || compaction.reserveTokensFloor <= 0) {
+    compaction.reserveTokensFloor = DEFAULT_OPENCLAW_COMPACTION_CONFIG.reserveTokensFloor;
+    compactionChanged = true;
+  }
+
+  if (typeof compaction.keepRecentTokens !== 'number' || compaction.keepRecentTokens <= 0) {
+    compaction.keepRecentTokens = DEFAULT_OPENCLAW_COMPACTION_CONFIG.keepRecentTokens;
+    compactionChanged = true;
+  }
+
+  if (typeof compaction.timeoutSeconds !== 'number' || compaction.timeoutSeconds <= 0) {
+    compaction.timeoutSeconds = DEFAULT_OPENCLAW_COMPACTION_CONFIG.timeoutSeconds;
+    compactionChanged = true;
+  }
+
+  if (!isRecord(compaction.memoryFlush)) {
+    compaction.memoryFlush = DEFAULT_OPENCLAW_COMPACTION_CONFIG.memoryFlush;
+    compactionChanged = true;
+  }
+
+  if (compactionChanged) {
+    defaults.compaction = compaction;
+    changed = true;
+  }
+
   agents.defaults = defaults;
   config.agents = agents;
 
-  return true;
+  return changed || !isRecord(previousAgents);
 }

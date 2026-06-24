@@ -25,7 +25,6 @@ import {
   type AttachedFileMeta,
   type ChatSession,
   type ChatState,
-  type CompressionStateEntry,
   type ContentBlock,
   type ReasoningMode,
   type RawMessage,
@@ -60,7 +59,7 @@ import {
   markChatRunVisibleProgress,
 } from './chat/chat-run-perf';
 import { prepareContextBeforeSend } from './chat/context-send-guard';
-import { filterLargeToolResults, applyTimeDecayStrategy } from './chat/history-time-decay';
+import { applyTimeDecayStrategy } from './chat/history-time-decay';
 import {
   bindRunIdToObservation,
   createRunawayToolObservation,
@@ -89,30 +88,6 @@ export type {
  * When a session was previously compressed, this replaces the older messages
  * with the summary, keeping only the recent messages that were retained.
  */
-function reconstructCompressedView(
-  messages: RawMessage[],
-  state: CompressionStateEntry,
-): RawMessage[] {
-  const currentTotal = messages.length;
-  const keepCount = state.totalMessagesAtCompression - state.compressedCount;
-
-  // The "keep" messages are the last `keepCount` from the original set.
-  // If new messages were added since compression, they appear after.
-  const keepStart = Math.max(0, currentTotal - keepCount);
-  let keptMessages = messages.slice(keepStart);
-
-  // Filter large tool results (Layer 2) on kept messages
-  keptMessages = filterLargeToolResults(keptMessages);
-
-  const summaryMsg: RawMessage = {
-    role: 'system',
-    content: state.summaryText,
-    timestamp: state.compressedAt / 1000,
-    id: crypto.randomUUID(),
-  };
-
-  return [summaryMsg, ...keptMessages];
-}
 
 // Module-level timestamp tracking the last chat event received.
 // Used by the safety timeout to avoid false-positive "no response" errors
@@ -3096,6 +3071,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionPinnedAt: loadSessionPinnedAtFromStorage(),
   sessionStreamingStates: {},
   sessionCompressionState: {},
+  contextCompressionStatus: null,
   thinkingLevel: null,
   reasoningMode: loadStoredReasoningMode(),
 
@@ -3514,7 +3490,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // ── New session ──
 
-  newSession: () => {
+  newSession: (agentId?: string) => {
     // Generate a new unique session key and switch to it.
     // NOTE: We intentionally do NOT call sessions.reset on the old session.
     // sessions.reset archives (renames) the session JSONL file, making old
@@ -3525,9 +3501,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       && messages.length === 0
       && !sessionLastActivity[currentSessionKey]
       && !sessionLabels[currentSessionKey];
-    const prefix = getCanonicalPrefixFromSessionKey(currentSessionKey)
-      ?? getCanonicalPrefixFromSessions(sessions)
-      ?? DEFAULT_CANONICAL_PREFIX;
+    const normalizedAgentId = agentId?.trim();
+    const prefix = normalizedAgentId
+      ? `agent:${normalizedAgentId}`
+      : (getCanonicalPrefixFromSessionKey(currentSessionKey)
+        ?? getCanonicalPrefixFromSessions(sessions)
+        ?? DEFAULT_CANONICAL_PREFIX);
     const newKey = `${prefix}:session-${Date.now()}`;
     const newSessionEntry: ChatSession = { key: newKey, displayName: newKey };
     // Save messages snapshot if there's active streaming
@@ -3949,14 +3928,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               } else {
                 console.debug(`[History] Loaded ${rawMessages.length} messages from LOCAL filesystem`);
 
-                // Apply compression reconstruction or time decay
-                const compressionState = get().sessionCompressionState?.[currentSessionKey] ?? null;
-                const hasCachedCompression = compressionState && !compressionState.isTruncation
-                  && rawMessages.length >= compressionState.totalMessagesAtCompression;
-                const preMessages = hasCachedCompression
-                  ? reconstructCompressedView(rawMessages, compressionState!)
-                  : rawMessages;
-                const decayResult = applyTimeDecayStrategy(preMessages, get().sessionLastActivity[currentSessionKey], hasCachedCompression ?? false);
+                // Apply time decay
+                const decayResult = applyTimeDecayStrategy(rawMessages, get().sessionLastActivity[currentSessionKey], false);
 
                 const applied = applyLoadedMessages(decayResult.messages, thinkingLevel, response.promptErrors ?? []);
                 if (decayResult.stats.finalCount < decayResult.stats.originalCount) {
@@ -4030,14 +4003,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             rawMessages = await loadCronFallbackMessages(currentSessionKey, 200);
           }
 
-          // Apply compression reconstruction or time decay
-          const compressionState = get().sessionCompressionState?.[currentSessionKey] ?? null;
-          const hasCachedCompression = compressionState && !compressionState.isTruncation
-            && rawMessages.length >= compressionState.totalMessagesAtCompression;
-          const preMessages = hasCachedCompression
-            ? reconstructCompressedView(rawMessages, compressionState!)
-            : rawMessages;
-          const decayResult = applyTimeDecayStrategy(preMessages, get().sessionLastActivity[currentSessionKey], hasCachedCompression ?? false);
+          // Apply time decay
+          const decayResult = applyTimeDecayStrategy(rawMessages, get().sessionLastActivity[currentSessionKey], false);
 
           const applied = applyLoadedMessages(decayResult.messages, thinkingLevel);
           if (decayResult.stats.finalCount < decayResult.stats.originalCount) {
@@ -4277,7 +4244,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       runtimeMessage,
       workspaceContext,
       isInternalStagedExecution,
-      invokeCompactorRpc: (method, params, timeoutMs) => useGatewayStore.getState().rpc(method, params as Record<string, unknown>, timeoutMs),
       persistedCompressionState: get().sessionCompressionState?.[currentSessionKey] ?? null,
     });
 
@@ -4286,13 +4252,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return;
     }
 
-    if (contextGuard.compressed) {
-      const nextCompressionState = contextGuard.compressionMeta
-        ? { ...get().sessionCompressionState, [currentSessionKey]: contextGuard.compressionMeta }
-        : get().sessionCompressionState;
-      set({ messages: contextGuard.messages, sessionCompressionState: nextCompressionState });
-      scheduleUiStateSync();
-    }
+
 
     const isFirstMessage = !get().messages.some((m) => m.role === 'user');
     const truncated = trimmed.length > 50 ? `${trimmed.slice(0, 50)}…` : trimmed;

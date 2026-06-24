@@ -153,6 +153,11 @@ export interface CompressionStateEntry {
   isTruncation: boolean;
 }
 
+/** UI-level compaction status indicator, driven by Gateway compaction events */
+export type ContextCompressionStatus =
+  | { status: 'idle' }
+  | { status: 'compacting'; startedAt: number };
+
 export type EmptyFinalRecoveryState =
   | { status: 'idle' }
   | { status: 'checking'; sessionKey: string; runId: string | null }
@@ -221,6 +226,8 @@ export interface ChatState {
   sessionStreamingStates: Record<string, SessionStreamingState>;
   /** Compression state per session, persisted to disk and restored on reload/switch */
   sessionCompressionState: Record<string, CompressionStateEntry | null>;
+  /** UI-level compaction status indicator (driven by Gateway compaction events) */
+  contextCompressionStatus: ContextCompressionStatus | null;
 
   // Thinking
   thinkingLevel: string | null;
@@ -229,7 +236,7 @@ export interface ChatState {
   // Actions
   loadSessions: (force?: boolean) => Promise<void>;
   switchSession: (key: string) => void;
-  newSession: () => void;
+  newSession: (agentId?: string) => void;
   /** Set pre-filled input text for the chat input box */
   setPrefilledInput: (text: string | null) => void;
   /** Associate the active chat session with a workspace id (or clear). */

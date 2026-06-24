@@ -29,11 +29,10 @@ import { finishFirstSessionPerf, markFirstSessionRuntimeEvent } from './first-se
 import { extractInvokedSkillIds } from './usage-report-extract';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
 
-import type { AttachedFileMeta, ContextCompressionStatus, RawMessage } from './types';
+import type { AttachedFileMeta, RawMessage } from './types';
 import { getEmptyFinalDiagnostic } from '@/lib/host-api';
 import type { ChatGet, ChatSet } from './store-api';
 import { markChatRunRuntimeEvent } from './chat-run-perf';
-import { maybeCompressRuntimeContext } from './runtime-context-monitor';
 import {
   buildComplexTaskExecutionRequest,
   clearPendingComplexTaskPlan,

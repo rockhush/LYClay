@@ -2,7 +2,6 @@ import i18n from '@/i18n';
 import { hostApiFetch } from '@/lib/host-api';
 import { estimateHistoryTokens, estimateMessageTokens } from '@/lib/token-estimator';
 import { useAgentsStore } from '@/stores/agents';
-import { compressHistory, type InvokeRpcFn } from './context-compactor';
 import { DEFAULT_CONTEXT_WINDOW, resolveContextBudget, type ContextBudget } from './context-budget';
 import type { CompressionStateEntry, RawMessage } from './types';
 
@@ -24,7 +23,6 @@ export interface PrepareContextBeforeSendInput {
   runtimeMessage: string;
   workspaceContext?: string;
   isInternalStagedExecution: boolean;
-  invokeCompactorRpc: InvokeRpcFn;
   persistedCompressionState?: CompressionStateEntry | null;
 }
 
@@ -119,54 +117,12 @@ export async function prepareContextBeforeSend(input: PrepareContextBeforeSendIn
   const pendingRuntimeMessage = buildPendingRuntimeMessage(input);
   const pendingMessageTokens = estimateMessageTokens(pendingRuntimeMessage.content);
 
+  // Only block when the single pending message itself is too large.
+  // Total context hard limit is handled by Gateway compaction — we don't
+  // want to reject messages that Gateway could successfully compact.
   if (pendingMessageTokens > Math.floor(budget.hardLimitTokens * 0.9)) {
     return buildResult(input.messages, budget, false, 'currentMessageTooLarge');
   }
 
-  let nextMessages = input.messages;
-  let compressed = false;
-  let compressionMeta: CompressionStateEntry | undefined;
-  let estimatedTokens = estimateHistoryTokens([...nextMessages, pendingRuntimeMessage]);
-
-  if (nextMessages.length >= 10 && estimatedTokens >= budget.compressionTriggerTokens) {
-    const compression = await compressHistory(
-      nextMessages,
-      input.sessionKey,
-      input.invokeCompactorRpc,
-      {
-        threshold: budget.compressionTriggerTokens,
-        keepRecentTokens: budget.recentRawTokens,
-        summaryTokens: budget.summaryTokens,
-        hardLimitTokens: budget.hardLimitTokens,
-      },
-      input.persistedCompressionState,
-    );
-
-    if (compression) {
-      nextMessages = [compression.summaryMessage, ...compression.compressedMessages];
-      compressed = true;
-      compressionMeta = {
-        summaryText: compression.summaryMessage.content as string,
-        compressedCount: compression.compressedCount,
-        totalMessagesAtCompression: compression.totalMessagesAtCompression,
-        compressedTokens: compression.compressedTokens,
-        compressedAt: Date.now(),
-        isTruncation: compression.isTruncation,
-      };
-      estimatedTokens = estimateHistoryTokens([...nextMessages, pendingRuntimeMessage]);
-      console.log('[context-send-guard] compressed context before send', {
-        sessionKey: input.sessionKey,
-        originalCount: compression.originalCount,
-        estimatedTokens,
-        hardLimitTokens: budget.hardLimitTokens,
-        contextWindow: budget.contextWindow,
-      });
-    }
-  }
-
-  if (estimatedTokens > budget.hardLimitTokens) {
-    return { ...buildResult(nextMessages, budget, compressed, 'contextTooLarge'), compressionMeta };
-  }
-
-  return { ...buildResult(nextMessages, budget, compressed), compressionMeta };
+  return buildResult(input.messages, budget, false);
 }

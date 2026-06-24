@@ -2,7 +2,6 @@ import i18n from '@/i18n';
 import { invokeIpc } from '@/lib/api-client';
 import { recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
 import { useAgentsStore } from '@/stores/agents';
-import { resetCompactorSession } from './context-compactor';
 import {
   beginFirstSessionPerf,
   markFirstSessionRpcCompleted,
@@ -26,9 +25,8 @@ import {
   upsertImageCacheEntry,
 } from './helpers';
 
-import type { ChatSession, ContextCompressionStatus, RawMessage, ReasoningMode } from './types';
+import type { ChatSession, RawMessage, ReasoningMode } from './types';
 import { buildClearedActiveRunPatch } from './run-lifecycle';
-import { prepareContextBeforeSend } from './context-send-guard';
 import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
 import {
   bindRunIdToObservation,
@@ -311,7 +309,6 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       if (targetSessionKey !== get().currentSessionKey) {
         const current = get();
         const leavingEmpty = !current.currentSessionKey.endsWith(':main') && current.messages.length === 0;
-        resetCompactorSession(targetSessionKey);
         set((s) => ({
           currentSessionKey: targetSessionKey,
           currentAgentId: getAgentIdFromSessionKey(targetSessionKey),
@@ -384,24 +381,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         })),
       };
 
-      const contextGuard = await prepareContextBeforeSend({
-        sessionKey: currentSessionKey,
-        messages: get().messages,
-        pendingUserMessage: userMsg,
-        runtimeMessage,
-        workspaceContext: '',
-        isInternalStagedExecution,
-        invokeCompactorRpc: (method, params, timeoutMs) => invokeIpc('gateway:rpc', method, params, timeoutMs),
-      });
 
-      if (contextGuard.error) {
-        set({ error: contextGuard.errorMessage ?? String(contextGuard.error), sending: false });
-        return;
-      }
-
-      if (contextGuard.compressed) {
-        set({ messages: contextGuard.messages });
-      }
       set((s) => ({
         messages: isInternalStagedExecution
           ? s.messages

@@ -61,10 +61,6 @@ describe('prepareContextBeforeSend', () => {
 
   it('compresses old history before sending when dynamic trigger is exceeded', async () => {
     const { prepareContextBeforeSend } = await import('@/stores/chat/context-send-guard');
-    const invokeCompactorRpc = vi.fn().mockResolvedValue({
-      success: true,
-      result: { message: { content: '结构化摘要' } },
-    });
 
     const result = await prepareContextBeforeSend({
       sessionKey: 'agent:main:main',
@@ -72,24 +68,15 @@ describe('prepareContextBeforeSend', () => {
       pendingUserMessage: { role: 'user', content: '继续' },
       runtimeMessage: '继续',
       isInternalStagedExecution: false,
-      invokeCompactorRpc,
     });
 
+    // Compression is now handled by OpenClaw Gateway; client-side only enforces hard limit
     expect(result.error).toBeUndefined();
-    expect(result.compressed).toBe(true);
-    expect(invokeCompactorRpc).toHaveBeenCalledWith(
-      'chat.send',
-      expect.objectContaining({ sessionKey: '__compactor__', deliver: false }),
-      60000,
-    );
-    expect(result.messages[0].role).toBe('system');
-    expect(String(result.messages[0].content)).toContain('结构化摘要');
+    expect(result.compressed).toBe(false);
   });
 
-  it('blocks sending when final context exceeds the hard limit', async () => {
-    settingsState.contextCompressionEnabled = false;
+  it('no longer blocks when total context exceeds hard limit — Gateway compaction handles it', async () => {
     const { prepareContextBeforeSend } = await import('@/stores/chat/context-send-guard');
-    const invokeCompactorRpc = vi.fn();
 
     const result = await prepareContextBeforeSend({
       sessionKey: 'agent:main:main',
@@ -97,11 +84,12 @@ describe('prepareContextBeforeSend', () => {
       pendingUserMessage: { role: 'user', content: '继续' },
       runtimeMessage: '继续',
       isInternalStagedExecution: false,
-      invokeCompactorRpc,
     });
 
-    expect(result.error).toBe('contextTooLarge');
-    expect(invokeCompactorRpc).not.toHaveBeenCalled();
+    // Hard limit on total context has been removed; Gateway compaction handles it.
+    // Only single-message-too-large is still checked client-side.
+    expect(result.error).toBeUndefined();
+    expect(result.compressed).toBe(false);
   });
 
   it('uses the default budget when contextWindow cannot be resolved', async () => {
@@ -115,7 +103,6 @@ describe('prepareContextBeforeSend', () => {
       pendingUserMessage: { role: 'user', content: 'hello' },
       runtimeMessage: 'hello',
       isInternalStagedExecution: false,
-      invokeCompactorRpc: vi.fn(),
     });
 
     expect(result.error).toBeUndefined();

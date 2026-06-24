@@ -11,7 +11,7 @@ import {
   Loader2,
   User as UserIcon,
   AlertCircle,
-  // MessageSquare, // 暂时隐藏「我的数字员工」使用按钮
+  MessageSquare,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -134,7 +134,7 @@ interface AgentCardProps {
   onUse: () => void;
 }
 
-function AgentCard({ agent, onToggle: _onToggle, onUninstall, onUse: _onUse }: AgentCardProps) {
+function AgentCard({ agent, onToggle: _onToggle, onUninstall, onUse }: AgentCardProps) {
   const initial = getAgentInitial(agent.name);
   const versionLabel = formatVersion(agent.version);
   const authorLabel = agent.author.trim() || '未知作者';
@@ -177,7 +177,6 @@ function AgentCard({ agent, onToggle: _onToggle, onUninstall, onUse: _onUse }: A
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {/*
           <Button
             type="button"
             size="icon"
@@ -195,7 +194,6 @@ function AgentCard({ agent, onToggle: _onToggle, onUninstall, onUse: _onUse }: A
           >
             <MessageSquare className="h-3.5 w-3.5" />
           </Button>
-          */}
           {!agent.isCore && (
             <Button
               type="button"
@@ -360,7 +358,7 @@ function MarketplaceAgentCard({
 
 export function DigitalEmployee() {
   const navigate = useNavigate();
-  const switchSession = useChatStore((state) => state.switchSession);
+  const newSession = useChatStore((state) => state.newSession);
   const [activeTab, setActiveTab] = useState<'mine' | 'market'>('mine');
   const [searchQuery, setSearchQuery] = useState('');
   const [marketQuery, setMarketQuery] = useState('');
@@ -588,9 +586,9 @@ export function DigitalEmployee() {
       toast.warning('请先启用该数字员工');
       return;
     }
-    switchSession(agent.sessionKey);
+    newSession(agent.agentId);
     navigate('/');
-  }, [navigate, switchSession]);
+  }, [navigate, newSession]);
 
   const handleUninstallMyAgent = useCallback(async (agent: MyAgent) => {
     try {

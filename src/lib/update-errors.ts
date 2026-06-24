@@ -31,3 +31,42 @@ export function formatUpdateFriendlyError(message: string): string {
   }
   return message;
 }
+
+export function isSkillNotInMarketplaceError(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return /company api error:\s*404\b/.test(normalized);
+}
+
+export function isSkillRateLimitedError(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return /company api error:\s*429\b/.test(normalized);
+}
+
+/** Maps raw batch-update failures to user-facing skill toasts only. */
+export function formatSkillBatchUpdateFailureReason(
+  message: string,
+  labels: {
+    skillNotInMarketplace: string;
+    rateLimited: string;
+    useIntranet: string;
+  },
+): string {
+  const trimmed = message.trim();
+  if (!trimmed) return '';
+
+  if (isSkillNotInMarketplaceError(trimmed)) {
+    return labels.skillNotInMarketplace;
+  }
+
+  if (isSkillRateLimitedError(trimmed)) {
+    return labels.rateLimited;
+  }
+
+  if (isUpdateIntranetOrNetworkError(trimmed)) {
+    return labels.useIntranet;
+  }
+
+  return trimmed;
+}

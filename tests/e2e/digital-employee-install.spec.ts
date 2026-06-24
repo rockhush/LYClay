@@ -234,11 +234,9 @@ test.describe('digital employee marketplace installation', () => {
       await expect(page.getByText('local-test11-name')).toHaveCount(0);
       await expect(page.getByText('local-doc-name')).toHaveCount(0);
 
-      /*
-      // 「使用」按钮暂时隐藏
       await page.getByTestId(`digital-employee-my-use-${localInstanceId}`).click();
       await expect(page.getByTestId('chat-composer-input')).toBeVisible({ timeout: 30_000 });
-      */
+      await expect(page.getByText('文档分析数字员工')).toBeVisible();
     } finally {
       await closeElectronApp(app);
     }

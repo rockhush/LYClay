@@ -87,6 +87,9 @@ import {
   resolveInstalledVersionForMarketplaceSkill,
   SKILL_UPDATE_VERIFICATION_FAILED,
 } from '@/lib/skill-update-verification';
+import {
+  formatSkillBatchUpdateFailureReason,
+} from '@/lib/update-errors';
 import { UploadSkillDialog } from '@/components/skills/UploadSkillDialog';
 import { BatchUpdateSkillsDialog } from '@/components/skills/BatchUpdateSkillsDialog';
 import { BatchToggleSkillsDialog } from '@/components/skills/BatchToggleSkillsDialog';
@@ -1459,7 +1462,14 @@ export function Skills() {
         const checkResult = await checkSkillUpdateForMarketplace(skill);
         if (checkResult.status === 'failed') {
           summary.failed += 1;
-          recordFailure(skill, checkResult.error?.trim() || t('toast.failReasonCheckFailed'));
+          recordFailure(
+            skill,
+            formatSkillBatchUpdateFailureReason(checkResult.error ?? '', {
+              skillNotInMarketplace: t('toast.failReasonSkillNotInMarketplace'),
+              rateLimited: t('toast.failReasonRateLimited'),
+              useIntranet: t('toast.failReasonUseIntranet'),
+            }) || t('toast.failReasonCheckFailed'),
+          );
           markSkillUpdateFailed(skill.slug);
           continue;
         }
@@ -1497,7 +1507,11 @@ export function Skills() {
           const errorMessage = error instanceof Error ? error.message : String(error);
           const reason = INSTALL_ERROR_CODES.has(errorMessage)
             ? t(`toast.${errorMessage}`)
-            : (errorMessage.trim() || t('toast.failReasonUnknown'));
+            : (formatSkillBatchUpdateFailureReason(errorMessage, {
+              skillNotInMarketplace: t('toast.failReasonSkillNotInMarketplace'),
+              rateLimited: t('toast.failReasonRateLimited'),
+              useIntranet: t('toast.failReasonUseIntranet'),
+            }) || errorMessage.trim() || t('toast.failReasonUnknown'));
           recordFailure(skill, reason);
           markSkillUpdateFailed(skill.slug);
         }

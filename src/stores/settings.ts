@@ -38,10 +38,6 @@ interface SettingsState {
   sidebarCollapsed: boolean;
   devModeUnlocked: boolean;
 
-  // Context Compression
-  contextCompressionEnabled: boolean;
-  contextCompressionThreshold: number;
-
   // Setup
   setupComplete: boolean;
 
@@ -65,8 +61,6 @@ interface SettingsState {
   setAutoDownloadUpdate: (value: boolean) => void;
   setSidebarCollapsed: (value: boolean) => void;
   setDevModeUnlocked: (value: boolean) => void;
-  setContextCompressionEnabled: (value: boolean) => void;
-  setContextCompressionThreshold: (value: number) => void;
   markSetupComplete: () => void;
   resetSettings: () => void;
 }
@@ -90,8 +84,6 @@ const defaultSettings = {
   autoDownloadUpdate: false,
   sidebarCollapsed: false,
   devModeUnlocked: false,
-  contextCompressionEnabled: true,
-  contextCompressionThreshold: 150000,
   setupComplete: false,
 };
 
@@ -182,8 +174,6 @@ export const useSettingsStore = create<SettingsState>()(
           body: JSON.stringify({ value: devModeUnlocked }),
         }).catch(() => { });
       },
-      setContextCompressionEnabled: (contextCompressionEnabled) => set({ contextCompressionEnabled }),
-      setContextCompressionThreshold: (contextCompressionThreshold) => set({ contextCompressionThreshold }),
       markSetupComplete: () => set({ setupComplete: true }),
       resetSettings: () => set(defaultSettings),
     }),
