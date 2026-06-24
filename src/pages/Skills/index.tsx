@@ -79,7 +79,6 @@ import {
 } from '@/lib/skill-display-cache';
 import {
   clearSkillUpdateFailed,
-  isSkillUpdateFailed,
   markSkillUpdateFailed,
   subscribeSkillUpdateFailures,
 } from '@/lib/skill-update-failure-session';
@@ -509,7 +508,6 @@ interface MarketplaceSkillCardProps {
   skill: MarketplaceSkill;
   isInstalled: boolean;
   isLoading: boolean;
-  updateFailed: boolean;
   onInstall: () => void;
   onUninstall: () => void;
   onUpdate: () => void;
@@ -522,7 +520,6 @@ function MarketplaceSkillCard({
   skill,
   isInstalled,
   isLoading,
-  updateFailed,
   onInstall,
   onUninstall,
   onUpdate,
@@ -588,14 +585,6 @@ function MarketplaceSkillCard({
           </div>
         </div>
         <div className="flex items-center shrink-0">
-          {isInstalled && updateFailed && (
-            <span
-              data-testid={`marketplace-skill-update-failed-${skill.slug}`}
-              className="mr-3 text-[12px] font-normal text-[#FF0000] shrink-0 whitespace-nowrap"
-            >
-              更新失败
-            </span>
-          )}
           <div className="flex items-center gap-1">
           {isInstalled && (
             <Button
@@ -1449,6 +1438,13 @@ export function Skills() {
     setBatchUpdateProgress({ current: 0, total: selectedSkills.length });
     const currentScroll = listRef.current?.scrollTop || 0;
     const summary = { updated: 0, skipped: 0, failed: 0 };
+    const failedNames: string[] = [];
+    const recordFailedName = (skill: MarketplaceSkill) => {
+      const name = resolveCachedSkillDisplayMetadata({ marketplaceSkill: skill })?.name
+        ?? skill.name
+        ?? skill.slug;
+      if (name) failedNames.push(name);
+    };
     const updatedSkills: Array<{
       slug: string;
       latestVersion: string;
@@ -1463,6 +1459,7 @@ export function Skills() {
         const checkResult = await checkSkillUpdateForMarketplace(skill);
         if (checkResult.status === 'failed') {
           summary.failed += 1;
+          recordFailedName(skill);
           markSkillUpdateFailed(skill.slug);
           continue;
         }
@@ -1476,6 +1473,7 @@ export function Skills() {
             checkResult.latestVersion,
           )) {
             summary.failed += 1;
+            recordFailedName(skill);
             markSkillUpdateFailed(skill.slug);
           } else {
             summary.skipped += 1;
@@ -1496,6 +1494,7 @@ export function Skills() {
         } catch (error) {
           console.error('[Skills] Batch update failed for', skill.slug, error);
           summary.failed += 1;
+          recordFailedName(skill);
           markSkillUpdateFailed(skill.slug);
         }
       }
@@ -1532,7 +1531,14 @@ export function Skills() {
 
       const summaryMessage = t('toast.batchUpdateSummary', summary);
       if (summary.failed > 0) {
-        toast.warning(summaryMessage);
+        const failedListMessage = failedNames.length > 0
+          ? t('toast.batchUpdateFailedList', { names: failedNames.join('、') })
+          : undefined;
+        toast.warning(summaryMessage, {
+          ...(failedListMessage ? { description: failedListMessage } : {}),
+          duration: Infinity,
+          closeButton: true,
+        });
       } else {
         toast.success(summaryMessage);
       }
@@ -1954,7 +1960,6 @@ export function Skills() {
                         skill={skill}
                         isInstalled={isInstalled}
                         isLoading={isBusy}
-                        updateFailed={isSkillUpdateFailed(skill.slug)}
                         onInstall={() => handleInstall(skill.slug)}
                         onUninstall={() => handleUninstall(skill.slug)}
                         onUpdate={() => handleUpdate(skill.slug)}

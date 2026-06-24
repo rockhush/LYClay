@@ -133,6 +133,7 @@
         "batchPartial": "Updated {{success}} / {{total}} skills. Some items failed.",
         "batchUpdateComplete": "All installed skills have been updated",
         "batchUpdateSummary": "Update complete: {{updated}} updated, {{skipped}} already up to date, {{failed}} failed",
+        "batchUpdateFailedList": "Failed to update: {{names}}",
         "noBatchUpdateTargets": "No installed skills to update",
         "batchUpdateSelectRequired": "Please select at least one skill to update",
         "batchEnableSelectRequired": "Please select at least one skill to enable",

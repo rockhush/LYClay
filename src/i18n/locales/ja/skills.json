@@ -106,6 +106,7 @@
         "batchUpdated": "{{count}} 件のスキルを更新しました",
         "failedCheckUpdates": "更新の確認に失敗しました",
         "failedUpdate": "更新に失敗しました",
+        "batchUpdateFailedList": "更新に失敗: {{names}}",
         "openedEditor": "エディターで開きました",
         "failedEditor": "エディターを開けませんでした",
         "failedSave": "設定の保存に失敗しました",
