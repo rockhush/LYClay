@@ -35,7 +35,7 @@ import {
 } from './cron-schedule';
 
 interface GatewayLike {
-  getStatus: () => { state: string };
+  getStatus: () => { state: string; warmupStatus?: 'idle' | 'warming' | 'ready' | 'failed' };
   rpc: <T>(method: string, params?: unknown, timeoutMs?: number) => Promise<T>;
 }
 
@@ -81,6 +81,19 @@ const RUN_TRANSPORT_RETRY_DELAY_MS = 5_000;
 const MANUAL_RUN_TIMEOUT_MS = 45_000;
 const MANUAL_RUN_ATTEMPTS = 2;
 const MANUAL_RUN_RETRY_DELAY_MS = 2_000;
+
+// Background catch-up/retry must ride out cold start: the AI provider is lazily
+// initialized on the first run (60+s) and warmup is off by default, so the first
+// attempt typically "stalls before execution start (context-engine)". These
+// increasing delays let the provider finish warming so a later attempt succeeds.
+// Non-transient errors (e.g. missing channel) abort immediately without waiting.
+const BACKGROUND_RUN_RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 180_000];
+
+// If a warmup is actively in progress, wait (bounded) for it to settle before
+// firing so we don't race provider initialization. Harmless when warmup is
+// idle/disabled/ready (we proceed immediately and rely on the backoff above).
+const WARMUP_WAIT_MAX_MS = 180_000;
+const WARMUP_POLL_INTERVAL_MS = 3_000;
 
 // Catch-up only applies to "sparse" schedules (>= 1h cadence); a missed
 // every-few-minutes tick is irrelevant and would be noisy.
@@ -182,14 +195,60 @@ export function triggerCronJobManually(gw: GatewayLike, id: string): Promise<unk
   });
 }
 
+/** If a warmup is in progress, wait (bounded) for it to settle before firing. */
+async function waitForWarmupIfInProgress(): Promise<void> {
+  if (!gateway) return;
+  const deadline = Date.now() + WARMUP_WAIT_MAX_MS;
+  while (Date.now() < deadline) {
+    const status = gateway.getStatus();
+    if (status.state !== 'running') return;
+    // Only 'warming' means provider init is actively running; for any other
+    // value (ready/idle/failed/undefined) we proceed and let the backoff cover
+    // the cold-start case.
+    if (status.warmupStatus !== 'warming') return;
+    await delay(WARMUP_POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * Run a cron job from the background supervisor with cold-start-tolerant backoff.
+ * The first attempt usually triggers the gateway's lazy provider init and fails
+ * with a transient "stalled before execution start" error; later attempts, after
+ * the provider is warm, succeed. Never throws — background context.
+ */
+async function runCronJobInBackground(id: string): Promise<{ ok: boolean; error?: string }> {
+  await waitForWarmupIfInProgress();
+
+  const maxAttempts = BACKGROUND_RUN_RETRY_DELAYS_MS.length + 1;
+  let lastError = '';
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (!gateway || gateway.getStatus().state !== 'running') {
+      return { ok: false, error: lastError || 'gateway not running' };
+    }
+    try {
+      await gateway.rpc('cron.run', { id, mode: 'force' }, CRON_RUN_TIMEOUT_MS);
+      return { ok: true };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      const isLastAttempt = attempt >= maxAttempts - 1;
+      if (isLastAttempt || !isTransientCronError(lastError)) break;
+      const waitMs = BACKGROUND_RUN_RETRY_DELAYS_MS[attempt];
+      logger.info(
+        `[cron-supervisor] background run ${id} transient failure (attempt ${attempt + 1}/${maxAttempts}), retrying in ${Math.round(waitMs / 1000)}s: ${lastError}`,
+      );
+      await delay(waitMs);
+    }
+  }
+  return { ok: false, error: lastError };
+}
+
 /** Fire a job without surfacing errors (background supervisor context). */
 async function fireQuietly(id: string, context: string): Promise<void> {
-  try {
-    await runCronJobWithRetry(gateway!, id);
+  const result = await runCronJobInBackground(id);
+  if (result.ok) {
     logger.info(`[cron-supervisor] ${context} run completed for job ${id}`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn(`[cron-supervisor] ${context} run for job ${id} did not confirm: ${message}`);
+  } else {
+    logger.warn(`[cron-supervisor] ${context} run for job ${id} did not confirm: ${result.error || 'unknown'}`);
   }
 }
 
