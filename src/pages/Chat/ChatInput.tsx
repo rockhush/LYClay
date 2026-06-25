@@ -228,6 +228,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   const digitalEmployeesLoading = useDigitalEmployeesStore((s) => s.loading);
   const fetchDigitalEmployees = useDigitalEmployeesStore((s) => s.fetchEmployees);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
+  const newSession = useChatStore((s) => s.newSession);
   const reasoningMode = useChatStore((s) => s.reasoningMode);
   const setReasoningMode = useChatStore((s) => s.setReasoningMode);
   const reasoningOptions = useMemo(
@@ -1060,6 +1061,9 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                           agent={agent}
                           selected={agent.id === targetAgentId}
                           onSelect={() => {
+                            // Match Digital Employee page "chat" action: bind the
+                            // conversation to this employee so the header shows it.
+                            newSession(agent.id);
                             setTargetAgentId(agent.id);
                             setPickerOpen(false);
                             textareaRef.current?.focus();

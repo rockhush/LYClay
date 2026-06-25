@@ -563,7 +563,7 @@ export function Settings() {
                   Workspace、文件和域名授权
                 </p>
               </div>
-              <Button asChild variant="outline" size="sm" className="rounded-full h-8 px-3 text-xs">
+              <Button asChild variant="outline" size="sm" className="rounded-full h-7 px-3 text-xs">
                 <Link to="/settings/security">
                   <Shield className="h-3.5 w-3.5 mr-1.5" />
                   打开

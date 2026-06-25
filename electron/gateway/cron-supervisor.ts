@@ -23,6 +23,7 @@
  * guarded to avoid duplicate or runaway runs.
  */
 
+import { powerMonitor } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { logger } from '../utils/logger';
@@ -65,7 +66,12 @@ const STATE_FILE = join(getOpenClawConfigDir(), 'cron', '.lyclaw-cron-supervisor
 // Defer the first pass so the gateway can finish warmup and run its own on-time
 // / catch-up firing before we step in. We only act on what it missed/failed.
 const INITIAL_PASS_DELAY_MS = 90_000;
-const PERIODIC_PASS_INTERVAL_MS = 5 * 60_000;
+// Safety-net interval when no wake/focus events fire (unchanged behavior, faster than 5m).
+const PERIODIC_PASS_INTERVAL_MS = 2 * 60_000;
+// Brief settle after resume/unlock so the gateway websocket can recover before cron.run.
+const REQUEST_PASS_DELAY_MS = 5_000;
+// Skip redundant wake-triggered passes when a pass just completed (periodic still runs on schedule).
+const MIN_WAKE_PASS_INTERVAL_MS = 45_000;
 
 // Background (catch-up / retry) runs are fire-and-forget and never block the
 // UI, so they can afford a patient timeout.
@@ -113,7 +119,12 @@ let started = false;
 let gateway: GatewayLike | null = null;
 let initialTimer: ReturnType<typeof setTimeout> | null = null;
 let periodicTimer: ReturnType<typeof setInterval> | null = null;
+let pendingPassTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingPassReason: string | null = null;
+let wakeHooksRegistered = false;
 let passInFlight = false;
+let passQueued = false;
+let lastPassCompletedAt = 0;
 let state: SupervisorState = { handled: {}, retried: {} };
 let stateLoaded = false;
 
@@ -300,7 +311,11 @@ async function maybeRetryFailure(job: SupervisedCronJob, now: number): Promise<v
 }
 
 async function runPass(reason: string): Promise<void> {
-  if (!gateway || passInFlight) return;
+  if (!gateway) return;
+  if (passInFlight) {
+    passQueued = true;
+    return;
+  }
   if (gateway.getStatus().state !== 'running') return;
 
   passInFlight = true;
@@ -342,7 +357,65 @@ async function runPass(reason: string): Promise<void> {
     logger.warn(`[cron-supervisor] pass (${reason}) failed:`, error);
   } finally {
     passInFlight = false;
+    lastPassCompletedAt = Date.now();
+    if (passQueued) {
+      passQueued = false;
+      setTimeout(() => {
+        void runPass('queued');
+      }, 2_000);
+    }
   }
+}
+
+function clearPendingPassTimer(): void {
+  if (pendingPassTimer) {
+    clearTimeout(pendingPassTimer);
+    pendingPassTimer = null;
+  }
+  pendingPassReason = null;
+}
+
+/**
+ * Schedule a supervisor pass soon (e.g. after system resume or screen unlock).
+ * Coalesces rapid events and skips when a pass just completed. Does not replace
+ * the periodic safety-net pass.
+ */
+export function requestCronSupervisorPass(reason: string): void {
+  if (!started || !gateway) return;
+
+  const now = Date.now();
+  if (now - lastPassCompletedAt < MIN_WAKE_PASS_INTERVAL_MS && !pendingPassTimer) {
+    return;
+  }
+
+  pendingPassReason = reason;
+  if (pendingPassTimer) {
+    clearTimeout(pendingPassTimer);
+  }
+
+  pendingPassTimer = setTimeout(() => {
+    pendingPassTimer = null;
+    const passReason = pendingPassReason ?? reason;
+    pendingPassReason = null;
+    logger.info(`[cron-supervisor] wake-triggered pass (${passReason})`);
+    void runPass(passReason);
+  }, REQUEST_PASS_DELAY_MS);
+  unref(pendingPassTimer);
+}
+
+/** Register OS wake hooks once (resume / unlock-screen). */
+export function registerCronSupervisorWakeHooks(): void {
+  if (wakeHooksRegistered) return;
+  wakeHooksRegistered = true;
+
+  powerMonitor.on('resume', () => {
+    logger.info('[cron-supervisor] system resume detected');
+    requestCronSupervisorPass('system-resume');
+  });
+  powerMonitor.on('unlock-screen', () => {
+    logger.info('[cron-supervisor] screen unlock detected');
+    requestCronSupervisorPass('unlock-screen');
+  });
 }
 
 /** Start the cron supervisor. Idempotent — safe to call on every gateway start. */
@@ -350,6 +423,8 @@ export function startCronSupervisor(gw: GatewayLike): void {
   if (started) return;
   started = true;
   gateway = gw;
+
+  registerCronSupervisorWakeHooks();
 
   initialTimer = setTimeout(() => {
     void runPass('startup-catchup');
@@ -361,7 +436,7 @@ export function startCronSupervisor(gw: GatewayLike): void {
   }, PERIODIC_PASS_INTERVAL_MS);
   unref(periodicTimer);
 
-  logger.info('[cron-supervisor] started (catch-up + transient-failure retry)');
+  logger.info('[cron-supervisor] started (catch-up + transient-failure retry + wake triggers)');
 }
 
 /** Stop the cron supervisor and clear timers. */
@@ -374,6 +449,8 @@ export function stopCronSupervisor(): void {
     clearInterval(periodicTimer);
     periodicTimer = null;
   }
+  clearPendingPassTimer();
+  passQueued = false;
   started = false;
   gateway = null;
 }

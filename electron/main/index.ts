@@ -52,7 +52,7 @@ import { startSessionTranscriptWatcher } from '../utils/session-transcript-watch
 import { startHostApiServer } from '../api/server';
 import { HostEventBus } from '../api/event-bus';
 import { startUsageReportScheduler, stopUsageReportScheduler, ensureWorkNoReady } from '../utils/reporting';
-import { startCronSupervisor, stopCronSupervisor } from '../gateway/cron-supervisor';
+import { startCronSupervisor, stopCronSupervisor, requestCronSupervisorPass } from '../gateway/cron-supervisor';
 import { deviceOAuthManager } from '../utils/device-oauth';
 import { browserOAuthManager } from '../utils/browser-oauth';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
@@ -496,6 +496,7 @@ async function initialize(): Promise<void> {
 
   // Bridge gateway and host-side events before any auto-start logic runs, so
   // renderer subscribers observe the full startup lifecycle.
+  let lastGatewayStateForCron: string | null = null;
   gatewayManager.on('status', (status: { state: string }) => {
     hostEventBus.emit('gateway:status', status);
     if (status.state === 'running' && !isE2EMode) {
@@ -505,7 +506,11 @@ async function initialize(): Promise<void> {
       // Cron supervisor: catch up scheduled runs missed while offline and retry
       // cold-start failures. Idempotent — only the first 'running' starts it.
       startCronSupervisor(gatewayManager);
+      if (lastGatewayStateForCron !== 'running') {
+        requestCronSupervisorPass('gateway-running');
+      }
     }
+    lastGatewayStateForCron = status.state;
   });
 
   gatewayManager.on('error', (error) => {

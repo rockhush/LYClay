@@ -1019,9 +1019,10 @@ export function Cron() {
     }
   }, []);
 
-  // Fetch jobs on mount
+  // Fetch jobs on mount; nudge supervisor so missed/failed runs catch up without waiting for periodic pass.
   useEffect(() => {
     if (isGatewayRunning) {
+      void hostApiFetch('/api/cron/supervisor-nudge', { method: 'POST' }).catch(() => {});
       fetchJobs();
     }
   }, [fetchJobs, isGatewayRunning]);

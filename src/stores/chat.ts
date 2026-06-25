@@ -3495,7 +3495,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // NOTE: We intentionally do NOT call sessions.reset on the old session.
     // sessions.reset archives (renames) the session JSONL file, making old
     // conversation history inaccessible when the user switches back to it.
-    const { currentSessionKey, messages, sessions, sessionLastActivity, sessionLabels, activeRunId, streamingText, streamingMessage, streamingTools, pendingFinal, lastUserMessageAt, pendingToolImages, runAborted, sending } = get();
+    const { currentSessionKey, messages, sessionLastActivity, sessionLabels, activeRunId, streamingText, streamingMessage, streamingTools, pendingFinal, lastUserMessageAt, pendingToolImages, runAborted, sending } = get();
     // Only treat sessions with no history records and no activity timestamp as empty
     const leavingEmpty = !currentSessionKey.endsWith(':main')
       && messages.length === 0
@@ -3504,9 +3504,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const normalizedAgentId = agentId?.trim();
     const prefix = normalizedAgentId
       ? `agent:${normalizedAgentId}`
-      : (getCanonicalPrefixFromSessionKey(currentSessionKey)
-        ?? getCanonicalPrefixFromSessions(sessions)
-        ?? DEFAULT_CANONICAL_PREFIX);
+      : DEFAULT_CANONICAL_PREFIX;
     const newKey = `${prefix}:session-${Date.now()}`;
     const newSessionEntry: ChatSession = { key: newKey, displayName: newKey };
     // Save messages snapshot if there's active streaming

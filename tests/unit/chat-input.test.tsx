@@ -19,6 +19,7 @@ const { agentsState, chatState, digitalEmployeesState, gatewayState, skillsState
     currentSessionKey: 'agent:main:main',
     messages: [] as unknown[],
     bindCurrentSessionWorkspace: vi.fn(),
+    newSession: vi.fn(),
     reasoningMode: 'fast',
     setReasoningMode: vi.fn(),
   },
@@ -135,7 +136,8 @@ describe('ChatInput agent targeting', () => {
     chatState.currentSessionKey = 'agent:main:main';
     chatState.messages = [];
     chatState.bindCurrentSessionWorkspace = vi.fn();
-    gatewayState.status = { state: 'running', port: 18789 };
+    chatState.newSession = vi.fn();
+    gatewayState.status = { state: 'running', port: 18789, gatewayReady: true, warmupStatus: 'ready' };
     gatewayState.rpc.mockReset();
     gatewayState.rpc.mockResolvedValue({ skills: [] });
     skillsState.skills = [];
@@ -231,6 +233,7 @@ describe('ChatInput agent targeting', () => {
     fireEvent.click(screen.getByTitle('Choose agent'));
     fireEvent.click(screen.getByText('内联探针数字员工'));
 
+    expect(chatState.newSession).toHaveBeenCalledWith('inline-probe--local');
     expect(screen.getByText('@内联探针数字员工')).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Hello direct agent' } });

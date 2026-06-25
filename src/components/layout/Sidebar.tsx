@@ -969,7 +969,14 @@ export function Sidebar() {
             } = useChatStore.getState();
             const currentIsAlreadyFreshEmpty =
               ms.length === 0 && !sla[ck] && !sl[ck];
-            if (!currentIsAlreadyFreshEmpty || ck.endsWith(':main') || prefilledInput) {
+            const isMainAgentSession = getAgentIdFromSessionKey(ck) === 'main';
+            if (
+              !isOnChat
+              || !currentIsAlreadyFreshEmpty
+              || ck.endsWith(':main')
+              || prefilledInput
+              || !isMainAgentSession
+            ) {
               newSession();
             }
             navigate('/');

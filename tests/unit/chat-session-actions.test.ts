@@ -140,7 +140,7 @@ describe('chat session actions', () => {
     expect(h.read().loadHistory).toHaveBeenCalledTimes(1);
   });
 
-  it('newSession creates a canonical session key and clears transient state', async () => {
+  it('newSession without agentId always creates a Main Agent session key and clears transient state', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1711111111111);
     const { createSessionActions } = await import('@/stores/chat/session-actions');
     const h = makeHarness({
@@ -156,8 +156,9 @@ describe('chat session actions', () => {
 
     actions.newSession();
     const next = h.read();
-    expect(next.currentSessionKey).toBe('agent:foo:session-1711111111111');
-    expect(next.sessions.some((s) => s.key === 'agent:foo:session-1711111111111')).toBe(true);
+    expect(next.currentSessionKey).toBe('agent:main:session-1711111111111');
+    expect(next.currentAgentId).toBe('main');
+    expect(next.sessions.some((s) => s.key === 'agent:main:session-1711111111111')).toBe(true);
     expect(next.messages).toEqual([]);
     expect(next.streamingText).toBe('');
     expect(next.activeRunId).toBeNull();

@@ -809,6 +809,13 @@ function normalizeCronDelivery(
     ? delivery.accountId.trim()
     : undefined;
 
+  // "仅在 LYClaw 内" (mode none): deliver to the user in-app. Strip any
+  // channel/to/accountId so a stale external target can never make the Gateway
+  // attempt channel delivery (e.g. DingTalk requires --to).
+  if (mode === 'none') {
+    return { mode: 'none' };
+  }
+
   if (mode === 'announce' && !channel) {
     return { mode: 'none' };
   }
@@ -833,6 +840,17 @@ function normalizeCronDeliveryPatch(rawDelivery: unknown): Record<string, unknow
       ? delivery.mode.trim()
       : 'none';
   }
+
+  // Switching to "仅在 LYClaw 内" (mode none) must clear any previously-set
+  // external target, otherwise the Gateway keeps a stale channel/to and still
+  // attempts channel delivery (e.g. DingTalk requires --to).
+  if (patch.mode === 'none') {
+    patch.channel = '';
+    patch.to = '';
+    patch.accountId = '';
+    return patch;
+  }
+
   if ('channel' in delivery) {
     patch.channel = typeof delivery.channel === 'string' && delivery.channel.trim()
       ? toOpenClawChannelType(delivery.channel.trim())

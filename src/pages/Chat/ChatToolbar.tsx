@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useChatStore } from '@/stores/chat';
 import { useAgentsStore } from '@/stores/agents';
+import { useDigitalEmployeesStore } from '@/stores/digital-employees';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 
@@ -17,11 +18,15 @@ export function ChatToolbar() {
   const loading = useChatStore((s) => s.loading);
   const currentAgentId = useChatStore((s) => s.currentAgentId);
   const agents = useAgentsStore((s) => s.agents);
+  const digitalEmployees = useDigitalEmployeesStore((s) => s.employees);
   const { t } = useTranslation('chat');
-  const currentAgentName = useMemo(
-    () => (agents ?? []).find((agent) => agent.id === currentAgentId)?.name ?? currentAgentId,
-    [agents, currentAgentId],
-  );
+  const currentAgentName = useMemo(() => {
+    const fromAgents = (agents ?? []).find((agent) => agent.id === currentAgentId);
+    if (fromAgents?.name) return fromAgents.name;
+    const fromEmployees = (digitalEmployees ?? []).find((employee) => employee.agentId === currentAgentId);
+    if (fromEmployees?.name) return fromEmployees.name;
+    return currentAgentId;
+  }, [agents, currentAgentId, digitalEmployees]);
 
   return (
     <div className="flex w-full items-center justify-between gap-2">

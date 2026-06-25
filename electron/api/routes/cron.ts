@@ -7,7 +7,7 @@ import { getOpenClawConfigDir } from '../../utils/paths';
 import { resolveAccountIdFromSessionHistory } from '../../utils/session-util';
 import { toOpenClawChannelType, toUiChannelType } from '../../utils/channel-alias';
 import { resolveAgentIdFromChannel } from '../../utils/agent-config';
-import { triggerCronJobManually } from '../../gateway/cron-supervisor';
+import { triggerCronJobManually, requestCronSupervisorPass } from '../../gateway/cron-supervisor';
 
 /**
  * Find agentId from session history by delivery "to" address.
@@ -300,6 +300,13 @@ function normalizeCronDelivery(
     ? delivery.accountId.trim()
     : undefined;
 
+  // "仅在 LYClaw 内" (mode none): results are delivered to the user via the
+  // in-app chat. Strip any channel/to/accountId so a stale external target can
+  // never make the Gateway attempt channel delivery (e.g. DingTalk requires --to).
+  if (mode === 'none') {
+    return { mode: 'none' };
+  }
+
   if (mode === 'announce' && !channel) {
     return { mode: 'none' };
   }
@@ -324,6 +331,18 @@ function normalizeCronDeliveryPatch(rawDelivery: unknown): Record<string, unknow
       ? delivery.mode.trim()
       : 'none';
   }
+
+  // Switching to "仅在 LYClaw 内" (mode none) must clear any previously-set
+  // external target, otherwise the Gateway keeps a stale channel/to and still
+  // attempts channel delivery (e.g. DingTalk requires --to). Explicitly wipe
+  // channel/to/accountId even when the UI only sends `{ mode: 'none' }`.
+  if (patch.mode === 'none') {
+    patch.channel = '';
+    patch.to = '';
+    patch.accountId = '';
+    return patch;
+  }
+
   if ('channel' in delivery) {
     patch.channel = typeof delivery.channel === 'string' && delivery.channel.trim()
       ? toOpenClawChannelType(delivery.channel.trim())
@@ -493,16 +512,20 @@ export async function handleCronRoutes(
 
       // Run repair in background — don't block the response.
       if (!usedFallback && jobs.length > 0) {
-        // Repair 1: delivery channel missing
+        // Repair 1: an isolated (in-app) agentTurn job is set to announce but
+        // cannot actually deliver externally — either the channel is missing,
+        // or a channel is set without a recipient (`to`). Both happen to
+        // UI-created "仅在 LYClaw 内" jobs whose delivery got mangled; reverting
+        // to { mode: 'none' } delivers the result to the user in-app instead of
+        // failing (e.g. "DingTalk message requires --to <conversationId>").
         const jobsToRepairDelivery = jobs.filter((job) => {
           const isIsolatedAgent =
             (job.sessionTarget === 'isolated' || !job.sessionTarget) &&
             job.payload?.kind === 'agentTurn';
-          return (
-            isIsolatedAgent &&
-            job.delivery?.mode === 'announce' &&
-            !job.delivery?.channel
-          );
+          if (!isIsolatedAgent || job.delivery?.mode !== 'announce') return false;
+          const hasChannel = Boolean(job.delivery?.channel);
+          const hasRecipient = Boolean(job.delivery?.to);
+          return !hasChannel || !hasRecipient;
         });
         if (jobsToRepairDelivery.length > 0) {
           // Fire-and-forget: repair in background
@@ -511,7 +534,9 @@ export async function handleCronRoutes(
               try {
                 await ctx.gatewayManager.rpc('cron.update', {
                   id: job.id,
-                  patch: { delivery: { mode: 'none' } },
+                  // Explicitly clear the stale external target so the Gateway
+                  // stops attempting channel delivery.
+                  patch: { delivery: { mode: 'none', channel: '', to: '', accountId: '' } },
                 });
               } catch {
                 // ignore per-job repair failure
@@ -521,18 +546,27 @@ export async function handleCronRoutes(
           // Optimistically fix the response data
           for (const job of jobsToRepairDelivery) {
             job.delivery = { mode: 'none' };
-            if (job.state?.lastError?.includes('Channel is required')) {
+            // Clear the stale "can't deliver" error so the card stops showing
+            // a red error once the job is downgraded to in-app delivery.
+            const staleError = job.state?.lastError ?? '';
+            if (
+              staleError.includes('Channel is required')
+              || /requires\s+--to/i.test(staleError)
+              || /conversationId/i.test(staleError)
+            ) {
               job.state.lastError = undefined;
               job.state.lastStatus = 'ok';
             }
           }
         }
+        const repairedToNoneIds = new Set(jobsToRepairDelivery.map((job) => job.id));
 
         // Repair 2: agentId is undefined for jobs with announce delivery
         // Only repair undefined -> inferred agent, NOT main -> inferred agent
         const jobsToRepairAgent = jobs.filter((job) => {
           const jobAgentId = (job as unknown as { agentId?: string }).agentId;
           return (
+            !repairedToNoneIds.has(job.id) &&  // already downgraded to in-app delivery
             (job.sessionTarget === 'isolated' || !job.sessionTarget) &&
             job.payload?.kind === 'agentTurn' &&
             job.delivery?.mode === 'announce' &&
@@ -690,6 +724,12 @@ export async function handleCronRoutes(
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
+    return true;
+  }
+
+  if (url.pathname === '/api/cron/supervisor-nudge' && req.method === 'POST') {
+    requestCronSupervisorPass('cron-page');
+    sendJson(res, 200, { success: true });
     return true;
   }
 
