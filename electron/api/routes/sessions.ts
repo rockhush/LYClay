@@ -195,6 +195,8 @@ function isInternalUserPreviewText(text: string): boolean {
   const normalized = text.trim();
   if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(normalized)) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(normalized)) return true;
+  if (/^\[LYCLAW internal tool failure feedback\]/i.test(normalized)) return true;
+  if (/^\[LYCLAW internal convergence directive\]/i.test(normalized)) return true;
   if (
     /^\s*Current time\s*:/i.test(normalized)
     && /^\s*Current time\s*:[^\n]*\/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+UTC\s*$/i.test(normalized)
@@ -226,6 +228,21 @@ function parseTranscriptMessageTimestamp(message: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function mergeTranscriptEntryTimestamp(message: unknown, entryTimestamp?: string): unknown {
+  let ms = parseTranscriptMessageTimestamp(message);
+  if (!ms && typeof entryTimestamp === 'string' && entryTimestamp.trim()) {
+    const parsed = Date.parse(entryTimestamp.trim());
+    if (Number.isFinite(parsed)) ms = parsed;
+  }
+  if (!ms) return message;
+
+  const record = message && typeof message === 'object'
+    ? { ...(message as Record<string, unknown>) }
+    : { content: message };
+  record.timestamp = ms / 1000;
+  return record;
 }
 
 async function readLastMessageTimestamp(filePath: string): Promise<number | undefined> {
@@ -454,9 +471,24 @@ export async function handleSessionRoutes(
       let uuidFileName = fileInfo?.fileName;
 
       if (!uuidFileName && !resolvedSrcPath) {
-        logger.warn(`[sessions:history-local] No UUID file found for ${sessionKey}`);
-        sendJson(res, 200, { success: true, messages: [] });
-        return true;
+        const sessionSegment = parts.slice(2).join(':');
+        if (sessionSegment.startsWith('session-')) {
+          const fallbackPath = join(sessionsDir, `${sessionSegment}.jsonl`);
+          try {
+            await fsP.access(fallbackPath);
+            resolvedSrcPath = fallbackPath;
+            uuidFileName = `${sessionSegment}.jsonl`;
+            logger.debug(`[sessions:history-local] Using sessionKey fallback path: ${fallbackPath}`);
+          } catch {
+            logger.warn(`[sessions:history-local] No UUID file found for ${sessionKey}`);
+            sendJson(res, 200, { success: true, messages: [] });
+            return true;
+          }
+        } else {
+          logger.warn(`[sessions:history-local] No UUID file found for ${sessionKey}`);
+          sendJson(res, 200, { success: true, messages: [] });
+          return true;
+        }
       }
 
       if (!resolvedSrcPath) {
@@ -482,11 +514,14 @@ export async function handleSessionRoutes(
             const entry = JSON.parse(line) as {
               type?: string;
               customType?: string;
+              timestamp?: string;
               message?: unknown;
               data?: PromptErrorRecord;
             };
             if (entry.type === 'message' && entry.message) {
-              return [{ kind: 'message' as const, value: redactStructuredSecrets(sanitizeTranscriptMessageForDisplay(entry.message)) }];
+              const message = redactStructuredSecrets(sanitizeTranscriptMessageForDisplay(entry.message));
+              const withTimestamp = mergeTranscriptEntryTimestamp(message, entry.timestamp);
+              return [{ kind: 'message' as const, value: withTimestamp }];
             }
             if (entry.type === 'custom' && entry.customType === 'openclaw:prompt-error') {
               return [{ kind: 'promptError' as const, value: redactStructuredSecrets(entry.data ?? {}) }];

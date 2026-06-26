@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import { GatewayManager } from '../gateway/manager';
 import { ClawHubService, ClawHubSearchParams, ClawHubInstallParams, ClawHubUninstallParams } from '../gateway/clawhub';
 import { triggerCronJobManually } from '../gateway/cron-supervisor';
+import { clearStaleInAppDeliveryErrorState } from '../gateway/cron-stale-errors';
 import {
   type ProviderConfig,
 } from '../utils/secure-storage';
@@ -65,7 +66,9 @@ import { grantDialogPaths, revokeSkillGrantsForSkill } from '../security/permiss
 import { secureProxyAwareFetch } from '../security/network-fetch';
 import { assertGatewayRpcNetworkAllowed, assertTextNetworkAllowed } from '../security/network-preflight';
 import { assertGatewayRpcModelSecretsAllowed, assertModelSecretsAllowedBeforeSend } from '../security/model-secret-preflight';
-import { assertGatewayRpcFilePathsAllowed, assertTextFilePathsAllowed } from '../security/chat-file-path-preflight';
+import { assertGatewayRpcFilePathsAllowed, assertMediaFilePathsAllowed, assertTextFilePathsAllowed } from '../security/chat-file-path-preflight';
+import { mergeExtraSystemPrompt } from '../utils/session-delivery-context';
+import { buildStagedDiskFileName, buildStagedMediaSystemPrompt } from '../../shared/media-staging';
 import { protectMemoryRpcOutput } from '../security/memory-content-policy';
 import { assertOpenTargetAllowedWithConfirmation, registerSecurityConfirmationHandlers } from '../security/confirmation-service';
 import { getProviderService } from '../services/providers/provider-service';
@@ -954,31 +957,30 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
       const result = await gatewayManager.rpc('cron.list', { includeDisabled: true });
       const jobs = Array.isArray(result) ? result : (result as { jobs?: GatewayCronJob[] })?.jobs ?? [];
 
-      // Auto-repair legacy UI-created jobs that were saved without
-      // delivery: { mode: 'none' }.  The Gateway auto-normalizes them
-      // to delivery: { mode: 'announce' } which then fails with
-      // "Channel is required" when no external channels are configured.
+      // Auto-repair legacy UI-created jobs whose delivery was mangled to
+      // announce without a complete external target. Downgrade to in-app
+      // delivery (mode: none) and clear stale delivery errors from the list.
       for (const job of jobs) {
         const isIsolatedAgent =
           (job.sessionTarget === 'isolated' || !job.sessionTarget) &&
           job.payload?.kind === 'agentTurn';
-        const needsRepair =
-          isIsolatedAgent &&
-          job.delivery?.mode === 'announce' &&
-          !job.delivery?.channel;
+        if (!isIsolatedAgent || job.delivery?.mode !== 'announce') {
+          clearStaleInAppDeliveryErrorState(job);
+          continue;
+        }
+
+        const hasChannel = Boolean(job.delivery?.channel);
+        const hasRecipient = Boolean(job.delivery?.to);
+        const needsRepair = !hasChannel || !hasRecipient;
 
         if (needsRepair) {
           try {
             await gatewayManager.rpc('cron.update', {
               id: job.id,
-              patch: { delivery: { mode: 'none' } },
+              patch: { delivery: { mode: 'none', channel: '', to: '', accountId: '' } },
             });
             job.delivery = { mode: 'none' };
-            // Clear stale channel-resolution error from the last run
-            if (job.state?.lastError?.includes('Channel is required')) {
-              job.state.lastError = undefined;
-              job.state.lastStatus = 'ok';
-            }
+            clearStaleInAppDeliveryErrorState(job);
           } catch (e) {
             console.warn(`Failed to auto-repair cron job ${job.id}:`, e);
           }
@@ -1449,7 +1451,13 @@ function registerGatewayHandlers(
       }
       await assertModelSecretsAllowedBeforeSend(message, 'chat:sendWithMedia');
       await assertTextNetworkAllowed(message, 'chat:sendWithMedia');
-      await assertTextFilePathsAllowed(message, 'chat:sendWithMedia');
+      if (params.media?.length) {
+        await assertMediaFilePathsAllowed(
+          params.media.map((item) => item.filePath),
+          'chat:sendWithMedia',
+        );
+      }
+      await assertTextFilePathsAllowed(params.message, 'chat:sendWithMedia');
 
       const sessionId = params.sessionKey.startsWith('agent:')
         ? params.sessionKey.split(':').slice(2).join(':') || undefined
@@ -1465,8 +1473,12 @@ function registerGatewayHandlers(
       if (imageAttachments.length > 0) {
         rpcParams.attachments = imageAttachments;
       }
-      if (params.extraSystemPrompt) {
-        rpcParams.extraSystemPrompt = params.extraSystemPrompt;
+      const extraSystemPrompt = mergeExtraSystemPrompt(
+        params.extraSystemPrompt,
+        params.media?.length ? buildStagedMediaSystemPrompt(params.media) : undefined,
+      );
+      if (extraSystemPrompt) {
+        rpcParams.extraSystemPrompt = extraSystemPrompt;
       }
       if (params.executeAsAgentId) {
         rpcParams.executeAsAgentId = params.executeAsAgentId;
@@ -2497,8 +2509,12 @@ const OUTBOUND_DIR = join(homedir(), '.openclaw', 'media', 'outbound');
  */
 async function generateImagePreview(filePath: string, mimeType: string): Promise<string | null> {
   try {
+    const { readFile: readFileAsync } = await import('fs/promises');
     const img = nativeImage.createFromPath(filePath);
-    if (img.isEmpty()) return null;
+    if (img.isEmpty()) {
+      const buf = await readFileAsync(filePath);
+      return buf.length > 0 ? `data:${mimeType};base64,${buf.toString('base64')}` : null;
+    }
     const size = img.getSize();
     const maxDim = 512; // keep enough resolution for crisp display on Retina
     // Only resize if larger than threshold — specify ONE dimension to keep ratio
@@ -2509,7 +2525,6 @@ async function generateImagePreview(filePath: string, mimeType: string): Promise
       return `data:image/png;base64,${resized.toPNG().toString('base64')}`;
     }
     // Small image — use original (async read to avoid blocking)
-    const { readFile: readFileAsync } = await import('fs/promises');
     const buf = await readFileAsync(filePath);
     return `data:${mimeType};base64,${buf.toString('base64')}`;
   } catch {
@@ -2583,13 +2598,13 @@ function registerFileHandlers(): void {
     for (const filePath of filePaths) {
       const pathInfo = await assertPathAllowed({ path: filePath, capability: 'stage', source: 'file:stage' });
       const id = crypto.randomUUID();
-      const ext = extname(pathInfo.realPath);
-      const stagedPath = join(OUTBOUND_DIR, `${id}${ext}`);
+      const fileName = basename(pathInfo.realPath);
+      const stagedFileName = buildStagedDiskFileName(id, fileName);
+      const stagedPath = join(OUTBOUND_DIR, stagedFileName);
       await fsP.copyFile(pathInfo.realPath, stagedPath);
 
       const s = await fsP.stat(stagedPath);
-      const mimeType = getMimeType(ext);
-      const fileName = basename(pathInfo.realPath);
+      const mimeType = getMimeType(extname(stagedFileName));
 
       // Generate preview for images
       let preview: string | null = null;
@@ -2612,8 +2627,9 @@ function registerFileHandlers(): void {
     await fsP.mkdir(OUTBOUND_DIR, { recursive: true });
 
     const id = crypto.randomUUID();
-    const ext = extname(payload.fileName) || mimeToExt(payload.mimeType);
-    const stagedPath = join(OUTBOUND_DIR, `${id}${ext}`);
+    const stagedFileName = buildStagedDiskFileName(id, payload.fileName);
+    const stagedPath = join(OUTBOUND_DIR, stagedFileName);
+    const ext = extname(stagedFileName) || mimeToExt(payload.mimeType);
     const buffer = Buffer.from(payload.base64, 'base64');
     await fsP.writeFile(stagedPath, buffer);
 

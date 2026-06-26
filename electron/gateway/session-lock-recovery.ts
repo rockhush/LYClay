@@ -131,7 +131,7 @@ export async function recoverOrphanedSessionTranscriptLock(params: {
   const sessionsJson = await readJsonFile<Record<string, SessionStoreEntry>>(sessionsJsonPath);
   const entry = sessionsJson?.[sessionKey];
   if (!entry) return { recovered: false, reason: 'session-entry-missing' };
-  if (isActiveSessionStatus(entry.status)) return { recovered: false, reason: 'session-active' };
+  const sessionWasActive = isActiveSessionStatus(entry.status);
 
   const rawSessionFile = typeof entry.sessionFile === 'string' ? entry.sessionFile : '';
   if (!rawSessionFile) return { recovered: false, reason: 'session-file-missing' };
@@ -165,6 +165,15 @@ export async function recoverOrphanedSessionTranscriptLock(params: {
   const lockPidAlive = isPidAlive(lockPid);
   const lockBelongsToCurrentGateway = lockPid === currentPid;
   const lockOwnerIsDead = lockPidAlive === false;
+  if (sessionWasActive && (lockBelongsToCurrentGateway || !lockOwnerIsDead)) {
+    return {
+      recovered: false,
+      reason: 'session-active',
+      lockPath,
+      sessionFile,
+      details: { lockPid, lockPidAlive, currentPid, lockBelongsToCurrentGateway },
+    };
+  }
   if (!lockBelongsToCurrentGateway && !lockOwnerIsDead) {
     return {
       recovered: false,
@@ -183,6 +192,15 @@ export async function recoverOrphanedSessionTranscriptLock(params: {
   }
 
   await unlink(lockPath);
+  if (sessionWasActive && sessionsJson) {
+    sessionsJson[sessionKey] = {
+      ...entry,
+      status: 'stale-recovered',
+      recoveredAt: new Date(nowMs).toISOString(),
+      recoveryReason: params.reason,
+    };
+    await writeJsonFile(sessionsJsonPath, sessionsJson);
+  }
   params.logger.warn('[gateway:session-lock-recovery] removed orphaned session transcript lock', {
     reason: params.reason,
     sessionKey,
@@ -192,6 +210,8 @@ export async function recoverOrphanedSessionTranscriptLock(params: {
     lockPid,
     lockPidAlive,
     currentPid,
+    previousStatus: sessionWasActive ? entry.status : undefined,
+    nextStatus: sessionWasActive ? 'stale-recovered' : undefined,
   });
   return { recovered: true, lockPath, sessionFile, lockAgeMs, lockPid, lockPidAlive };
 }

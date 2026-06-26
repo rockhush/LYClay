@@ -23,6 +23,7 @@ const HOST_EVENT_TO_IPC_CHANNEL: Record<string, string> = {
   'openclaw:cli-installed': 'openclaw:cli-installed',
   'update:status-changed': 'update:status-changed',
   'update:auto-install-countdown': 'update:auto-install-countdown',
+  'cron:updated': 'cron:updated',
   'security:confirmation-request': 'security:confirmation-request',
 };
 

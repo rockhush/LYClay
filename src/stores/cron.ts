@@ -138,12 +138,21 @@ export const useCronStore = create<CronState>((set) => ({
         method: 'POST',
         body: JSON.stringify({ id }),
       });
-      // Refresh jobs after trigger to update lastRun/nextRun state
-      try {
-        const result = await hostApiFetch<CronJob[]>('/api/cron/jobs');
-        set({ jobs: result });
-      } catch {
-        // Ignore refresh error
+      // Refresh after trigger; poll briefly so Gateway state can settle before
+      // we decide whether the card still shows a stale failure banner.
+      const pollDelaysMs = [0, 750, 1500, 2500];
+      for (const delayMs of pollDelaysMs) {
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        try {
+          const result = await hostApiFetch<CronJob[]>('/api/cron/jobs');
+          set({ jobs: result });
+          const job = result.find((entry) => entry.id === id);
+          if (job?.lastRun?.success) return;
+        } catch {
+          // Ignore refresh errors between poll attempts.
+        }
       }
     } catch (error) {
       console.error('Failed to trigger cron job:', error);

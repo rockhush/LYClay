@@ -95,6 +95,9 @@ export function createRunawayToolObservation(options: {
     writeExecPairCount: 0,
     repeatedExecCommandCount: 0,
     repeatedWriteTargetCount: 0,
+    repeatedDebugScriptCount: 0,
+    repeatedOutputPatternCount: 0,
+    structuralInspectionCount: 0,
     lastToolCallAt: null,
     lastToolResultAt: null,
     lastVisibleProgressAt: null,
@@ -105,12 +108,16 @@ export function createRunawayToolObservation(options: {
     convergenceDirectiveLevel: 'none',
     convergenceDirective: null,
     convergenceDirectiveUpdatedAt: null,
+    injectedConvergenceDirectiveLevel: 'none',
+    injectedConvergenceDirectiveAt: null,
     initialStrategyInjected: Boolean(options.initialStrategyInjected),
     seenToolCallKeys: [],
     seenToolResultKeys: [],
     recentToolNames: [],
     recentExecCommands: [],
     recentWriteTargets: [],
+    recentDebugScriptTargets: [],
+    recentOutputFingerprints: [],
   };
 }
 
@@ -212,6 +219,60 @@ function normalizeWriteTarget(args: Record<string, unknown>): string | null {
   return base.toLowerCase().replace(/\d+/g, '#').slice(0, 120);
 }
 
+function extractMessageText(message: unknown): string {
+  if (!message || typeof message !== 'object') return '';
+  const content = (message as RawMessage).content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((block) => {
+    if (!block || typeof block !== 'object') return '';
+    const record = block as Record<string, unknown>;
+    return String(record.text ?? record.content ?? '');
+  }).filter(Boolean).join('\n');
+}
+
+function normalizeDebugScriptTarget(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.toLowerCase().replace(/\\/g, '/');
+  const match = normalized.match(/(?:^|\/)((?:vmi[_-]?(?:debug|check)|tmp|debug|check|inspect)[a-z0-9_#-]*\.py)\b/)
+    ?? normalized.match(/\bpython(?:\.exe)?\s+(?:[^\s"']+[\/])?((?:vmi[_-]?(?:debug|check)|tmp|debug|check|inspect)[a-z0-9_#-]*\.py)\b/);
+  if (!match) return null;
+  return match[1].replace(/\d+/g, '#');
+}
+
+function extractDebugScriptTarget(name: string, args: Record<string, unknown>): string | null {
+  const command = String(args.command ?? args.cmd ?? '').trim();
+  const writeTarget = normalizeWriteTarget(args);
+  if (name === 'write') return normalizeDebugScriptTarget(writeTarget);
+  if (name === 'exec') return normalizeDebugScriptTarget(command);
+  return null;
+}
+
+function isStructuralInspectionTool(name: string, args: Record<string, unknown>): boolean {
+  const lowerName = name.toLowerCase();
+  if (['read', 'grep', 'search', 'find', 'glob', 'list', 'ls'].includes(lowerName)) return true;
+  if (lowerName !== 'exec') return false;
+  const command = normalizeExecCommand(args) ?? '';
+  return /\b(dir|ls|find|rg|grep|head|tail)\b/.test(command)
+    || (/\bpython\b/.test(command) && /\b(inspect|check|debug|preview|schema|sheet|sheets|columns|rows|head|sample)\b/.test(command));
+}
+
+function normalizeOutputFingerprint(message: unknown): string | null {
+  const text = extractMessageText(message).toLowerCase().replace(/\r/g, '').trim();
+  if (text.length < 24) return null;
+  const rowLike = text.split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /\b(row|col|column|sheet|empty|null|none|nan)\b/.test(line))
+    .slice(0, 8);
+  const basis = rowLike.length >= 2 ? rowLike.join('\n') : text.split('\n').filter(Boolean).slice(0, 6).join('\n');
+  const compact = basis
+    .replace(/[a-z]:\/[\w./-]+/g, '<path>')
+    .replace(/\b\d{2,}\b/g, '#')
+    .replace(/\s+/g, ' ')
+    .slice(0, 220);
+  return compact.length >= 24 ? compact : null;
+}
+
 function calculateRisk(next: RunawayToolObservation): Pick<RunawayToolObservation, 'riskState' | 'riskReasons'> {
   const reasons: string[] = [];
   let riskState: RunawayToolRiskState = 'normal';
@@ -220,9 +281,25 @@ function calculateRisk(next: RunawayToolObservation): Pick<RunawayToolObservatio
     riskState = 'needs_convergence';
     reasons.push(`tool_calls>=15 (${next.toolCallCount})`);
   }
-  if (next.writeExecPairCount >= 3 || next.repeatedExecCommandCount >= 3 || next.repeatedWriteTargetCount >= 3) {
+  if (
+    next.writeExecPairCount >= 3
+    || next.repeatedExecCommandCount >= 3
+    || next.repeatedWriteTargetCount >= 3
+    || next.repeatedDebugScriptCount >= 2
+    || next.repeatedOutputPatternCount >= 2
+  ) {
     riskState = 'debug_loop';
     reasons.push('repeated write/exec debug pattern');
+  }
+  if (next.repeatedDebugScriptCount >= 2) {
+    reasons.push(`repeated debug scripts>=2 (${next.repeatedDebugScriptCount})`);
+  }
+  if (next.repeatedOutputPatternCount >= 2) {
+    reasons.push(`repeated output patterns>=2 (${next.repeatedOutputPatternCount})`);
+  }
+  if (next.taskKind !== 'general' && next.structuralInspectionCount >= 4) {
+    riskState = riskState === 'normal' ? 'needs_convergence' : riskState;
+    reasons.push(`structural_inspections>=4 (${next.structuralInspectionCount})`);
   }
   if (next.toolCallCount >= 25) {
     riskState = 'tool_heavy';
@@ -332,6 +409,16 @@ export function observeRunawayToolEvent(options: {
       next.writeExecPairCount += 1;
     }
 
+    if (next.taskKind !== 'general' && isStructuralInspectionTool(detail.name, detail.args)) {
+      next.structuralInspectionCount += 1;
+    }
+
+    const debugScriptTarget = extractDebugScriptTarget(detail.name, detail.args);
+    if (debugScriptTarget) {
+      if (next.recentDebugScriptTargets.includes(debugScriptTarget)) next.repeatedDebugScriptCount += 1;
+      next.recentDebugScriptTargets = boundedPush(next.recentDebugScriptTargets, debugScriptTarget);
+    }
+
     if (detail.name === 'exec') {
       const command = normalizeExecCommand(detail.args);
       if (command) {
@@ -356,6 +443,11 @@ export function observeRunawayToolEvent(options: {
     next.seenToolResultKeys = boundedUniquePush(next.seenToolResultKeys, key);
     next.toolResultCount += 1;
     next.lastToolResultAt = now;
+    const fingerprint = normalizeOutputFingerprint(event.message);
+    if (fingerprint) {
+      if (next.recentOutputFingerprints.includes(fingerprint)) next.repeatedOutputPatternCount += 1;
+      next.recentOutputFingerprints = boundedPush(next.recentOutputFingerprints, fingerprint);
+    }
   });
 
   next = { ...next, ...calculateRisk(next) };

@@ -91,8 +91,43 @@ describe('session transcript lock recovery', () => {
       logger,
     });
 
-    expect(result).toEqual({ recovered: false, reason: 'session-active' });
+    expect(result).toMatchObject({
+      recovered: false,
+      reason: 'session-active',
+      lockPath,
+      details: expect.objectContaining({ lockPid: 1234, currentPid: 1234, lockBelongsToCurrentGateway: true }),
+    });
     expect(await readFile(lockPath, 'utf8')).toContain('"pid":1234');
+  });
+
+  it('recovers an active session lock left by a dead previous gateway', async () => {
+    const { sessionKey, sessionFile, lockPath } = await writeSessionStore({ status: 'processing' });
+    await writeFile(
+      lockPath,
+      JSON.stringify({ pid: 999999, createdAt: '2026-06-08T01:23:40.000Z' }),
+      'utf8',
+    );
+
+    const result = await recoverOrphanedSessionTranscriptLock({
+      sessionKey,
+      openclawDir,
+      currentPid: 1234,
+      nowMs: Date.parse('2026-06-08T01:24:40.000Z'),
+      reason: 'before-user-chat-send',
+      logger,
+    });
+
+    expect(result).toMatchObject({
+      recovered: true,
+      lockPath,
+      sessionFile,
+      lockPid: 999999,
+      lockPidAlive: false,
+    });
+    await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    const sessionsJson = await readFile(path.join(openclawDir, 'agents', 'main', 'sessions', 'sessions.json'), 'utf8');
+    expect(sessionsJson).toContain('"status": "stale-recovered"');
+    expect(sessionsJson).toContain('"recoveryReason": "before-user-chat-send"');
   });
 
   it('keeps the lock when it belongs to a live other process', async () => {

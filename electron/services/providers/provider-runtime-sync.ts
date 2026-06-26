@@ -407,20 +407,35 @@ async function syncRuntimeProviderConfig(
 ): Promise<void> {
   let modelOverrides = buildModelOverridesFromRegistry(context.meta?.models, config.model);
 
-  // For ly-auto, fetch model config from nginx gateway to override registry defaults
+  // For ly-auto, fetch nginx input modalities while keeping compile-parity compat.
   if (config.type === LY_AUTO_PROVIDER_ID && modelOverrides && config.model) {
     const baseUrl = config.baseUrl || context.meta?.baseUrl;
+    let nginxEntry: Record<string, unknown> | null = null;
     if (baseUrl) {
-      const nginxEntry = await fetchNginxModelOverrides(baseUrl);
+      nginxEntry = await fetchNginxModelOverrides(baseUrl);
       if (nginxEntry) {
         logger.info(
-          `[provider-runtime-sync] Nginx model config (not applied to compile): maxTokens=${nginxEntry.maxTokens}, contextWindow=${nginxEntry.contextWindow}`,
+          `[provider-runtime-sync] Nginx model config: input=${JSON.stringify(nginxEntry.input)}, maxTokens=${nginxEntry.maxTokens}, contextWindow=${nginxEntry.contextWindow}`,
         );
+        // Merge nginx fields into the base compat overrides so openclaw.json
+        // reflects actual model capabilities (input, reasoning, contextWindow, etc.)
+        const compat = buildLyAutoModelOverrides();
+        if (nginxEntry.compat && typeof nginxEntry.compat === 'object') {
+          Object.assign(compat.compat as Record<string, unknown>, nginxEntry.compat);
+        }
+        const overrides: Record<string, unknown> = { ...compat };
+        if (typeof nginxEntry.reasoning === 'boolean') overrides.reasoning = nginxEntry.reasoning;
+        if (Array.isArray(nginxEntry.input)) overrides.input = nginxEntry.input;
+        if (typeof nginxEntry.contextWindow === 'number') overrides.contextWindow = nginxEntry.contextWindow;
+        if (typeof nginxEntry.maxTokens === 'number') overrides.maxTokens = nginxEntry.maxTokens;
+        modelOverrides = { [config.model]: overrides };
       } else {
-        logger.warn('[provider-runtime-sync] Failed to fetch nginx model config, using compile-parity defaults');
+        logger.warn('[provider-runtime-sync] Failed to fetch nginx model config, using ly-auto defaults');
+        modelOverrides = { [config.model]: buildLyAutoModelOverrides() };
       }
+    } else {
+      modelOverrides = { [config.model]: buildLyAutoModelOverrides() };
     }
-    modelOverrides = { [config.model]: buildLyAutoModelOverrides() };
   }
 
   // Custom/ollama vLLM endpoints need explicit streaming usage compat in openclaw.json too.

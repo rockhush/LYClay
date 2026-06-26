@@ -25,52 +25,77 @@ import {
   type AttachedFileMeta,
   type ChatSession,
   type ChatState,
+  type CompressionStateEntry,
   type ContentBlock,
   type ReasoningMode,
   type RawMessage,
+  type RunawayToolObservation,
   type SessionStreamingState,
   type ToolStatus,
 } from './chat/types';
 import {
-  areEquivalentAttachmentOnlyUserTexts,
   attachmentFileNameFromPath,
-  dedupeEquivalentAttachmentUserMessages,
+  filterChannelOutboundEchoMessages,
+  hasVisibleAssistantContent,
+  isChannelDeliveryConfirmationText,
   isSuppressedRunError,
+  isAbortErrorMessage,
+  isRecoverableRuntimeError,
+  markUserAbort,
+  resolveRunFailureErrorMessage,
+  shouldTreatAbortAsUserStop,
+  truncateRunErrorMessage,
+  isWithinUserAbortWindow,
+  dedupeEquivalentAttachmentUserMessages,
   matchesOptimisticUserMessage,
+  getLatestOptimisticUserMessage,
   normalizeComparableUserText,
+  areEquivalentAttachmentOnlyUserTexts,
   stripGatewayUserMetadata,
 } from './chat/helpers';
 import {
   buildClearedActiveRunPatch,
+  findConcludingAssistantForActiveTurn,
+  findLatestVisibleUserIndex,
+  findTerminalAssistantAfterLatestUser,
+  findTerminalAssistantForActiveTurn,
+  isConcludingAssistantReply,
+  isFailedAssistantMessage,
   isRunTerminalAssistantMessage,
+  shouldKeepRunActiveAfterAssistantFinal,
 } from './chat/run-lifecycle';
+import {
+  shouldFinalizeUserTurn,
+  shouldForceAbortStuckRun,
+} from './chat/user-turn-lifecycle';
+import {
+  clearSessionActivityPoll,
+  refreshSessionBackendActivity,
+  startSessionActivityPoll,
+} from './chat/session-backend-bridge';
 import {
   clearUserAbortedSession,
   isUserAbortedSession,
   persistUserAbortedSession,
 } from './chat/user-aborted-sessions';
-import {
-  beginChatRunPerf,
-  markChatRunRpcCompleted,
-  markChatRunRpcStarted,
-  finishChatRunPerf,
-  markChatRunRuntimeEvent,
-  markChatRunTranscriptProgress,
-  markChatRunVisibleProgress,
-} from './chat/chat-run-perf';
+import { abortPendingChildDelegations } from './chat/abort-child-delegations';
 import { prepareContextBeforeSend } from './chat/context-send-guard';
-import { applyTimeDecayStrategy } from './chat/history-time-decay';
+import { applyTimeDecayStrategy, filterLargeToolResults } from './chat/history-time-decay';
 import {
   bindRunIdToObservation,
   createRunawayToolObservation,
   detectTaskWorkflowKind,
   observeRunawayToolEvent,
 } from './chat/runaway-tool-observer';
-import { buildInitialConvergenceSystemPrompt } from './chat/task-convergence-strategy';
+import {
+  buildInitialConvergenceSystemPrompt,
+  shouldUpgradeConvergenceDirective,
+} from './chat/task-convergence-strategy';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
 import {
   isSubagentSessionKey,
+  filterUserFacingSessions,
   pickUserFacingSession,
 } from '@/lib/session-key-utils';
 
@@ -88,6 +113,30 @@ export type {
  * When a session was previously compressed, this replaces the older messages
  * with the summary, keeping only the recent messages that were retained.
  */
+function reconstructCompressedView(
+  messages: RawMessage[],
+  state: CompressionStateEntry,
+): RawMessage[] {
+  const currentTotal = messages.length;
+  const keepCount = state.totalMessagesAtCompression - state.compressedCount;
+
+  // The "keep" messages are the last `keepCount` from the original set.
+  // If new messages were added since compression, they appear after.
+  const keepStart = Math.max(0, currentTotal - keepCount);
+  let keptMessages = messages.slice(keepStart);
+
+  // Filter large tool results (Layer 2) on kept messages
+  keptMessages = filterLargeToolResults(keptMessages);
+
+  const summaryMsg: RawMessage = {
+    role: 'system',
+    content: state.summaryText,
+    timestamp: state.compressedAt / 1000,
+    id: crypto.randomUUID(),
+  };
+
+  return [summaryMsg, ...keptMessages];
+}
 
 // Module-level timestamp tracking the last chat event received.
 // Used by the safety timeout to avoid false-positive "no response" errors
@@ -128,16 +177,7 @@ const _abortedChatRunIds = new Set<string>();
 // Timestamp of the most recent user-initiated stop. Late abort-type error
 // events (which may arrive after the run id was already forgotten and
 // runAborted reset) are suppressed when they land within this window.
-let _lastUserAbortAt = 0;
-const USER_ABORT_ERROR_SUPPRESS_WINDOW_MS = 15_000;
-
-function markUserAbort(): void {
-  _lastUserAbortAt = Date.now();
-}
-
-function isWithinUserAbortWindow(): boolean {
-  return _lastUserAbortAt > 0 && Date.now() - _lastUserAbortAt < USER_ABORT_ERROR_SUPPRESS_WINDOW_MS;
-}
+// See markUserAbort / isWithinUserAbortWindow in ./chat/helpers.
 
 function markAbortedChatRun(runId: string): void {
   const id = runId.trim();
@@ -194,6 +234,7 @@ let _interruptedSendSession: InterruptedSendSessionState | null = null;
 // the user sees a friendly error message.
 let _lastSendParams: { text: string; attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>; targetAgentId?: string | null } | null = null;
 let _retriedRunIds = new Set<string>();
+let _suppressNextOptimisticUserMessage = false;
 const _digitalEmployeeRuns = new Map<string, { agentId: string; name: string }>();
 
 function isToolStreamError(error: string): boolean {
@@ -257,7 +298,7 @@ const SESSION_LOAD_MIN_INTERVAL_MS = 1_200;
 const REASONING_MODE_STORAGE_KEY = 'LYClaw:chat:reasoning-mode';
 
 function isReasoningMode(value: unknown): value is ReasoningMode {
-  return value === 'fast' || value === 'thinking' || value === 'expert';
+  return value === 'fast' || value === 'thinking';
 }
 
 function loadStoredReasoningMode(): ReasoningMode {
@@ -383,10 +424,8 @@ function persistSessionPinnedAtIfChanged(pinnedAt: Record<string, number>): void
 
 _lastPersistedSessionPinnedAt = JSON.stringify(loadSessionPinnedAtFromStorage());
 
-function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' | 'high' {
-  if (mode === 'fast') return 'off';
-  if (mode === 'expert') return 'high';
-  return 'medium';
+function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' {
+  return mode === 'fast' ? 'off' : 'medium';
 }
 
 async function patchSessionThinkingLevel(sessionKey: string, mode: ReasoningMode): Promise<void> {
@@ -728,10 +767,13 @@ function getSessionModel(sessions: ChatSession[], sessionKey: string): string | 
 }
 
 const HISTORY_LOAD_MIN_INTERVAL_MS = 800;
-const ACTIVE_SEND_HISTORY_FALLBACK_INITIAL_DELAY_MS = 5_000;
-const ACTIVE_SEND_HISTORY_FALLBACK_DELAYS_MS = [8_000, 12_000];
-const ACTIVE_SEND_HISTORY_FALLBACK_REPEAT_MS = 15_000;
-const ACTIVE_SEND_HISTORY_FALLBACK_STREAMING_DELAY_MS = 20_000;
+const ACTIVE_SEND_HISTORY_FALLBACK_INITIAL_DELAY_MS = 2_000;
+const ACTIVE_SEND_HISTORY_FALLBACK_DELAYS_MS = [3_000, 5_000];
+const ACTIVE_SEND_HISTORY_FALLBACK_REPEAT_MS = 6_000;
+const ACTIVE_SEND_HISTORY_FALLBACK_STREAMING_DELAY_MS = 10_000;
+const TOOL_EXECUTION_STALE_MS = 2 * 60_000;
+const GENERIC_ERROR_RECOVERY_MS = 45_000;
+const RUNTIME_ERROR_RECOVERY_GRACE_MS = 5_000;
 const CHAT_EVENT_DEDUPE_TTL_MS = 30_000;
 const _chatEventDedupe = new Map<string, number>();
 const _lastRuntimeTranscriptProgressSignatureBySession = new Map<string, string>();
@@ -750,6 +792,17 @@ function clearHistoryPoll(): void {
   }
 }
 
+const ABORT_HISTORY_QUIET_MS = 2_000;
+let _abortHistoryQuietUntil = 0;
+
+function markAbortHistoryQuietPeriod(ms = ABORT_HISTORY_QUIET_MS): void {
+  _abortHistoryQuietUntil = Date.now() + ms;
+}
+
+function isAbortHistoryQuietPeriod(): boolean {
+  return Date.now() < _abortHistoryQuietUntil;
+}
+
 function hasLiveStreamContent(state: Pick<ChatState, 'streamingMessage' | 'streamingText' | 'streamingTools'>): boolean {
   if (state.streamingText && state.streamingText.trim()) return true;
   if (state.streamingTools.length > 0) return true;
@@ -766,15 +819,13 @@ function startActiveSendHistoryFallback(sessionKey: string): void {
       const state = useChatStore.getState();
       if (state.currentSessionKey !== sessionKey || !state.sending) return;
 
-      if (!hasLiveStreamContent(state)) {
-        try {
-          await state.loadHistory(true);
-        } catch (error) {
-          console.warn('[chat.history-fallback] local transcript refresh failed', {
-            sessionKey,
-            error: String(error),
-          });
-        }
+      try {
+        await state.loadHistory(true, { force: attempt > 0 });
+      } catch (error) {
+        console.warn('[chat.history-fallback] local transcript refresh failed', {
+          sessionKey,
+          error: String(error),
+        });
       }
 
       const nextState = useChatStore.getState();
@@ -1062,12 +1113,6 @@ function snapshotStreamingAssistantMessage(
   }];
 }
 
-function getLatestOptimisticUserMessage(messages: RawMessage[], userTimestampMs: number): RawMessage | undefined {
-  return [...messages].reverse().find(
-    (message) => message.role === 'user' && (!message.timestamp || Math.abs(toMs(message.timestamp) - userTimestampMs) < 5000),
-  );
-}
-
 /** Keep locally sent user messages when Gateway transcript has not persisted them yet (e.g. after abort). */
 function mergeMissingLocalUserMessages(
   pipelineMessages: RawMessage[],
@@ -1122,6 +1167,7 @@ function buildSessionRegistrationPatch(
 function createEmptySessionStreamingState(): SessionStreamingState {
   return {
     activeRunId: null,
+    activeTool: null,
     streamingText: '',
     streamingMessage: null,
     streamingTools: [],
@@ -1138,6 +1184,7 @@ function createEmptySessionStreamingState(): SessionStreamingState {
 function snapshotCurrentStreamingState(state: ChatState): SessionStreamingState {
   return {
     activeRunId: state.activeRunId,
+    activeTool: state.activeTool,
     streamingText: state.streamingText,
     streamingMessage: state.streamingMessage,
     streamingTools: state.streamingTools,
@@ -1464,6 +1511,41 @@ function isMessageAfterUserTimestamp(message: RawMessage, userTimestampMs: numbe
   return toMs(message.timestamp) >= userTimestampMs;
 }
 
+function getThinkingTextLength(content: unknown): number {
+  if (!Array.isArray(content)) return 0;
+  let length = 0;
+  for (const block of content as ContentBlock[]) {
+    if (block.type === 'thinking' && typeof block.thinking === 'string') {
+      length += block.thinking.length;
+    }
+  }
+  return length;
+}
+
+function getAssistantProgressContentLength(message: RawMessage): number {
+  return Math.max(getMessageText(message.content).length, getThinkingTextLength(message.content));
+}
+
+function getStreamingDisplayText(message: RawMessage): string {
+  const text = getMessageText(message.content);
+  if (text.trim()) return text;
+  if (!Array.isArray(message.content)) return text;
+  const thinkingParts = (message.content as ContentBlock[])
+    .filter((block) => block.type === 'thinking' && typeof block.thinking === 'string')
+    .map((block) => block.thinking!.trim())
+    .filter(Boolean);
+  return thinkingParts.length > 0 ? thinkingParts.join('\n') : text;
+}
+
+function getStreamingAssistantTextLength(
+  state: Pick<ChatState, 'streamingMessage' | 'streamingText'>,
+): number {
+  if (state.streamingMessage && typeof state.streamingMessage === 'object') {
+    return getAssistantProgressContentLength(state.streamingMessage as RawMessage);
+  }
+  return state.streamingText?.length ?? 0;
+}
+
 /**
  * When Gateway stream events are delayed or missing, mirror in-progress assistant
  * turns from the local JSONL transcript into streaming UI state.
@@ -1472,32 +1554,40 @@ function buildSendingUiPatchFromTranscript(
   rawMessages: RawMessage[],
   state: Pick<ChatState, 'sending' | 'lastUserMessageAt' | 'streamingMessage' | 'streamingText' | 'streamingTools' | 'pendingFinal'>,
 ): Partial<ChatState> | null {
-  if (!state.sending || hasLiveStreamContent(state)) return null;
+  if (!state.sending) return null;
 
   const userTs = state.lastUserMessageAt;
   const progress = getRuntimeTranscriptProgress(rawMessages, userTs);
   if (!progress) return null;
 
   const patch: Partial<ChatState> = {};
-  let latestAssistant: RawMessage | null = null;
-  for (let i = rawMessages.length - 1; i >= 0; i -= 1) {
-    const message = rawMessages[i];
-    if (message.role !== 'assistant') continue;
+  const hasLive = hasLiveStreamContent(state);
+
+  let mergedTools = state.streamingTools;
+  let longestAssistant: RawMessage | null = null;
+  let longestAssistantTextLen = 0;
+
+  for (const message of rawMessages) {
     if (!isMessageAfterUserTimestamp(message, userTs)) continue;
-    latestAssistant = message;
-    break;
+
+    const eventState = isToolResultRole(message.role) ? 'final' : 'delta';
+    const toolUpdates = collectToolUpdates(message, eventState);
+    if (toolUpdates.length > 0) {
+      mergedTools = upsertToolStatuses(mergedTools, toolUpdates);
+    }
   }
 
-  if (latestAssistant) {
-    const normalized = normalizeStreamingMessage(latestAssistant) as RawMessage;
+  for (const message of rawMessages) {
+    if (!isMessageAfterUserTimestamp(message, userTs)) continue;
+    if (message.role !== 'assistant') continue;
+
+    const normalized = normalizeStreamingMessage(message) as RawMessage;
     const progressInfo = classifyVisibleProgress(normalized);
-    if (progressInfo.visible) {
-      const toolUpdates = collectToolUpdates(normalized, 'delta');
-      patch.streamingMessage = normalized;
-      patch.streamingText = getMessageText(normalized.content);
-      if (toolUpdates.length > 0) {
-        patch.streamingTools = upsertToolStatuses(state.streamingTools, toolUpdates);
-      }
+    if (progressInfo.kind === 'none' || progressInfo.kind === 'placeholder') continue;
+    const contentLen = getAssistantProgressContentLength(normalized);
+    if (contentLen > longestAssistantTextLen) {
+      longestAssistantTextLen = contentLen;
+      longestAssistant = normalized;
     }
   }
 
@@ -1505,6 +1595,34 @@ function buildSendingUiPatchFromTranscript(
     if (!isMessageAfterUserTimestamp(message, userTs)) return false;
     return isRunTerminalAssistantMessage(message);
   });
+
+  if (hasLive) {
+    if (mergedTools.length !== state.streamingTools.length
+      || JSON.stringify(mergedTools) !== JSON.stringify(state.streamingTools)) {
+      patch.streamingTools = mergedTools;
+    }
+    const currentTextLen = getStreamingAssistantTextLength(state);
+    if (longestAssistant && longestAssistantTextLen > currentTextLen) {
+      patch.streamingMessage = longestAssistant;
+      patch.streamingText = getStreamingDisplayText(longestAssistant);
+    }
+    if (!hasTerminalReply && (progress.assistantCount > 0 || progress.toolResultCount > 0)) {
+      patch.pendingFinal = true;
+    }
+    return Object.keys(patch).length > 0 ? patch : null;
+  }
+
+  if (longestAssistant) {
+    const progressInfo = classifyVisibleProgress(longestAssistant);
+    if (progressInfo.visible) {
+      patch.streamingMessage = longestAssistant;
+      patch.streamingText = getStreamingDisplayText(longestAssistant);
+      if (mergedTools.length > 0) {
+        patch.streamingTools = mergedTools;
+      }
+    }
+  }
+
   if (!hasTerminalReply && (progress.assistantCount > 0 || progress.toolResultCount > 0)) {
     patch.pendingFinal = true;
   }
@@ -1519,18 +1637,27 @@ function applySendingUiPatchFromTranscript(
 ): void {
   const patch = buildSendingUiPatchFromTranscript(rawMessages, get());
   if (patch) {
-    _lastChatEventAt = Date.now();
     set(patch);
   }
 }
 
-/** Extract media file refs from [media attached: <path> (<mime>) | ...] patterns */
+/** Extract media file refs from [media attached: <path> (<mime>) | <path>] patterns */
 function extractMediaRefs(text: string): Array<{ filePath: string; mimeType: string }> {
   const refs: Array<{ filePath: string; mimeType: string }> = [];
-  const regex = /\[media attached:\s*([^\s(]+)\s*\(([^)]+)\)\s*\|[^\]]*\]/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    refs.push({ filePath: match[1], mimeType: match[2] });
+  const blockPattern = /\[media attached:\s*([\s\S]*?)\s*\]/g;
+  for (const match of text.matchAll(blockPattern)) {
+    const inner = match[1].trim();
+    if (!inner) continue;
+    const pipeIdx = inner.lastIndexOf(' | ');
+    const left = pipeIdx >= 0 ? inner.slice(0, pipeIdx) : inner;
+    const rightPath = pipeIdx >= 0 ? inner.slice(pipeIdx + 3).trim() : '';
+    const parenIdx = left.lastIndexOf(' (');
+    const filePath = (parenIdx >= 0 ? left.slice(0, parenIdx) : left).trim();
+    const mimeType = parenIdx >= 0
+      ? left.slice(parenIdx + 2).replace(/\)\s*$/, '').trim()
+      : 'application/octet-stream';
+    if (filePath) refs.push({ filePath, mimeType });
+    if (rightPath && rightPath !== filePath) refs.push({ filePath: rightPath, mimeType });
   }
   return refs;
 }
@@ -2022,7 +2149,7 @@ function parseSessionRecord(record: Record<string, unknown>): ChatSession | null
   const key = String(record.key || '');
   if (!key || key.includes('__warmup__')) return null;
   const firstUserMessagePreview = record.firstUserMessagePreview
-    ? String(record.firstUserMessagePreview)
+    ? String(record.firstUserMessagePreview).replace(/\/think\s+(off|medium|high)\s+/i, '')
     : undefined;
 
   return {
@@ -2186,6 +2313,7 @@ function buildSessionSwitchPatch(
     | 'runAborted'
     | 'runError'
     | 'sending'
+    | 'activeTool'
   >,
   nextSessionKey: string,
 ): Partial<ChatState> {
@@ -2220,6 +2348,7 @@ function buildSessionSwitchPatch(
       runAborted: state.runAborted,
       runError: state.runError,
       sending: state.sending,
+      activeTool: state.activeTool,
       messagesSnapshot: shouldSnapshotMessages ? [...state.messages] : [],
     },
   };
@@ -2300,6 +2429,7 @@ function buildSessionSwitchPatch(
     runError: effectiveNextSessionState.runError ?? null,
     sending: effectiveNextSessionState.sending,
     loading: false,
+    sessionBackendActivity: null,
  };
 }
 
@@ -2387,8 +2517,13 @@ function isToolResultRole(role: unknown): boolean {
 }
 
 function isInternalMessageText(text: string): boolean {
-  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(text.trim())) return true;
+  const normalized = text.trim();
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(normalized)) return true;
+  if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(normalized)) return true;
+  if (/^\[LYCLAW internal tool failure feedback\]/i.test(normalized)) return true;
+  if (/^\[LYCLAW internal convergence directive\]/i.test(normalized)) return true;
   if (/\b(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(text) && stripSilentReplyToken(text).trim().length === 0) return true;
+  if (isChannelDeliveryConfirmationText(text)) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(text.trim())) return true;
   return isRuntimeSystemInjection(text);
 }
@@ -2637,6 +2772,55 @@ function collectToolUpdates(message: unknown, eventState: string): ToolStatus[] 
   return updates;
 }
 
+function buildConvergenceDirectiveFeedback(observation: RunawayToolObservation): string {
+  return [
+    '[LYCLAW internal convergence directive]',
+    observation.convergenceDirective ?? '',
+    '',
+    `Observed risk state: ${observation.riskState}.`,
+    `Observed tool calls: ${observation.toolCallCount}.`,
+    `Structural inspections: ${observation.structuralInspectionCount}.`,
+    `Repeated debug scripts: ${observation.repeatedDebugScriptCount}.`,
+    `Repeated output patterns: ${observation.repeatedOutputPatternCount}.`,
+    '',
+    'This is internal runtime guidance. Continue the user task if possible, but do not reveal this control message verbatim.',
+  ].join('\n');
+}
+
+function injectConvergenceDirectiveIfNeeded(observation: RunawayToolObservation): RunawayToolObservation {
+  if (!observation.convergenceDirective || observation.convergenceDirectiveLevel === 'none') return observation;
+  if (!shouldUpgradeConvergenceDirective(observation.injectedConvergenceDirectiveLevel, observation.convergenceDirectiveLevel)) {
+    return observation;
+  }
+
+  const injectedAt = Date.now();
+  const idempotencyKey = [
+    'convergence-directive',
+    observation.sessionKey,
+    observation.runId ?? 'no-run',
+    observation.convergenceDirectiveLevel,
+    observation.convergenceDirectiveUpdatedAt ?? injectedAt,
+  ].join(':');
+  void useGatewayStore.getState().rpc(
+    'chat.send',
+    {
+      sessionKey: observation.sessionKey,
+      message: buildConvergenceDirectiveFeedback(observation),
+      deliver: false,
+      idempotencyKey,
+    },
+    120_000,
+  ).catch((error) => {
+    console.warn('[chat.tool-loop-observer] failed to inject convergence directive:', error);
+  });
+
+  return {
+    ...observation,
+    injectedConvergenceDirectiveLevel: observation.convergenceDirectiveLevel,
+    injectedConvergenceDirectiveAt: injectedAt,
+  };
+}
+
 function recordRunawayToolObservationForStore(
   state: ChatState,
   event: Record<string, unknown>,
@@ -2648,7 +2832,7 @@ function recordRunawayToolObservationForStore(
   const currentObservation = sessionKey === state.currentSessionKey
     ? state.runawayToolObservation
     : state.sessionRunawayToolObservations[sessionKey] ?? null;
-  const nextObservation = observeRunawayToolEvent({
+  const observed = observeRunawayToolEvent({
     observation: currentObservation,
     event,
     resolvedState,
@@ -2656,7 +2840,9 @@ function recordRunawayToolObservationForStore(
     sessionKey,
     toolUpdates: toolUpdates ?? collectToolUpdates(event.message, resolvedState),
   });
-  if (!nextObservation || nextObservation === currentObservation) return null;
+  if (!observed || observed === currentObservation) return null;
+
+  const nextObservation = injectConvergenceDirectiveIfNeeded(observed);
 
   return {
     runawayToolObservation: sessionKey === state.currentSessionKey ? nextObservation : state.runawayToolObservation,
@@ -2724,21 +2910,57 @@ function getRuntimeEventErrorMessage(event: Record<string, unknown>): string {
   ];
 
   for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.trim()) return candidate;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return truncateRunErrorMessage(candidate);
+    }
     if (candidate && typeof candidate === 'object') {
       const record = candidate as Record<string, unknown>;
       const nested = record.errorMessage ?? record.error_message ?? record.error;
-      if (typeof nested === 'string' && nested.trim()) return nested;
+      if (typeof nested === 'string' && nested.trim()) {
+        return truncateRunErrorMessage(nested);
+      }
     }
   }
 
   return 'An error occurred';
 }
 
+function scheduleRunRecoveryOrFinalize(
+  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  get: () => ChatState,
+  options: { runId?: string | null; graceMs: number; sessionKey: string },
+): void {
+  clearErrorRecoveryTimer();
+  _errorRecoveryTimer = setTimeout(() => {
+    _errorRecoveryTimer = null;
+    const state = get();
+    if (!state.sending || state.currentSessionKey !== options.sessionKey) return;
+    if (Date.now() - _lastChatEventAt < Math.min(options.graceMs / 2, 10_000)) return;
+    clearHistoryPoll();
+    set(buildClearedActiveRunPatch());
+    void state.loadHistory(true, { force: true });
+  }, options.graceMs);
+}
+
 function isTerminalAssistantErrorMessage(message: RawMessage | undefined): boolean {
-  if (!message || message.role !== 'assistant') return false;
+  return isFailedAssistantMessage(message);
+}
+
+function getNormalizedStopReason(message: RawMessage | undefined): string | null {
+  if (!message) return null;
   const msg = message as RawMessage & { stopReason?: unknown; stop_reason?: unknown };
-  return (msg.stopReason ?? msg.stop_reason) === 'error';
+  const stopReason = msg.stopReason ?? msg.stop_reason;
+  return stopReason == null ? null : String(stopReason).toLowerCase();
+}
+
+function isToolContinuationStopReason(stopReason: string | null): boolean {
+  return stopReason === 'tooluse'
+    || stopReason === 'tool_use'
+    || stopReason === 'tool-call'
+    || stopReason === 'tool_call'
+    || stopReason === 'tool-calls'
+    || stopReason === 'tool_calls'
+    || stopReason === 'toolcalls';
 }
 
 function getMessageErrorMessage(message: RawMessage | undefined): string {
@@ -2779,6 +3001,40 @@ function hasToolInvocation(message: RawMessage | undefined): boolean {
     || block.type === 'tool_result'
     || block.type === 'toolResult'
   ));
+}
+
+function shouldFinalizeErrorImmediately(errorMessage: string, event: Record<string, unknown>): boolean {
+  if (event.recoverable === true) return false;
+  if (
+    event.terminal === true
+    || event.final === true
+    || event.recoverable === false
+    || event.nonDeliverable === true
+    || event.non_deliverable === true
+  ) {
+    return true;
+  }
+
+  const normalized = errorMessage.toLowerCase();
+  return normalized.includes('non_deliverable_terminal_turn')
+    || normalized.includes('list index out of range')
+    || normalized.includes('tool call stream error')
+    || normalized.includes('malformed tool_call')
+    || normalized.includes('model did not return tool call')
+    || normalized.includes('tool_calls.arguments');
+}
+
+function isTerminalAssistantMessage(message: RawMessage | undefined): boolean {
+  if (!message || message.role !== 'assistant') return false;
+  if (!hasNonToolAssistantContent(message)) return false;
+
+  // Transcript polling is observational and may catch an assistant message
+  // while it is still being persisted. Only an explicit stop reason is strong
+  // enough to close the active run from history.
+  const normalized = getNormalizedStopReason(message);
+  if (normalized == null) return false;
+
+  return !isToolContinuationStopReason(normalized);
 }
 
 type PromptErrorRecord = {
@@ -3052,6 +3308,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sending: false,
   aborting: false,
   activeRunId: null,
+  activeTool: null,
   streamingText: '',
   streamingMessage: null,
   streamingTools: [],
@@ -3072,6 +3329,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionStreamingStates: {},
   sessionCompressionState: {},
   contextCompressionStatus: null,
+  sessionBackendActivity: null,
+  gatewayBackgroundActivity: null,
   thinkingLevel: null,
   reasoningMode: loadStoredReasoningMode(),
 
@@ -3173,10 +3432,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const sessions = await loadLocalSessionSummaries('main');
 
             if (sessions.length > 0) {
-              const mergedLocal = mergePreservedSessionsIntoGatewayList(sessions, get());
+              const mergedLocal = filterUserFacingSessions(
+                mergePreservedSessionsIntoGatewayList(sessions, get()),
+              );
               
               const { currentSessionKey } = get();
-              const nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
+              let nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
+              if (isSubagentSessionKey(nextSessionKey)) {
+                const redirected = pickUserFacingSession(mergedLocal, currentSessionKey);
+                if (redirected) nextSessionKey = redirected.key;
+              }
               
               // 从 updatedAt 填充 sessionLastActivity，防止会话被误判为空会话
               const discoveredActivity = Object.fromEntries(
@@ -3247,6 +3512,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
 
           const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(dedupedSessions, get());
+          const userFacingSessions = filterUserFacingSessions(mergedWithPreserved);
 
           const { currentSessionKey, sessions: localSessions } = get();
           let nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
@@ -3257,25 +3523,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
           }
           if (isSubagentSessionKey(nextSessionKey)) {
-            const redirected = pickUserFacingSession(mergedWithPreserved, currentSessionKey);
+            const redirected = pickUserFacingSession(userFacingSessions, currentSessionKey);
             if (redirected) nextSessionKey = redirected.key;
           }
-          if (!mergedWithPreserved.find((s) => s.key === nextSessionKey) && mergedWithPreserved.length > 0) {
+          if (!userFacingSessions.find((s) => s.key === nextSessionKey) && userFacingSessions.length > 0) {
             // Preserve only locally-created pending sessions. On initial boot the
             // default ghost key (`agent:main:main`) should yield to real history.
             const hasLocalPendingSession = localSessions.some((session) => session.key === nextSessionKey);
             if (!hasLocalPendingSession) {
-              const fallback = pickUserFacingSession(mergedWithPreserved);
+              const fallback = pickUserFacingSession(userFacingSessions);
               if (fallback) nextSessionKey = fallback.key;
             }
           }
 
-          const sessionsWithCurrent = !mergedWithPreserved.find((s) => s.key === nextSessionKey) && nextSessionKey
+          const sessionsWithCurrent = !userFacingSessions.find((s) => s.key === nextSessionKey) && nextSessionKey
             ? [
-              ...mergedWithPreserved,
+              ...userFacingSessions,
               { key: nextSessionKey, displayName: nextSessionKey },
             ]
-            : mergedWithPreserved;
+            : userFacingSessions;
 
           const discoveredActivity = Object.fromEntries(
             sessionsWithCurrent
@@ -3322,11 +3588,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // ── Switch session ──
 
   switchSession: (key: string) => {
+    if (isSubagentSessionKey(key)) {
+      const redirected = pickUserFacingSession(get().sessions, get().currentSessionKey);
+      if (!redirected) return;
+      key = redirected.key;
+    }
     if (key === get().currentSessionKey) return;
     // Stop any background polling for the old session before switching.
     // This prevents the poll timer from firing after the switch and loading
     // the wrong session's history into the new session's view.
     clearHistoryPoll();
+    clearSessionActivityPoll();
     const prev = get();
     if (prev.sending && prev.currentSessionKey !== key) {
       _interruptedSendSession = {
@@ -3524,6 +3796,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           runAborted,
           runError: s.runError,
           sending,
+          activeTool: s.activeTool,
           messagesSnapshot: hasActiveStreaming ? [...messages] : [],
         },
       };
@@ -3676,6 +3949,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (quiet && !force && !afterAwaitRetry && Date.now() - lastLoadAt < HISTORY_LOAD_MIN_INTERVAL_MS) {
       return;
     }
+    if (force && isAbortHistoryQuietPeriod()) {
+      return;
+    }
 
     let loadGeneration = 0;
     if (!quiet) {
@@ -3741,7 +4017,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         clearHistoryLoadingIfCurrent();
       };
 
-      const applyLoadedMessages = (
+      const applyLoadedMessages = async (
         rawMessages: RawMessage[],
         thinkingLevel: string | null,
         promptErrors: PromptErrorRecord[] = [],
@@ -3753,7 +4029,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       // Before filtering: attach images/files from tool_result messages to the next assistant message
       const messagesWithToolImages = enrichWithToolResultFiles(rawMessages);
-      const filteredMessages = messagesWithToolImages.filter((msg) => !isToolResultRole(msg.role) && !isInternalMessage(msg));
+      const withoutInternal = messagesWithToolImages.filter((msg) => !isToolResultRole(msg.role) && !isInternalMessage(msg));
+      const filteredMessages = filterChannelOutboundEchoMessages(withoutInternal);
       // Restore file attachments for user/assistant messages (from cache + text patterns)
       const enrichedMessages = annotateDigitalEmployeeHistoryMessages(
         normalizeComplexTaskControlUserMessages(enrichWithCachedImages(filteredMessages)),
@@ -3766,7 +4043,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const pipelineMessages = interruptedOut.messages;
       const finalMessages = resolveFinalMessagesWithLocalPreservation(currentSessionKey, pipelineMessages, get);
 
-      set({ messages: finalMessages, thinkingLevel });
+      set((state) => ({
+        messages: finalMessages,
+        thinkingLevel,
+      }));
 
       const firstUserMsg = finalMessages.find((m) => m.role === 'user');
       const lastMsg = finalMessages[finalMessages.length - 1];
@@ -3808,56 +4088,91 @@ export const useChatStore = create<ChatState>((set, get) => ({
       });
       const { pendingFinal, lastUserMessageAt, sending: isSendingNow, activeRunId: currentActiveRunId } = get();
 
-      // If we're sending but haven't received streaming events, check
-      // whether the loaded history reveals intermediate tool-call activity.
-      // This surfaces progress via the pendingFinal → ActivityIndicator path.
-      // But skip this if there's an active run, as streaming state should be preserved.
-      const userMsTs = lastUserMessageAt ? toMs(lastUserMessageAt) : 0;
-      const isAfterUserMsg = (msg: RawMessage): boolean => {
-        if (!userMsTs || !msg.timestamp) return true;
-        return toMs(msg.timestamp) >= userMsTs;
-      };
+      // Finalize only when the latest user turn has a terminal assistant reply.
+      // Use the merged transcript (with optimistic user messages) — raw history
+      // often still ends at the previous turn while a new send is in flight.
+      const recentTerminalAssistant = findTerminalAssistantForActiveTurn(
+        finalMessages,
+        lastUserMessageAt,
+      ) ?? findConcludingAssistantForActiveTurn(
+        finalMessages,
+        lastUserMessageAt,
+      );
 
-      const recentTerminalAssistant = [...rawMessages].reverse().find((msg) => {
-        if (msg.role !== 'assistant') return false;
-        if (!isRunTerminalAssistantMessage(msg)) return false;
-        return isAfterUserMsg(msg);
-      });
+      const backendSnapshot = await refreshSessionBackendActivity(currentSessionKey);
+      if (backendSnapshot) {
+        set({
+          sessionBackendActivity: backendSnapshot.session,
+          gatewayBackgroundActivity: backendSnapshot.background,
+        });
+      }
 
       if ((isSendingNow || get().pendingFinal || get().activeRunId) && recentTerminalAssistant) {
-        clearHistoryPoll();
-        clearErrorRecoveryTimer();
-        set(buildClearedActiveRunPatch());
-        finishChatRunPerf('history-final', currentActiveRunId ?? '');
-      } else if (isSendingNow && !hasLiveStreamContent(get())) {
+        if (!shouldFinalizeUserTurn(
+          finalMessages,
+          lastUserMessageAt,
+          backendSnapshot?.session ?? get().sessionBackendActivity,
+          recentTerminalAssistant,
+          backendSnapshot?.background ?? get().gatewayBackgroundActivity,
+        )) {
+          if (isSendingNow) {
+            applySendingUiPatchFromTranscript(rawMessages, set, get);
+          }
+          // Transcript already has a terminal assistant but the backend still
+          // reports processing (async desync). Clear stale streaming buffers so
+          // the committed reply in messages[] is visible without waiting for stop.
+          if (
+            recentTerminalAssistant
+            && (isRunTerminalAssistantMessage(recentTerminalAssistant)
+              || hasVisibleAssistantContent(recentTerminalAssistant))
+          ) {
+            set({
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingToolImages: [],
+            });
+          }
+        } else {
+          clearHistoryPoll();
+          clearSessionActivityPoll();
+          clearErrorRecoveryTimer();
+          set(buildClearedActiveRunPatch());
+        }
+      } else if (isSendingNow) {
         applySendingUiPatchFromTranscript(rawMessages, set, get);
       }
 
-      const latestPromptError = getLatestPromptErrorAfterUser(promptErrors, userMsTs);
+      const latestPromptError = getLatestPromptErrorAfterUser(promptErrors, lastUserMessageAt ? toMs(lastUserMessageAt) : 0);
       if (latestPromptError) {
-        const promptErrorAt = getPromptErrorTimestamp(latestPromptError);
-        const terminalAfterPromptError = [...rawMessages].reverse().some((msg) => {
-          if (!isRunTerminalAssistantMessage(msg)) return false;
-          if (!promptErrorAt || !msg.timestamp) return false;
-          return toMs(msg.timestamp) >= promptErrorAt;
-        });
-        if (!terminalAfterPromptError) {
-          clearHistoryPoll();
-          clearErrorRecoveryTimer();
-          set({
-            error: typeof latestPromptError.error === 'string'
-              ? latestPromptError.error
-              : i18n.t('chat:errors.modelResponseTimeoutLong'),
-            sending: false,
-            activeRunId: null,
-            pendingFinal: false,
-            streamingText: '',
-            streamingMessage: null,
-            streamingTools: [],
-            pendingToolImages: [],
-            lastUserMessageAt: null,
-            runAborted: true,
+        const promptErrorText = typeof latestPromptError.error === 'string' ? latestPromptError.error : '';
+        if (!isAbortErrorMessage(promptErrorText)) {
+          const promptErrorAt = getPromptErrorTimestamp(latestPromptError);
+          const hasSuccessfulTerminalAfterError = [...rawMessages].reverse().some((msg) => {
+            if (!isRunTerminalAssistantMessage(msg)) return false;
+            if (!promptErrorAt || !msg.timestamp) return false;
+            return toMs(msg.timestamp) >= promptErrorAt;
           });
+          if (!hasSuccessfulTerminalAfterError) {
+            const displayError = promptErrorText
+              ? resolveRunFailureErrorMessage(promptErrorText)
+              : i18n.t('chat:errors.modelResponseTimeoutLong');
+            clearHistoryPoll();
+            clearErrorRecoveryTimer();
+            set({
+              error: displayError,
+              runError: displayError,
+              sending: false,
+              activeRunId: null,
+              pendingFinal: false,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingToolImages: [],
+              lastUserMessageAt: null,
+              runAborted: false,
+            });
+          }
         }
       }
       return true;
@@ -3865,7 +4180,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       const recordTranscriptProgress = (
         rawMessages: RawMessage[],
-        source: 'local-history' | 'gateway-history',
+        _source: 'local-history' | 'gateway-history',
       ) => {
         const state = get();
         if (!state.sending) return;
@@ -3878,18 +4193,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           _lastChatEventAt = Date.now();
         }
 
-        markChatRunTranscriptProgress({
-          runId: state.activeRunId,
-          source,
-          ...progress,
-        });
-        if (progress.visibleKind) {
-          markChatRunVisibleProgress({
-            runId: state.activeRunId,
-            source: 'transcript',
-            kind: progress.visibleKind,
-          });
-        }
         applySendingUiPatchFromTranscript(rawMessages, set, get);
       };
 
@@ -3926,10 +4229,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
               } else {
                 console.debug(`[History] Loaded ${rawMessages.length} messages from LOCAL filesystem`);
 
-                // Apply time decay
-                const decayResult = applyTimeDecayStrategy(rawMessages, get().sessionLastActivity[currentSessionKey], false);
+                // Apply compression reconstruction or time decay
+                const compressionState = get().sessionCompressionState?.[currentSessionKey] ?? null;
+                const hasCachedCompression = compressionState && !compressionState.isTruncation
+                  && rawMessages.length >= compressionState.totalMessagesAtCompression;
+                const preMessages = hasCachedCompression
+                  ? reconstructCompressedView(rawMessages, compressionState!)
+                  : rawMessages;
+                const decayResult = applyTimeDecayStrategy(preMessages, get().sessionLastActivity[currentSessionKey], hasCachedCompression ?? false);
 
-                const applied = applyLoadedMessages(decayResult.messages, thinkingLevel, response.promptErrors ?? []);
+                const applied = await applyLoadedMessages(decayResult.messages, thinkingLevel, response.promptErrors ?? []);
                 if (decayResult.stats.finalCount < decayResult.stats.originalCount) {
                   console.log(`[history-time-decay] ${currentSessionKey}: ${decayResult.stats.originalCount}→${decayResult.stats.finalCount} messages, ~${decayResult.stats.estimatedTokens} tokens (${decayResult.stats.hoursAgo.toFixed(1)}h ago)`);
                 }
@@ -4001,10 +4310,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             rawMessages = await loadCronFallbackMessages(currentSessionKey, 200);
           }
 
-          // Apply time decay
-          const decayResult = applyTimeDecayStrategy(rawMessages, get().sessionLastActivity[currentSessionKey], false);
+          // Apply compression reconstruction or time decay
+          const compressionState = get().sessionCompressionState?.[currentSessionKey] ?? null;
+          const hasCachedCompression = compressionState && !compressionState.isTruncation
+            && rawMessages.length >= compressionState.totalMessagesAtCompression;
+          const preMessages = hasCachedCompression
+            ? reconstructCompressedView(rawMessages, compressionState!)
+            : rawMessages;
+          const decayResult = applyTimeDecayStrategy(preMessages, get().sessionLastActivity[currentSessionKey], hasCachedCompression ?? false);
 
-          const applied = applyLoadedMessages(decayResult.messages, thinkingLevel);
+          const applied = await applyLoadedMessages(decayResult.messages, thinkingLevel);
           if (decayResult.stats.finalCount < decayResult.stats.originalCount) {
             console.log(`[history-time-decay] ${currentSessionKey}: ${decayResult.stats.originalCount}→${decayResult.stats.finalCount} messages, ~${decayResult.stats.estimatedTokens} tokens (${decayResult.stats.hoursAgo.toFixed(1)}h ago)`);
           }
@@ -4028,7 +4343,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           const fallbackMessages = await loadCronFallbackMessages(currentSessionKey, 200);
           if (fallbackMessages.length > 0) {
-            const applied = applyLoadedMessages(fallbackMessages, null);
+            const applied = await applyLoadedMessages(fallbackMessages, null);
             if (!applied) {
               _historyApplyDiscardedForKey.add(currentSessionKey);
             }
@@ -4046,7 +4361,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         console.warn('Failed to load chat history:', err);
         const fallbackMessages = await loadCronFallbackMessages(currentSessionKey, 200);
         if (fallbackMessages.length > 0) {
-          const applied = applyLoadedMessages(fallbackMessages, null);
+          const applied = await applyLoadedMessages(fallbackMessages, null);
           if (!applied) {
             _historyApplyDiscardedForKey.add(currentSessionKey);
           }
@@ -4151,6 +4466,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const trimmed = text.trim();
     if (!trimmed && (!attachments || attachments.length === 0)) return;
+    const suppressOptimisticUserMessage = _suppressNextOptimisticUserMessage;
+    _suppressNextOptimisticUserMessage = false;
 
     clearAbortedChatRuns();
 
@@ -4164,6 +4481,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     let currentSessionKey = get().currentSessionKey;
     clearUserAbortedSession(currentSessionKey);
+
+    const preSendActivity = await refreshSessionBackendActivity(currentSessionKey);
+    if (preSendActivity?.session.hasTrackedUserRun) {
+      if (get().sending || get().activeRunId) {
+        return;
+      }
+      abortGatewayRun(currentSessionKey);
+      await sleep(250);
+      const afterAbortActivity = await refreshSessionBackendActivity(currentSessionKey);
+      if (afterAbortActivity?.session.hasTrackedUserRun) {
+        set({ error: i18n.t('chat:errors.backendRunStopped'), sending: false });
+        return;
+      }
+    }
+
     const reasoningMode = get().reasoningMode;
     const hasMedia = Boolean(attachments && attachments.length > 0);
     const reasoningDecision = getReasoningDecision(trimmed, reasoningMode, hasMedia);
@@ -4262,7 +4594,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     set((s) => {
       const boundWorkspaceId = s.sessionWorkspaceIds[currentSessionKey] ?? selectedWorkspaceId ?? null;
-      const nextMessages = isInternalStagedExecution
+      const nextMessages = (isInternalStagedExecution || suppressOptimisticUserMessage)
         ? s.messages
         : dedupeEquivalentAttachmentUserMessages([...s.messages, userMsg]);
       const prevStream = s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState();
@@ -4279,8 +4611,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamingText: '',
         streamingMessage: null,
         streamingTools: [],
+        activeTool: null,
         pendingFinal: false,
         lastUserMessageAt: nowMs,
+        pendingToolImages: [],
         runawayToolObservation,
         sessionRunawayToolObservations: {
           ...s.sessionRunawayToolObservations,
@@ -4288,6 +4622,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
         isFirstMessageEver: _isFirstMessageEver, // Store flag in state for UI access
         runAborted: false,
+        runError: null,
         activeRunId: null,
         sessions: ensureSessionEntry(s.sessions, currentSessionKey).map((session) => (
           session.key === currentSessionKey
@@ -4305,6 +4640,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...s.sessionStreamingStates,
           [currentSessionKey]: {
             ...prevStream,
+            activeRunId: null,
+            activeTool: null,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
             messagesSnapshot: nextMessages,
             sending: true,
             lastUserMessageAt: nowMs,
@@ -4328,6 +4670,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearErrorRecoveryTimer();
     _lastRuntimeTranscriptProgressSignatureBySession.delete(currentSessionKey);
     startActiveSendHistoryFallback(currentSessionKey);
+    startSessionActivityPoll(currentSessionKey, set, get);
 
     const SAFETY_TIMEOUT_MS = 15 * 60_000;
     // Removed polling mechanism to prevent duplicate user messages.
@@ -4340,32 +4683,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
     let lastPendingFinalHistoryRefreshAt = 0;
     let lastStreamingHistoryRefreshAt = 0;
     const checkStuck = () => {
-      const state = get();
-      if (!state.sending) return;
-      if (hasLiveStreamContent(state)) return;
-      const idleMs = Date.now() - _lastChatEventAt;
-      if (state.streamingMessage || state.streamingText) {
-        if (idleMs < STREAMING_STALE_HISTORY_REFRESH_MS) {
-          setTimeout(checkStuck, 10_000);
-          return;
+      void (async () => {
+        const state = get();
+        if (!state.sending) return;
+        const idleMs = Date.now() - _lastChatEventAt;
+        const hasRunningTools = state.streamingTools.some((tool) => tool.status === 'running');
+        const backendSnapshot = await refreshSessionBackendActivity(currentSessionKey);
+        if (backendSnapshot) {
+          set({
+            sessionBackendActivity: backendSnapshot.session,
+            gatewayBackgroundActivity: backendSnapshot.background,
+          });
         }
-        if (Date.now() - lastStreamingHistoryRefreshAt >= STREAMING_STALE_HISTORY_REFRESH_MS) {
-          lastStreamingHistoryRefreshAt = Date.now();
-          void state.loadHistory(true);
-        }
-        if (idleMs >= STREAMING_STALE_HARD_TIMEOUT_MS) {
-          const currentStream = get().streamingMessage as RawMessage | null;
-          const streamSnapshot = snapshotStreamingAssistantMessage(
-            currentStream,
-            get().messages,
-            `stale-${state.activeRunId || Date.now()}`,
-          );
+        const backendActivity = backendSnapshot?.session ?? get().sessionBackendActivity;
+        const backendStillActive = backendActivity && !shouldForceAbortStuckRun(backendActivity);
+
+        if (hasRunningTools && idleMs >= TOOL_EXECUTION_STALE_MS) {
+          if (backendStillActive) {
+            setTimeout(checkStuck, 10_000);
+            return;
+          }
           clearHistoryPoll();
+          clearSessionActivityPoll();
           abortGatewayRun(currentSessionKey);
           _pendingComplexTaskPlans.delete(currentSessionKey);
-          set((s) => ({
-            messages: streamSnapshot.length > 0 ? [...s.messages, ...streamSnapshot] : s.messages,
-            error: i18n.t('chat:errors.modelResponseTimeoutLong'),
+          set({
+            error: i18n.t('chat:errors.toolExecutionTimeout'),
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
@@ -4374,46 +4717,102 @@ export const useChatStore = create<ChatState>((set, get) => ({
             pendingFinal: false,
             pendingToolImages: [],
             lastUserMessageAt: null,
-          }));
-          return;
-        }
-        setTimeout(checkStuck, 10_000);
-        return;
-      }
-      if (state.pendingFinal) {
-        if (idleMs >= PENDING_FINAL_HISTORY_REFRESH_MS && Date.now() - lastPendingFinalHistoryRefreshAt >= PENDING_FINAL_HISTORY_REFRESH_MS) {
-          lastPendingFinalHistoryRefreshAt = Date.now();
-          void state.loadHistory(true);
-        }
-        if (idleMs >= PENDING_FINAL_HARD_TIMEOUT_MS) {
-          clearHistoryPoll();
-          abortGatewayRun(currentSessionKey);
-          _pendingComplexTaskPlans.delete(currentSessionKey);
-          set({
-            error: i18n.t('chat:errors.modelResponseTimeoutLong'),
-            sending: false,
-            activeRunId: null,
-            pendingFinal: false,
-            lastUserMessageAt: null,
           });
           return;
         }
-        setTimeout(checkStuck, 10_000);
-        return;
-      }
-      if (Date.now() - _lastChatEventAt < SAFETY_TIMEOUT_MS) {
-        setTimeout(checkStuck, 10_000);
-        return;
-      }
-      clearHistoryPoll();
-      abortGatewayRun(currentSessionKey);
-      _pendingComplexTaskPlans.delete(currentSessionKey);
-      set({
-        error: i18n.t('chat:errors.modelResponseTimeout'),
-        sending: false,
-        activeRunId: null,
-        lastUserMessageAt: null,
-      });
+
+        if (state.streamingMessage || state.streamingText) {
+          if (idleMs < STREAMING_STALE_HISTORY_REFRESH_MS) {
+            setTimeout(checkStuck, 10_000);
+            return;
+          }
+          if (Date.now() - lastStreamingHistoryRefreshAt >= STREAMING_STALE_HISTORY_REFRESH_MS) {
+            lastStreamingHistoryRefreshAt = Date.now();
+            void state.loadHistory(true, { force: true });
+          }
+          if (idleMs >= STREAMING_STALE_HARD_TIMEOUT_MS) {
+            if (backendStillActive) {
+              setTimeout(checkStuck, 10_000);
+              return;
+            }
+            const currentStream = get().streamingMessage as RawMessage | null;
+            const streamSnapshot = snapshotStreamingAssistantMessage(
+              currentStream,
+              get().messages,
+              `stale-${state.activeRunId || Date.now()}`,
+            );
+            clearHistoryPoll();
+            clearSessionActivityPoll();
+            abortGatewayRun(currentSessionKey);
+            _pendingComplexTaskPlans.delete(currentSessionKey);
+            set((s) => ({
+              messages: streamSnapshot.length > 0 ? [...s.messages, ...streamSnapshot] : s.messages,
+              error: i18n.t('chat:errors.modelResponseTimeoutLong'),
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              sending: false,
+              activeRunId: null,
+              pendingFinal: false,
+              pendingToolImages: [],
+              lastUserMessageAt: null,
+            }));
+            return;
+          }
+          setTimeout(checkStuck, 10_000);
+          return;
+        }
+
+        if (hasRunningTools) {
+          setTimeout(checkStuck, 10_000);
+          return;
+        }
+
+        if (state.pendingFinal) {
+          if (idleMs >= PENDING_FINAL_HISTORY_REFRESH_MS && Date.now() - lastPendingFinalHistoryRefreshAt >= PENDING_FINAL_HISTORY_REFRESH_MS) {
+            lastPendingFinalHistoryRefreshAt = Date.now();
+            void state.loadHistory(true);
+          }
+          if (idleMs >= PENDING_FINAL_HARD_TIMEOUT_MS) {
+            if (backendStillActive) {
+              setTimeout(checkStuck, 10_000);
+              return;
+            }
+            clearHistoryPoll();
+            clearSessionActivityPoll();
+            abortGatewayRun(currentSessionKey);
+            _pendingComplexTaskPlans.delete(currentSessionKey);
+            set({
+              error: i18n.t('chat:errors.modelResponseTimeoutLong'),
+              sending: false,
+              activeRunId: null,
+              pendingFinal: false,
+              lastUserMessageAt: null,
+            });
+            return;
+          }
+          setTimeout(checkStuck, 10_000);
+          return;
+        }
+        if (Date.now() - _lastChatEventAt < SAFETY_TIMEOUT_MS) {
+          setTimeout(checkStuck, 10_000);
+          return;
+        }
+        if (backendStillActive) {
+          setTimeout(checkStuck, 10_000);
+          return;
+        }
+        clearHistoryPoll();
+        clearSessionActivityPoll();
+        abortGatewayRun(currentSessionKey);
+        _pendingComplexTaskPlans.delete(currentSessionKey);
+        set({
+          error: i18n.t('chat:errors.modelResponseTimeout'),
+          sending: false,
+          activeRunId: null,
+          lastUserMessageAt: null,
+        });
+      })();
     };
     setTimeout(checkStuck, 30_000);
 
@@ -4425,21 +4824,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       });
     }
     try {
-      const firstSessionPerfMethod = hasMedia ? 'chat.sendWithMedia' : 'chat.send';
-      beginChatRunPerf({
-        localId: idempotencyKey,
-        sessionKey: currentSessionKey,
-        method: firstSessionPerfMethod,
-        selectedReasoningMode: reasoningMode,
-        effectiveReasoningMode,
-        messageLength: trimmed.length,
-        hasMedia,
-        attachmentCount: attachments?.length ?? 0,
-        isMainSession: currentSessionKey.endsWith(':main'),
-        reasoningOverrideReason: reasoningDecision.reason,
-        reasoningOverrideRule: reasoningDecision.rule,
-        reasoningOverrideConfidence: reasoningDecision.confidence,
-      });
       if (hasMedia) {
         console.log('[sendMessage] Media paths:', attachments!.map(a => a.stagedPath));
       }
@@ -4463,7 +4847,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       // Longer timeout for chat sends to tolerate high-latency networks (avoids connect error)
       const CHAT_SEND_TIMEOUT_MS = 120_000;
-      markChatRunRpcStarted(idempotencyKey);
       const messageForGateway = withThinkingDirective(
         runtimeMessage + (_deIsDigital ? '' : workspaceContext),
         effectiveReasoningMode,
@@ -4512,11 +4895,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         result = { success: true, result: rpcResult };
       }
 
-      markChatRunRpcCompleted(idempotencyKey, {
-        success: result.success,
-        runId: result.result?.runId ?? null,
-        error: result.error,
-      });
       console.log(`[sendMessage] RPC result: success=${result.success}, runId=${result.result?.runId || 'none'}`);
       if (needsPatch) {
         deferSessionThinkingLevelPatch(currentSessionKey, reasoningMode);
@@ -4580,10 +4958,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     } catch (err) {
       const errStr = String(err);
-      markChatRunRpcCompleted(idempotencyKey, {
-        success: false,
-        error: errStr,
-      });
       if (isUserSecurityDenialMessage(errStr)) {
         clearHistoryPoll();
         _pendingComplexTaskPlans.delete(currentSessionKey);
@@ -4602,7 +4976,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   abortRun: async () => {
     clearHistoryPoll();
+    clearSessionActivityPoll();
     clearErrorRecoveryTimer();
+    markAbortHistoryQuietPeriod();
     const { currentSessionKey, messages, activeRunId } = get();
     markUserAbort();
     if (activeRunId) {
@@ -4640,14 +5016,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
 
     try {
-      await useGatewayStore.getState().rpc(
-        'sessions.abort',
-        {
-          key: currentSessionKey,
-          ...(activeRunId ? { runId: activeRunId } : {}),
-        },
-        10_000,
-      );
+      const rpc = useGatewayStore.getState().rpc.bind(useGatewayStore.getState());
+      await Promise.all([
+        rpc(
+          'sessions.abort',
+          {
+            key: currentSessionKey,
+            ...(activeRunId ? { runId: activeRunId } : {}),
+          },
+          10_000,
+        ),
+        abortPendingChildDelegations(messages, rpc),
+      ]);
     } catch (err) {
       // 忽略 abort 错误，因为用户主动终止会话时 RPC 可能被中止
       const errStr = String(err);
@@ -4655,6 +5035,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({ error: errStr });
       }
     }
+
+    // Sync transcript after stop so any reply that landed on disk while the UI
+    // was desynced becomes visible without requiring another interaction.
+    void get().loadHistory(true, { force: true });
   },
 
   // ── Handle incoming chat events from Gateway ──
@@ -4779,26 +5163,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set(observationPatch);
     }
 
-    markChatRunRuntimeEvent({
-      state: resolvedState,
-      runId,
-      hasMessage: Boolean(event.message),
-    });
-
-    const visibleProgress = classifyVisibleProgress(event.message);
-    if (visibleProgress.visible) {
-      markChatRunVisibleProgress({
-        runId,
-        source: 'stream',
-        kind: visibleProgress.kind,
-        state: resolvedState,
-        messageBlockTypes: visibleProgress.messageBlockTypes,
-      });
-    }
-
     // Only pause the history poll when we receive user-visible streaming data
     // or a terminal event. Placeholder deltas must not kill the fallback poll.
     const hasTerminalData = resolvedState === 'final' || resolvedState === 'error' || resolvedState === 'aborted';
+    const visibleProgress = classifyVisibleProgress(event.message);
     const hasUsefulData = hasTerminalData || visibleProgress.visible;
     if (hasUsefulData) {
       clearHistoryPoll();
@@ -4940,16 +5308,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   error: null,
                 });
 
-                // Abort the failed run on gateway
-                abortGatewayRun(currentSessionKey);
-
-                // Retry immediately (small delay so the abort RPC propagates)
-                setTimeout(() => {
+                // Abort the failed run on gateway and wait before retrying once.
+                void (async () => {
+                  abortGatewayRun(currentSessionKey);
+                  await sleep(300);
+                  const activity = await refreshSessionBackendActivity(currentSessionKey);
+                  if (activity?.session.hasTrackedUserRun) {
+                    await sleep(500);
+                  }
                   const state = get();
                   if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
                   const params = _lastSendParams!;
+                  _suppressNextOptimisticUserMessage = true;
                   void state.sendMessage(params.text, params.attachments, params.targetAgentId);
-                }, 100);
+                })();
 
                 // Don't snapshot the failed message, don't set error, don't loadHistory
                 break;
@@ -4961,7 +5333,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const messageError = getMessageErrorMessage(normalizedFinalMessage);
             clearHistoryPoll();
             if (isUserSecurityDenialMessage(messageError)) {
-              finishChatRunPerf('cancelled', runId);
               set(buildSecurityDenialState(messageError));
               break;
             }
@@ -4978,26 +5349,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
               void get().loadHistory(true);
               break;
             }
+            if (shouldTreatAbortAsUserStop(messageError, {
+              runId,
+              runAborted: get().runAborted || wasUserAbortedRun,
+            })) {
+              set({
+                streamingText: '',
+                streamingMessage: null,
+                sending: false,
+                activeRunId: null,
+                pendingFinal: false,
+                error: null,
+                runError: null,
+              });
+              void get().loadHistory(true);
+              break;
+            }
+            const resolvedMessageError = resolveRunFailureErrorMessage(messageError);
             set({
               streamingText: '',
               streamingMessage: null,
               sending: false,
               activeRunId: null,
               pendingFinal: false,
-              runError: messageError,
+              error: resolvedMessageError,
+              runError: resolvedMessageError,
+              runAborted: isAbortErrorMessage(messageError),
             });
             break;
           }
 
           const finalMsgContent = getMessageText(normalizedFinalMessage.content);
           if (finalMsgContent.trim() && isInternalMessageText(finalMsgContent)) {
-            set((s) => ({
-              streamingText: '',
-              streamingMessage: s.streamingMessage,
-              sending: false,
-              activeRunId: null,
-              pendingFinal: false,
-            }));
+            set({
+              ...buildClearedActiveRunPatch(),
+              runError: null,
+            });
             clearHistoryPoll();
             void get().loadHistory(true, { force: true });
             break;
@@ -5053,13 +5440,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
             break;
           }
           const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
-          const intermediateToolStep = toolOnly || hasToolInvocation(normalizedFinalMessage);
           const hasOutput = hasNonToolAssistantContent(normalizedFinalMessage);
-          const keepRunActiveAfterFinal = intermediateToolStep && !isExecApprovalFollowupRun(runId);
-          const msgId = normalizedFinalMessage.id || (intermediateToolStep ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
+          const userIdx = findLatestVisibleUserIndex(get().messages);
+          const turnMessages = userIdx >= 0 ? get().messages.slice(userIdx + 1) : get().messages;
+          const isConcluding = isConcludingAssistantReply(
+            normalizedFinalMessage,
+            [...turnMessages, normalizedFinalMessage],
+          );
+          const keepRunActiveAfterFinal = !isExecApprovalFollowupRun(runId)
+            && !isRunTerminalAssistantMessage(normalizedFinalMessage)
+            && !isConcluding
+            && shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage);
+          const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
           set((s) => {
             const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
-            const streamingTools = hasOutput && !intermediateToolStep ? [] : nextTools;
+            const streamingTools = hasOutput && !keepRunActiveAfterFinal ? [] : nextTools;
 
             // Attach any images collected from preceding tool results
             const pendingImgs = s.pendingToolImages;
@@ -5085,9 +5480,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
               } : {
                 streamingText: '',
                 streamingMessage: null,
-                sending: hasOutput ? false : s.sending,
-                activeRunId: hasOutput ? null : s.activeRunId,
-                pendingFinal: hasOutput ? false : true,
+                sending: keepRunActiveAfterFinal ? s.sending : false,
+                activeRunId: keepRunActiveAfterFinal ? s.activeRunId : null,
+                pendingFinal: keepRunActiveAfterFinal ? true : false,
                 streamingTools,
                 ...clearPendingImages,
               };
@@ -5103,16 +5498,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
               messages: [...s.messages, msgWithImages],
               streamingText: '',
               streamingMessage: null,
-              sending: hasOutput ? false : s.sending,
-              activeRunId: hasOutput ? null : s.activeRunId,
-              pendingFinal: hasOutput ? false : true,
+              sending: keepRunActiveAfterFinal ? s.sending : false,
+              activeRunId: keepRunActiveAfterFinal ? s.activeRunId : null,
+              pendingFinal: keepRunActiveAfterFinal ? true : false,
               streamingTools,
               ...clearPendingImages,
             };
           });
           // After the final response, quietly reload history to surface all intermediate
           // tool-use turns (thinking + tool blocks) from the Gateway's authoritative record.
-          if (hasOutput && !intermediateToolStep) {
+          if (!keepRunActiveAfterFinal) {
             clearHistoryPoll();
             void get().loadHistory(true, { force: true });
             const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
@@ -5193,8 +5588,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // and suppress the error bar instead of surfacing it to the user.
         // The terminal `aborted` event can arrive first (clearing runAborted and
         // forgetting the run id), so we also honor a short post-stop time window.
-        const isAbortError = rawErrorMsg.toLowerCase().includes('abort');
-        if (isAbortError && (wasUserAbortedRun || get().runAborted || isWithinUserAbortWindow())) {
+        if (shouldTreatAbortAsUserStop(rawErrorMsg, {
+          runId,
+          runAborted: wasUserAbortedRun || get().runAborted,
+        })) {
           clearErrorRecoveryTimer();
           clearHistoryPoll();
           set({
@@ -5229,16 +5626,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
             error: null,
           });
 
-          // Abort failed run
-          abortGatewayRun(currentSessionKey);
-
-          // Retry after short delay
-          setTimeout(() => {
+          // Abort failed run and wait before retrying once.
+          void (async () => {
+            abortGatewayRun(currentSessionKey);
+            await sleep(300);
+            const activity = await refreshSessionBackendActivity(currentSessionKey);
+            if (activity?.session.hasTrackedUserRun) {
+              await sleep(500);
+            }
             const state = get();
             if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
             const params = _lastSendParams!;
+            _suppressNextOptimisticUserMessage = true;
             void state.sendMessage(params.text, params.attachments, params.targetAgentId);
-          }, 100);
+          })();
           break;
         }
         const errorMsg = getRuntimeEventErrorMessage(event);
@@ -5250,7 +5651,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (isUserSecurityDenialMessage(errorMsg)) {
           clearErrorRecoveryTimer();
           clearHistoryPoll();
-          finishChatRunPerf('cancelled', runId);
           _pendingComplexTaskPlans.delete(currentSessionKey);
           set(buildSecurityDenialState(errorMsg));
           break;
@@ -5277,6 +5677,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         if (wasSending && isGenericError) {
           void get().loadHistory(true, { force: true });
+          scheduleRunRecoveryOrFinalize(set, get, {
+            runId,
+            graceMs: GENERIC_ERROR_RECOVERY_MS,
+            sessionKey: currentSessionKey,
+          });
+          break;
         }
 
         // Snapshot the current streaming message into messages[] so partial
@@ -5294,69 +5700,79 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }));
         }
 
-        if (wasSending && isGenericError) {
-          clearErrorRecoveryTimer();
-          break;
-        }
-
+        const recoverableError = isRecoverableRuntimeError(errorMsg);
+        const displayError = resolveRunFailureErrorMessage(rawErrorMsg);
         set({
-          error: errorMsg,
+          error: displayError,
+          runError: displayError,
           streamingText: '',
           streamingMessage: null,
           streamingTools: [],
           pendingFinal: false,
           pendingToolImages: [],
+          ...(recoverableError ? {} : {
+            sending: false,
+            activeRunId: null,
+            lastUserMessageAt: null,
+            runAborted: isAbortErrorMessage(rawErrorMsg),
+          }),
         });
 
-        // Don't immediately give up: the Gateway often retries internally
-        // after transient API failures (e.g. "terminated"). Keep `sending`
-        // true for a grace period so that recovery events are processed and
-        // the agent-phase-completion handler can still trigger loadHistory.
-        if (wasSending) {
-          clearErrorRecoveryTimer();
-          const ERROR_RECOVERY_GRACE_MS = 15_000;
-          _errorRecoveryTimer = setTimeout(() => {
-            _errorRecoveryTimer = null;
-            const state = get();
-            if (state.sending && !state.streamingMessage) {
-              clearHistoryPoll();
-              finishChatRunPerf('error', runId);
-              // Grace period expired with no recovery — finalize the error
-              set({
-                sending: false,
-                activeRunId: null,
-                lastUserMessageAt: null,
-              });
-              // One final history reload in case the Gateway completed in the
-              // background and we just missed the event.
-              state.loadHistory(true);
-            }
-          }, ERROR_RECOVERY_GRACE_MS);
-        } else {
+        if (wasSending && recoverableError) {
+          scheduleRunRecoveryOrFinalize(set, get, {
+            runId,
+            graceMs: RUNTIME_ERROR_RECOVERY_GRACE_MS,
+            sessionKey: currentSessionKey,
+          });
+        } else if (wasSending) {
           clearHistoryPoll();
-          finishChatRunPerf('error', runId);
-          set({ sending: false, activeRunId: null, lastUserMessageAt: null });
+          void get().loadHistory(true, { force: true });
         }
         break;
       }
       case 'aborted': {
         clearHistoryPoll();
         clearErrorRecoveryTimer();
-        if (runId) forgetAbortedChatRun(runId);
+        const isUserAbort = Boolean(runId && isAbortedChatRun(runId));
+        if (isUserAbort) {
+          if (runId) forgetAbortedChatRun(runId);
+          const lastUser = getLastRealUserSnapshot(get().messages);
+          const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
+          set((s) => ({
+            ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
+            sending: false,
+            activeRunId: null,
+            runAborted: false,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            lastUserMessageAt: null,
+            pendingToolImages: [],
+            error: null,
+            runError: null,
+          }));
+          break;
+        }
+
+        const displayError = i18n.t('chat:errors.runAbortedBySystem');
         const lastUser = getLastRealUserSnapshot(get().messages);
         const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
         set((s) => ({
           ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
           sending: false,
           activeRunId: null,
-          runAborted: false,
+          runAborted: true,
           streamingText: '',
           streamingMessage: null,
           streamingTools: [],
           pendingFinal: false,
           lastUserMessageAt: null,
           pendingToolImages: [],
+          error: displayError,
+          runError: displayError,
         }));
+        void get().loadHistory(true, { force: true });
         break;
       }
       default: {
@@ -5414,16 +5830,54 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     if (!matchesRun) return;
 
-    void get().loadHistory(true, { force: true }).finally(() => {
-      const next = get();
-      if (next.currentSessionKey !== resolvedSessionKey) return;
-      if (resolvedRunId && next.activeRunId && next.activeRunId !== resolvedRunId) return;
-      if (!next.sending && !next.pendingFinal && !next.activeRunId) return;
-      clearHistoryPoll();
-      clearErrorRecoveryTimer();
-      finishChatRunPerf('gateway-completed', resolvedRunId ?? next.activeRunId ?? '');
-      set(buildClearedActiveRunPatch());
-    });
+    const finalizeAfterHistory = (attempt: number) => {
+      void get().loadHistory(true, { force: true }).finally(async () => {
+        const next = get();
+        if (next.currentSessionKey !== resolvedSessionKey) return;
+        if (resolvedRunId && next.activeRunId && next.activeRunId !== resolvedRunId) return;
+        if (!next.sending && !next.pendingFinal && !next.activeRunId) return;
+
+        const backendSnapshot = await refreshSessionBackendActivity(resolvedSessionKey);
+        if (backendSnapshot) {
+          set({
+            sessionBackendActivity: backendSnapshot.session,
+            gatewayBackgroundActivity: backendSnapshot.background,
+          });
+        }
+
+        if (shouldFinalizeUserTurn(
+          next.messages,
+          next.lastUserMessageAt,
+          backendSnapshot?.session ?? next.sessionBackendActivity,
+          undefined,
+          backendSnapshot?.background ?? next.gatewayBackgroundActivity,
+        )) {
+          clearHistoryPoll();
+          clearSessionActivityPoll();
+          clearErrorRecoveryTimer();
+          set(buildClearedActiveRunPatch());
+          return;
+        }
+
+        if (attempt < 4) {
+          window.setTimeout(() => finalizeAfterHistory(attempt + 1), 250 * (attempt + 1));
+          return;
+        }
+
+        // Gateway reported completed but transcript may still be in-flight (tool rounds,
+        // narration-before-tools). Do not force idle UI without a terminal assistant turn.
+        set({
+          streamingText: '',
+          streamingMessage: null,
+          streamingTools: [],
+          pendingFinal: next.pendingFinal || next.sending || Boolean(next.activeRunId),
+          sending: next.sending || Boolean(backendSnapshot?.session.processing),
+          activeRunId: next.activeRunId ?? backendSnapshot?.session.activeRunIds[0] ?? null,
+        });
+      });
+    };
+
+    finalizeAfterHistory(0);
   },
 
   refresh: async () => {

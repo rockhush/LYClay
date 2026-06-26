@@ -6,7 +6,9 @@ import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 import { assertModelSecretsAllowedBeforeSend } from '../../security/model-secret-preflight';
 import { assertTextNetworkAllowed } from '../../security/network-preflight';
-import { assertTextFilePathsAllowed } from '../../security/chat-file-path-preflight';
+import { assertMediaFilePathsAllowed, assertTextFilePathsAllowed } from '../../security/chat-file-path-preflight';
+import { mergeExtraSystemPrompt } from '../../utils/session-delivery-context';
+import { buildStagedMediaSystemPrompt } from '../../../shared/media-staging';
 
 export async function handleGatewayRoutes(
   req: IncomingMessage,
@@ -94,6 +96,24 @@ export async function handleGatewayRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/sessions/backend-activity' && req.method === 'GET') {
+    const sessionKey = url.searchParams.get('sessionKey')?.trim();
+    if (!sessionKey) {
+      sendJson(res, 400, { success: false, error: 'sessionKey is required' });
+      return true;
+    }
+    try {
+      const [session, background] = await Promise.all([
+        ctx.gatewayManager.getSessionActivity(sessionKey),
+        ctx.gatewayManager.getGatewayBackgroundActivity(sessionKey),
+      ]);
+      sendJson(res, 200, { success: true, session, background });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
   if (url.pathname === '/api/sessions/recover-stale' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{ sessionKey?: string }>(req);
@@ -154,8 +174,12 @@ export async function handleGatewayRoutes(
       if (imageAttachments.length > 0) {
         rpcParams.attachments = imageAttachments;
       }
-      if (body.extraSystemPrompt) {
-        rpcParams.extraSystemPrompt = body.extraSystemPrompt;
+      const extraSystemPrompt = mergeExtraSystemPrompt(
+        body.extraSystemPrompt,
+        body.media?.length ? buildStagedMediaSystemPrompt(body.media) : undefined,
+      );
+      if (extraSystemPrompt) {
+        rpcParams.extraSystemPrompt = extraSystemPrompt;
       }
 
       if (body.executeAsAgentId) {
@@ -166,7 +190,13 @@ export async function handleGatewayRoutes(
       }
       await assertModelSecretsAllowedBeforeSend(message, 'hostapi:chat.send-with-media');
       await assertTextNetworkAllowed(message, 'hostapi:chat.send-with-media');
-      await assertTextFilePathsAllowed(message, 'hostapi:chat.send-with-media');
+      if (body.media?.length) {
+        await assertMediaFilePathsAllowed(
+          body.media.map((item) => item.filePath),
+          'hostapi:chat.send-with-media',
+        );
+      }
+      await assertTextFilePathsAllowed(body.message, 'hostapi:chat.send-with-media');
       const result = await ctx.gatewayManager.rpc('chat.send', rpcParams, 120000);
       sendJson(res, 200, { success: true, result });
     } catch (error) {

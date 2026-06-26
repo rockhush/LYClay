@@ -8,6 +8,7 @@ import { resolveAccountIdFromSessionHistory } from '../../utils/session-util';
 import { toOpenClawChannelType, toUiChannelType } from '../../utils/channel-alias';
 import { resolveAgentIdFromChannel } from '../../utils/agent-config';
 import { triggerCronJobManually, requestCronSupervisorPass } from '../../gateway/cron-supervisor';
+import { clearStaleInAppDeliveryErrorState } from '../../gateway/cron-stale-errors';
 
 /**
  * Find agentId from session history by delivery "to" address.
@@ -546,20 +547,17 @@ export async function handleCronRoutes(
           // Optimistically fix the response data
           for (const job of jobsToRepairDelivery) {
             job.delivery = { mode: 'none' };
-            // Clear the stale "can't deliver" error so the card stops showing
-            // a red error once the job is downgraded to in-app delivery.
-            const staleError = job.state?.lastError ?? '';
-            if (
-              staleError.includes('Channel is required')
-              || /requires\s+--to/i.test(staleError)
-              || /conversationId/i.test(staleError)
-            ) {
-              job.state.lastError = undefined;
-              job.state.lastStatus = 'ok';
-            }
+            clearStaleInAppDeliveryErrorState(job);
           }
         }
         const repairedToNoneIds = new Set(jobsToRepairDelivery.map((job) => job.id));
+
+        // Repair 1b: in-app jobs already on mode:none may still carry a stale
+        // delivery error (e.g. "Message failed") from before the config was fixed.
+        for (const job of jobs) {
+          if (repairedToNoneIds.has(job.id)) continue;
+          clearStaleInAppDeliveryErrorState(job);
+        }
 
         // Repair 2: agentId is undefined for jobs with announce delivery
         // Only repair undefined -> inferred agent, NOT main -> inferred agent

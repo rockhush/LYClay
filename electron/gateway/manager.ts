@@ -12,6 +12,7 @@ import { PORTS } from '../utils/config';
 import { JsonRpcNotification, isNotification, isResponse } from './protocol';
 import { logger } from '../utils/logger';
 import { protectMemoryRpcOutput } from '../security/memory-content-policy';
+import { enrichChatSendParams } from '../utils/chat-send-enrichment';
 import { captureTelemetryEvent, trackMetric } from '../utils/telemetry';
 // Dev-only Langfuse chat tracing — uncomment with electron/main/index.ts langfuse import.
 // import {
@@ -80,6 +81,13 @@ import {
   type SessionTranscriptLockRecoveryResult,
   type StaleSessionRecoveryResult,
 } from './session-lock-recovery';
+import {
+  ToolRunRegistry,
+  type ToolRunRecord,
+  type ToolRunHandle,
+} from '../runtime/tool-run-registry';
+import { isSessionProcessingLiveOnDisk } from './session-processing-liveness';
+
 
 export interface GatewayStatus {
   state: GatewayLifecycleState;
@@ -127,11 +135,16 @@ export interface GatewayDiagnosticsSnapshot {
   lastSocketCloseAt?: number;
   lastSocketCloseCode?: number;
   consecutiveRpcFailures: number;
+  activeToolRuns?: Array<Record<string, unknown>>;
+  terminalToolRuns?: Array<Record<string, unknown>>;
+  activeBackgroundProcessCount?: number;
+  killFailedToolRunCount?: number;
+  toolRunQuota?: Record<string, unknown>;
 }
 
 type TrackedChatRunSnapshot = Array<{
   runId: string;
-  kind: 'user' | 'warmup';
+  kind: 'user' | 'warmup' | 'internal';
   sessionKey?: string;
   ageSinceAcceptedMs: number;
   ageSinceRequestedMs: number;
@@ -139,6 +152,12 @@ type TrackedChatRunSnapshot = Array<{
   hasFirstVisibleProgress: boolean;
   firstVisibleProgressKind?: string;
 }>;
+
+type GatewayChatEvent = {
+  state?: unknown;
+  runId?: unknown;
+  message?: unknown;
+};
 
 export type EmptyFinalDiagnostic = {
   runId: string;
@@ -248,7 +267,7 @@ export class GatewayManager extends EventEmitter {
     sessionKey?: string;
   }>();
   private chatRunMetrics = new Map<string, {
-    kind: 'user' | 'warmup';
+    kind: 'user' | 'warmup' | 'internal';
     sessionKey?: string;
     requestedAt: number;
     acceptedAt: number;
@@ -276,6 +295,11 @@ export class GatewayManager extends EventEmitter {
     consecutiveHeartbeatMisses: 0,
     consecutiveRpcFailures: 0,
   };
+  private readonly toolFailureFeedbackCounts = new Map<string, number>();
+  private readonly toolRunRegistry = new ToolRunRegistry({
+    cleanupToolRun: async (record, reason) => this.cleanupToolRun(record, reason),
+    onTerminal: (event) => this.emitToolRunTerminalEvent(event.record),
+  });
   private static readonly WARMUP_DELAY_MS = 250;
   private static readonly WARMUP_FIRST_OUTPUT_TIMEOUT_MS = 120_000;
   private static readonly WARMUP_BACKGROUND_RPC_RELEASE_MS = 10_000;
@@ -356,7 +380,16 @@ export class GatewayManager extends EventEmitter {
   }
 
   getDiagnostics(): GatewayDiagnosticsSnapshot {
-    return { ...this.diagnostics };
+    const toolRuns = this.toolRunRegistry.list();
+    const activeToolRuns = toolRuns.filter((record) => record.status === 'running');
+    return {
+      ...this.diagnostics,
+      activeToolRuns,
+      terminalToolRuns: toolRuns.filter((record) => record.status !== 'running').slice(-20),
+      activeBackgroundProcessCount: activeToolRuns.filter((record) => record.handle?.kind === 'process').length,
+      killFailedToolRunCount: toolRuns.filter((record) => record.status === 'kill_failed').length,
+      toolRunQuota: this.toolRunRegistry.getQuotaSnapshot(),
+    };
   }
 
   /**
@@ -531,6 +564,8 @@ export class GatewayManager extends EventEmitter {
     this.lifecycleController.bump('stop');
     // Disable auto-reconnect
     this.shouldReconnect = false;
+
+    await this.settleTrackedUserRunsForGatewayStop('gateway-stopped');
 
     // Clear all timers
     this.clearAllTimers();
@@ -876,6 +911,66 @@ export class GatewayManager extends EventEmitter {
     }
   }
 
+  private clearChatRunMetricTimers(run: {
+    firstEventWatchdogTimers?: NodeJS.Timeout[];
+    firstVisibleProgressWatchdogTimers?: NodeJS.Timeout[];
+  }): void {
+    if (run.firstEventWatchdogTimers) {
+      for (const timer of run.firstEventWatchdogTimers) {
+        clearTimeout(timer);
+      }
+      run.firstEventWatchdogTimers = undefined;
+    }
+    if (run.firstVisibleProgressWatchdogTimers) {
+      for (const timer of run.firstVisibleProgressWatchdogTimers) {
+        clearTimeout(timer);
+      }
+      run.firstVisibleProgressWatchdogTimers = undefined;
+    }
+  }
+
+  private async settleTrackedUserRunsForGatewayStop(reason: string): Promise<void> {
+    const trackedUserRuns = [...this.chatRunMetrics.entries()]
+      .filter(([, run]) => run.kind === 'user');
+    if (trackedUserRuns.length === 0) {
+      return;
+    }
+
+    logger.warn('[gateway:chat-run] settling tracked user runs because gateway is stopping', {
+      reason,
+      runs: trackedUserRuns.map(([runId, run]) => ({
+        runId,
+        sessionKey: run.sessionKey,
+        ageSinceAcceptedMs: Date.now() - run.acceptedAt,
+      })),
+    });
+
+    for (const [runId, run] of trackedUserRuns) {
+      this.clearChatRunMetricTimers(run);
+      this.chatRunMetrics.delete(runId);
+
+      try {
+        await this.toolRunRegistry.cancelByRun(runId, reason);
+      } catch (error) {
+        logger.warn('[tool-run-registry] failed to cancel active tools for gateway stop', {
+          reason,
+          runId,
+          sessionKey: run.sessionKey,
+          error: String(error),
+        });
+      }
+
+      this.emit('chat:message', {
+        message: {
+          state: 'aborted',
+          runId,
+          sessionKey: run.sessionKey,
+          reason,
+        },
+      });
+    }
+  }
+
   private scheduleGatewayReadyFallback(): void {
     this.clearGatewayReadyFallback();
     this.gatewayReadyFallbackTimer = setTimeout(async () => {
@@ -1081,8 +1176,19 @@ export class GatewayManager extends EventEmitter {
       && (params as { sessionKey?: unknown }).sessionKey === 'agent:main:__warmup__';
   }
 
+  private isInternalToolFeedbackChatSend(method: string, params?: unknown): boolean {
+    if (method !== 'chat.send' || !params || typeof params !== 'object') return false;
+    const message = (params as { message?: unknown }).message;
+    return typeof message === 'string' && (
+      message.trim().startsWith('[LYCLAW internal tool failure feedback]')
+      || message.trim().startsWith('[LYCLAW internal convergence directive]')
+    );
+  }
+
   private isUserChatSend(method: string, params?: unknown): boolean {
-    return method === 'chat.send' && !this.isWarmupChatSend(method, params);
+    return method === 'chat.send'
+      && !this.isWarmupChatSend(method, params)
+      && !this.isInternalToolFeedbackChatSend(method, params);
   }
 
   private hasInflightUserChatSend(): boolean {
@@ -1108,7 +1214,9 @@ export class GatewayManager extends EventEmitter {
       return undefined;
     }
     const p = params as { sessionKey?: unknown; key?: unknown };
-    const value = method === 'sessions.delete' ? p.key : p.sessionKey;
+    const value = method === 'sessions.delete' || method === 'sessions.abort' || method === 'sessions.patch'
+      ? (p.key ?? p.sessionKey)
+      : p.sessionKey;
     return typeof value === 'string' ? value : undefined;
   }
 
@@ -1573,6 +1681,125 @@ export class GatewayManager extends EventEmitter {
     return [...this.chatRunMetrics.values()].some((run) => run.kind === 'user' && run.sessionKey === key);
   }
 
+  private getTrackedUserRunIdsForSession(sessionKey: string): string[] {
+    return [...this.chatRunMetrics.entries()]
+      .filter(([, run]) => run.kind === 'user' && run.sessionKey === sessionKey)
+      .map(([runId]) => runId);
+  }
+
+  private static readonly ACTIVE_SESSION_STATUSES = new Set(['running', 'processing', 'queued', 'pending']);
+
+  private isActiveSessionStatus(status: unknown): boolean {
+    return typeof status === 'string'
+      && GatewayManager.ACTIVE_SESSION_STATUSES.has(status.toLowerCase());
+  }
+
+  /** Heartbeat/cron lane — resident background work, not user-visible background tasks. */
+  private isHeartbeatSessionKey(sessionKey: string): boolean {
+    const parts = sessionKey.split(':');
+    return parts.length === 3 && parts[0] === 'agent' && parts[2] === 'main';
+  }
+
+  private getGatewayProcessPid(): number {
+    return this.process?.pid ?? this.status.pid ?? process.pid;
+  }
+
+  async getSessionActivity(sessionKey: string | null | undefined): Promise<{
+    sessionKey: string;
+    status: string | null;
+    processing: boolean;
+    hasTrackedUserRun: boolean;
+    activeRunIds: string[];
+  }> {
+    const key = sessionKey?.trim() ?? '';
+    const activeRunIds = key ? this.getTrackedUserRunIdsForSession(key) : [];
+    const hasTrackedUserRun = activeRunIds.length > 0;
+
+    if (!key || !key.startsWith('agent:')) {
+      return {
+        sessionKey: key,
+        status: null,
+        processing: hasTrackedUserRun,
+        hasTrackedUserRun,
+        activeRunIds,
+      };
+    }
+
+    const agentId = key.split(':')[1] || 'main';
+    const sessionsJsonPath = path.join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+    const sessionsJson = await this.readJsonSnapshot<Record<string, { status?: unknown }>>(sessionsJsonPath);
+    const status = sessionsJson.ok && sessionsJson.value[key]?.status != null
+      ? String(sessionsJson.value[key].status)
+      : null;
+    const processing = await isSessionProcessingLiveOnDisk({
+      sessionKey: key,
+      hasTrackedActiveRun: hasTrackedUserRun,
+      currentPid: this.getGatewayProcessPid(),
+    });
+
+    return {
+      sessionKey: key,
+      status,
+      processing,
+      hasTrackedUserRun,
+      activeRunIds,
+    };
+  }
+
+  async getGatewayBackgroundActivity(currentSessionKey?: string | null): Promise<{
+    hasBackgroundProcessing: boolean;
+    processingSessionKeys: string[];
+  }> {
+    const current = currentSessionKey?.trim() ?? '';
+    const processingSessionKeys = new Set<string>();
+
+    for (const run of this.chatRunMetrics.values()) {
+      if (run.kind !== 'user' || !run.sessionKey || run.sessionKey === current) continue;
+      if (this.isHeartbeatSessionKey(run.sessionKey)) continue;
+      processingSessionKeys.add(run.sessionKey);
+    }
+
+    const agentIds = new Set<string>(['main']);
+    if (current.startsWith('agent:')) {
+      agentIds.add(current.split(':')[1] || 'main');
+    }
+
+    for (const agentId of agentIds) {
+      const sessionsJsonPath = path.join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+      const sessionsJson = await this.readJsonSnapshot<Record<string, { status?: unknown }>>(sessionsJsonPath);
+      if (!sessionsJson.ok) continue;
+
+      const candidateKeys: string[] = [];
+      for (const [sessionKey, entry] of Object.entries(sessionsJson.value)) {
+        if (sessionKey === 'sessions' || sessionKey === current) continue;
+        if (this.isActiveSessionStatus(entry?.status) && !this.isHeartbeatSessionKey(sessionKey)) {
+          candidateKeys.push(sessionKey);
+        }
+      }
+
+      const liveKeys = await Promise.all(candidateKeys.map(async (sessionKey) => {
+        if (processingSessionKeys.has(sessionKey)) return null;
+        const hasTracked = this.hasTrackedUserRunForSession(sessionKey);
+        const live = await isSessionProcessingLiveOnDisk({
+          sessionKey,
+          hasTrackedActiveRun: hasTracked,
+          currentPid: this.getGatewayProcessPid(),
+        });
+        return live ? sessionKey : null;
+      }));
+
+      for (const sessionKey of liveKeys) {
+        if (sessionKey) processingSessionKeys.add(sessionKey);
+      }
+    }
+
+    const keys = [...processingSessionKeys];
+    return {
+      hasBackgroundProcessing: keys.length > 0,
+      processingSessionKeys: keys,
+    };
+  }
+
   async recoverStaleSessionAfterEmptyFinal(sessionKey: string | null | undefined): Promise<StaleSessionRecoveryResult> {
     const key = sessionKey?.trim();
     if (!key) {
@@ -1644,6 +1871,295 @@ export class GatewayManager extends EventEmitter {
     waiter.resolve(state);
   }
 
+  private getMessageRole(message: unknown): string {
+    if (!message || typeof message !== 'object') return '';
+    const role = (message as Record<string, unknown>).role;
+    return typeof role === 'string' ? role : '';
+  }
+
+  private getMessageTextContent(message: unknown): string {
+    if (!message || typeof message !== 'object') return '';
+    const content = (message as Record<string, unknown>).content;
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content
+      .map((block) => {
+        if (!block || typeof block !== 'object') return '';
+        const text = (block as Record<string, unknown>).text;
+        return typeof text === 'string' ? text : '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  private getToolResultDetails(message: unknown): Record<string, unknown> {
+    if (!message || typeof message !== 'object') return {};
+    const details = (message as Record<string, unknown>).details;
+    return details && typeof details === 'object' ? details as Record<string, unknown> : {};
+  }
+
+  private getToolCallId(message: unknown): string {
+    if (!message || typeof message !== 'object') return '';
+    const value = (message as Record<string, unknown>).toolCallId
+      ?? (message as Record<string, unknown>).tool_call_id;
+    return typeof value === 'string' ? value : '';
+  }
+
+  private getToolName(message: unknown): string {
+    if (!message || typeof message !== 'object') return 'tool';
+    const value = (message as Record<string, unknown>).toolName
+      ?? (message as Record<string, unknown>).name;
+    return typeof value === 'string' && value.trim() ? value : 'tool';
+  }
+
+  private parseToolHandle(message: unknown): ToolRunHandle | null {
+    const details = this.getToolResultDetails(message);
+    const text = this.getMessageTextContent(message);
+    const sessionId = typeof details.sessionId === 'string'
+      ? details.sessionId
+      : (text.match(/session\s+([A-Za-z0-9_-]+)/i)?.[1] ?? '');
+    const rawPid = typeof details.pid === 'number'
+      ? details.pid
+      : Number(text.match(/pid\s+(\d+)/i)?.[1] ?? NaN);
+    if (!sessionId && !Number.isFinite(rawPid)) return null;
+    return {
+      kind: 'process',
+      id: sessionId || String(rawPid),
+      ...(Number.isFinite(rawPid) ? { pid: rawPid } : {}),
+    };
+  }
+
+  private isRunningToolResult(message: unknown): boolean {
+    const role = this.getMessageRole(message).toLowerCase();
+    if (role !== 'toolresult' && role !== 'tool_result') return false;
+    const details = this.getToolResultDetails(message);
+    if (details.status === 'running') return true;
+    return /Command still running/i.test(this.getMessageTextContent(message));
+  }
+
+  private observeToolRunFromChatEvent(event: GatewayChatEvent, sessionKey?: string): void {
+    const runId = typeof event.runId === 'string' ? event.runId : null;
+    const message = event.message;
+    const role = this.getMessageRole(message).toLowerCase();
+    if (role !== 'toolresult' && role !== 'tool_result') return;
+
+    if (this.isRunningToolResult(message)) {
+      const handle = this.parseToolHandle(message);
+      const details = this.getToolResultDetails(message);
+      const startedAt = typeof details.startedAt === 'number' ? details.startedAt : undefined;
+      this.toolRunRegistry.registerRunningTool({
+        owner: this.isInternalHeartbeatMessage(message) ? 'internal-heartbeat' : 'user-run',
+        visible: !this.isInternalHeartbeatMessage(message),
+        sessionKey: sessionKey ?? 'unknown',
+        runId,
+        toolCallId: this.getToolCallId(message) || `${this.getToolName(message)}:${handle?.id ?? Date.now()}`,
+        toolName: this.getToolName(message),
+        startedAt,
+        handle: handle ?? undefined,
+        message: this.getMessageTextContent(message),
+      });
+      return;
+    }
+
+    const details = this.getToolResultDetails(message);
+    const status = typeof details.status === 'string' ? details.status.toLowerCase() : '';
+    const text = this.getMessageTextContent(message);
+    const handle = this.parseToolHandle(message);
+    const toolCallId = this.getToolCallId(message);
+    const candidates = [
+      ...(runId ? this.toolRunRegistry.findByRun(runId) : []),
+      ...this.toolRunRegistry.findByHandle(handle),
+    ].filter((record, index, all) => (
+      all.findIndex((item) => item.toolRunId === record.toolRunId) === index
+    ));
+    const terminalStatus = status === 'error' || status === 'failed' || /\(Command exited with code [1-9]\d*\)/i.test(text)
+      ? 'failed'
+      : status === 'completed' || status === 'done' || /\(Command exited with code 0\)/i.test(text)
+        ? 'completed'
+        : null;
+    if (!terminalStatus) {
+      for (const record of candidates) {
+        if (toolCallId && record.toolCallId !== toolCallId) continue;
+        this.toolRunRegistry.markProgress(record.toolRunId, { message: text });
+      }
+      return;
+    }
+    for (const record of candidates) {
+      if (toolCallId && record.toolCallId !== toolCallId) continue;
+      this.toolRunRegistry.markTerminal(record.toolRunId, terminalStatus, terminalStatus);
+      if (terminalStatus === 'completed') {
+        void this.toolRunRegistry.cleanupCompletedToolRun(record.toolRunId, 'completed').catch((error) => {
+          logger.warn('[tool-run-registry] cleanup completed tool failed', {
+            toolRunId: record.toolRunId,
+            error: String(error),
+          });
+        });
+      }
+    }
+  }
+
+  private isInternalHeartbeatMessage(message: unknown): boolean {
+    const text = this.getMessageTextContent(message).trim();
+    return /^(HEARTBEAT_OK|NO_REPLY)$/i.test(text)
+      || /^\[?OpenClaw heartbeat poll\]?$/i.test(text);
+  }
+
+  private async cleanupToolRun(record: ToolRunRecord, reason: string): Promise<{ ok: boolean; unsupported?: boolean; error?: string }> {
+    if (!record.handle || record.handle.kind !== 'process') {
+      return { ok: false, unsupported: true, error: `cleanup unsupported for ${record.handle?.kind ?? 'missing-handle'}` };
+    }
+    const sessionId = record.handle.id;
+    if (!sessionId) {
+      return { ok: false, unsupported: true, error: 'missing process session id' };
+    }
+    try {
+      const shouldKill = reason !== 'completed';
+      logger.warn('[tool-run-registry] cleaning process handle', {
+        reason,
+        shouldKill,
+        sessionKey: record.sessionKey,
+        runId: record.runId,
+        toolCallId: record.toolCallId,
+        toolName: record.toolName,
+        sessionId,
+        pid: record.handle.pid,
+      });
+      if (shouldKill) {
+        await this.rpc('process', { action: 'kill', sessionId }, 8_000);
+      }
+      await this.rpc('process', { action: 'remove', sessionId }, 8_000).catch((error) => {
+        logger.warn('[tool-run-registry] process remove failed after kill', {
+          sessionId,
+          error: String(error),
+        });
+      });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  private emitToolRunTerminalEvent(record: ToolRunRecord): void {
+    if (record.status === 'completed' || record.status === 'cancelled') {
+      logger.info('[tool-run-registry] terminal tool event is silent', {
+        status: record.status,
+        terminalReason: record.terminalReason,
+        sessionKey: record.sessionKey,
+        runId: record.runId,
+        toolCallId: record.toolCallId,
+        toolName: record.toolName,
+      });
+      return;
+    }
+    const elapsedMs = Math.max(0, Date.now() - record.startedAt);
+    const idleMs = record.lastProgressAt ? Math.max(0, Date.now() - record.lastProgressAt) : null;
+    const failureText = this.buildInjectedToolFailureText(record, elapsedMs);
+    const message = {
+      role: 'toolResult',
+      toolCallId: record.toolCallId,
+      toolName: record.toolName,
+      isError: true,
+      content: [{
+        type: 'text',
+        text: failureText,
+      }],
+      details: {
+        status: record.status,
+        reason: record.terminalReason,
+        elapsedMs,
+        idleMs,
+        cleanupAttempted: record.cleanup.attempted,
+        cleanupSucceeded: record.cleanup.status === 'succeeded'
+          ? true
+          : record.cleanup.status === 'failed'
+            ? false
+            : null,
+        cleanupStatus: record.cleanup.status,
+        cleanupError: record.cleanup.error,
+        retryable: record.cleanup.status === 'succeeded',
+        suggestedNextActions: record.cleanup.status === 'succeeded'
+          ? ['change-tool', 'change-parameters', 'retry', 'ask-user', 'explain-failure']
+          : ['change-tool', 'ask-user', 'explain-failure'],
+        handle: record.handle,
+      },
+      timestamp: Date.now(),
+    };
+    const event = {
+      state: 'tool_timeout',
+      runId: record.runId,
+      sessionKey: record.sessionKey,
+      message,
+    };
+    logger.warn('[tool-run-registry] emitting tool terminal event', event);
+    this.emit('chat:message', { message: event });
+    if (record.visible && record.sessionKey && record.sessionKey !== 'unknown') {
+      if (!this.shouldSendToolFailureFeedback(record)) {
+        logger.warn('[tool-run-registry] skipped tool failure feedback after repeat limit', {
+          sessionKey: record.sessionKey,
+          runId: record.runId,
+          toolCallId: record.toolCallId,
+          toolName: record.toolName,
+          terminalReason: record.terminalReason,
+        });
+        return;
+      }
+      void this.sendToolFailureFeedbackToModel(record, failureText).catch((error) => {
+        logger.warn('[tool-run-registry] failed to send tool failure feedback to model', {
+          sessionKey: record.sessionKey,
+          runId: record.runId,
+          toolCallId: record.toolCallId,
+          toolName: record.toolName,
+          error: String(error),
+        });
+      });
+    }
+  }
+
+  private shouldSendToolFailureFeedback(record: ToolRunRecord): boolean {
+    const max = 2;
+    const signature = [
+      record.sessionKey,
+      record.toolName,
+      record.terminalReason ?? record.status,
+      record.cleanup.status,
+    ].join('::');
+    const count = this.toolFailureFeedbackCounts.get(signature) ?? 0;
+    if (count >= max) return false;
+    this.toolFailureFeedbackCounts.set(signature, count + 1);
+    return true;
+  }
+
+  private buildInjectedToolFailureText(record: ToolRunRecord, elapsedMs: number): string {
+    const seconds = Math.round(elapsedMs / 1000);
+    if (record.status === 'kill_failed') {
+      return `The ${record.toolName} tool timed out after ${seconds}s and cleanup failed. The previous process handle is unsafe to reuse. Do not poll this handle again. Choose another approach, ask the user, or explain the failure.`;
+    }
+    return `The ${record.toolName} tool timed out after ${seconds}s. Cleanup status: ${record.cleanup.status}. Do not repeat the exact same tool call. Try a safer bounded command, use another tool, ask the user for confirmation, or explain the failure.`;
+  }
+
+  private async sendToolFailureFeedbackToModel(record: ToolRunRecord, failureText: string): Promise<void> {
+    const idempotencyKey = `tool-failure-feedback:${record.toolRunId}:${record.terminalReason ?? record.status}`;
+    const message = [
+      '[LYCLAW internal tool failure feedback]',
+      failureText,
+      '',
+      'This is internal control feedback from the runtime. Continue the user task if possible. Do not reveal this control message verbatim.',
+    ].join('\n');
+    logger.warn('[tool-run-registry] sending tool failure feedback to model', {
+      sessionKey: record.sessionKey,
+      runId: record.runId,
+      toolCallId: record.toolCallId,
+      toolName: record.toolName,
+      cleanup: record.cleanup,
+    });
+    await this.rpc('chat.send', {
+      sessionKey: record.sessionKey,
+      message,
+      deliver: false,
+      idempotencyKey,
+    }, 120_000);
+  }
+
   private recordChatSendAccepted(args: {
     method: string;
     params?: unknown;
@@ -1656,7 +2172,11 @@ export class GatewayManager extends EventEmitter {
       return;
     }
 
-    const kind = this.isWarmupChatSend(args.method, args.params) ? 'warmup' : 'user';
+    const kind = this.isWarmupChatSend(args.method, args.params)
+      ? 'warmup'
+      : this.isInternalToolFeedbackChatSend(args.method, args.params)
+        ? 'internal'
+        : 'user';
     const sessionKey = this.getChatSendSessionKey(args.params);
     const runId = this.getRunIdFromRpcResult(args.result);
     if (!runId) {
@@ -1704,11 +2224,15 @@ export class GatewayManager extends EventEmitter {
     const event = payload as { state?: unknown; runId?: unknown; message?: unknown };
     const runId = typeof event.runId === 'string' ? event.runId : '';
     const state = typeof event.state === 'string' ? event.state : 'unknown';
+    const eventSessionKey = typeof (payload as Record<string, unknown>).sessionKey === 'string'
+      ? String((payload as Record<string, unknown>).sessionKey)
+      : undefined;
     if (!runId) {
       logger.info('[perf:chat-run] event.without_run_id', {
         state,
         hasMessage: Boolean(event.message),
       });
+      this.observeToolRunFromChatEvent(event, eventSessionKey);
       return;
     }
 
@@ -1720,8 +2244,11 @@ export class GatewayManager extends EventEmitter {
         state,
         hasMessage: Boolean(event.message),
       });
+      this.observeToolRunFromChatEvent(event, eventSessionKey);
       return;
     }
+
+    this.observeToolRunFromChatEvent(event, metrics.sessionKey ?? eventSessionKey);
 
     if (!metrics.firstEventAt) {
       metrics.firstEventAt = now;
@@ -1981,6 +2508,33 @@ export class GatewayManager extends EventEmitter {
     });
   }
 
+  private async handleToolLifecycleRpcSideEffects(method: string, params?: unknown): Promise<void> {
+    if (method !== 'sessions.abort') return;
+    const sessionKey = this.getRpcSessionKey(method, params);
+    const runId = params && typeof params === 'object' && typeof (params as { runId?: unknown }).runId === 'string'
+      ? (params as { runId: string }).runId
+      : null;
+    try {
+      const records = runId
+        ? await this.toolRunRegistry.cancelByRun(runId, 'user-cancelled')
+        : await this.toolRunRegistry.cancelBySession(sessionKey, 'user-cancelled');
+      if (records.length > 0) {
+        logger.warn('[tool-run-registry] cancelled active tools for sessions.abort', {
+          sessionKey,
+          runId,
+          count: records.length,
+          toolRunIds: records.map((record) => record.toolRunId),
+        });
+      }
+    } catch (error) {
+      logger.warn('[tool-run-registry] failed to cancel active tools for sessions.abort', {
+        sessionKey,
+        runId,
+        error: String(error),
+      });
+    }
+  }
+
   private async recoverSessionTranscriptLockForChatSend(params: unknown, reason: string): Promise<void> {
     const sessionKey = this.getChatSendSessionKey(params);
     await this.recoverSessionTranscriptLock(sessionKey, reason);
@@ -2043,7 +2597,10 @@ export class GatewayManager extends EventEmitter {
    * Uses OpenClaw protocol format: { type: "req", id: "...", method: "...", params: {...} }
    */
   async rpc<T>(method: string, params?: unknown, timeoutMs = 30000): Promise<T> {
-    await this.prepareForUserChatSend(method, params);
+    const effectiveParams = method === 'chat.send'
+      ? await enrichChatSendParams(params)
+      : params;
+    await this.prepareForUserChatSend(method, effectiveParams);
     const rpcStart = Date.now();
     logger.info(`[rpc] ${method} started (timeout=${timeoutMs}ms)`);
 
@@ -2068,12 +2625,12 @@ export class GatewayManager extends EventEmitter {
         method,
         startedAt: rpcStart,
         timeoutMs,
-        sessionKey: this.getRpcSessionKey(method, params),
+        sessionKey: this.getRpcSessionKey(method, effectiveParams),
       });
       chatSendWatchdogTimers = this.scheduleChatSendWatchdog({
         requestId: id,
         method,
-        params,
+        params: effectiveParams,
         rpcStart,
       });
 
@@ -2095,7 +2652,7 @@ export class GatewayManager extends EventEmitter {
         type: 'req',
         id,
         method,
-        params,
+        params: effectiveParams,
       };
 
       try {
@@ -2118,7 +2675,7 @@ export class GatewayManager extends EventEmitter {
       }
       this.recordChatSendAccepted({
         method,
-        params,
+        params: effectiveParams,
         result,
         requestedAt: rpcStart,
         acceptedAt: Date.now(),

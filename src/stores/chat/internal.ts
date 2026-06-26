@@ -8,7 +8,7 @@ const REASONING_MODE_STORAGE_KEY = 'LYClaw:chat:reasoning-mode';
 function loadStoredReasoningMode(): ChatState['reasoningMode'] {
   try {
     const stored = window.localStorage.getItem(REASONING_MODE_STORAGE_KEY);
-    if (stored === 'fast' || stored === 'thinking' || stored === 'expert') {
+    if (stored === 'fast' || stored === 'thinking') {
       return stored;
     }
   } catch {
@@ -28,6 +28,7 @@ export const initialChatState: Pick<
   | 'prefilledInput'
   | 'sending'
   | 'activeRunId'
+  | 'activeTool'
   | 'streamingText'
   | 'streamingMessage'
   | 'streamingTools'
@@ -62,6 +63,7 @@ export const initialChatState: Pick<
   sending: false,
   aborting: false,
   activeRunId: null,
+  activeTool: null,
   streamingText: '',
   streamingMessage: null,
   streamingTools: [],

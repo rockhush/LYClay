@@ -1,0 +1,353 @@
+diff --git a/dist/chat-DOMgZOP2.js b/dist/chat-DOMgZOP2.js
+index 2e65c247e158cbf3ec6d3212817c63a0aa9a3647..d6cd269553df4890e594b5323f4d832fcf2e9f15 100644
+--- a/dist/chat-DOMgZOP2.js
++++ b/dist/chat-DOMgZOP2.js
+@@ -2683,6 +2683,9 @@ const chatHandlers = {
+ 						imageOrder: imageOrder.length > 0 ? imageOrder : void 0,
+ 						thinkingLevelOverride: p.thinking,
+ 						fastModeOverride: p.fastMode,
++						extraSystemPrompt: p.extraSystemPrompt,
++						executeAsAgentId: typeof p.executeAsAgentId === "string" && p.executeAsAgentId.trim() ? p.executeAsAgentId.trim() : void 0,
++						executedByAgentName: typeof p.executedByAgentName === "string" && p.executedByAgentName.trim() ? p.executedByAgentName.trim() : void 0,
+ 						userTurnTranscriptRecorder: userTurnRecorder,
+ 						onAgentRunStart: (runId) => {
+ 							agentRunStarted = true;
+diff --git a/dist/compaction-successor-transcript-DOYIvTa2.js b/dist/compaction-successor-transcript-DOYIvTa2.js
+index dc91ddb1897fe810a2932d5edd68cc3d1392349f..ea03db0837f4a0c03f13ccaaf6453abf42a7cfb3 100644
+--- a/dist/compaction-successor-transcript-DOYIvTa2.js
++++ b/dist/compaction-successor-transcript-DOYIvTa2.js
+@@ -39,7 +39,7 @@ import { i as streamSimple, o as getApiProvider } from "./stream-CGV1FC9I.js";
+ import { r as createAssistantMessageEventStream } from "./event-stream-ReMmOTzX.js";
+ import { at as SettingsManager, s as DefaultResourceLoader } from "./sessions-D4hg9w_o.js";
+ import { n as SUMMARIZATION_OVERHEAD_TOKENS } from "./compaction-planning-C60ze-Y9.js";
+-import { a as isSilentReplyText, r as isSilentReplyPayloadText } from "./tokens-Doqt0ySJ.js";
++import { a as isSilentReplyText, r as isSilentReplyPayloadText, c as stripSilentToken, s as stripLeadingSilentToken, o as startsWithSilentToken, n as SILENT_REPLY_TOKEN } from "./tokens-Doqt0ySJ.js";
+ import { b as stripInternalMetadataForDisplay } from "./session-utils.fs-C-Xn7QJC.js";
+ import { a as makeZeroUsageSnapshot, o as normalizeUsage } from "./usage-C67Kbb7n.js";
+ import { i as jsonUtf8BytesOrInfinity, n as firstEnumerableOwnKeys, t as boundedJsonUtf8Bytes } from "./json-utf8-bytes-C14lActR.js";
+@@ -1525,6 +1525,64 @@ function isTranscriptOnlyOpenClawAssistantMessage(message) {
+ 	if (!message || message.role !== "assistant") return false;
+ 	return isTranscriptOnlyOpenClawAssistantModel(normalizeOptionalString(message.provider) ?? "", normalizeOptionalString(message.model) ?? "");
+ }
++function sanitizeAssistantReplayVisibleText(text, silentToken = SILENT_REPLY_TOKEN) {
++	let next = text;
++	if (!next) return "";
++	const trimmedInitial = next.trim();
++	if (!trimmedInitial || isSilentReplyPayloadText(trimmedInitial, silentToken)) return "";
++	if (!isSilentReplyText(next, silentToken)) {
++		const hadLeadingSilentToken = startsWithSilentToken(next, silentToken);
++		if (hadLeadingSilentToken) next = stripLeadingSilentToken(next, silentToken);
++		if (hadLeadingSilentToken || next.toLowerCase().includes(silentToken.toLowerCase())) next = stripSilentToken(next, silentToken);
++	}
++	const trimmed = next.trim();
++	if (!trimmed || isSilentReplyPayloadText(trimmed, silentToken)) return "";
++	return next;
++}
++function sanitizeAssistantMessageForTranscriptPersistence(message) {
++	if (!message || message.role !== "assistant") return message;
++	const content = message.content;
++	if (typeof content === "string") {
++		const sanitized = sanitizeAssistantReplayVisibleText(stripInternalMetadataForDisplay(content));
++		if (!sanitized.trim()) return null;
++		if (sanitized === content) return message;
++		return {
++			...message,
++			content: sanitized
++		};
++	}
++	if (!Array.isArray(content)) return message;
++	let touched = false;
++	const nextContent = [];
++	for (const block of content) {
++		if (!block || typeof block !== "object") {
++			nextContent.push(block);
++			continue;
++		}
++		const text = block.text;
++		if (typeof text !== "string") {
++			nextContent.push(block);
++			continue;
++		}
++		const sanitized = sanitizeAssistantReplayVisibleText(stripInternalMetadataForDisplay(text));
++		if (sanitized === text) {
++			if (sanitized.trim()) nextContent.push(block);
++			else touched = true;
++			continue;
++		}
++		touched = true;
++		if (sanitized.trim()) nextContent.push({
++			...block,
++			text: sanitized
++		});
++	}
++	if (!touched) return message;
++	if (nextContent.length === 0) return null;
++	return {
++		...message,
++		content: nextContent
++	};
++}
+ function installSessionToolResultGuard(sessionManager, opts) {
+ 	const originalAppend = getRawSessionAppendMessage(sessionManager);
+ 	setRawSessionAppendMessage(sessionManager, originalAppend);
+@@ -1627,8 +1685,13 @@ function installSessionToolResultGuard(sessionManager, opts) {
+ 		const toolCalls = nextRole === "assistant" && stopReason !== "aborted" && stopReason !== "error" ? extractToolCallsFromAssistant(nextMessage) : [];
+ 		if (!(nextRole === "assistant" && toolCalls.length === 0 && isTranscriptOnlyOpenClawAssistantMessage(nextMessage)) && pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)) flushPendingToolResults();
+ 		if (!allowSyntheticToolResults && pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)) flushPendingToolResults();
+-		const finalMessage = applyBeforeWriteHook(persistMessage(nextMessage));
++		let finalMessage = applyBeforeWriteHook(persistMessage(nextMessage));
+ 		if (!finalMessage) return;
++		if (finalMessage.role === "assistant") {
++			const sanitizedAssistant = sanitizeAssistantMessageForTranscriptPersistence(finalMessage);
++			if (!sanitizedAssistant) return;
++			finalMessage = sanitizedAssistant;
++		}
+ 		const finalRole = finalMessage.role;
+ 		if (finalRole === "assistant" && toolCalls.length === 0 && opts?.suppressTranscriptOnlyAssistantPersistence === true) return;
+ 		if (finalRole === "assistant" && opts?.suppressAssistantErrorPersistence === true && finalMessage.stopReason === "error") return;
+@@ -3676,9 +3739,9 @@ function sanitizeUserReplayContent(message) {
+ 	} : message;
+ }
+ function normalizeAssistantReplayTextContent(message, replayContent) {
+-	const strippedText = stripInternalMetadataForDisplay(replayContent);
++	const strippedText = sanitizeAssistantReplayVisibleText(stripInternalMetadataForDisplay(replayContent));
+ 	const trimmed = strippedText.trim();
+-	if (!trimmed || isSilentReplyPayloadText(trimmed, "NO_REPLY")) return null;
++	if (!trimmed) return null;
+ 	return {
+ 		...message,
+ 		content: [{
+@@ -3700,15 +3763,14 @@ function normalizeAssistantReplayBlockContent(message, replayContent) {
+ 			sanitizedContent.push(block);
+ 			continue;
+ 		}
+-		const strippedText = stripInternalMetadataForDisplay(text);
++		const strippedText = sanitizeAssistantReplayVisibleText(stripInternalMetadataForDisplay(text));
+ 		if (strippedText === text) {
+-			if (!isSilentReplyPayloadText(text.trim(), "NO_REPLY")) sanitizedContent.push(block);
++			if (strippedText.trim()) sanitizedContent.push(block);
+ 			else touched = true;
+ 			continue;
+ 		}
+ 		touched = true;
+-		const trimmed = strippedText.trim();
+-		if (trimmed && !isSilentReplyPayloadText(trimmed, "NO_REPLY")) sanitizedContent.push({
++		if (strippedText.trim()) sanitizedContent.push({
+ 			...block,
+ 			text: strippedText
+ 		});
+diff --git a/dist/get-reply-BpFiu3Nn.js b/dist/get-reply-BpFiu3Nn.js
+index 97733b6a8259ad04c3c8531825acc9e2295ecfff..441dc2be6d34d6a244ee0b12915e47e05c60c55d 100644
+--- a/dist/get-reply-BpFiu3Nn.js
++++ b/dist/get-reply-BpFiu3Nn.js
+@@ -133,6 +133,7 @@ import fs from "node:fs";
+ import path from "node:path";
+ import fs$1 from "node:fs/promises";
+ import crypto from "node:crypto";
++import { homedir as userHomeDir } from "node:os";
+ //#region src/auto-reply/reply/get-reply-directives-utils.ts
+ const CLEARED_EXEC_FIELDS = {
+ 	hasExecDirective: false,
+@@ -5046,13 +5047,97 @@ async function applyLinkUnderstandingIfNeeded(params) {
+ 		return false;
+ 	}
+ }
++async function pathExistsSafe(filePath) {
++	try {
++		await fs$1.access(filePath);
++		return true;
++	} catch {
++		return false;
++	}
++}
++async function readJsonFileSafe(filePath) {
++	try {
++		return JSON.parse(await fs$1.readFile(filePath, "utf-8"));
++	} catch {
++		return null;
++	}
++}
++async function resolveDigitalEmployeeDir(agentId) {
++	const home = userHomeDir();
++	const legacyDir = path.join(home, ".openclaw", "digital-employee", agentId);
++	if (await pathExistsSafe(legacyDir)) return legacyDir;
++	const managedRoot = path.join(home, ".openclaw", "digital-employees");
++	const directManagedDir = path.join(managedRoot, agentId);
++	if (await pathExistsSafe(directManagedDir)) return directManagedDir;
++	if (!await pathExistsSafe(managedRoot)) return null;
++	try {
++		for (const entry of await fs$1.readdir(managedRoot, { withFileTypes: true })) {
++			if (!entry.isDirectory()) continue;
++			const installDir = path.join(managedRoot, entry.name);
++			const record = await readJsonFileSafe(path.join(installDir, "install.json"));
++			if (record?.agentId === agentId || record?.instanceId === agentId) return installDir;
++		}
++	} catch {}
++	return null;
++}
++async function buildDigitalEmployeeMcpServers(employeeDir) {
++	const manifest = await readJsonFileSafe(path.join(employeeDir, "employee.json"));
++	const templatePath = typeof manifest?.mcp?.serverTemplate === "string" && manifest.mcp.serverTemplate.trim()
++		? path.join(employeeDir, manifest.mcp.serverTemplate)
++		: path.join(employeeDir, "mcp", "servers.json");
++	let config = await readJsonFileSafe(templatePath);
++	if (!config && templatePath.endsWith("servers.json")) config = await readJsonFileSafe(path.join(employeeDir, "mcp", "servers.template.json"));
++	return config?.servers && typeof config.servers === "object" ? config.servers : {};
++}
++async function loadDigitalEmployeeWorkflows(employeeDir) {
++	const wfDir = path.join(employeeDir, "workflows");
++	if (!await pathExistsSafe(wfDir)) return "";
++	try {
++		const files = (await fs$1.readdir(wfDir)).filter((name) => name.endsWith(".md")).sort();
++		const parts = [];
++		for (const fileName of files) {
++			parts.push(await fs$1.readFile(path.join(wfDir, fileName), "utf-8"));
++		}
++		return parts.join("\n\n---\n\n");
++	} catch {
++		return "";
++	}
++}
++async function resolveDigitalEmployeeExecutionContext(cfg, opts) {
++	const requestedAgentId = normalizeOptionalString(opts?.executeAsAgentId);
++	if (!requestedAgentId) return null;
++	const agentId = normalizeAgentId(requestedAgentId);
++	const employeeDir = await resolveDigitalEmployeeDir(agentId);
++	if (!employeeDir) throw new Error(`Digital employee "${agentId}" is not installed`);
++	const employeeSkillsDir = path.join(employeeDir, "skills");
++	const employeeCfg = {
++		...cfg,
++		mcp: { ...cfg?.mcp, servers: await buildDigitalEmployeeMcpServers(employeeDir) },
++		skills: {
++			...cfg?.skills,
++			__digitalEmployeeOnly: true,
++			load: { ...cfg?.skills?.load, extraDirs: [employeeSkillsDir] }
++		}
++	};
++	const workflowText = await loadDigitalEmployeeWorkflows(employeeDir);
++	const isolationPrompt = [
++		"Digital employee isolation:",
++		"- Available skills and MCP servers are limited to this digital employee package.",
++		"- Ignore skills, MCP servers, or tool inventories mentioned earlier in the shared conversation unless they appear in the current package-local inventory.",
++		"- When asked about your skills, list only the package-local skills available to this digital employee."
++	].join("\n");
++	const workflowPrompt = [isolationPrompt, workflowText ? `<workflows>\n${workflowText}\n</workflows>` : ""].filter(Boolean).join("\n\n");
++	return { agentId, cfg: employeeCfg, workflowPrompt };
++}
+ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 	const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+-	const cfg = resolveGetReplyConfig({
++	let cfg = resolveGetReplyConfig({
+ 		getRuntimeConfig,
+ 		isFastTestEnv,
+ 		configOverride
+ 	});
++	const digitalEmployeeExecution = await resolveDigitalEmployeeExecutionContext(cfg, opts);
++	if (digitalEmployeeExecution) cfg = digitalEmployeeExecution.cfg;
+ 	const resolverTiming = createReplyTimingTracker({
+ 		log: replyResolverTimingLog,
+ 		config: cfg
+@@ -5066,7 +5151,7 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 		isFastTestEnv
+ 	}));
+ 	const finalized = resolverTiming.measureSync("reply.finalize_context", () => finalizeInboundContext(ctx));
+-	const { agentSessionKey, agentId } = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
++	const { agentSessionKey: sessionAgentKeyRaw, agentId: sessionAgentId } = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
+ 		const resolvedAgentSessionKey = resolveCommandTurnTargetSessionKey(finalized) || finalized.SessionKey;
+ 		return {
+ 			agentSessionKey: resolvedAgentSessionKey,
+@@ -5077,6 +5162,12 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 			})
+ 		};
+ 	});
++	const agentId = digitalEmployeeExecution?.agentId ?? sessionAgentId;
++	const agentSessionKey = sessionAgentKeyRaw;
++	const baseOpts = digitalEmployeeExecution ? {
++		...opts,
++		extraSystemPrompt: digitalEmployeeExecution.workflowPrompt || void 0
++	} : opts;
+ 	const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
+ 		surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
+ 		hasSessionKey: Boolean(agentSessionKey),
+@@ -5102,11 +5193,11 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 		config: cfg,
+ 		attributes: traceAttributes
+ 	}));
+-	const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () => mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)));
++	const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () => mergeSkillFilters(baseOpts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)));
+ 	const resolvedOpts = mergedSkillFilter !== void 0 ? {
+-		...opts,
++		...baseOpts,
+ 		skillFilter: mergedSkillFilter
+-	} : opts;
++	} : baseOpts;
+ 	const agentCfg = cfg.agents?.defaults;
+ 	const sessionCfg = cfg.session;
+ 	const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync("reply.resolve_default_model", () => resolveDefaultModel({
+@@ -5221,6 +5312,10 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 	const { sessionCtx, sessionEntry, previousSessionEntry, sessionStore, sessionKey, sessionId, isNewSession, resetTriggered, systemSent, storePath, sessionScope, groupResolution, isGroup, triggerBodyNormalized, bodyStripped } = sessionState;
+ 	let { abortedLastRun } = sessionState;
+ 	resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
++	if (digitalEmployeeExecution && sessionEntry?.skillsSnapshot) {
++		sessionState.sessionEntry = { ...sessionEntry, skillsSnapshot: void 0 };
++		if (sessionStore && sessionKey) sessionStore[sessionKey] = { ...sessionStore[sessionKey], skillsSnapshot: void 0 };
++	}
+ 	if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
+ 		const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
+ 		if (opts?.isHeartbeat) {
+diff --git a/dist/schema-KBhSSPA3.js b/dist/schema-KBhSSPA3.js
+index 8fabdd4d1f3ccd237c712cc35aa151d1158d5b63..d26472ff031a158ab0aa2d19987e6bc5b8cefc7c 100644
+--- a/dist/schema-KBhSSPA3.js
++++ b/dist/schema-KBhSSPA3.js
+@@ -2745,8 +2745,11 @@ const ChatSendParamsSchema = Type.Object({
+ 	systemInputProvenance: Type.Optional(InputProvenanceSchema),
+ 	systemProvenanceReceipt: Type.Optional(Type.String()),
+ 	suppressCommandInterpretation: Type.Optional(Type.Boolean()),
++	extraSystemPrompt: Type.Optional(Type.String()),
++	executeAsAgentId: Type.Optional(Type.String()),
++	executedByAgentName: Type.Optional(Type.String()),
+ 	idempotencyKey: NonEmptyString
+-}, { additionalProperties: false });
++}, { additionalProperties: true });
+ /** Cancels the active or named run for a chat session. */
+ const ChatAbortParamsSchema = Type.Object({
+ 	sessionKey: NonEmptyString,
+diff --git a/dist/workspace-P8p68RCT.js b/dist/workspace-P8p68RCT.js
+index be7afdd3395bc064722d206e951c448af6b1269d..62b092f6483257879a10d08f9a24742dd4355545 100644
+--- a/dist/workspace-P8p68RCT.js
++++ b/dist/workspace-P8p68RCT.js
+@@ -907,6 +907,34 @@ function loadSkillEntries(workspaceDir, opts) {
+ 	});
+ 	const merged = /* @__PURE__ */ new Map();
+ 	for (const record of extraSkills) merged.set(record.skill.name, record);
++	if (opts?.config?.skills?.__digitalEmployeeOnly === true) {
++		return Array.from(merged.values()).toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en")).map((record) => {
++		const skill = record.skill;
++		const frontmatter = record.frontmatter ?? readSkillFrontmatterSafe({
++			rootDir: skill.baseDir,
++			filePath: skill.filePath,
++			maxBytes: limits.maxSkillFileBytes
++		}) ?? {};
++		const invocation = resolveSkillInvocationPolicy(frontmatter);
++		const entry = {
++			skill,
++			frontmatter,
++			metadata: resolveSkillEntryMetadata({
++				frontmatter,
++				skillDir: skill.baseDir
++			}),
++			invocation,
++			exposure: {
++				includeInRuntimeRegistry: true,
++				includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
++				userInvocable: invocation.userInvocable ?? true
++			}
++		};
++		if (record.syncSourceDir !== void 0) entry.syncSourceDir = record.syncSourceDir;
++		if (record.syncDirName !== void 0) entry.syncDirName = record.syncDirName;
++		return entry;
++	});
++	}
+ 	for (const record of bundledSkills) merged.set(record.skill.name, record);
+ 	for (const record of managedSkills) merged.set(record.skill.name, record);
+ 	for (const record of personalAgentsSkills) merged.set(record.skill.name, record);

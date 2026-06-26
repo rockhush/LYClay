@@ -12,10 +12,8 @@ function persistReasoningMode(mode: ReasoningMode): void {
   }
 }
 
-function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' | 'high' {
-  if (mode === 'fast') return 'off';
-  if (mode === 'expert') return 'high';
-  return 'medium';
+function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' {
+  return mode === 'fast' ? 'off' : 'medium';
 }
 
 async function patchSessionThinkingLevel(sessionKey: string, mode: ReasoningMode): Promise<void> {

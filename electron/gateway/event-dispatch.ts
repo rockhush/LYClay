@@ -5,6 +5,40 @@ type GatewayEventEmitter = {
   emit: (event: string, payload: unknown) => boolean;
 };
 
+function getMessageText(message: unknown): string {
+  if (!message || typeof message !== 'object') return '';
+  const record = message as Record<string, unknown>;
+  const direct = record.content ?? record.text;
+  if (typeof direct === 'string') return direct;
+  if (!Array.isArray(direct)) return '';
+  return direct.map((block) => {
+    if (!block || typeof block !== 'object') return '';
+    const item = block as Record<string, unknown>;
+    if (typeof item.text === 'string') return item.text;
+    if (typeof item.content === 'string') return item.content;
+    return '';
+  }).filter(Boolean).join('\n');
+}
+
+function isInternalChatPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const event = payload as Record<string, unknown>;
+  const message = event.message;
+  if (!message || typeof message !== 'object') return false;
+  const record = message as Record<string, unknown>;
+  const text = getMessageText(message).trim();
+  if (/^(HEARTBEAT_OK|NO_REPLY)$/i.test(text)) return true;
+  if (/^\[?OpenClaw heartbeat poll\]?$/i.test(text)) return true;
+  if (/^\[LYCLAW internal tool failure feedback\]/i.test(text)) return true;
+  if (/^\[LYCLAW internal convergence directive\]/i.test(text)) return true;
+  if (record.display === false && record.customType === 'openclaw.runtime-context') return true;
+  if (/async command completion event was triggered/i.test(text)
+    && /reply HEARTBEAT_OK only/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
 export function dispatchProtocolEvent(
   emitter: GatewayEventEmitter,
   event: string,
@@ -16,6 +50,13 @@ export function dispatchProtocolEvent(
     case 'chat': {
       const chatState = (payload as Record<string, unknown>)?.state;
       logger.info(`[event] chat event received: state=${chatState}, runId=${(payload as Record<string, unknown>)?.runId}`);
+      if (isInternalChatPayload(payload)) {
+        logger.info('[event] suppressed internal chat event before renderer dispatch', {
+          state: chatState,
+          runId: (payload as Record<string, unknown>)?.runId,
+        });
+        break;
+      }
       emitter.emit('chat:message', { message: payload });
       break;
     }
@@ -48,6 +89,10 @@ export function dispatchJsonRpcNotification(
       emitter.emit('channel:status', notification.params as { channelId: string; status: string });
       break;
     case GatewayEventType.MESSAGE_RECEIVED:
+      if (isInternalChatPayload((notification.params as { message?: unknown })?.message ?? notification.params)) {
+        logger.info('[event] suppressed internal JSON-RPC chat notification before renderer dispatch');
+        break;
+      }
       emitter.emit('chat:message', notification.params as { message: unknown });
       break;
     case GatewayEventType.ERROR: {

@@ -1,7 +1,7 @@
 import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
 import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
-import { isSubagentSessionKey, pickUserFacingSession } from '@/lib/session-key-utils';
+import { filterUserFacingSessions, isSubagentSessionKey, pickUserFacingSession } from '@/lib/session-key-utils';
 import { useGatewayStore } from '@/stores/gateway';
 import { getCanonicalPrefixFromSessions, toMs } from './helpers';
 import { DEFAULT_CANONICAL_PREFIX, DEFAULT_SESSION_KEY, type ChatSession } from './types';
@@ -30,7 +30,7 @@ function parseSessionRecord(record: Record<string, unknown>): ChatSession | null
   const key = String(record.key || '');
   if (!key || key.includes('__warmup__')) return null;
   const firstUserMessagePreview = record.firstUserMessagePreview
-    ? String(record.firstUserMessagePreview)
+    ? String(record.firstUserMessagePreview).replace(/\/think\s+(off|medium|high)\s+/i, '')
     : undefined;
 
   // 过滤掉没有 firstUserMessagePreview 的会话记录
@@ -109,21 +109,27 @@ export function createSessionActions(
           const sessions = await loadLocalSessionSummaries('main');
 
           if (sessions.length > 0) {
+            const userFacingSessions = filterUserFacingSessions(sessions);
+
             const { currentSessionKey } = get();
-            const nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
+            let nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
+            if (isSubagentSessionKey(nextSessionKey)) {
+              const redirected = pickUserFacingSession(userFacingSessions, currentSessionKey);
+              if (redirected) nextSessionKey = redirected.key;
+            }
             
             const discoveredActivity = Object.fromEntries(
-              sessions
+              userFacingSessions
                 .map((session) => {
                   const activity = resolveSessionListActivityMs(session);
                   return activity ? [session.key, activity] as const : null;
                 })
                 .filter((entry): entry is readonly [string, number] => entry != null),
             );
-            const discoveredLabels = getSessionLabelsFromSessions(sessions);
+            const discoveredLabels = getSessionLabelsFromSessions(userFacingSessions);
 
             set((state) => ({
-              sessions,
+              sessions: userFacingSessions,
               currentSessionKey: nextSessionKey,
               currentAgentId: getAgentIdFromSessionKey(nextSessionKey),
               sessionLabels: {
@@ -185,6 +191,7 @@ export function createSessionActions(
             seen.add(s.key);
             return true;
           });
+          const userFacingSessions = filterUserFacingSessions(dedupedSessions);
 
           const { currentSessionKey } = get();
           let nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
@@ -195,24 +202,24 @@ export function createSessionActions(
             }
           }
           if (isSubagentSessionKey(nextSessionKey)) {
-            const redirected = pickUserFacingSession(dedupedSessions, currentSessionKey);
+            const redirected = pickUserFacingSession(userFacingSessions, currentSessionKey);
             if (redirected) nextSessionKey = redirected.key;
           }
-          if (!dedupedSessions.find((s) => s.key === nextSessionKey) && dedupedSessions.length > 0) {
+          if (!userFacingSessions.find((s) => s.key === nextSessionKey) && userFacingSessions.length > 0) {
             // Current session not found in the backend list
             const isNewEmptySession = get().messages.length === 0;
             if (!isNewEmptySession) {
-              const fallback = pickUserFacingSession(dedupedSessions);
+              const fallback = pickUserFacingSession(userFacingSessions);
               if (fallback) nextSessionKey = fallback.key;
             }
           }
 
-          const sessionsWithCurrent = !dedupedSessions.find((s) => s.key === nextSessionKey) && nextSessionKey
+          const sessionsWithCurrent = !userFacingSessions.find((s) => s.key === nextSessionKey) && nextSessionKey
             ? [
-              ...dedupedSessions,
+              ...userFacingSessions,
               { key: nextSessionKey, displayName: nextSessionKey },
             ]
-            : dedupedSessions;
+            : userFacingSessions;
 
           const discoveredActivity = Object.fromEntries(
             sessionsWithCurrent
@@ -250,6 +257,11 @@ export function createSessionActions(
     // ── Switch session ──
 
     switchSession: (key: string) => {
+      if (isSubagentSessionKey(key)) {
+        const redirected = pickUserFacingSession(get().sessions, get().currentSessionKey);
+        if (!redirected) return;
+        key = redirected.key;
+      }
       const { currentSessionKey, messages, sessionLastActivity, sessionLabels } = get();
       // Only treat sessions with no history records and no activity timestamp as empty.
       // Relying solely on messages.length is unreliable because switchSession clears

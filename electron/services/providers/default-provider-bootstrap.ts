@@ -59,10 +59,9 @@ async function fetchNginxModelConfig(baseUrl: string): Promise<NginxModelEntry |
   }
 }
 
-function buildModelOverrides(_nginxEntry: NginxModelEntry | null): Record<string, unknown> {
-  // Match custom vLLM direct providers (compat only). Nginx reasoning/input flags
-  // must not change OpenClaw compile — gateway rewrites model name at HTTP layer.
-  return buildLyAutoModelOverrides();
+function buildModelOverrides(nginxEntry: NginxModelEntry | null): Record<string, unknown> {
+  // Compat-only for compile parity; input modalities come from nginx or ly-auto default.
+  return buildLyAutoModelOverrides(nginxEntry);
 }
 
 function createLyAutoAccount(existing?: ProviderAccount | null): ProviderAccount {

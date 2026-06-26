@@ -3,22 +3,14 @@ import { invokeIpc } from '@/lib/api-client';
 import { recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
 import { useAgentsStore } from '@/stores/agents';
 import {
-  beginFirstSessionPerf,
-  markFirstSessionRpcCompleted,
-  markFirstSessionRpcStarted,
-} from './first-session-perf';
-import {
-  beginChatRunPerf,
-  markChatRunRpcCompleted,
-  markChatRunRpcStarted,
-} from './chat-run-perf';
-import {
   clearAbortedChatRuns,
   clearErrorRecoveryTimer,
   clearHistoryPoll,
   dedupeEquivalentAttachmentUserMessages,
   getLastChatEventAt,
   markAbortedChatRun,
+  markAbortHistoryQuietPeriod,
+  markUserAbort,
   isUserSecurityDenialMessage,
   buildSecurityCancelNotice,
   setLastChatEventAt,
@@ -27,6 +19,11 @@ import {
 
 import type { ChatSession, RawMessage, ReasoningMode } from './types';
 import { buildClearedActiveRunPatch } from './run-lifecycle';
+import { refreshSessionBackendActivity } from './session-backend-bridge';
+import { shouldForceAbortStuckRun } from './user-turn-lifecycle';
+import { abortPendingChildDelegations } from './abort-child-delegations';
+import { persistUserAbortedSession } from './user-aborted-sessions';
+import { prepareContextBeforeSend } from './context-send-guard';
 import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
 import {
   bindRunIdToObservation,
@@ -34,6 +31,7 @@ import {
   detectTaskWorkflowKind,
 } from './runaway-tool-observer';
 import { buildInitialConvergenceSystemPrompt } from './task-convergence-strategy';
+import { clearToolWatchdogsForRun } from './tool-lifecycle-watchdog';
 
 function normalizeAgentId(value: string | undefined | null): string {
   return (value ?? '').trim().toLowerCase() || 'main';
@@ -49,10 +47,8 @@ function buildFallbackMainSessionKey(agentId: string): string {
   return `agent:${normalizeAgentId(agentId)}:main`;
 }
 
-function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' | 'high' {
-  if (mode === 'fast') return 'off';
-  if (mode === 'expert') return 'high';
-  return 'medium';
+function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' {
+  return mode === 'fast' ? 'off' : 'medium';
 }
 
 function isSlashCommand(message: string): boolean {
@@ -92,7 +88,6 @@ function isLightweightInput(message: string, hasMedia: boolean): boolean {
 }
 
 function getEffectiveReasoningMode(message: string, selectedMode: ReasoningMode, hasMedia: boolean): ReasoningMode {
-  if (selectedMode === 'expert') return selectedMode;
   if (isLightweightInput(message, hasMedia)) return 'fast';
   return selectedMode;
 }
@@ -327,6 +322,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           streamingMessage: null,
           streamingTools: [],
           activeRunId: null,
+          activeTool: null,
           error: null,
           pendingFinal: false,
           lastUserMessageAt: null,
@@ -392,6 +388,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         streamingText: '',
         streamingMessage: null,
         streamingTools: [],
+        activeTool: null,
         pendingFinal: false,
         lastUserMessageAt: nowMs,
       }));
@@ -435,81 +432,101 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       const SOFT_NO_RESPONSE_NOTICE_MS = 90_000;
       const HARD_NO_RESPONSE_TIMEOUT_MS = 15 * 60_000;
       const PENDING_FINAL_STUCK_MS = 90_000;
+      const TOOL_EXECUTION_STALE_MS = 2 * 60_000;
       let slowResponseNoticeLogged = false;
       const checkStuck = () => {
-        const state = get();
-        if (!state.sending) return;
-        if (state.streamingMessage || state.streamingText) return;
-        if (state.pendingFinal) {
+        void (async () => {
+          const state = get();
+          if (!state.sending) return;
           const idleMs = Date.now() - getLastChatEventAt();
-          if (idleMs >= PENDING_FINAL_STUCK_MS) {
-            void get().loadHistory(true, { force: true }).finally(() => {
-              const next = get();
-              if (next.currentSessionKey !== currentSessionKey || !next.sending) return;
-              if (Date.now() - getLastChatEventAt() < PENDING_FINAL_STUCK_MS / 2) return;
-              clearHistoryPoll();
-              clearErrorRecoveryTimer();
-              set(buildClearedActiveRunPatch());
+          const hasRunningTools = state.streamingTools.some((tool) => tool.status === 'running');
+          const backendSnapshot = await refreshSessionBackendActivity(currentSessionKey);
+          if (backendSnapshot) {
+            set({
+              sessionBackendActivity: backendSnapshot.session,
+              gatewayBackgroundActivity: backendSnapshot.background,
             });
           }
-          setTimeout(checkStuck, 10_000);
-          return;
-        }
-        const idleMs = Date.now() - getLastChatEventAt();
-        if (idleMs < SOFT_NO_RESPONSE_NOTICE_MS) {
-          setTimeout(checkStuck, 10_000);
-          return;
-        }
-        if (idleMs < HARD_NO_RESPONSE_TIMEOUT_MS) {
-          if (!slowResponseNoticeLogged) {
-            slowResponseNoticeLogged = true;
-            console.info('[chat.safety-timeout] still waiting for first model response', {
-              idleMs,
-              activeRunId: state.activeRunId,
-              currentSessionKey,
+          const backendActivity = backendSnapshot?.session ?? get().sessionBackendActivity;
+          const backendStillActive = backendActivity && !shouldForceAbortStuckRun(backendActivity);
+
+          if (hasRunningTools && idleMs >= TOOL_EXECUTION_STALE_MS) {
+            if (backendStillActive) {
+              setTimeout(checkStuck, 10_000);
+              return;
+            }
+            clearHistoryPoll();
+            abortGatewayRun(currentSessionKey);
+            clearPendingComplexTaskPlan(currentSessionKey);
+            set({
+              error: i18n.t('chat:errors.toolExecutionTimeout'),
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              sending: false,
+              activeRunId: null,
+              pendingFinal: false,
+              lastUserMessageAt: null,
             });
+            return;
           }
-          setTimeout(checkStuck, 15_000);
-          return;
-        }
-        clearHistoryPoll();
-        abortGatewayRun(currentSessionKey);
-        clearPendingComplexTaskPlan(currentSessionKey);
-        set({
-          error: i18n.t('chat:errors.modelResponseTimeoutLong'),
-          sending: false,
-          activeRunId: null,
-          lastUserMessageAt: null,
-        });
+          if (state.streamingMessage || state.streamingText) {
+            setTimeout(checkStuck, 10_000);
+            return;
+          }
+          if (state.pendingFinal) {
+            if (idleMs >= PENDING_FINAL_STUCK_MS) {
+              void get().loadHistory(true, { force: true }).finally(() => {
+                const next = get();
+                if (next.currentSessionKey !== currentSessionKey || !next.sending) return;
+                if (Date.now() - getLastChatEventAt() < PENDING_FINAL_STUCK_MS / 2) return;
+                if (next.sessionBackendActivity && !shouldForceAbortStuckRun(next.sessionBackendActivity)) return;
+                clearHistoryPoll();
+                clearErrorRecoveryTimer();
+                set(buildClearedActiveRunPatch());
+              });
+            }
+            setTimeout(checkStuck, 10_000);
+            return;
+          }
+          if (idleMs < SOFT_NO_RESPONSE_NOTICE_MS) {
+            setTimeout(checkStuck, 10_000);
+            return;
+          }
+          if (idleMs < HARD_NO_RESPONSE_TIMEOUT_MS) {
+            if (!slowResponseNoticeLogged) {
+              slowResponseNoticeLogged = true;
+              console.info('[chat.safety-timeout] still waiting for first model response', {
+                idleMs,
+                activeRunId: state.activeRunId,
+                currentSessionKey,
+              });
+            }
+            setTimeout(checkStuck, 15_000);
+            return;
+          }
+          if (backendStillActive) {
+            setTimeout(checkStuck, 10_000);
+            return;
+          }
+          clearHistoryPoll();
+          abortGatewayRun(currentSessionKey);
+          clearPendingComplexTaskPlan(currentSessionKey);
+          set({
+            error: i18n.t('chat:errors.modelResponseTimeoutLong'),
+            sending: false,
+            activeRunId: null,
+            lastUserMessageAt: null,
+          });
+        })();
       };
       setTimeout(checkStuck, 30_000);
 
-      let firstSessionPerfActive = false;
-      let firstSessionPerfMethod = 'chat.send';
       const idempotencyKey = crypto.randomUUID();
       try {
-        firstSessionPerfMethod = hasMedia ? 'chat.sendWithMedia' : 'chat.send';
-        beginChatRunPerf({
-          localId: idempotencyKey,
-          sessionKey: currentSessionKey,
-          method: firstSessionPerfMethod,
-          selectedReasoningMode: reasoningMode,
-          effectiveReasoningMode,
-          messageLength: trimmed.length,
-          hasMedia,
-          attachmentCount: attachments?.length ?? 0,
-          isMainSession: currentSessionKey.endsWith(':main'),
-        });
         if (hasMedia) {
           console.log('[sendMessage] Media paths:', attachments!.map(a => a.stagedPath));
         }
-        firstSessionPerfActive = beginFirstSessionPerf({
-          sessionKey: currentSessionKey,
-          idempotencyKey,
-          messageLength: trimmed.length,
-          hasMedia: Boolean(hasMedia),
-          attachmentCount: attachments?.length ?? 0,
-        });
 
         // Cache image attachments BEFORE the IPC call to avoid race condition:
         // history may reload (via Gateway event) before the RPC returns.
@@ -528,10 +545,6 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         let result: { success: boolean; result?: { runId?: string }; error?: string };
         // Longer timeout for chat sends to tolerate high-latency networks (avoids connect error)
         const CHAT_SEND_TIMEOUT_MS = 120_000;
-        markChatRunRpcStarted(idempotencyKey);
-        if (firstSessionPerfActive) {
-          markFirstSessionRpcStarted(firstSessionPerfMethod);
-        }
 
         if (hasMedia) {
           result = await invokeIpc(
@@ -566,20 +579,6 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             },
             CHAT_SEND_TIMEOUT_MS,
           ) as { success: boolean; result?: { runId?: string }; error?: string };
-        }
-
-        markChatRunRpcCompleted(idempotencyKey, {
-          success: result.success,
-          runId: result.result?.runId ?? null,
-          error: result.error,
-        });
-        if (firstSessionPerfActive) {
-          markFirstSessionRpcCompleted({
-            method: firstSessionPerfMethod,
-            success: result.success,
-            runId: result.result?.runId ?? null,
-            error: result.error,
-          });
         }
 
         console.log(`[sendMessage] RPC result: success=${result.success}, runId=${result.result?.runId || 'none'}`);
@@ -624,6 +623,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
               [currentSessionKey]: {
                 ...(s.sessionStreamingStates[currentSessionKey] ?? {
                   activeRunId: null,
+                  activeTool: null,
                   streamingText: '',
                   streamingMessage: null,
                   streamingTools: [],
@@ -649,17 +649,6 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           }));
         }
       } catch (err) {
-        markChatRunRpcCompleted(idempotencyKey, {
-          success: false,
-          error: String(err),
-        });
-        if (firstSessionPerfActive) {
-          markFirstSessionRpcCompleted({
-            method: firstSessionPerfMethod,
-            success: false,
-            error: String(err),
-          });
-        }
         clearHistoryPoll();
         const errorMessage = String(err);
         if (isUserSecurityDenialMessage(errorMessage)) {
@@ -669,6 +658,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             securityCancelNotice: buildSecurityCancelNotice(errorMessage),
             sending: false,
             activeRunId: null,
+            activeTool: null,
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
@@ -687,15 +677,22 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
     abortRun: async () => {
       clearHistoryPoll();
       clearErrorRecoveryTimer();
-      const { currentSessionKey, activeRunId } = get();
+      markAbortHistoryQuietPeriod();
+      markUserAbort();
+      const { currentSessionKey, activeRunId, messages } = get();
       if (activeRunId) {
         markAbortedChatRun(activeRunId);
+      }
+      clearToolWatchdogsForRun(set, get, activeRunId, 'user-cancelled');
+      if (currentSessionKey) {
+        persistUserAbortedSession(currentSessionKey, activeRunId);
       }
 
       set({
         sending: false,
         aborting: false,
         activeRunId: null,
+        activeTool: null,
         streamingText: '',
         streamingMessage: null,
         pendingFinal: false,
@@ -703,18 +700,23 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
         pendingToolImages: [],
         streamingTools: [],
         error: null,
+        runAborted: true,
       });
 
       if (currentSessionKey) {
-        invokeIpc(
-          'gateway:rpc',
-          'sessions.abort',
-          {
-            key: currentSessionKey,
-            ...(activeRunId ? { runId: activeRunId } : {}),
-          },
-          10_000,
-        ).catch((err) => {
+        const rpc = async (method: string, params: Record<string, unknown>, timeoutMs?: number) =>
+          invokeIpc('gateway:rpc', method, params, timeoutMs);
+        void Promise.allSettled([
+          rpc(
+            'sessions.abort',
+            {
+              key: currentSessionKey,
+              ...(activeRunId ? { runId: activeRunId } : {}),
+            },
+            10_000,
+          ),
+          abortPendingChildDelegations(messages, rpc),
+        ]).catch((err) => {
           console.warn('[abortRun] Failed to abort run:', err);
         });
       }

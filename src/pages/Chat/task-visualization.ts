@@ -1,5 +1,22 @@
 import { extractText, extractTextSegments, extractThinkingSegments, extractToolUse } from './message-utils';
 import type { ContentBlock, RawMessage, ToolStatus } from '@/stores/chat';
+import { summarizeChildRunActivity } from '@/lib/subagent-delegation';
+
+export type {
+  ChildDelegationBinding,
+  InFlightChildDelegation,
+  SubagentCompletionInfo,
+} from '@/lib/subagent-delegation';
+export {
+  collectChildDelegationBindings,
+  collectCompletedSubagentSessionKeys,
+  findInFlightChildDelegation,
+  hasPendingChildDelegation,
+  isWaitingOnSubagentDelegation,
+  parseAgentIdFromSessionKey,
+  parseSubagentCompletionInfo,
+  summarizeChildRunActivity,
+} from '@/lib/subagent-delegation';
 
 export type TaskStepStatus = 'running' | 'completed' | 'error';
 
@@ -7,7 +24,7 @@ export interface TaskStep {
   id: string;
   label: string;
   status: TaskStepStatus;
-  kind: 'thinking' | 'tool' | 'system' | 'message';
+  kind: 'thinking' | 'tool' | 'system' | 'message' | 'model';
   detail?: string;
   depth: number;
   parentId?: string;
@@ -50,12 +67,6 @@ interface DeriveTaskStepsInput {
   omitLastStreamingMessageSegment?: boolean;
 }
 
-export interface SubagentCompletionInfo {
-  sessionKey: string;
-  sessionId: string;
-  agentId: string;
-}
-
 function normalizeText(text: string | null | undefined): string | undefined {
   if (!text) return undefined;
   const normalized = text.replace(/[ \t]+/g, ' ').trim();
@@ -70,30 +81,6 @@ function makeToolId(prefix: string, name: string, index: number): string {
 function hasThinkingBlock(message: RawMessage): boolean {
   if (!Array.isArray(message.content)) return false;
   return (message.content as ContentBlock[]).some((block) => block.type === 'thinking');
-}
-
-export function parseAgentIdFromSessionKey(sessionKey: string): string | null {
-  const parts = sessionKey.split(':');
-  if (parts.length < 2 || parts[0] !== 'agent') return null;
-  return parts[1] || null;
-}
-
-export function parseSubagentCompletionInfo(message: RawMessage): SubagentCompletionInfo | null {
-  const text = typeof message.content === 'string'
-    ? message.content
-    : Array.isArray(message.content)
-      ? message.content.map((block) => ('text' in block && typeof block.text === 'string' ? block.text : '')).join('\n')
-      : '';
-  if (!text.includes('[Internal task completion event]')) return null;
-
-  const sessionKeyMatch = text.match(/session_key:\s*(.+)/);
-  const sessionIdMatch = text.match(/session_id:\s*(.+)/);
-  const sessionKey = sessionKeyMatch?.[1]?.trim();
-  const sessionId = sessionIdMatch?.[1]?.trim();
-  if (!sessionKey || !sessionId) return null;
-  const agentId = parseAgentIdFromSessionKey(sessionKey);
-  if (!agentId) return null;
-  return { sessionKey, sessionId, agentId };
 }
 
 /** OpenClaw session orchestration tools — hidden from the execution graph UI. */
@@ -187,7 +174,7 @@ function attachTopology(steps: TaskStep[]): TaskStep[] {
       continue;
     }
 
-    if (step.kind === 'thinking' || step.kind === 'message') {
+    if (step.kind === 'thinking' || step.kind === 'message' || step.kind === 'model') {
       withTopology.push({
         ...step,
         depth: activeBranchNodeId ? 3 : 1,
@@ -229,14 +216,15 @@ function appendDetailSegments(
   const normalizedSegments = segments
     .map((segment) => normalizeText(segment))
     .filter((segment): segment is string => !!segment)
-    .filter((segment) => !isModelCommandApprovalNarration(segment))
-    .filter((segment) => !isSubagentOrchestrationNarration(segment));
+    .filter((segment) => !isModelCommandApprovalNarration(segment));
 
   normalizedSegments.forEach((detail, index) => {
+    const isLast = index === normalizedSegments.length - 1;
+    const isRunning = options.running && isLast;
     options.upsertStep({
       id: `${options.idPrefix}-${index}`,
       label: options.label,
-      status: options.running && index === normalizedSegments.length - 1 ? 'running' : 'completed',
+      status: isRunning ? 'running' : 'completed',
       kind: options.kind,
       detail,
       depth: 1,
@@ -325,7 +313,6 @@ export function deriveTaskSteps({
     });
 
     toolUses.forEach((tool, index) => {
-      if (isSubagentOrchestrationToolName(tool.name)) return;
       const input = tool.input as Record<string, unknown>;
       const url = tool.name === 'web_fetch' && typeof input?.url === 'string' ? input.url : undefined;
       upsertStep({
@@ -355,7 +342,7 @@ export function deriveTaskSteps({
       });
       if (thinkingSegments.length === 0 && hasThinkingBlock(streamMessage)) {
         upsertStep({
-          id: 'stream-thinking-empty',
+          id: 'stream-thinking-0',
           label: 'Thinking',
           status: 'running',
           kind: 'thinking',
@@ -383,7 +370,6 @@ export function deriveTaskSteps({
   const activeToolIds = new Set<string>();
   const activeToolNamesWithoutIds = new Set<string>();
   streamingTools.forEach((tool, index) => {
-    if (isSubagentOrchestrationToolName(tool.name)) return;
     const id = tool.toolCallId || tool.id || makeToolId('stream-status', tool.name, index);
     activeToolIds.add(id);
     if (!tool.toolCallId && !tool.id) {
@@ -401,7 +387,6 @@ export function deriveTaskSteps({
 
   if (streamMessage) {
     extractToolUse(streamMessage).forEach((tool, index) => {
-      if (isSubagentOrchestrationToolName(tool.name)) return;
       const id = tool.id || makeToolId('stream-tool', tool.name, index);
       if (activeToolIds.has(id) || activeToolNamesWithoutIds.has(tool.name)) return;
       const input = tool.input as Record<string, unknown>;
@@ -419,4 +404,143 @@ export function deriveTaskSteps({
   }
 
   return attachTopology(steps);
+}
+
+export function findLatestSpawnStepId(steps: TaskStep[]): string | null {
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    if (/sessions_spawn/i.test(steps[i].label)) return steps[i].id;
+  }
+  return null;
+}
+
+function findSubagentBranchNodeId(steps: TaskStep[], spawnStepId?: string | null): string | null {
+  if (spawnStepId) {
+    const branchId = `${spawnStepId}:branch`;
+    if (steps.some((step) => step.id === branchId)) return branchId;
+  }
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const step = steps[i];
+    if (step.kind === 'system' && /Spawned branch/i.test(step.detail ?? '')) {
+      return step.id;
+    }
+  }
+  return null;
+}
+
+function formatSubagentBranchLabel(branchLabel: string | null | undefined, childRunning: boolean): string {
+  const name = branchLabel?.trim() || '子 Agent';
+  return childRunning ? `子任务执行中 · ${name}` : `子任务 · ${name}`;
+}
+
+function resolveSubagentBranchNode(
+  parentSteps: TaskStep[],
+  branchKey: string,
+  branchLabel?: string | null,
+  spawnStepId?: string | null,
+  childRunning = false,
+  childActivityDetail?: string | null,
+  childError = false,
+): { steps: TaskStep[]; branchNodeId: string } {
+  const resolvedSpawnStepId = spawnStepId ?? findLatestSpawnStepId(parentSteps);
+  let branchNodeId = findSubagentBranchNodeId(parentSteps, resolvedSpawnStepId);
+  const label = childError
+    ? `子任务无响应 · ${branchLabel?.trim() || '子 Agent'}`
+    : formatSubagentBranchLabel(branchLabel, childRunning);
+  const detail = childError
+    ? (childActivityDetail?.trim() || '子 Agent 长时间无进展，可能已在模型调用中卡住')
+    : (childActivityDetail?.trim()
+      || (childRunning ? '子 Agent 正在后台执行' : `Subagent: ${branchLabel?.trim() || 'subagent'}`));
+  if (!branchNodeId) {
+    branchNodeId = `${branchKey}:branch`;
+    return {
+      branchNodeId,
+      steps: [
+        ...parentSteps,
+        {
+          id: branchNodeId,
+          label,
+          status: childError ? 'error' : (childRunning ? 'running' : 'completed'),
+          kind: 'system',
+          detail,
+          depth: 2,
+          parentId: resolvedSpawnStepId ?? 'agent-run',
+        },
+      ],
+    };
+  }
+
+  return {
+    branchNodeId,
+    steps: parentSteps.map((step) => {
+      if (step.id !== branchNodeId) return step;
+      return {
+        ...step,
+        label,
+        detail,
+        status: childError ? 'error' : (childRunning ? 'running' : step.status),
+      };
+    }),
+  };
+}
+
+/** Nest child transcript steps under the parent spawn branch in the execution graph. */
+export function attachSubagentChildSteps(
+  parentSteps: TaskStep[],
+  childMessages: RawMessage[],
+  branchKey: string,
+  options?: {
+    branchLabel?: string | null;
+    spawnStepId?: string | null;
+    /** Keep the branch running while the child session is still in flight on the backend. */
+    forceChildRunning?: boolean;
+    /** Mark the branch as failed when the child session stalled without completion. */
+    forceChildError?: boolean;
+  },
+): TaskStep[] {
+  const childActivityDetail = summarizeChildRunActivity(childMessages);
+  const childError = options?.forceChildError ?? false;
+  if (childMessages.length === 0) {
+    return resolveSubagentBranchNode(
+      parentSteps,
+      branchKey,
+      options?.branchLabel,
+      options?.spawnStepId,
+      options?.forceChildRunning ?? true,
+      childActivityDetail,
+      childError,
+    ).steps;
+  }
+
+  const childDerived = deriveTaskSteps({
+    messages: childMessages,
+    streamingMessage: null,
+    streamingTools: [],
+  });
+  const childRunning = !childError && (
+    options?.forceChildRunning
+    || childDerived.some((step) => step.status === 'running')
+  );
+  const { steps: withBranch, branchNodeId } = resolveSubagentBranchNode(
+    parentSteps,
+    branchKey,
+    options?.branchLabel,
+    options?.spawnStepId,
+    childRunning,
+    childActivityDetail,
+    childError,
+  );
+
+  const existingIds = new Set(withBranch.map((step) => step.id));
+  const nestedChildSteps = childDerived
+    .map((step) => ({
+      ...step,
+      id: `${branchKey}:${step.id}`,
+      depth: 2 + step.depth,
+      parentId: step.parentId && step.parentId !== 'agent-run'
+        ? `${branchKey}:${step.parentId}`
+        : branchNodeId,
+    }))
+    .filter((step) => !existingIds.has(step.id));
+
+  return [...withBranch, ...nestedChildSteps];
 }

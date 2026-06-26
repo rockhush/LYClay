@@ -1,5 +1,11 @@
 import i18n from '@/i18n';
 import { invokeIpc } from '@/lib/api-client';
+import {
+  displayNameFromStagedDiskFileName,
+  extractMediaAttachedRefs,
+  isVirtualMediaUri,
+  preferAuthoritativeMediaRefs,
+} from '../../../shared/media-staging';
 import type { AttachedFileMeta, ChatSession, ContentBlock, RawMessage, ToolStatus } from './types';
 
 const COMPLEX_TASK_PLAN_MARKER = '[LYClaw complex task planning phase]';
@@ -41,6 +47,47 @@ export function clearAbortedChatRuns(): void {
   _abortedChatRunIds.clear();
 }
 
+// Late abort-type error events may arrive after the run id was forgotten.
+let _lastUserAbortAt = 0;
+const USER_ABORT_ERROR_SUPPRESS_WINDOW_MS = 15_000;
+
+export function markUserAbort(): void {
+  _lastUserAbortAt = Date.now();
+}
+
+export function isWithinUserAbortWindow(): boolean {
+  return _lastUserAbortAt > 0 && Date.now() - _lastUserAbortAt < USER_ABORT_ERROR_SUPPRESS_WINDOW_MS;
+}
+
+/** Generic runtime abort strings (user stop and system-side abort both use these). */
+export function isAbortErrorMessage(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const normalized = error.toLowerCase();
+  if (normalized.includes('operation was aborted')) return true;
+  if (normalized.includes('request was aborted')) return true;
+  return false;
+}
+
+/** Broader abort detection for live event routing (includes partial "abort" tokens). */
+export function isAbortRelatedErrorMessage(error: string | null | undefined): boolean {
+  if (!error) return false;
+  if (isAbortErrorMessage(error)) return true;
+  return error.toLowerCase().includes('abort');
+}
+
+export function shouldTreatAbortAsUserStop(
+  error: string | null | undefined,
+  options: {
+    runId?: string | null;
+    runAborted?: boolean;
+  } = {},
+): boolean {
+  if (!isAbortRelatedErrorMessage(error)) return false;
+  if (options.runId && isAbortedChatRun(options.runId)) return true;
+  if (options.runAborted) return true;
+  return isWithinUserAbortWindow();
+}
+
 // Timer for delayed error finalization. When the Gateway reports a mid-stream
 // error (e.g. "terminated"), it may retry internally and recover. We wait
 // before committing the error to give the recovery path a chance.
@@ -67,15 +114,48 @@ export function isUserSecurityDenialMessage(message: unknown): boolean {
 }
 
 /**
+ * True when the error bar already shows the dedicated backend-unresponsive copy.
+ * Abort strings are handled separately and must not map here.
+ */
+export function isBackendRunFailureError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return error === i18n.t('chat:errors.backendRunStopped');
+}
+
+/**
  * Runtime errors that carry no actionable information for the user and should
  * not surface in the chat error bar or run termination notice.
  */
 export function isSuppressedRunError(error: string | null | undefined): boolean {
   if (!error) return false;
   const normalized = error.toLowerCase();
-  if (normalized.includes('operation was aborted')) return true;
   if (normalized.includes('session file changed while embedded prompt lock was released')) return true;
+  if (isAbortErrorMessage(error) && isWithinUserAbortWindow()) return true;
   return false;
+}
+
+export function resolveRunFailureErrorMessage(error: string): string {
+  if (isAbortErrorMessage(error)) {
+    return i18n.t('chat:errors.runAbortedBySystem');
+  }
+  return truncateRunErrorMessage(error);
+}
+
+const RUN_ERROR_MESSAGE_MAX_CHARS = 480;
+
+/** Keep runtime error banners readable and prevent huge payloads from freezing the UI. */
+export function truncateRunErrorMessage(message: string, maxChars = RUN_ERROR_MESSAGE_MAX_CHARS): string {
+  const normalized = message.replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'An error occurred';
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars)}…`;
+}
+
+const RECOVERABLE_RUNTIME_ERROR_PATTERN = /terminated|temporarily unavailable|rate limit|overloaded|429|502|503|504|timeout/i;
+
+/** Gateway may retry these errors internally; others should end the run immediately. */
+export function isRecoverableRuntimeError(message: string): boolean {
+  return RECOVERABLE_RUNTIME_ERROR_PATTERN.test(message);
 }
 
 /**
@@ -103,6 +183,17 @@ function clearHistoryPoll(): void {
     clearTimeout(_historyPollTimer);
     _historyPollTimer = null;
   }
+}
+
+const ABORT_HISTORY_QUIET_MS = 2_000;
+let _abortHistoryQuietUntil = 0;
+
+function markAbortHistoryQuietPeriod(ms = ABORT_HISTORY_QUIET_MS): void {
+  _abortHistoryQuietUntil = Date.now() + ms;
+}
+
+function isAbortHistoryQuietPeriod(): boolean {
+  return Date.now() < _abortHistoryQuietUntil;
 }
 
 // ── Local image cache ─────────────────────────────────────────
@@ -607,13 +698,7 @@ function getMessageText(content: unknown): string {
 
 /** Extract media file refs from [media attached: <path> (<mime>) | ...] patterns */
 function extractMediaRefs(text: string): Array<{ filePath: string; mimeType: string }> {
-  const refs: Array<{ filePath: string; mimeType: string }> = [];
-  const regex = /\[media attached:\s*([^\s(]+)\s*\(([^)]+)\)\s*\|[^\]]*\]/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    refs.push({ filePath: match[1], mimeType: match[2] });
-  }
-  return refs;
+  return preferAuthoritativeMediaRefs(extractMediaAttachedRefs(text));
 }
 
 /** Map common file extensions to MIME types */
@@ -818,7 +903,8 @@ export function normalizeAttachmentBaseName(fileName: string): string {
 /** Last segment of `filePath`, normalized for display (encoding fixes). */
 export function attachmentFileNameFromPath(filePath: string): string {
   const base = filePath.split(/[\\/]/).pop() || 'file';
-  return normalizeAttachmentBaseName(base);
+  const display = displayNameFromStagedDiskFileName(base);
+  return normalizeAttachmentBaseName(display);
 }
 
 /**
@@ -1058,7 +1144,7 @@ async function loadMissingPreviews(messages: RawMessage[]): Promise<boolean> {
     // Path 1: files with explicit filePath field (raw path detection or enriched refs)
     for (const file of msg._attachedFiles) {
       const fp = file.filePath;
-      if (!fp || seenPaths.has(fp)) continue;
+      if (!fp || seenPaths.has(fp) || isVirtualMediaUri(fp)) continue;
       // Images: need preview. Non-images: need file size (for FileCard display).
       const needsLoad = file.mimeType.startsWith('image/')
         ? !file.preview
@@ -1197,9 +1283,95 @@ function isToolResultRole(role: unknown): boolean {
   return normalized === 'toolresult' || normalized === 'tool_result';
 }
 
+const CHANNEL_SEND_TOOL_PATTERN = /(?:message|dingtalk|chat|send|notify|im)(?:[_.-]|$)/i;
+
+function pushChannelSendPayload(payloads: string[], input: Record<string, unknown>): void {
+  for (const key of ['text', 'message', 'content', 'body', 'msg']) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim()) {
+      payloads.push(value.trim());
+    }
+  }
+}
+
+function extractChannelSendPayloads(message: { role?: unknown; content?: unknown }): string[] {
+  if (message.role !== 'assistant') return [];
+  const payloads: string[] = [];
+  const content = message.content;
+  if (!Array.isArray(content)) return payloads;
+  for (const block of content as ContentBlock[]) {
+    if (block.type !== 'tool_use' && block.type !== 'toolCall' || !block.name) continue;
+    if (!CHANNEL_SEND_TOOL_PATTERN.test(block.name)) continue;
+    const rawInput = (block as ContentBlock & { input?: unknown; arguments?: unknown }).input
+      ?? (block as ContentBlock & { arguments?: unknown }).arguments;
+    if (typeof rawInput === 'string') {
+      try {
+        pushChannelSendPayload(payloads, JSON.parse(rawInput) as Record<string, unknown>);
+      } catch {
+        if (rawInput.trim()) payloads.push(rawInput.trim());
+      }
+    } else if (rawInput && typeof rawInput === 'object') {
+      pushChannelSendPayload(payloads, rawInput as Record<string, unknown>);
+    }
+  }
+  return payloads;
+}
+
+/** Short DingTalk/channel delivery acknowledgments that should not appear in desktop chat. */
+function isChannelDeliveryConfirmationText(text: string): boolean {
+  const normalized = stripSilentReplyToken(text).replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  const patterns = [
+    /^已通过钉钉.{0,32}发送[。.!！]?$/i,
+    /^消息已通过钉钉发送[。.!！]?$/i,
+    /^已.{0,8}向.{0,48}发送(?:消息)?[。.!！]?$/i,
+    /^已向.{0,48}发送(?:消息)?[。.!！]?$/i,
+    /^sent (?:the )?message (?:via|through) dingtalk[。.!]?$/i,
+    /^message sent (?:via|through) dingtalk[。.!]?$/i,
+  ];
+  if (patterns.some((pattern) => pattern.test(normalized))) return true;
+  if (/钉钉/.test(normalized) && /发送/.test(normalized) && normalized.length <= 96) return true;
+  return false;
+}
+
+/** Hide assistant echoes of outbound channel payloads (e.g. DingTalk send-to-other-user). */
+function isChannelOutboundEchoMessage(
+  message: { role?: unknown; content?: unknown },
+  allMessages: Array<{ role?: unknown; content?: unknown }>,
+): boolean {
+  if (message.role !== 'assistant') return false;
+  const text = stripSilentReplyToken(getMessageText(message.content)).replace(/\s+/g, ' ').trim();
+  if (!text || text.length > 2_000) return false;
+
+  const messageIndex = allMessages.indexOf(message);
+  const scanUntil = messageIndex >= 0 ? messageIndex : allMessages.length;
+  const payloads: string[] = [];
+  for (let i = 0; i < scanUntil; i += 1) {
+    payloads.push(...extractChannelSendPayloads(allMessages[i]));
+  }
+  if (payloads.length === 0) return false;
+
+  return payloads.some((payload) => {
+    const normalizedPayload = payload.replace(/\s+/g, ' ').trim();
+    if (!normalizedPayload) return false;
+    return text === normalizedPayload
+      || text.includes(normalizedPayload)
+      || normalizedPayload.includes(text);
+  });
+}
+
+function filterChannelOutboundEchoMessages<T extends { role?: unknown; content?: unknown }>(messages: T[]): T[] {
+  return messages.filter((message) => !isChannelOutboundEchoMessage(message, messages));
+}
+
 function isInternalMessageText(text: string): boolean {
-  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(text.trim())) return true;
+  const normalized = text.trim();
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/.test(normalized)) return true;
+  if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(normalized)) return true;
+  if (/^\[LYCLAW internal tool failure feedback\]/i.test(normalized)) return true;
+  if (/^\[LYCLAW internal convergence directive\]/i.test(normalized)) return true;
   if (containsSilentReplyToken(text) && stripSilentReplyToken(text).trim().length === 0) return true;
+  if (isChannelDeliveryConfirmationText(text)) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(text.trim())) return true;
   return isRuntimeSystemInjection(text);
 }
@@ -1224,9 +1396,13 @@ function stripSilentReplyToken(text: string): string {
 
 /** True for internal plumbing messages that should never be shown in the UI. */
 function isInternalMessage(msg: { role?: unknown; content?: unknown }): boolean {
-  if (msg.role === 'system') return true;
+  // 压缩后保留完整对话历史：不再无条件过滤 role=system，因为 OpenClaw 压缩时
+  // 可能注入 system 角色的摘要，完全过滤会导致 UI 上所有 assistant 消息消失。
+  // 只过滤明确的内部消息文本（heartbeat/NO_REPLY/审批提示等）。
   const text = getMessageText(msg.content);
   if ((msg.role === 'user' || msg.role === 'assistant') && isInternalMessageText(text)) return true;
+  // system 消息现在也检查内容，避免把压缩摘要隐藏
+  if (msg.role === 'system' && isInternalMessageText(text)) return true;
   return false;
 }
 
@@ -1478,6 +1654,32 @@ function hasNonToolAssistantContent(message: RawMessage | undefined): boolean {
   return false;
 }
 
+/** User-visible assistant output (text/image). Excludes thinking-only turns. */
+function hasVisibleAssistantContent(message: RawMessage | undefined): boolean {
+  if (!message) return false;
+  if (typeof message.content === 'string') {
+    const text = message.content.trim();
+    return Boolean(text) && !isInternalMessageText(text);
+  }
+
+  const content = message.content;
+  if (Array.isArray(content)) {
+    for (const block of content as ContentBlock[]) {
+      if (block.type === 'text' && block.text?.trim() && !isInternalMessageText(block.text)) {
+        return true;
+      }
+      if (block.type === 'image') return true;
+    }
+  }
+
+  const msg = message as unknown as Record<string, unknown>;
+  if (typeof msg.text === 'string' && msg.text.trim() && !isInternalMessageText(msg.text)) {
+    return true;
+  }
+
+  return false;
+}
+
 function setHistoryPollTimer(timer: ReturnType<typeof setTimeout> | null): void {
   _historyPollTimer = timer;
 }
@@ -1502,6 +1704,8 @@ export {
   toMs,
   clearErrorRecoveryTimer,
   clearHistoryPoll,
+  markAbortHistoryQuietPeriod,
+  isAbortHistoryQuietPeriod,
   extractImagesAsAttachedFiles,
   getMessageText,
   stripGatewayUserMetadata,
@@ -1511,6 +1715,9 @@ export {
   enrichWithToolResultFiles,
   isInternalMessage,
   isInternalMessageText,
+  isChannelDeliveryConfirmationText,
+  isChannelOutboundEchoMessage,
+  filterChannelOutboundEchoMessages,
   stripSilentReplyToken,
   isToolResultRole,
   enrichWithCachedImages,
@@ -1522,6 +1729,7 @@ export {
   collectToolUpdates,
   upsertToolStatuses,
   hasNonToolAssistantContent,
+  hasVisibleAssistantContent,
   isToolOnlyMessage,
   normalizeStreamingMessage,
   matchesOptimisticUserMessage,

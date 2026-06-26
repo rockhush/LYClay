@@ -5,7 +5,9 @@
 
 export const SILENT_REPLY_PATCH_MARKER = 'sanitizeAssistantReplayVisibleText';
 
-const TOKENS_IMPORT_PATCH = /r as isSilentReplyPayloadText, s as stripLeadingSilentToken \} from "\.\/tokens-[^"]+\.js";/;
+const TOKENS_IMPORT_PATCH_OLD = /r as isSilentReplyPayloadText, s as stripLeadingSilentToken \} from "\.\/tokens-[^"]+\.js";/;
+const TOKENS_IMPORT_PATCH_65 = /a as isSilentReplyText, r as isSilentReplyPayloadText \} from "\.\/tokens-[^"]+\.js";/;
+const TOKENS_IMPORT_PATCH_REPLACEMENT = 'a as isSilentReplyText, r as isSilentReplyPayloadText, c as stripSilentToken, s as stripLeadingSilentToken, o as startsWithSilentToken, n as SILENT_REPLY_TOKEN } from';
 
 const REPLAY_HELPER = `function sanitizeAssistantReplayVisibleText(text, silentToken = SILENT_REPLY_TOKEN) {
 	let next = text;
@@ -188,14 +190,18 @@ export function applyOpenClawSilentReplyPatches(source) {
   let patched = false;
   let next = source;
 
-  if (TOKENS_IMPORT_PATCH.test(next) && !next.includes('c as stripSilentToken')) {
-    next = next.replace(TOKENS_IMPORT_PATCH, (match) => {
+  if (TOKENS_IMPORT_PATCH_OLD.test(next) && !next.includes('c as stripSilentToken')) {
+    next = next.replace(TOKENS_IMPORT_PATCH_OLD, (match) => {
       if (match.includes('c as stripSilentToken')) return match;
       return match.replace(
         's as stripLeadingSilentToken } from',
         's as stripLeadingSilentToken, c as stripSilentToken } from',
       );
     });
+    patched = true;
+  }
+  if (TOKENS_IMPORT_PATCH_65.test(next) && !next.includes('SILENT_REPLY_TOKEN')) {
+    next = next.replace(TOKENS_IMPORT_PATCH_65, TOKENS_IMPORT_PATCH_REPLACEMENT);
     patched = true;
   }
 

@@ -52,7 +52,7 @@ import { startSessionTranscriptWatcher } from '../utils/session-transcript-watch
 import { startHostApiServer } from '../api/server';
 import { HostEventBus } from '../api/event-bus';
 import { startUsageReportScheduler, stopUsageReportScheduler, ensureWorkNoReady } from '../utils/reporting';
-import { startCronSupervisor, stopCronSupervisor, requestCronSupervisorPass } from '../gateway/cron-supervisor';
+import { startCronSupervisor, stopCronSupervisor, requestCronSupervisorPass, setCronJobsUpdatedHandler } from '../gateway/cron-supervisor';
 import { deviceOAuthManager } from '../utils/device-oauth';
 import { browserOAuthManager } from '../utils/browser-oauth';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
@@ -650,6 +650,14 @@ if (gotTheLock) {
   gatewayManager = new GatewayManager();
   clawHubService = new ClawHubService();
   hostEventBus = new HostEventBus();
+
+  setCronJobsUpdatedHandler(({ reason, jobId }) => {
+    const payload = { reason, jobId };
+    hostEventBus.emit('cron:updated', payload);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('cron:updated', payload);
+    }
+  });
 
   // Register builtin extensions and load manifest
   registerAllBuiltinExtensions();

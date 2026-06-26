@@ -19,7 +19,7 @@ export {
   appendNodeRequireToNodeOptions,
 } from './win-shell';
 
-function getElectronApp() {
+export function getElectronApp(): ElectronAppLike {
   if (process.versions?.electron) {
     return (require('electron') as typeof import('electron')).app;
   }
@@ -169,6 +169,13 @@ export function getClawHubCliEntryPath(): string {
 export function getClawHubCliBinPath(): string {
   const binName = process.platform === 'win32' ? 'clawhub.cmd' : 'clawhub';
   return join(getElectronApp().getAppPath(), 'node_modules', '.bin', binName);
+}
+
+/**
+ * Get LYClaw company marketplace CLI script path
+ */
+export function getLyclawMarketplaceCliPath(): string {
+  return join(getElectronApp().getAppPath(), 'scripts', 'lyclaw-marketplace-cli.mjs');
 }
 
 /**

@@ -15,7 +15,13 @@ import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
 import type { RawMessage, AttachedFileMeta } from '@/stores/chat';
-import { extractText, extractImages, extractToolUse, formatTimestamp } from './message-utils';
+import {
+  extractText,
+  extractImages,
+  extractToolUse,
+  formatTimestamp,
+  resolveMessageDisplayTimestamp,
+} from './message-utils';
 
 interface ChatMessageProps {
   message: RawMessage;
@@ -139,6 +145,8 @@ export const ChatMessage = memo(function ChatMessage({
 
   const hasStreamingToolStatus = isStreaming && streamingTools.length > 0;
   if (!hasText && images.length === 0 && visibleTools.length === 0 && attachedFiles.length === 0 && !hasStreamingToolStatus) return null;
+
+  const displayTimestamp = formatTimestamp(resolveMessageDisplayTimestamp(message));
 
   return (
     <div
@@ -303,7 +311,7 @@ export const ChatMessage = memo(function ChatMessage({
         {isUser && hasText && (
           <UserHoverBar
             text={text}
-            timestamp={message.timestamp}
+            displayTimestamp={displayTimestamp}
             onEditMessage={onEditMessage}
             showEditButton={showEditButton}
           />
@@ -311,7 +319,7 @@ export const ChatMessage = memo(function ChatMessage({
 
         {/* Hover row for assistant messages — only when there is real text content */}
         {!isUser && hasText && (
-          <AssistantHoverBar text={text} timestamp={message.timestamp} />
+          <AssistantHoverBar text={text} displayTimestamp={displayTimestamp} />
         )}
       </div>
 
@@ -330,12 +338,6 @@ export const ChatMessage = memo(function ChatMessage({
   );
 });
 
-function formatDuration(durationMs?: number): string | null {
-  if (!durationMs || !Number.isFinite(durationMs)) return null;
-  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
-  return `${(durationMs / 1000).toFixed(1)}s`;
-}
-
 function ToolStatusBar({
   tools,
 }: {
@@ -344,14 +346,12 @@ function ToolStatusBar({
     toolCallId?: string;
     name: string;
     status: 'running' | 'completed' | 'error';
-    durationMs?: number;
     summary?: string;
   }>;
 }) {
   return (
     <div className="w-full space-y-1">
       {tools.map((tool) => {
-        const duration = formatDuration(tool.durationMs);
         const isRunning = tool.status === 'running';
         const isError = tool.status === 'error';
         return (
@@ -369,7 +369,6 @@ function ToolStatusBar({
             {isError && <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />}
             <Wrench className="h-3 w-3 shrink-0 opacity-60" />
             <span className="font-mono text-[12px] font-medium">{tool.name}</span>
-            {duration && <span className="text-[11px] opacity-60">{tool.summary ? `(${duration})` : duration}</span>}
             {tool.summary && (
               <span className="truncate text-[11px] opacity-70">{tool.summary}</span>
             )}
@@ -384,12 +383,12 @@ function ToolStatusBar({
 
 function UserHoverBar({
   text,
-  timestamp,
+  displayTimestamp,
   onEditMessage,
   showEditButton,
 }: {
   text: string;
-  timestamp?: number;
+  displayTimestamp: string;
   onEditMessage?: (text: string) => void;
   showEditButton?: boolean;
 }) {
@@ -404,7 +403,7 @@ function UserHoverBar({
   return (
     <div className="flex items-center justify-between w-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
       <span className="text-xs text-muted-foreground">
-        {timestamp ? formatTimestamp(timestamp) : ''}
+        {displayTimestamp}
       </span>
       <div className="flex items-center gap-0.5 -ml-5">
         <Button
@@ -434,7 +433,7 @@ function UserHoverBar({
 
 // ── Assistant hover bar (timestamp + copy, shown on group hover) ─
 
-function AssistantHoverBar({ text, timestamp }: { text: string; timestamp?: number }) {
+function AssistantHoverBar({ text, displayTimestamp }: { text: string; displayTimestamp: string }) {
   const [copied, setCopied] = useState(false);
 
   const copyContent = useCallback(() => {
@@ -446,7 +445,7 @@ function AssistantHoverBar({ text, timestamp }: { text: string; timestamp?: numb
   return (
     <div className="flex items-center justify-between w-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none px-1">
       <span className="text-xs text-muted-foreground">
-        {timestamp ? formatTimestamp(timestamp) : ''}
+        {displayTimestamp}
       </span>
       <Button
         variant="ghost"

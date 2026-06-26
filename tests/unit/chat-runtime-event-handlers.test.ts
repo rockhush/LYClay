@@ -12,7 +12,19 @@ const getMessageErrorMessage = vi.fn((message: { errorMessage?: string; error_me
 const getToolCallFilePath = vi.fn(() => undefined);
 const hasErrorRecoveryTimer = vi.fn(() => false);
 const hasNonToolAssistantContent = vi.fn(() => true);
-const isAbortedChatRun = vi.fn(() => false);
+const abortedChatRunIds = new Set<string>();
+const markAbortedChatRun = vi.fn((runId: string) => {
+  const id = runId.trim();
+  if (id) abortedChatRunIds.add(id);
+});
+const forgetAbortedChatRun = vi.fn((runId: string) => {
+  abortedChatRunIds.delete(runId.trim());
+});
+const isAbortedChatRun = vi.fn((runId: string) => abortedChatRunIds.has(runId.trim()));
+const isBackendRunFailureError = vi.fn(() => false);
+const isRecoverableRuntimeError = vi.fn(() => false);
+const truncateRunErrorMessage = vi.fn((message: string) => message);
+const resolveRunFailureErrorMessage = vi.fn((message: string) => message);
 const isInternalMessage = vi.fn(() => false);
 const isInternalMessageText = vi.fn(() => false);
 const isUserSecurityDenialMessage = vi.fn((message: unknown) =>
@@ -51,6 +63,13 @@ vi.mock('@/stores/chat/helpers', () => ({
   hasErrorRecoveryTimer: (...args: unknown[]) => hasErrorRecoveryTimer(...args),
   hasNonToolAssistantContent: (...args: unknown[]) => hasNonToolAssistantContent(...args),
   isAbortedChatRun: (...args: unknown[]) => isAbortedChatRun(...args),
+  markAbortedChatRun: (...args: unknown[]) => markAbortedChatRun(...args),
+  forgetAbortedChatRun: (...args: unknown[]) => forgetAbortedChatRun(...args),
+  isBackendRunFailureError: (...args: unknown[]) => isBackendRunFailureError(...args),
+  isRecoverableRuntimeError: (...args: unknown[]) => isRecoverableRuntimeError(...args),
+  truncateRunErrorMessage: (...args: unknown[]) => truncateRunErrorMessage(...args),
+  resolveRunFailureErrorMessage: (...args: unknown[]) => resolveRunFailureErrorMessage(...args),
+  attachmentFileNameFromPath: (filePath: string) => filePath.split(/[/\\]/).pop() || filePath,
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
   isInternalMessageText: (...args: unknown[]) => isInternalMessageText(...args),
   isUserSecurityDenialMessage: (...args: unknown[]) => isUserSecurityDenialMessage(...args),
@@ -79,6 +98,8 @@ type ChatLikeState = {
   pendingFinal: boolean;
   lastUserMessageAt: number | null;
   streamingText: string;
+  runAborted?: boolean;
+  contextCompressionStatus: unknown | null;
   loadHistory: ReturnType<typeof vi.fn>;
   sessionStreamingStates: Record<string, unknown>;
 };
@@ -114,6 +135,7 @@ function makeHarness(initial?: Partial<ChatLikeState>) {
 describe('chat runtime event handlers', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    abortedChatRunIds.clear();
     hasErrorRecoveryTimer.mockReturnValue(false);
     collectToolUpdates.mockReturnValue([]);
     getMessageText.mockImplementation((content: unknown) => {
@@ -134,6 +156,10 @@ describe('chat runtime event handlers', () => {
     normalizeStreamingMessage.mockImplementation((message: unknown) => message);
     snapshotStreamingAssistantMessage.mockImplementation((currentStream: unknown) => currentStream ? [currentStream as Record<string, unknown>] : []);
     upsertToolStatuses.mockImplementation((_current, updates) => updates);
+    isBackendRunFailureError.mockReturnValue(false);
+    isRecoverableRuntimeError.mockReturnValue(false);
+    truncateRunErrorMessage.mockImplementation((message: string) => message);
+    resolveRunFailureErrorMessage.mockImplementation((message: string) => message);
   });
 
   it('marks sending on started event', async () => {
@@ -235,7 +261,7 @@ describe('chat runtime event handlers', () => {
     const next = h.read();
     expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
     expect(next.error).toBe('boom');
-    expect(next.runError).toBeNull();
+    expect(next.runError).toBe('boom');
     expect(next.sending).toBe(false);
     expect(next.activeRunId).toBeNull();
     expect(next.lastUserMessageAt).toBeNull();
@@ -446,8 +472,9 @@ describe('chat runtime event handlers', () => {
     ]);
   });
 
-  it('clears runtime state on aborted event', async () => {
+  it('surfaces backend abort as a run failure instead of silently completing', async () => {
     const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    resolveRunFailureErrorMessage.mockReturnValueOnce('Backend agent stopped');
     const h = makeHarness({
       sending: true,
       activeRunId: 'r2',
@@ -465,6 +492,29 @@ describe('chat runtime event handlers', () => {
     expect(next.pendingFinal).toBe(false);
     expect(next.lastUserMessageAt).toBeNull();
     expect(next.pendingToolImages).toEqual([]);
+    expect(next.error).toBe('Backend agent stopped');
+    expect(next.runError).toBe('Backend agent stopped');
+    expect(next.runAborted).toBe(true);
+  });
+
+  it('keeps user-initiated abort silent', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    markAbortedChatRun('r-user');
+    const h = makeHarness({
+      sending: true,
+      activeRunId: 'r-user',
+      streamingText: 'abc',
+      pendingFinal: true,
+      lastUserMessageAt: 5,
+      error: 'stale error',
+    });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {}, 'aborted', 'r-user');
+    const next = h.read();
+    expect(next.sending).toBe(false);
+    expect(next.error).toBeNull();
+    expect(next.runError).toBeNull();
+    expect(forgetAbortedChatRun).toHaveBeenCalledWith('r-user');
   });
 
   it('filters text-block HEARTBEAT_OK deltas before they reach streamingMessage', async () => {
@@ -528,7 +578,7 @@ describe('chat runtime event handlers', () => {
     expect(next.streamingMessage).toBeNull();
     // Should trigger history reload
     expect(clearHistoryPoll).toHaveBeenCalled();
-    expect(next.loadHistory).toHaveBeenCalledWith(true);
+    expect(next.loadHistory).toHaveBeenCalledWith(true, { force: true });
   });
 
   it('infers background session from runId when sessionKey is missing', async () => {

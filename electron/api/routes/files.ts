@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 import { assertPathAllowed } from '../../security/path-policy';
+import { buildStagedDiskFileName } from '../../../shared/media-staging';
 
 const EXT_MIME_MAP: Record<string, string> = {
   '.png': 'image/png',
@@ -76,8 +77,12 @@ function sendFileRouteError(res: ServerResponse, error: unknown): void {
 
 async function generateImagePreview(filePath: string, mimeType: string): Promise<string | null> {
   try {
+    const { readFile } = await import('node:fs/promises');
     const img = nativeImage.createFromPath(filePath);
-    if (img.isEmpty()) return null;
+    if (img.isEmpty()) {
+      const buf = await readFile(filePath);
+      return buf.length > 0 ? `data:${mimeType};base64,${buf.toString('base64')}` : null;
+    }
     const size = img.getSize();
     const maxDim = 512;
     if (size.width > maxDim || size.height > maxDim) {
@@ -86,7 +91,6 @@ async function generateImagePreview(filePath: string, mimeType: string): Promise
         : img.resize({ height: maxDim });
       return `data:image/png;base64,${resized.toPNG().toString('base64')}`;
     }
-    const { readFile } = await import('node:fs/promises');
     const buf = await readFile(filePath);
     return `data:${mimeType};base64,${buf.toString('base64')}`;
   } catch {
@@ -109,12 +113,12 @@ export async function handleFileRoutes(
       for (const filePath of body.filePaths) {
         const pathInfo = await assertPathAllowed({ path: filePath, capability: 'stage', source: 'api:files:stage-paths' });
         const id = crypto.randomUUID();
-        const ext = extname(pathInfo.realPath);
-        const stagedPath = join(OUTBOUND_DIR, `${id}${ext}`);
+        const fileName = pathInfo.realPath.split(/[\\/]/).pop() || 'file';
+        const stagedFileName = buildStagedDiskFileName(id, fileName);
+        const stagedPath = join(OUTBOUND_DIR, stagedFileName);
         await fsP.copyFile(pathInfo.realPath, stagedPath);
         const s = await fsP.stat(stagedPath);
-        const mimeType = getMimeType(ext);
-        const fileName = pathInfo.realPath.split(/[\\/]/).pop() || 'file';
+        const mimeType = getMimeType(extname(stagedFileName));
         const preview = mimeType.startsWith('image/')
           ? await generateImagePreview(stagedPath, mimeType)
           : null;
@@ -133,8 +137,9 @@ export async function handleFileRoutes(
       const fsP = await import('node:fs/promises');
       await fsP.mkdir(OUTBOUND_DIR, { recursive: true });
       const id = crypto.randomUUID();
-      const ext = extname(body.fileName) || mimeToExt(body.mimeType);
-      const stagedPath = join(OUTBOUND_DIR, `${id}${ext}`);
+      const stagedFileName = buildStagedDiskFileName(id, body.fileName);
+      const stagedPath = join(OUTBOUND_DIR, stagedFileName);
+      const ext = extname(stagedFileName) || mimeToExt(body.mimeType);
       const buffer = Buffer.from(body.base64, 'base64');
       await fsP.writeFile(stagedPath, buffer);
       const mimeType = body.mimeType || getMimeType(ext);

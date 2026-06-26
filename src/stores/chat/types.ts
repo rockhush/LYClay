@@ -59,7 +59,7 @@ export interface ChatSession {
   lastMessageAt?: number;
 }
 
-export type ReasoningMode = 'fast' | 'thinking' | 'expert';
+export type ReasoningMode = 'fast' | 'thinking';
 
 export interface ToolStatus {
   id?: string;
@@ -69,6 +69,42 @@ export interface ToolStatus {
   durationMs?: number;
   summary?: string;
   updatedAt: number;
+}
+
+export type ToolLifecycleStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'timeout'
+  | 'cancelled';
+
+export interface ToolLifecycleSnapshot {
+  sessionKey: string;
+  runId: string | null;
+  toolCallId: string;
+  toolName: string;
+  status: ToolLifecycleStatus;
+  startedAt: number;
+  lastProgressAt: number | null;
+  timeoutAt: number | null;
+  idleTimeoutAt: number | null;
+  elapsedMs: number;
+  idleMs: number | null;
+  handle?: {
+    kind: 'process' | 'exec-session' | 'mcp-request' | 'plugin-job';
+    id: string;
+    pid?: number;
+  };
+  terminalReason?:
+    | 'completed'
+    | 'tool-error'
+    | 'hard-timeout'
+    | 'idle-timeout'
+    | 'user-cancelled'
+    | 'run-aborted'
+    | 'lost-handle';
+  message?: string;
 }
 
 export type TaskWorkflowKind =
@@ -101,6 +137,9 @@ export interface RunawayToolObservation {
   writeExecPairCount: number;
   repeatedExecCommandCount: number;
   repeatedWriteTargetCount: number;
+  repeatedDebugScriptCount: number;
+  repeatedOutputPatternCount: number;
+  structuralInspectionCount: number;
   lastToolCallAt: number | null;
   lastToolResultAt: number | null;
   lastVisibleProgressAt: number | null;
@@ -111,6 +150,8 @@ export interface RunawayToolObservation {
   convergenceDirectiveLevel: ConvergenceDirectiveLevel;
   convergenceDirective: string | null;
   convergenceDirectiveUpdatedAt: number | null;
+  injectedConvergenceDirectiveLevel: ConvergenceDirectiveLevel;
+  injectedConvergenceDirectiveAt: number | null;
   initialStrategyInjected: boolean;
   /** Serializable de-dupe keys for observed tool calls. Kept bounded by the observer. */
   seenToolCallKeys: string[];
@@ -119,11 +160,14 @@ export interface RunawayToolObservation {
   recentToolNames: string[];
   recentExecCommands: string[];
   recentWriteTargets: string[];
+  recentDebugScriptTargets: string[];
+  recentOutputFingerprints: string[];
 }
 
 /** Streaming state per session - preserved when switching between sessions */
 export interface SessionStreamingState {
   activeRunId: string | null;
+  activeTool: ToolLifecycleSnapshot | null;
   streamingText: string;
   streamingMessage: unknown | null;
   streamingTools: ToolStatus[];
@@ -188,6 +232,7 @@ export interface ChatState {
   sending: boolean;
   aborting: boolean;
   activeRunId: string | null;
+  activeTool: ToolLifecycleSnapshot | null;
   streamingText: string;
   streamingMessage: unknown | null;
   streamingTools: ToolStatus[];
@@ -226,8 +271,12 @@ export interface ChatState {
   sessionStreamingStates: Record<string, SessionStreamingState>;
   /** Compression state per session, persisted to disk and restored on reload/switch */
   sessionCompressionState: Record<string, CompressionStateEntry | null>;
-  /** UI-level compaction status indicator (driven by Gateway compaction events) */
+  /** Live context compression indicator for the active session. */
   contextCompressionStatus: ContextCompressionStatus | null;
+  /** Latest backend session activity snapshot for the current session (polled during open turns). */
+  sessionBackendActivity: import('./user-turn-lifecycle').SessionBackendActivity | null;
+  /** Cached gateway background session activity from backend-activity polling (internal). */
+  gatewayBackgroundActivity: import('./user-turn-lifecycle').GatewayBackgroundActivity | null;
 
   // Thinking
   thinkingLevel: string | null;

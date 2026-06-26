@@ -146,6 +146,206 @@ describe('chat target routing', () => {
     expect(patchCall?.[1]).toEqual({ key: 'agent:main:main', thinkingLevel: 'off' });
   });
 
+  it('clears stale active run and tool state before sending a new message', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'assistant', content: 'old answer' }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {
+        'agent:main:main': {
+          activeRunId: 'old-ppt-run',
+          activeTool: {
+            runId: 'old-ppt-run',
+            toolCallId: 'call-ppt',
+            name: 'exec',
+            status: 'running',
+            startedAt: Date.now() - 60_000,
+            lastActivityAt: Date.now() - 30_000,
+          },
+          streamingText: 'creating ppt',
+          streamingMessage: { role: 'assistant', content: 'creating ppt' },
+          streamingTools: [{ id: 'call-ppt', name: 'exec', status: 'running' }],
+          pendingFinal: true,
+          lastUserMessageAt: Date.now() - 60_000,
+          pendingToolImages: [{ toolCallId: 'call-ppt', path: 'old.png' }],
+          runAborted: false,
+          runError: null,
+          sending: false,
+          messagesSnapshot: [{ role: 'assistant', content: 'old answer' }],
+        },
+      },
+      sending: false,
+      activeRunId: 'old-ppt-run',
+      activeTool: {
+        runId: 'old-ppt-run',
+        toolCallId: 'call-ppt',
+        name: 'exec',
+        status: 'running',
+        startedAt: Date.now() - 60_000,
+        lastActivityAt: Date.now() - 30_000,
+      },
+      streamingText: 'creating ppt',
+      streamingMessage: { role: 'assistant', content: 'creating ppt' },
+      streamingTools: [{ id: 'call-ppt', name: 'exec', status: 'running' }],
+      pendingFinal: true,
+      lastUserMessageAt: Date.now() - 60_000,
+      pendingToolImages: [{ toolCallId: 'call-ppt', path: 'old.png' }],
+      error: null,
+      runError: 'Run interrupted because the Gateway restarted.',
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    await useChatStore.getState().sendMessage('介绍一下湖南');
+
+    const state = useChatStore.getState();
+    expect(state.activeRunId).toBe('run-text');
+    expect(state.activeTool).toBeNull();
+    expect(state.streamingTools).toEqual([]);
+    expect(state.streamingText).toBe('');
+    expect(state.streamingMessage).toBeNull();
+    expect(state.pendingToolImages).toEqual([]);
+    expect(state.runError).toBeNull();
+
+    const cached = state.sessionStreamingStates['agent:main:main'];
+    expect(cached.activeRunId).toBe('run-text');
+    expect(cached.activeTool).toBeNull();
+    expect(cached.streamingTools).toEqual([]);
+    expect(cached.streamingText).toBe('');
+    expect(cached.streamingMessage).toBeNull();
+    expect(cached.pendingToolImages).toEqual([]);
+    expect(cached.messagesSnapshot.at(-1)?.content).toBe('介绍一下湖南');
+  });
+
+  it('does not duplicate the user bubble when silently retrying a tool stream error', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+    });
+
+    await useChatStore.getState().sendMessage('retry task');
+    const sessionKey = useChatStore.getState().currentSessionKey;
+
+    useChatStore.getState().handleChatEvent({
+      state: 'error',
+      runId: 'run-text',
+      sessionKey,
+      errorMessage: 'list index out of range',
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+
+    const chatSendCalls = gatewayRpcMock.mock.calls.filter(([method]) => method === 'chat.send');
+    expect(chatSendCalls).toHaveLength(2);
+    expect(useChatStore.getState().messages.filter((message) => message.role === 'user')).toHaveLength(1);
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe('retry task');
+  });
+
+  it('finalizes a terminal tool stream error immediately when no silent retry is available', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-terminal-error',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'error',
+      runId: 'run-terminal-error',
+      sessionKey: 'agent:main:main',
+      errorMessage: 'list index out of range',
+    });
+
+    const state = useChatStore.getState();
+    expect(state.sending).toBe(false);
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(state.error).toBe('list index out of range');
+  });
+
+  it('ends a final stop response even when the message contains tool call metadata', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-final-stop',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [{ id: 'tool-1', name: 'exec', status: 'completed', updatedAt: Date.now() }],
+      pendingFinal: true,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-final-stop',
+      sessionKey: 'agent:main:main',
+      message: {
+        id: 'assistant-final-stop',
+        role: 'assistant',
+        content: 'Done. <tool_call>{"name":"exec"}</tool_call>',
+        stopReason: 'stop',
+        tool_calls: [{ id: 'tool-1', type: 'function', function: { name: 'exec', arguments: '{}' } }],
+      },
+    });
+
+    const state = useChatStore.getState();
+    expect(state.sending).toBe(false);
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(state.streamingTools).toEqual([]);
+    expect(state.messages.at(-1)).toEqual(expect.objectContaining({ id: 'assistant-final-stop' }));
+  });
+
   it('uses one-shot fast reasoning for lightweight input without changing the persisted mode', async () => {
     const { useChatStore } = await import('@/stores/chat');
 
@@ -415,7 +615,20 @@ describe('chat target routing', () => {
     expect(useChatStore.getState().runawayToolObservation).toEqual(expect.objectContaining({
       riskState: 'debug_loop',
       convergenceDirectiveLevel: 'medium',
+      injectedConvergenceDirectiveLevel: 'medium',
       convergenceDirective: expect.stringContaining('complete processing script'),
+    }));
+    const directiveCalls = gatewayRpcMock.mock.calls.filter(([method, params]) => (
+      method === 'chat.send'
+      && typeof params === 'object'
+      && params
+      && String((params as Record<string, unknown>).message ?? '').startsWith('[LYCLAW internal convergence directive]')
+    ));
+    expect(directiveCalls).toHaveLength(1);
+    expect(directiveCalls[0][1]).toEqual(expect.objectContaining({
+      sessionKey,
+      deliver: false,
+      message: expect.stringContaining('complete processing script'),
     }));
   });
 

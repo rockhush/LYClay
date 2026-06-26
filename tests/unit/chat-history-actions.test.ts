@@ -21,6 +21,9 @@ const hasNonToolAssistantContent = vi.fn((message: { content?: unknown } | undef
   return typeof message.content === 'string' ? message.content.trim().length > 0 : true;
 });
 const isToolResultRole = vi.fn((role: unknown) => role === 'toolresult' || role === 'tool_result');
+const isSuppressedRunError = vi.fn((message: unknown) => (
+  typeof message === 'string' && /gateway restart/i.test(message)
+));
 const isInternalMessage = vi.fn((msg: { role?: unknown; content?: unknown }) => {
   if (msg.role === 'system') return true;
   if (msg.role === 'assistant') {
@@ -57,10 +60,13 @@ vi.mock('@/stores/chat/helpers', () => ({
         && (!message.timestamp || Math.abs(toMs(message.timestamp) - userTimestampMs) < 5000),
     ),
   getMessageText: (...args: unknown[]) => getMessageText(...args),
-  stripGatewayUserMetadata: (text: unknown) => typeof text === 'string' ? text : '',
+  stripGatewayUserMetadata: (text: unknown) => typeof text === 'string'
+    ? text.replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+[^\]]+\]\s*/i, '')
+    : '',
   hasNonToolAssistantContent: (...args: unknown[]) => hasNonToolAssistantContent(...args),
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
   isToolResultRole: (...args: unknown[]) => isToolResultRole(...args),
+  isSuppressedRunError: (...args: unknown[]) => isSuppressedRunError(...args),
   loadMissingPreviews: (...args: unknown[]) => loadMissingPreviews(...args),
   matchesOptimisticUserMessage: (
     candidate: { role: string; timestamp?: number; content?: unknown; _attachedFiles?: Array<{ filePath?: string; fileName?: string; mimeType?: string; fileSize?: number }> },
@@ -105,6 +111,7 @@ type ChatLikeState = {
   sessionLastActivity: Record<string, number>;
   thinkingLevel: string | null;
   activeRunId: string | null;
+  sessions: Array<{ key: string; lastMessageAt?: number }>;
 };
 
 function makeHarness(initial?: Partial<ChatLikeState>) {
@@ -121,6 +128,7 @@ function makeHarness(initial?: Partial<ChatLikeState>) {
     sessionLastActivity: {},
     thinkingLevel: null,
     activeRunId: null,
+    sessions: [],
     ...initial,
   };
 
@@ -193,6 +201,45 @@ describe('chat history actions', () => {
     expect(hostApiFetchMock).not.toHaveBeenCalled();
     expect(h.read().messages).toEqual([]);
     expect(h.read().loading).toBe(false);
+  });
+
+  it('deduplicates retried user messages with different gateway timestamp prefixes', async () => {
+    const { createHistoryActions } = await import('@/stores/chat/history-actions');
+    const h = makeHarness({
+      currentSessionKey: 'agent:main:main',
+    });
+    const actions = createHistoryActions(h.set as never, h.get as never);
+
+    invokeIpcMock.mockResolvedValueOnce({
+      success: true,
+      result: {
+        messages: [
+          {
+            role: 'user',
+            content: '[Wed 2026-06-24 15:58 GMT+8] @testLYAI 请使用这个技能 [media attached: C:/tmp/workbook.xlsx]',
+            timestamp: 1782287922,
+          },
+          {
+            role: 'assistant',
+            content: 'Now I have a clear picture.',
+            timestamp: 1782288324,
+          },
+          {
+            role: 'user',
+            content: '[Wed 2026-06-24 16:05 GMT+8] @testLYAI 请使用这个技能 [media attached: C:/tmp/workbook.xlsx]',
+            timestamp: 1782288343,
+          },
+        ],
+      },
+    });
+
+    await actions.loadHistory();
+
+    expect(h.read().messages.filter((message) => message.role === 'user')).toHaveLength(1);
+    expect(h.read().messages.map((message) => message.content)).toEqual([
+      '[Wed 2026-06-24 15:58 GMT+8] @testLYAI 请使用这个技能 [media attached: C:/tmp/workbook.xlsx]',
+      'Now I have a clear picture.',
+    ]);
   });
 
   it('preserves existing messages when history refresh fails for the current session', async () => {

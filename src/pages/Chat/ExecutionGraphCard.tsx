@@ -7,6 +7,10 @@ import type { TaskStep } from './task-visualization';
 interface ExecutionGraphCardProps {
   agentLabel: string;
   steps: TaskStep[];
+  /** Session key used to scope run anchors. */
+  sessionKey: string;
+  /** Active run id — scopes graph per turn. */
+  runAnchorId?: string | null;
   active: boolean;
   /** Hide the trailing "Thinking ..." indicator even when active. */
   suppressThinking?: boolean;
@@ -22,6 +26,18 @@ interface ExecutionGraphCardProps {
 }
 
 const TOOL_ROW_EXTRA_INDENT_PX = 8;
+
+export function buildExecutionRunAnchorId(
+  activeRunId: string | null | undefined,
+  fallbackRunKey: string,
+): string {
+  return activeRunId ?? fallbackRunKey;
+}
+
+/** Stable per-turn anchor that survives loadHistory id rewrites and activeRunId assignment. */
+export function buildTurnRunAnchorId(sessionKey: string, triggerIndex: number): string {
+  return `${sessionKey}:turn-${triggerIndex}`;
+}
 
 function AnimatedDots({ className }: { className?: string }) {
   return (
@@ -43,23 +59,28 @@ function StepDetailCard({ step }: { step: TaskStep }) {
   const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(false);
   const hasDetail = !!step.detail;
-  // Narration steps (intermediate pure-text assistant messages folded from
-  // the chat stream) are rendered without a label/status pill: the message
-  // text IS the primary content.
   const isNarration = step.kind === 'message';
   const isTool = step.kind === 'tool';
   const isThinking = step.kind === 'thinking';
-  const showRunningDots = (isTool || isThinking) && step.status === 'running';
-  const hideStatusText = isTool && step.status === 'completed';
+  const isModel = step.kind === 'model';
+  const showRunningDots = (isTool || isThinking || isModel || isNarration) && step.status === 'running';
+  const hideStatusText = (isTool || isModel) && step.status === 'completed';
   const detailPreview = step.detail?.replace(/\s+/g, ' ').trim();
   const canExpand = hasDetail;
-    const displayLabel = isThinking ? t('executionGraph.thinkingLabel') : step.label;
+  const displayLabel = isThinking
+    ? t('executionGraph.thinkingLabel')
+    : isModel
+      ? t('executionGraph.modelCallLabel')
+      : step.label;
+  const showHeaderRow = !isNarration && (!isThinking || isModel)
+    || expanded
+    || step.status === 'running';
 
   return (
     <div
       className={cn(
         'min-w-0 flex-1 text-muted-foreground',
-        isTool || isNarration || isThinking
+        isTool || isNarration || isThinking || isModel
           ? 'px-0 py-0'
           : 'rounded-xl border border-black/10 bg-white/40 px-3 py-2 dark:border-white/10 dark:bg-white/[0.03]',
       )}
@@ -68,7 +89,7 @@ function StepDetailCard({ step }: { step: TaskStep }) {
         type="button"
         className={cn(
           'flex w-full gap-2 text-left',
-          isTool ? 'items-center' : 'items-start',
+          isTool || isModel ? 'items-center' : 'items-start',
           canExpand ? 'cursor-pointer' : 'cursor-default',
         )}
         onClick={() => {
@@ -77,7 +98,7 @@ function StepDetailCard({ step }: { step: TaskStep }) {
         }}
       >
         <div className="min-w-0 flex-1">
-          {(!isNarration && !isThinking || expanded) && (
+          {showHeaderRow && (
             <div className="flex min-w-0 items-center gap-2">
               <p className="shrink-0 text-sm font-medium text-muted-foreground">{displayLabel}</p>
               {isTool && step.label === 'web_fetch' && step.url && (
@@ -162,6 +183,8 @@ function StepDetailCard({ step }: { step: TaskStep }) {
 export function ExecutionGraphCard({
   agentLabel,
   steps,
+  sessionKey: _sessionKey,
+  runAnchorId: _runAnchorId,
   active,
   suppressThinking = false,
   isMimo = false,

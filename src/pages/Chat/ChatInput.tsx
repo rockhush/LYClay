@@ -245,12 +245,6 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
         description: t('composer.reasoning.thinkingDesc'),
         icon: Brain,
       },
-      {
-        mode: 'expert' as const,
-        label: t('composer.reasoning.expert'),
-        description: t('composer.reasoning.expertDesc'),
-        icon: Sparkles,
-      },
     ],
     [t],
   );

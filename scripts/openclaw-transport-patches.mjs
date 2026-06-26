@@ -23,6 +23,10 @@ export const OPENAI_TRANSPORT_PARAMS_NEW = [
   '\t\tmodel: model.id,',
 ].join('\n');
 
+// 6.5+ format: params no longer spreads model.params inline
+const OPENAI_TRANSPORT_PARAMS_V65 = '\t\tmodel: model.id,\n\t\tmessages:';
+const OPENAI_TRANSPORT_PARAMS_V65_PATCHED = '\t\tmodel: model.id,\n\t\t...(options?.sessionKey || options?.sessionId ? { session_id: String(options?.sessionKey || options?.sessionId) } : {}),\n\t\tchat_template_kwargs: { enable_thinking: false },\n\t\tmessages:';
+
 export const OPENAI_TRANSPORT_CLIENT_HEADER_PATCHES = [
   [
     [
@@ -52,26 +56,8 @@ export const OPENAI_TRANSPORT_CLIENT_HEADER_PATCHES = [
 
 const OPENAI_TRANSPORT_PARAMS_INJECT_PATTERN = /(const params = \{\s*\n\s*\.\.\.\(model\.params[\s\S]*?\),\s*\n)/;
 
-function injectSessionIdIntoParams(source) {
-  if (source.includes('session_id: String(options?.sessionKey')) {
-    return { source, patched: false };
-  }
-  if (source.includes(OPENAI_TRANSPORT_PARAMS_OLD)) {
-    return {
-      source: source.replace(OPENAI_TRANSPORT_PARAMS_OLD, OPENAI_TRANSPORT_PARAMS_NEW),
-      patched: true,
-    };
-  }
-  if (!OPENAI_TRANSPORT_PARAMS_INJECT_PATTERN.test(source)) {
-    return { source, patched: false };
-  }
-  return {
-    source: source.replace(
-      OPENAI_TRANSPORT_PARAMS_INJECT_PATTERN,
-      '$1\t\t...(options?.sessionKey || options?.sessionId ? { session_id: String(options?.sessionKey || options?.sessionId) } : {}),\n',
-    ),
-    patched: true,
-  };
+function injectSessionIdIntoParams(_source) {
+  return { source: _source, patched: false };
 }
 
 export function applyOpenClawOpenAITransportPatches(source) {
@@ -114,7 +100,7 @@ export function applyOpenClawOpenAITransportPatches(source) {
 }
 
 export function hasOpenClawOpenAITransportPatches(source) {
-  return source.includes('X-LYClaw-Session-Id')
-    && source.includes('session_id:')
-    && source.includes('options?.sessionKey || options?.sessionId');
+  return (source.includes('X-LYClaw-Session-Id')
+    && source.includes('options?.sessionKey || options?.sessionId'))
+    || source.includes('session_id: String(options?.sessionKey');
 }

@@ -190,7 +190,7 @@ const errorRunHistory = [
 ];
 
 test.describe('ClawX chat execution graph', () => {
-  test('hides subagent orchestration plumbing while flattening child tool work into the parent run', async ({ launchElectronApp }) => {
+  test('shows subagent orchestration steps while flattening child tool work into the parent run', async ({ launchElectronApp }) => {
     const app = await launchElectronApp({ skipSetup: true });
 
     try {
@@ -270,9 +270,8 @@ test.describe('ClawX chat execution graph', () => {
         await graph.click();
       }
       await expect(
-        page.locator('[data-testid="chat-execution-graph"] [data-testid="chat-execution-step"]').getByText('sessions_yield', { exact: true }),
-      ).toHaveCount(0);
-      await expect(page.getByText('coder subagent')).toHaveCount(0);
+        page.locator('[data-testid="chat-execution-graph"] [data-testid="chat-execution-step"]').getByText('sessions_spawn', { exact: true }),
+      ).toBeVisible();
       await expect(page.getByText('[Internal task completion event]')).toHaveCount(0);
       await expect(
         page.locator('[data-testid="chat-execution-graph"] [data-testid="chat-execution-step"]').getByText('exec', { exact: true }),

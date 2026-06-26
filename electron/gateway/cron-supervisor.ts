@@ -35,6 +35,30 @@ import {
   type GatewayCronScheduleLike,
 } from './cron-schedule';
 
+export type CronJobsUpdatedReason = 'supervisor-catch-up' | 'supervisor-retry';
+
+export type CronJobsUpdatedPayload = {
+  reason: CronJobsUpdatedReason;
+  jobId: string;
+};
+
+type CronJobsUpdatedHandler = (payload: CronJobsUpdatedPayload) => void;
+
+let onCronJobsUpdated: CronJobsUpdatedHandler | null = null;
+
+/** Register a handler to notify the UI when a background supervisor run succeeds. */
+export function setCronJobsUpdatedHandler(handler: CronJobsUpdatedHandler | null): void {
+  onCronJobsUpdated = handler;
+}
+
+function notifyCronJobsUpdated(reason: CronJobsUpdatedReason, jobId: string): void {
+  try {
+    onCronJobsUpdated?.({ reason, jobId });
+  } catch {
+    // ignore notifier failures
+  }
+}
+
 interface GatewayLike {
   getStatus: () => { state: string; warmupStatus?: 'idle' | 'warming' | 'ready' | 'failed' };
   rpc: <T>(method: string, params?: unknown, timeoutMs?: number) => Promise<T>;
@@ -254,10 +278,11 @@ async function runCronJobInBackground(id: string): Promise<{ ok: boolean; error?
 }
 
 /** Fire a job without surfacing errors (background supervisor context). */
-async function fireQuietly(id: string, context: string): Promise<void> {
+async function fireQuietly(id: string, context: CronJobsUpdatedReason): Promise<void> {
   const result = await runCronJobInBackground(id);
   if (result.ok) {
     logger.info(`[cron-supervisor] ${context} run completed for job ${id}`);
+    notifyCronJobsUpdated(context, id);
   } else {
     logger.warn(`[cron-supervisor] ${context} run for job ${id} did not confirm: ${result.error || 'unknown'}`);
   }
@@ -285,7 +310,7 @@ async function maybeCatchUp(job: SupervisedCronJob, now: number): Promise<boolea
   logger.info(
     `[cron-supervisor] catch-up firing job ${job.id} for missed occurrence ${new Date(prev).toISOString()}`,
   );
-  await fireQuietly(job.id, 'catch-up');
+  await fireQuietly(job.id, 'supervisor-catch-up');
   return true;
 }
 
@@ -307,7 +332,7 @@ async function maybeRetryFailure(job: SupervisedCronJob, now: number): Promise<v
   logger.info(
     `[cron-supervisor] retrying transient-failed job ${job.id}: ${job.state?.lastError ?? ''}`,
   );
-  await fireQuietly(job.id, 'retry');
+  await fireQuietly(job.id, 'supervisor-retry');
 }
 
 async function runPass(reason: string): Promise<void> {

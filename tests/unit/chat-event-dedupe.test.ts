@@ -578,6 +578,47 @@ describe('chat event dedupe', () => {
     expect(extractText(state.messages.at(-1))).toContain('Querying the calendar now');
   });
 
+  it('keeps run active for narration-only interim finals between tool rounds', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'Analyze the repo' }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-narration-gap',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-narration-gap',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        id: 'narration-gap',
+        content: [{ type: 'text', text: 'Scanning the repository structure.' }],
+      },
+    });
+
+    const state = useChatStore.getState();
+    expect(state.sending).toBe(true);
+    expect(state.activeRunId).toBe('run-narration-gap');
+    expect(state.pendingFinal).toBe(true);
+  });
+
   it('reconciles an ambiguous text final with a terminal transcript after tool use', async () => {
     const { useChatStore } = await import('@/stores/chat');
     const userTimestamp = Date.now();

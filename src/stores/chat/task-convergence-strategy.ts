@@ -62,7 +62,7 @@ function buildLightDirective(observation: RunawayToolObservation): string {
   return [
     'The current task has used many tools. Start converging now.',
     'Reuse existing evidence, reduce repeated inspection, and produce a complete processing plan or script.',
-    `Observed tool calls: ${observation.toolCallCount}. Task kind: ${observation.taskKind}.`,
+    `Observed tool calls: ${observation.toolCallCount}. Structural inspections: ${observation.structuralInspectionCount}. Task kind: ${observation.taskKind}.`,
   ].join(' ');
 }
 
@@ -71,7 +71,7 @@ function buildMediumDirective(observation: RunawayToolObservation): string {
     'You have entered a repeated debug/tool pattern.',
     'Stop fragmentary probing. Write one complete processing script or plan that includes reading, processing, writing, validation, and error reporting.',
     'Use at most 1-2 additional validation passes.',
-    `Observed write->exec pairs: ${observation.writeExecPairCount}; repeated exec commands: ${observation.repeatedExecCommandCount}; repeated write targets: ${observation.repeatedWriteTargetCount}.`,
+    `Observed write->exec pairs: ${observation.writeExecPairCount}; repeated exec commands: ${observation.repeatedExecCommandCount}; repeated write targets: ${observation.repeatedWriteTargetCount}; repeated debug scripts: ${observation.repeatedDebugScriptCount}; repeated output patterns: ${observation.repeatedOutputPatternCount}.`,
   ].join(' ');
 }
 
@@ -80,7 +80,7 @@ function buildForceDirective(observation: RunawayToolObservation): string {
     'This run is at high risk of a runaway tool loop.',
     'Do not create more temporary debug scripts.',
     'Based on existing results, provide a staged conclusion, the current blocker, or one complete executable solution.',
-    `Observed tool calls: ${observation.toolCallCount}. Risk: ${observation.riskState}.`,
+    `Observed tool calls: ${observation.toolCallCount}. Structural inspections: ${observation.structuralInspectionCount}. Risk: ${observation.riskState}.`,
   ].join(' ');
 }
 

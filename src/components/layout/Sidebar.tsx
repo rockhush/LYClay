@@ -39,6 +39,8 @@ import { cn } from '@/lib/utils';
 import { rendererExtensionRegistry } from '@/extensions/registry';
 import { useSettingsStore } from '@/stores/settings';
 import { useChatStore, type ChatSession } from '@/stores/chat';
+import { deriveIsExecuting, backendActivityForSession } from '@/stores/chat/user-turn-lifecycle';
+import { isWaitingOnSubagentDelegation } from '@/lib/subagent-delegation';
 import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
 import { useTokenUsageStore } from '@/stores/token-usage';
@@ -156,6 +158,7 @@ const STARTUP_LOAD_SESSIONS_DELAY_MS = 0;
 const STARTING_FALLBACK_LOAD_SESSIONS_DELAY_MS = 5_000;
 
 export function Sidebar() {
+  const { t } = useTranslation(['common', 'chat', 'settings']);
   const sidebarCollapsed = useSettingsStore((state) => state.sidebarCollapsed);
   const setSidebarCollapsed = useSettingsStore((state) => state.setSidebarCollapsed);
   const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
@@ -178,7 +181,10 @@ export function Sidebar() {
   const loadSessions = useChatStore((s) => s.loadSessions);
   const chatSending = useChatStore((s) => s.sending);
   const activeRunId = useChatStore((s) => s.activeRunId);
+  const pendingFinal = useChatStore((s) => s.pendingFinal);
   const messages = useChatStore((s) => s.messages);
+  const sessionBackendActivity = useChatStore((s) => s.sessionBackendActivity);
+  const gatewayBackgroundActivity = useChatStore((s) => s.gatewayBackgroundActivity);
   const streamingMessage = useChatStore((s) => s.streamingMessage);
   const streamingText = useChatStore((s) => s.streamingText);
   const streamingTools = useChatStore((s) => s.streamingTools);
@@ -188,7 +194,16 @@ export function Sidebar() {
   const isGatewayReady = isGatewayRunning && gatewayStatus.gatewayReady === true;
   const updateStatus = useUpdateStore((s) => s.status);
   const checkForUpdatesAfterGatewayReady = useUpdateStore((s) => s.checkForUpdatesAfterGatewayReady);
-  const isChatActive = chatSending || !!activeRunId;
+  const processingSubagentKeys = gatewayBackgroundActivity?.processingSessionKeys ?? [];
+  const waitingOnSubagentDelegation = useMemo(
+    () => isWaitingOnSubagentDelegation(messages, processingSubagentKeys),
+    [messages, processingSubagentKeys],
+  );
+  const isChatActive = deriveIsExecuting(
+    { sending: chatSending, activeRunId, pendingFinal },
+    backendActivityForSession(sessionBackendActivity, currentSessionKey),
+    { waitingOnSubagentDelegation },
+  );
 
   const firstResponsePreparingLocksSwitch = useMemo(
     () => isFirstResponsePreparing({
@@ -430,8 +445,10 @@ export function Sidebar() {
   const isNewChatActive = isOnChat && !currentSessionHasContent;
   const isSessionViewActive = isOnChat && currentSessionHasContent;
 
-  const getSessionLabel = (key: string, displayName?: string, label?: string) =>
-    customSessionLabels[key] ?? sessionLabels[key] ?? label ?? displayName ?? key;
+  const getSessionLabel = (key: string, displayName?: string, label?: string) => {
+    const raw = customSessionLabels[key] ?? sessionLabels[key] ?? label ?? displayName ?? key;
+    return raw.replace(/\/think\s+(off|medium|high)\s+/i, '');
+  };
 
   const openDevConsole = async () => {
     try {
@@ -450,7 +467,6 @@ export function Sidebar() {
     }
   };
 
-  const { t } = useTranslation(['common', 'chat', 'settings']);
   const [sessionToDelete, setSessionToDelete] = useState<{ key: string; label: string } | null>(null);
   const [workspaceToDelete, setWorkspaceToDelete] = useState<{ id: string; label: string } | null>(null);
   const [sessionToRename, setSessionToRename] = useState<{ key: string; label: string } | null>(null);
@@ -585,9 +601,16 @@ export function Sidebar() {
     // user switched away — so a session still streaming in the background
     // keeps its orange indicator no matter which session is being viewed.
     const otherSessionState = sessionStreamingStates[s.key];
+    const otherMessages = otherSessionState?.messagesSnapshot ?? [];
+    const isOtherWaitingOnSubagent = !isCurrent
+      && isWaitingOnSubagentDelegation(otherMessages, processingSubagentKeys);
     const isOtherSessionRunning =
-      !isCurrent && !!(otherSessionState?.sending || otherSessionState?.activeRunId);
-    const isRunning = (isCurrent && isChatActive) || isOtherSessionRunning;
+      !isCurrent && (
+        processingSubagentKeys.includes(s.key)
+        || !!(otherSessionState?.sending || otherSessionState?.activeRunId || otherSessionState?.pendingFinal)
+        || isOtherWaitingOnSubagent
+      );
+    const isRunning = isCurrent ? isChatActive : isOtherSessionRunning;
     const statusTitle = isRunning
       ? t('chat:sidebar.statusRunning', { defaultValue: '问答进行中' })
       : t('chat:sidebar.statusCompleted', { defaultValue: '已完成' });

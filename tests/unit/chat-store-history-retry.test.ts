@@ -40,7 +40,25 @@ describe('useChatStore startup history retry', () => {
     agentsState.agents = [];
     gatewayRpcMock.mockReset();
     hostApiFetchMock.mockReset();
-    hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
+    hostApiFetchMock.mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/api/sessions/backend-activity')) {
+        return {
+          success: true,
+          session: {
+            sessionKey: 'agent:main:main',
+            status: 'idle',
+            processing: false,
+            hasTrackedUserRun: false,
+            activeRunIds: [],
+          },
+          background: {
+            hasBackgroundProcessing: false,
+            processingSessionKeys: [],
+          },
+        };
+      }
+      return { success: false, messages: [], error: 'local miss' };
+    });
   });
 
   afterEach(() => {
@@ -205,6 +223,124 @@ describe('useChatStore startup history retry', () => {
     expect(useChatStore.getState().activeRunId).toBeNull();
     expect(useChatStore.getState().pendingFinal).toBe(false);
     expect(useChatStore.getState().streamingMessage).toBeNull();
+  });
+
+  it('does not history-finalize while backend session activity is still processing', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'hello', id: 'u1', timestamp: 1000 }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-history-final',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: 1000,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    hostApiFetchMock.mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('/api/sessions/backend-activity')) {
+        return {
+          success: true,
+          session: {
+            sessionKey: 'agent:main:main',
+            status: 'processing',
+            processing: true,
+            hasTrackedUserRun: true,
+            activeRunIds: ['run-history-final'],
+          },
+          background: {
+            hasBackgroundProcessing: false,
+            processingSessionKeys: [],
+          },
+        };
+      }
+      return {
+        success: true,
+        messages: [
+          { role: 'user', content: 'hello', id: 'u1', timestamp: 1000 },
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'terminal answer' }],
+            id: 'a1',
+            timestamp: 1001,
+            stopReason: 'stop',
+          },
+        ],
+      };
+    });
+
+    await useChatStore.getState().loadHistory(true, { force: true });
+
+    expect(useChatStore.getState().sending).toBe(true);
+    expect(useChatStore.getState().activeRunId).toBe('run-history-final');
+  });
+
+  it('keeps a second-round send active when quiet history still ends at the previous terminal assistant', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [
+        { role: 'user', content: 'first', id: 'u1', timestamp: 1000 },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'answer one' }],
+          id: 'a1',
+          timestamp: 1001,
+          stopReason: 'stop',
+        },
+        { role: 'user', content: 'second', id: 'u2', timestamp: 2000 },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-round-2',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: 2000,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    hostApiFetchMock.mockResolvedValueOnce({
+      success: true,
+      messages: [
+        { role: 'user', content: 'first', id: 'u1', timestamp: 1000 },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'answer one' }],
+          id: 'a1',
+          timestamp: 1001,
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    await useChatStore.getState().loadHistory(true, { force: true });
+
+    expect(useChatStore.getState().messages.map((message) => message.content)).toEqual([
+      'first',
+      [{ type: 'text', text: 'answer one' }],
+      'second',
+    ]);
+    expect(useChatStore.getState().sending).toBe(true);
+    expect(useChatStore.getState().activeRunId).toBe('run-round-2');
+    expect(useChatStore.getState().pendingFinal).toBe(false);
   });
 
   it('finalizes an active send when quiet local history ends with NO_REPLY', async () => {
@@ -525,5 +661,88 @@ describe('useChatStore startup history retry', () => {
       }),
     );
     infoSpy.mockRestore();
+  });
+
+  it('merges transcript tool progress and longer assistant text while live stream content exists', async () => {
+    vi.setSystemTime(new Date('2026-05-18T05:10:57.000Z'));
+    const { useChatStore } = await import('@/stores/chat');
+    const userTs = Date.now() / 1000;
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:session-live',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:session-live' }],
+      messages: [
+        {
+          role: 'user',
+          id: 'user-1',
+          timestamp: userTs,
+          content: 'Run the report',
+        },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-live',
+      streamingText: '好的，先检查',
+      streamingMessage: {
+        role: 'assistant',
+        id: 'stream-1',
+        timestamp: userTs + 1,
+        content: [{ type: 'text', text: '好的，先检查' }],
+      },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTs,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+      runAborted: false,
+    });
+
+    hostApiFetchMock.mockResolvedValue({
+      success: true,
+      messages: [
+        {
+          role: 'user',
+          id: 'user-1',
+          timestamp: userTs,
+          content: 'Run the report',
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-1',
+          timestamp: userTs + 1,
+          content: [{ type: 'text', text: '好的，先检查' }],
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-2',
+          timestamp: userTs + 2,
+          content: [
+            { type: 'toolCall', id: 'call-exec', name: 'exec', arguments: { command: 'ls' } },
+          ],
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-3',
+          timestamp: userTs + 3,
+          content: [{ type: 'text', text: '好的，先检查文件结构和数据情况。' }],
+        },
+      ],
+    });
+
+    await useChatStore.getState().loadHistory(true);
+
+    const state = useChatStore.getState();
+    expect(state.streamingText).toBe('好的，先检查文件结构和数据情况。');
+    expect(state.streamingTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ toolCallId: 'call-exec', name: 'exec' }),
+      ]),
+    );
+    expect(state.pendingFinal).toBe(true);
   });
 });

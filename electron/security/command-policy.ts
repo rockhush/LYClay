@@ -303,7 +303,7 @@ function classifySegment(segment: string): CommandSegmentDecision {
       setPrompt('Privilege or permission changes require confirmation', 'high', 'privilege-or-permission-change');
     }
 
-    if (tokens.some((token) => /^(clawhub|clawhub\.cmd|clawdhub\.js)$/i.test(basenameLower(token)))
+    if (tokens.some((token) => /^(clawhub|clawhub\.cmd|clawdhub\.js|lyclaw-marketplace|lyclaw-marketplace-cli\.mjs)$/i.test(basenameLower(token)))
       && tokens.some((token) => ['install', 'uninstall', 'remove', 'update', 'upgrade'].includes(token.toLowerCase()))) {
       setPrompt('Skill marketplace changes may install or remove executable local content', 'medium', 'skill-marketplace-change');
     }

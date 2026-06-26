@@ -10,13 +10,19 @@ import {
   getToolCallFilePath,
   hasErrorRecoveryTimer,
   hasNonToolAssistantContent,
+  hasVisibleAssistantContent,
   isAbortedChatRun,
+  isAbortErrorMessage,
   isToolOnlyMessage,
   isToolResultRole,
   isInternalMessageText,
   isUserSecurityDenialMessage,
   buildSecurityCancelNotice,
   isSuppressedRunError,
+  isRecoverableRuntimeError,
+  resolveRunFailureErrorMessage,
+  shouldTreatAbortAsUserStop,
+  truncateRunErrorMessage,
   makeAttachedFile,
   attachmentFileNameFromPath,
   normalizeStreamingMessage,
@@ -24,20 +30,23 @@ import {
   snapshotStreamingAssistantMessage,
   upsertToolStatuses,
 } from './helpers';
-import { buildClearedActiveRunPatch } from './run-lifecycle';
-import { finishFirstSessionPerf, markFirstSessionRuntimeEvent } from './first-session-perf';
+import { buildClearedActiveRunPatch, shouldKeepRunActiveAfterAssistantFinal } from './run-lifecycle';
 import { extractInvokedSkillIds } from './usage-report-extract';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
 
 import type { AttachedFileMeta, RawMessage } from './types';
 import { getEmptyFinalDiagnostic } from '@/lib/host-api';
 import type { ChatGet, ChatSet } from './store-api';
-import { markChatRunRuntimeEvent } from './chat-run-perf';
 import {
   buildComplexTaskExecutionRequest,
   clearPendingComplexTaskPlan,
   getPendingComplexTaskPlan,
 } from './runtime-send-actions';
+import {
+  clearToolWatchdogsForRun,
+  getRunningToolSnapshotFromMessage,
+  trackRunningTool,
+} from './tool-lifecycle-watchdog';
 // De-dup guard for the management/claw/report uploader. We may receive the
 // same `final` event twice during recovery (gateway resend, reconnect race);
 // without this guard a single tool_use turn could double-count skill
@@ -171,10 +180,21 @@ function isStillConfirmingEmptyFinal(get: ChatGet, sessionKey: string, runId: st
     && (!runId || !state.activeRunId || state.activeRunId === runId);
 }
 
+function hasActiveRunningTool(get: ChatGet, sessionKey: string, runId: string): boolean {
+  const state = get();
+  const activeTool = state.currentSessionKey === sessionKey
+    ? state.activeTool
+    : state.sessionStreamingStates[sessionKey]?.activeTool;
+  return Boolean(
+    activeTool
+      && activeTool.status === 'running'
+      && (!runId || !activeTool.runId || activeTool.runId === runId),
+  );
+}
+
 function completeEmptyFinalFromHistory(set: ChatSet, get: ChatGet, sessionKey: string, runId: string): void {
   if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
   clearHistoryPoll();
-  finishFirstSessionPerf('final', runId);
   set({
     sending: false,
     activeRunId: null,
@@ -215,6 +235,23 @@ async function confirmEmptyFinalWithHistory(set: ChatSet, get: ChatGet, runId: s
     return;
   }
 
+  if (hasActiveRunningTool(get, sessionKey, runId)) {
+    set({
+      emptyFinalRecovery: {
+        status: 'waiting',
+        sessionKey,
+        runId,
+        reason: 'tracked-active-tool',
+        diagnostic: { activeTool: get().activeTool ?? get().sessionStreamingStates[sessionKey]?.activeTool ?? null },
+      },
+      runError: null,
+      pendingFinal: true,
+      sending: false,
+      activeRunId: null,
+    });
+    return;
+  }
+
   set({
     emptyFinalRecovery: {
       status: 'checking',
@@ -244,14 +281,13 @@ async function confirmEmptyFinalWithHistory(set: ChatSet, get: ChatGet, runId: s
       },
       runError: null,
       pendingFinal: true,
-      sending: false,
-      activeRunId: null,
+      sending: hasTrackedActiveRun ? true : get().sending,
+      activeRunId: hasTrackedActiveRun ? (runId || get().activeRunId) : get().activeRunId,
     });
     return;
   }
 
   clearHistoryPoll();
-  finishFirstSessionPerf('error', runId);
   set({
     error: null,
     runError: EMPTY_FINAL_NO_RESPONSE_ERROR,
@@ -273,6 +309,10 @@ async function confirmEmptyFinalWithHistory(set: ChatSet, get: ChatGet, runId: s
   });
 }
 
+function isExecApprovalFollowupRun(runId: string): boolean {
+  return runId.startsWith('exec-approval-followup:');
+}
+
 export function handleRuntimeEventState(
   set: ChatSet,
   get: ChatGet,
@@ -280,16 +320,6 @@ export function handleRuntimeEventState(
   resolvedState: string,
   runId: string,
 ): void {
-      markFirstSessionRuntimeEvent({
-        state: resolvedState,
-        runId,
-        hasMessage: Boolean(event.message),
-      });
-      markChatRunRuntimeEvent({
-        state: resolvedState,
-        runId,
-        hasMessage: Boolean(event.message),
-      });
       if (runId && isAbortedChatRun(runId) && resolvedState !== 'aborted' && resolvedState !== 'final' && resolvedState !== 'error') {
         return;
       }
@@ -311,6 +341,7 @@ export function handleRuntimeEventState(
         const stored = get().sessionStreamingStates[targetSessionKey];
         return stored ?? {
           activeRunId: null,
+          activeTool: null,
           streamingText: '',
           streamingMessage: null,
           streamingTools: [],
@@ -418,10 +449,11 @@ export function handleRuntimeEventState(
             const prev = getBackgroundSessionState();
             if (!finalMsg) {
               patchBackgroundSessionState({
-                streamingText: '',
-                streamingMessage: null,
-                pendingFinal: true,
+                ...buildClearedActiveRunPatch(),
+                runError: null,
               });
+              clearHistoryPoll();
+              void get().loadHistory(true, { force: true });
               break;
             }
 
@@ -466,8 +498,19 @@ export function handleRuntimeEventState(
             }
 
             const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
+            if (isToolResultRole(normalizedFinalMessage.role)) {
+              const runningTool = getRunningToolSnapshotFromMessage(normalizedFinalMessage, {
+                sessionKey: targetSessionKey,
+                runId,
+              });
+              if (runningTool) {
+                trackRunningTool(set, get, runningTool, false);
+              } else {
+                clearToolWatchdogsForRun(set, get, runId, 'completed');
+              }
+            }
             const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
-            const hasOutput = hasNonToolAssistantContent(normalizedFinalMessage);
+            const hasOutput = hasVisibleAssistantContent(normalizedFinalMessage);
             const msgId = normalizedFinalMessage.id || (toolOnly ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
             const pendingImgs = prev.pendingToolImages;
             const msgWithImages: RawMessage = pendingImgs.length > 0
@@ -482,6 +525,9 @@ export function handleRuntimeEventState(
             const streamingTools = hasOutput ? [] : nextTools;
             const nextSnapshot = [...(prev.messagesSnapshot ?? []), msgWithImages];
 
+            if (hasOutput && !toolOnly) {
+              clearToolWatchdogsForRun(set, get, runId, 'completed');
+            }
             patchBackgroundSessionState({
               messagesSnapshot: nextSnapshot,
               streamingText: '',
@@ -498,6 +544,7 @@ export function handleRuntimeEventState(
           if (finalMsg) {
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
+              clearToolWatchdogsForRun(set, get, runId, 'tool-error');
               const messageError = getMessageErrorMessage(normalizedFinalMessage);
               if (isUserSecurityDenialMessage(messageError)) {
                 set({
@@ -542,23 +589,25 @@ export function handleRuntimeEventState(
             }
             const finalMsgContent = getMessageText(normalizedFinalMessage.content);
             if (finalMsgContent.trim() && isInternalMessageText(finalMsgContent)) {
-              // 如果已经有流式消息，保留它而不是清空
-              // 这可以防止 NO_REPLY 消息覆盖已经显示的结果
-              set((s) => ({
+              set({
                 ...buildClearedActiveRunPatch(),
-                streamingMessage: s.streamingMessage,
                 runError: null,
-              }));
-              // Reload history to surface intermediate tool-use turns (thinking +
-              // tool blocks) from the Gateway's authoritative record, since
-              // NO_REPLY itself carries no visible content.
-              finishFirstSessionPerf('final', runId);
+              });
               clearHistoryPoll();
               void get().loadHistory(true, { force: true });
               break;
             }
             const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
             if (isToolResultRole(normalizedFinalMessage.role)) {
+              const runningTool = getRunningToolSnapshotFromMessage(normalizedFinalMessage, {
+                sessionKey: targetSessionKey,
+                runId,
+              });
+              if (runningTool) {
+                trackRunningTool(set, get, runningTool, true);
+              } else {
+                clearToolWatchdogsForRun(set, get, runId, 'completed');
+              }
               // Resolve file path from the streaming assistant message's matching tool call
               const currentStreamForPath = get().streamingMessage as RawMessage | null;
               const matchedPath = (currentStreamForPath && normalizedFinalMessage.toolCallId)
@@ -616,12 +665,13 @@ export function handleRuntimeEventState(
               });
               break;
             }
-            const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
             const hasOutput = hasNonToolAssistantContent(normalizedFinalMessage);
-            const msgId = normalizedFinalMessage.id || (toolOnly ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
+            const keepRunActiveAfterFinal = shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
+              && !isExecApprovalFollowupRun(runId);
+            const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
             set((s) => {
               const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
-              const streamingTools = hasOutput ? [] : nextTools;
+              const streamingTools = hasOutput && !keepRunActiveAfterFinal ? [] : nextTools;
 
               // Attach any images collected from preceding tool results
               const pendingImgs = s.pendingToolImages;
@@ -638,7 +688,7 @@ export function handleRuntimeEventState(
               // Check if message already exists (prevent duplicates)
               const alreadyExists = s.messages.some(m => m.id === msgId);
               if (alreadyExists) {
-                return toolOnly ? {
+                return keepRunActiveAfterFinal ? {
                   streamingText: '',
                   streamingMessage: null,
                   pendingFinal: true,
@@ -654,7 +704,7 @@ export function handleRuntimeEventState(
                   ...clearPendingImages,
                 };
               }
-              return toolOnly ? {
+              return keepRunActiveAfterFinal ? {
                 messages: [...s.messages, msgWithImages],
                 streamingText: '',
                 streamingMessage: null,
@@ -681,8 +731,7 @@ export function handleRuntimeEventState(
 
             // After the final response, quietly reload history to surface all intermediate
             // tool-use turns (thinking + tool blocks) from the Gateway's authoritative record.
-            if (hasOutput && !toolOnly) {
-              finishFirstSessionPerf('final', runId);
+            if (!keepRunActiveAfterFinal) {
               clearHistoryPoll();
               void get().loadHistory(true);
               const pendingPlan = getPendingComplexTaskPlan(get().currentSessionKey);
@@ -710,33 +759,100 @@ export function handleRuntimeEventState(
           }
           break;
         }
+        case 'tool_timeout': {
+          clearErrorRecoveryTimer();
+          const timeoutMessage = event.message
+            ? normalizeStreamingMessage(event.message) as RawMessage
+            : null;
+          const updates = timeoutMessage ? collectToolUpdates(timeoutMessage, 'error') : [];
+          clearToolWatchdogsForRun(set, get, runId, 'tool-error');
+          const toolName = timeoutMessage?.toolName || 'tool';
+          const details = (timeoutMessage as (RawMessage & { details?: Record<string, unknown> }) | null)?.details;
+          const cleanupSucceeded = details?.cleanupSucceeded;
+          const summary = cleanupSucceeded === false
+            ? `${toolName} 调用超时，底层资源清理失败；已反馈给模型换一种方式处理。`
+            : `${toolName} 调用超时；已反馈给模型换一种方式处理。`;
+
+          if (isForegroundEvent) {
+            set((s) => {
+              const currentStream = s.streamingMessage as RawMessage | null;
+              const snapshotMsgs = snapshotStreamingAssistantMessage(currentStream, s.messages, runId);
+              return {
+                messages: timeoutMessage
+                  ? [...s.messages, ...snapshotMsgs, timeoutMessage]
+                  : [...s.messages, ...snapshotMsgs],
+                streamingText: summary,
+                streamingMessage: null,
+                pendingFinal: true,
+                runError: null,
+                error: null,
+                sending: true,
+                activeRunId: null,
+                activeTool: null,
+                streamingTools: updates.length > 0
+                  ? upsertToolStatuses(s.streamingTools, updates)
+                  : s.streamingTools,
+              };
+            });
+          } else {
+            const prev = getBackgroundSessionState();
+            const currentMessages = (prev.messagesSnapshot ?? []) as RawMessage[];
+            const currentStream = prev.streamingMessage as RawMessage | null;
+            const snapshotMsgs = snapshotStreamingAssistantMessage(currentStream, currentMessages, runId);
+            const nextMessages = timeoutMessage
+              ? [...currentMessages, ...snapshotMsgs, timeoutMessage]
+              : [...currentMessages, ...snapshotMsgs];
+            patchBackgroundSessionState({
+              messagesSnapshot: nextMessages,
+              streamingText: summary,
+              streamingMessage: null,
+              pendingFinal: true,
+              runError: null,
+              sending: true,
+              activeRunId: null,
+              activeTool: null,
+              streamingTools: updates.length > 0
+                ? upsertToolStatuses(prev.streamingTools, updates)
+                : prev.streamingTools,
+            });
+          }
+          break;
+        }
         case 'error': {
-          const errorMsg = String(event.errorMessage || 'An error occurred');
+          const rawError = String(event.errorMessage || 'An error occurred');
+          const errorMsg = truncateRunErrorMessage(rawError);
 
           // 仅当用户主动终止（点击停止按钮）时才静默处理 abort error，
           // 系统侧 abort（如上下文溢出、provider 中断）应正常展示错误
-          const isAbortError = errorMsg.toLowerCase().includes('abort') || errorMsg === 'This operation was aborted';
-          const isUserAbort = runId && isAbortedChatRun(runId);
-          if (isAbortError && isUserAbort) {
+          const isUserAbort = shouldTreatAbortAsUserStop(rawError, {
+            runId,
+            runAborted: get().runAborted,
+          });
+          if (isUserAbort) {
+            clearToolWatchdogsForRun(set, get, runId, 'user-cancelled');
             set({
               sending: false,
               activeRunId: null,
+              activeTool: null,
               streamingText: '',
               streamingMessage: null,
               streamingTools: [],
               pendingFinal: false,
               pendingToolImages: [],
               error: null,
+              runError: null,
             });
-            forgetAbortedChatRun(runId!);
+            if (runId) forgetAbortedChatRun(runId);
             break;
           }
+
+          clearToolWatchdogsForRun(set, get, runId, 'tool-error');
+          const displayError = resolveRunFailureErrorMessage(rawError);
 
           const wasSending = get().sending;
           if (isUserSecurityDenialMessage(errorMsg)) {
             clearErrorRecoveryTimer();
             clearHistoryPoll();
-            finishFirstSessionPerf('cancelled', runId);
             set({
               error: null,
               runError: null,
@@ -748,6 +864,7 @@ export function handleRuntimeEventState(
               pendingToolImages: [],
               sending: false,
               activeRunId: null,
+              activeTool: null,
               lastUserMessageAt: null,
             });
             break;
@@ -759,6 +876,7 @@ export function handleRuntimeEventState(
             set({
               sending: false,
               activeRunId: null,
+              activeTool: null,
               streamingText: '',
               streamingMessage: null,
               streamingTools: [],
@@ -788,41 +906,43 @@ export function handleRuntimeEventState(
           }
 
           set({
-            error: errorMsg,
+            error: displayError,
+            runError: displayError,
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
             pendingFinal: false,
             pendingToolImages: [],
+            ...(isRecoverableRuntimeError(errorMsg) ? {} : {
+              sending: false,
+              activeRunId: null,
+              lastUserMessageAt: null,
+              runAborted: isAbortErrorMessage(rawError),
+            }),
           });
 
-          // Don't immediately give up: the Gateway often retries internally
-          // after transient API failures (e.g. "terminated"). Keep `sending`
-          // true for a grace period so that recovery events are processed and
-          // the agent-phase-completion handler can still trigger loadHistory.
-          if (wasSending) {
+          if (wasSending && isRecoverableRuntimeError(errorMsg)) {
             clearErrorRecoveryTimer();
-            const ERROR_RECOVERY_GRACE_MS = 15_000;
+            const ERROR_RECOVERY_GRACE_MS = 5_000;
             setErrorRecoveryTimer(setTimeout(() => {
               setErrorRecoveryTimer(null);
               const state = get();
               if (state.sending && !state.streamingMessage) {
                 clearHistoryPoll();
-                finishFirstSessionPerf('error', runId);
-                // Grace period expired with no recovery — finalize the error
                 set({
                   sending: false,
                   activeRunId: null,
+                  activeTool: null,
                   lastUserMessageAt: null,
                 });
-                // One final history reload in case the Gateway completed in the
-                // background and we just missed the event.
                 state.loadHistory(true);
               }
             }, ERROR_RECOVERY_GRACE_MS));
+          } else if (wasSending) {
+            clearHistoryPoll();
+            void get().loadHistory(true, { force: true });
           } else {
             clearHistoryPoll();
-            finishFirstSessionPerf('error', runId);
             set({ sending: false, activeRunId: null, lastUserMessageAt: null });
           }
           break;
@@ -830,17 +950,43 @@ export function handleRuntimeEventState(
         case 'aborted': {
           clearHistoryPoll();
           clearErrorRecoveryTimer();
+          clearToolWatchdogsForRun(set, get, runId, 'run-aborted');
+          const isUserAbort = Boolean(runId && isAbortedChatRun(runId));
+          if (isUserAbort) {
+            set({
+              sending: false,
+              aborting: false,
+              activeRunId: null,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              lastUserMessageAt: null,
+              pendingToolImages: [],
+              error: null,
+              runError: null,
+            });
+            forgetAbortedChatRun(runId!);
+            break;
+          }
+
+          const displayError = resolveRunFailureErrorMessage('This operation was aborted');
           set({
             sending: false,
             aborting: false,
             activeRunId: null,
+            activeTool: null,
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
             pendingFinal: false,
             lastUserMessageAt: null,
             pendingToolImages: [],
+            error: displayError,
+            runError: displayError,
+            runAborted: true,
           });
+          void get().loadHistory(true, { force: true });
           break;
         }
         default: {

@@ -86,6 +86,16 @@ status: completed successfully`;
     expect(isInternalMessage({ role: 'user', content: '[OpenClaw heartbeat poll]' })).toBe(true);
   });
 
+  it('filters internal tool failure feedback control messages', () => {
+    const content = [
+      '[LYCLAW internal tool failure feedback]',
+      'The exec tool timed out after 120s. Cleanup status: succeeded.',
+      'This is internal control feedback from the runtime.',
+    ].join('\n');
+
+    expect(isInternalMessage({ role: 'user', content })).toBe(true);
+  });
+
   it('does not filter normal user message that starts with current time', () => {
     const content = 'Current time: 北京现在几点？';
 

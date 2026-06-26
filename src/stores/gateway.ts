@@ -16,14 +16,19 @@ const gatewayEventDedupe = new Map<string, number>();
 const GATEWAY_EVENT_DEDUPE_TTL_MS = 30_000;
 const LOAD_SESSIONS_MIN_INTERVAL_MS = 1_200;
 const LOAD_HISTORY_MIN_INTERVAL_MS = 800;
+const GATEWAY_INTERRUPTED_RUN_MESSAGE = 'Run interrupted because the Gateway restarted.';
 const CRON_REPAIR_STARTUP_DELAY_MS = 60_000;
 const CRON_REPAIR_BUSY_RETRY_DELAY_MS = 30_000;
+const DEFERRED_SESSION_REFRESH_RETRY_MS = 1_000;
 let lastLoadSessionsAt = 0;
 let lastLoadHistoryAt = 0;
 let cronRepairTriggeredThisSession = false;
 let cronRepairStartupTimer: ReturnType<typeof setTimeout> | null = null;
 let lastReabortGatewayConnectedAt: number | undefined;
 let chatStoreImportPromise: Promise<typeof import('./chat')> | null = null;
+let deferredSessionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let hasDeferredSessionRefresh = false;
+let deferredSessionRefreshForce = false;
 
 function loadChatStoreModule(): Promise<typeof import('./chat')> {
   chatStoreImportPromise ??= import('./chat');
@@ -161,10 +166,58 @@ export function shouldProcessGatewayEvent(event: Record<string, unknown>): boole
   return true;
 }
 
+type SessionRefreshState = {
+  activeRunId?: string | null;
+  sending?: boolean;
+  loadSessions: (force?: boolean) => Promise<void>;
+};
+
+function isChatRunActiveForSessionRefresh(state: Pick<SessionRefreshState, 'activeRunId' | 'sending'>): boolean {
+  return Boolean(state.sending || state.activeRunId);
+}
+
+function scheduleDeferredSessionRefresh(force = false): void {
+  hasDeferredSessionRefresh = true;
+  deferredSessionRefreshForce = deferredSessionRefreshForce || force;
+  if (deferredSessionRefreshTimer) return;
+
+  deferredSessionRefreshTimer = setTimeout(() => {
+    deferredSessionRefreshTimer = null;
+    if (!hasDeferredSessionRefresh) return;
+
+    loadChatStoreModule()
+      .then(({ useChatStore }) => {
+        const state = useChatStore.getState();
+        if (isChatRunActiveForSessionRefresh(state)) {
+          scheduleDeferredSessionRefresh(deferredSessionRefreshForce);
+          return;
+        }
+
+        const forceRefresh = deferredSessionRefreshForce;
+        hasDeferredSessionRefresh = false;
+        deferredSessionRefreshForce = false;
+        maybeLoadSessions(state, forceRefresh, { deferWhileActive: false });
+      })
+      .catch(() => {});
+  }, DEFERRED_SESSION_REFRESH_RETRY_MS);
+}
+
+function flushDeferredSessionRefreshWhenIdle(): void {
+  if (hasDeferredSessionRefresh) {
+    scheduleDeferredSessionRefresh();
+  }
+}
+
 function maybeLoadSessions(
-  state: { loadSessions: (force?: boolean) => Promise<void> },
+  state: SessionRefreshState,
   force = false,
+  options: { deferWhileActive?: boolean } = {},
 ): void {
+  if (options.deferWhileActive !== false && isChatRunActiveForSessionRefresh(state)) {
+    scheduleDeferredSessionRefresh(force);
+    return;
+  }
+
   const now = Date.now();
   if (!force && now - lastLoadSessionsAt < LOAD_SESSIONS_MIN_INTERVAL_MS) return;
   lastLoadSessionsAt = now;
@@ -264,7 +317,7 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
     });
   }
 
-  // Tool/item progress without chat deltas — pull JSONL transcript instead.
+  // Tool/item progress without chat deltas - pull JSONL transcript instead.
   if (stream === 'item' || stream === 'command_output') {
     loadChatStoreModule()
       .then(({ useChatStore }) => {
@@ -320,6 +373,15 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
       .catch(() => {});
   }
 
+  // Gateway emits phase=end after each tool round; that is not a full run completion.
+  if (phase === 'end') {
+    loadChatStoreModule()
+      .then(({ useChatStore }) => {
+        refreshActiveAgentSessionHistory(useChatStore.getState(), runId, sessionKey, true);
+      })
+      .catch(() => {});
+  }
+
   if (phase === 'completed' || phase === 'done' || phase === 'finished') {
     loadChatStoreModule()
       .then(({ useChatStore }) => {
@@ -337,19 +399,19 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
           runId != null ? String(runId) : null,
           resolvedSessionKey,
         );
-      })
-      .catch(() => {});
-  } else if (phase === 'end') {
-    loadChatStoreModule()
-      .then(({ useChatStore }) => {
-        const state = useChatStore.getState();
-        const resolvedSessionKey = sessionKey != null ? String(sessionKey) : null;
-        const matchesCurrentSession = resolvedSessionKey == null || resolvedSessionKey === state.currentSessionKey;
-        const matchesActiveRun = runId != null && state.activeRunId != null && String(runId) === state.activeRunId;
+        flushDeferredSessionRefreshWhenIdle();
 
-        if (matchesCurrentSession || matchesActiveRun) {
+        const curSessionKey = resolvedSessionKey === state.currentSessionKey;
+        const curActiveRun = state.activeRunId != null && String(runId) === state.activeRunId;
+        if (curSessionKey || curActiveRun) {
           maybeLoadHistory(state, true);
         }
+      })
+      .catch(() => {});
+
+    void import('@/stores/token-usage')
+      .then(({ scheduleTokenUsageRefreshAfterRun }) => {
+        scheduleTokenUsageRefreshAfterRun();
       })
       .catch(() => {});
   }
@@ -377,6 +439,83 @@ function handleGatewayChatMessage(data: unknown): void {
     };
     if (!shouldProcessGatewayEvent(normalized)) return;
     useChatStore.getState().handleChatEvent(normalized);
+  }).catch(() => {});
+}
+
+function settleActiveChatForGatewayInterruption(reason: string): void {
+  loadChatStoreModule().then(({ useChatStore }) => {
+    const state = useChatStore.getState();
+    const events: Array<{ runId: string; sessionKey: string }> = [];
+    if (state.activeRunId) {
+      events.push({ runId: state.activeRunId, sessionKey: state.currentSessionKey });
+    }
+    for (const [sessionKey, sessionState] of Object.entries(state.sessionStreamingStates)) {
+      if (sessionState.activeRunId && !events.some((event) => event.runId === sessionState.activeRunId)) {
+        events.push({ runId: sessionState.activeRunId, sessionKey });
+      }
+    }
+
+    for (const event of events) {
+      state.handleChatEvent({
+        state: 'aborted',
+        runId: event.runId,
+        sessionKey: event.sessionKey,
+        reason,
+      });
+    }
+
+    useChatStore.setState((current) => {
+      const shouldClearCurrent = current.sending || current.pendingFinal || current.activeRunId || current.activeTool;
+      if (!shouldClearCurrent && current.runAborted) {
+        return {};
+      }
+
+      const currentSession = current.sessionStreamingStates[current.currentSessionKey];
+      return {
+        sending: false,
+        aborting: false,
+        activeRunId: null,
+        activeTool: null,
+        streamingText: '',
+        streamingMessage: null,
+        streamingTools: [],
+        pendingFinal: false,
+        pendingToolImages: [],
+        lastUserMessageAt: null,
+        runAborted: true,
+        runError: GATEWAY_INTERRUPTED_RUN_MESSAGE,
+        sessionStreamingStates: {
+          ...current.sessionStreamingStates,
+          [current.currentSessionKey]: {
+            ...(currentSession ?? {
+              activeRunId: null,
+              activeTool: null,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              lastUserMessageAt: null,
+              pendingToolImages: [],
+              runAborted: false,
+              sending: false,
+              runError: GATEWAY_INTERRUPTED_RUN_MESSAGE,
+              messagesSnapshot: current.messages,
+            }),
+            activeRunId: null,
+            activeTool: null,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            lastUserMessageAt: null,
+            sending: false,
+            runAborted: true,
+            runError: GATEWAY_INTERRUPTED_RUN_MESSAGE,
+          },
+        },
+      };
+    });
   }).catch(() => {});
 }
 
@@ -422,6 +561,10 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
           const unsubscribers: Array<() => void> = [];
           unsubscribers.push(subscribeHostEvent<GatewayStatus>('gateway:status', (payload) => {
             set({ status: payload });
+
+            if (payload.state === 'stopped' || payload.state === 'reconnecting' || payload.state === 'error') {
+              settleActiveChatForGatewayInterruption(`gateway-${payload.state}`);
+            }
 
             // Reset first message flag when gateway starts/restarts
             if (payload.state === 'running') {
@@ -507,7 +650,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
                 const current = get().status;
                 if (latest.state !== current.state || latest.warmupStatus !== current.warmupStatus) {
                   console.info(
-                    `[gateway-store] reconciled stale status: ${current.state}/${current.warmupStatus ?? 'none'} → ${latest.state}/${latest.warmupStatus ?? 'none'}`,
+                    `[gateway-store] reconciled stale status: ${current.state}/${current.warmupStatus ?? 'none'} -> ${latest.state}/${latest.warmupStatus ?? 'none'}`,
                   );
                   set({ status: latest });
                 }
@@ -517,7 +660,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
         }
 
         // Re-fetch status after IPC listeners are registered to close the race
-        // window: if the gateway transitioned (e.g. starting → running) between
+        // window: if the gateway transitioned (e.g. starting -> running) between
         // the initial fetch and the IPC listener setup, that event was lost.
         // A second fetch guarantees we pick up the latest state.
         try {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveTaskSteps, parseSubagentCompletionInfo } from '@/pages/Chat/task-visualization';
+import { deriveTaskSteps, attachSubagentChildSteps, findInFlightChildDelegation, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo } from '@/pages/Chat/task-visualization';
 import { stripProcessMessagePrefix } from '@/pages/Chat/message-utils';
 import type { RawMessage, ToolStatus } from '@/stores/chat';
 
@@ -470,7 +470,7 @@ describe('deriveTaskSteps', () => {
     expect(stripProcessMessagePrefix(reply, [processBlock])).toBe('最终答案在这里。');
   });
 
-  it('hides subagent orchestration tools from the execution graph', () => {
+  it('shows subagent orchestration tools in the execution graph', () => {
     const messages: RawMessage[] = [
       {
         role: 'assistant',
@@ -498,10 +498,11 @@ describe('deriveTaskSteps', () => {
       streamingTools: [],
     });
 
-    expect(steps).toEqual([]);
+    expect(steps.some((step) => step.label === 'sessions_spawn')).toBe(true);
+    expect(steps.some((step) => step.label === 'sessions_yield')).toBe(true);
   });
 
-  it('filters subagent orchestration narration from graph message steps', () => {
+  it('keeps subagent orchestration narration in graph message steps', () => {
     const messages: RawMessage[] = [
       {
         role: 'assistant',
@@ -521,7 +522,7 @@ describe('deriveTaskSteps', () => {
       streamingTools: [],
     });
 
-    expect(steps.some((step) => step.detail?.includes('调度子agent'))).toBe(false);
+    expect(steps.some((step) => step.detail?.includes('调度子agent'))).toBe(true);
     expect(steps.some((step) => step.detail?.includes('检查完成'))).toBe(true);
   });
 
@@ -543,5 +544,265 @@ status: completed successfully`,
       sessionId: 'child-session-id',
       agentId: 'coder',
     });
+  });
+});
+
+describe('findInFlightChildDelegation', () => {
+  it('returns child session info after spawn until completion event arrives', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'Research labor law' },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'spawn-1',
+          name: 'sessions_spawn',
+          input: { label: 'legal-research', task: 'collect statutes' },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            status: 'accepted',
+            childSessionKey: 'agent:main:subagent:child-123',
+            runId: 'child-run-id',
+          }),
+        }],
+      },
+    ];
+
+    const delegation = findInFlightChildDelegation(messages, new Set());
+    expect(delegation).toEqual({
+      label: 'legal-research',
+      childSessionKey: 'agent:main:subagent:child-123',
+      runId: 'child-run-id',
+    });
+
+    const completed = findInFlightChildDelegation(
+      messages,
+      new Set(['agent:main:subagent:child-123']),
+    );
+    expect(completed).toBeNull();
+
+    const stillProcessing = findInFlightChildDelegation(
+      messages,
+      new Set(['agent:main:subagent:child-123']),
+      ['agent:main:subagent:child-123'],
+    );
+    expect(stillProcessing?.childSessionKey).toBe('agent:main:subagent:child-123');
+  });
+
+  it('detects waiting state while child delegation is in flight', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'Research labor law' },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'spawn-1',
+          name: 'sessions_spawn',
+          input: { label: 'legal-research', task: 'collect statutes' },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            status: 'accepted',
+            childSessionKey: 'agent:main:subagent:child-123',
+            runId: 'child-run-id',
+          }),
+        }],
+      },
+    ];
+
+    expect(isWaitingOnSubagentDelegation(messages)).toBe(true);
+  });
+
+  it('stays waiting when an earlier child completed but a later spawn is still in flight', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'Build deck' },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'spawn-1',
+          name: 'sessions_spawn',
+          input: { taskName: 'first-pass' },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            childSessionKey: 'agent:main:subagent:child-1',
+          }),
+        }],
+      },
+      {
+        role: 'user',
+        content: '[Internal task completion event] session_key: agent:main:subagent:child-1 session_id: child-1-id',
+      },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'spawn-2',
+          name: 'sessions_spawn',
+          input: { taskName: 'second-pass' },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-2',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            childSessionKey: 'agent:main:subagent:child-2',
+          }),
+        }],
+      },
+    ];
+
+    expect(isWaitingOnSubagentDelegation(messages)).toBe(true);
+    expect(findInFlightChildDelegation(
+      messages,
+      new Set(['agent:main:subagent:child-1']),
+    )).toEqual({
+      label: 'second-pass',
+      childSessionKey: 'agent:main:subagent:child-2',
+      runId: null,
+    });
+  });
+});
+
+describe('attachSubagentChildSteps', () => {
+  it('nests child transcript steps under the spawn branch in the execution graph', () => {
+    const parentSteps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-spawn',
+          content: [{
+            type: 'tool_use',
+            id: 'spawn-1',
+            name: 'sessions_spawn',
+            input: { agentId: 'coder', task: 'inspect repo' },
+          }],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    const merged = attachSubagentChildSteps(
+      parentSteps,
+      [
+        {
+          role: 'assistant',
+          id: 'child-assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'child-read',
+            name: 'read',
+            input: { path: 'README.md' },
+          }],
+        },
+      ],
+      'child-session-id',
+      { branchLabel: 'coder' },
+    );
+
+    const branchStep = merged.find((step) => step.id === 'spawn-1:branch');
+    expect(branchStep).toEqual(expect.objectContaining({
+      label: 'coder run',
+      depth: 2,
+      parentId: 'spawn-1',
+    }));
+
+    const childToolStep = merged.find((step) => step.id === 'child-session-id:tool-child-read');
+    expect(childToolStep).toEqual(expect.objectContaining({
+      label: 'read',
+      depth: 3,
+      parentId: 'spawn-1:branch',
+    }));
+  });
+
+  it('shows a running branch placeholder while waiting for child transcript', () => {
+    const merged = attachSubagentChildSteps(
+      [],
+      [],
+      'agent:main:subagent:child-123',
+      { branchLabel: 'legal-research' },
+    );
+
+    expect(merged).toEqual([
+      expect.objectContaining({
+        id: 'agent:main:subagent:child-123:branch',
+        label: 'legal-research run',
+        status: 'running',
+        depth: 2,
+        parentId: 'agent-run',
+      }),
+    ]);
+  });
+
+  it('nests each child transcript under its own spawn branch when multiple spawns exist', () => {
+    const parentSteps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-spawn-1',
+          content: [{
+            type: 'tool_use',
+            id: 'spawn-1',
+            name: 'sessions_spawn',
+            input: { taskName: 'first-pass' },
+          }],
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-spawn-2',
+          content: [{
+            type: 'tool_use',
+            id: 'spawn-2',
+            name: 'sessions_spawn',
+            input: { taskName: 'second-pass' },
+          }],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    const merged = attachSubagentChildSteps(
+      parentSteps,
+      [{
+        role: 'assistant',
+        id: 'child-assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'child-read',
+          name: 'read',
+          input: { path: 'README.md' },
+        }],
+      }],
+      'agent:main:subagent:child-1',
+      { branchLabel: 'first-pass', spawnStepId: 'spawn-1' },
+    );
+
+    const childToolStep = merged.find((step) => step.id === 'agent:main:subagent:child-1:tool-child-read');
+    expect(childToolStep).toEqual(expect.objectContaining({
+      parentId: 'spawn-1:branch',
+      depth: 3,
+    }));
+    expect(merged.find((step) => step.id === 'spawn-2:branch')).toBeTruthy();
   });
 });

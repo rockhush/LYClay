@@ -143,6 +143,19 @@ describe('command security policy', () => {
     expect(result.segments[0]?.matchedRules).toContain('skill-marketplace-change');
   });
 
+  it('requires confirmation for lyclaw marketplace installs', async () => {
+    const result = await evaluateCommandPolicy({
+      executable: 'node',
+      args: ['/app/scripts/lyclaw-marketplace-cli.mjs', 'install', '123'],
+      cwd: workspace,
+      allowedRoots: [workspace],
+      source: 'agent',
+    });
+
+    expect(result.decision.action).toBe('prompt');
+    expect(result.segments[0]?.matchedRules).toContain('skill-marketplace-change');
+  });
+
   it('requires high-risk confirmation for remote package runners', async () => {
     const result = await evaluateCommandPolicy({
       command: 'pnpm dlx create-something',

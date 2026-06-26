@@ -127,6 +127,7 @@ describe('bootstrapLyManagedProviders', () => {
         api: 'openai-completions',
         modelOverrides: {
           auto: expect.objectContaining({
+            input: ['text', 'image'],
             compat: expect.objectContaining({
               supportsUsageInStreaming: true,
               supportsPromptCacheKey: false,
@@ -144,6 +145,7 @@ describe('bootstrapLyManagedProviders', () => {
         apiKey: 'EMPTY',
         models: [expect.objectContaining({
           id: 'auto',
+          input: ['text', 'image'],
           compat: expect.objectContaining({ supportsUsageInStreaming: true }),
         })],
       }),

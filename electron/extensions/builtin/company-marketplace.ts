@@ -31,6 +31,7 @@ import {
 } from '../../utils/company-marketplace-installs';
 import { assertCommandAllowedWithConfirmation } from '../../security/confirmation-service';
 import { extractZipArchive } from '../../utils/zip-extract';
+import { matchesMarketplaceQuery } from '../../utils/company-marketplace-search';
 
 const COMPANY_API_BASE = 'http://portal.srv.lstech.com/aihome/api/skill';
 // const COMPANY_API_BASE = 'http://100.0.4.203/aihome/api/skill';
@@ -247,12 +248,7 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
       }
 
       if (params.query && params.query.trim()) {
-        const query = params.query.toLowerCase();
-        results = results.filter(skill => 
-          skill.name.toLowerCase().includes(query) ||
-          skill.description.toLowerCase().includes(query) ||
-          (skill.author && skill.author.toLowerCase().includes(query))
-        );
+        results = results.filter((skill) => matchesMarketplaceQuery(skill, params.query));
       }
 
       return results;

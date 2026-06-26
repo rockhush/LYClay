@@ -79,7 +79,7 @@ describe('Models page token usage cache', () => {
     resetTokenUsageStoreForTests();
   });
 
-  it('does not fetch token usage when opening the models page', async () => {
+  it('fetches token usage when opening the models page', async () => {
     useTokenUsageStore.setState({
       status: 'done',
       entries: createUsageHistory(10),
@@ -87,17 +87,38 @@ describe('Models page token usage cache', () => {
       loaded: true,
     });
 
+    hostApiFetchMock.mockResolvedValueOnce(createUsageHistory(10));
+
     render(<Models />);
 
     await act(async () => {
       await Promise.resolve();
     });
 
-    expect(hostApiFetchMock).not.toHaveBeenCalled();
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
+    expect(hostApiFetchMock).toHaveBeenCalledWith('/api/usage/recent-token-history');
     expect(screen.getAllByTestId('token-usage-entry')).toHaveLength(5);
   });
 
-  it('refreshes token usage only when the refresh button is clicked', async () => {
+  it('shows cached token usage when gateway is not running', async () => {
+    gatewayState.status = { state: 'stopped', port: 18789 };
+    useTokenUsageStore.setState({
+      status: 'done',
+      entries: createUsageHistory(3),
+      stableEntries: createUsageHistory(3),
+      loaded: true,
+    });
+
+    render(<Models />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getAllByTestId('token-usage-entry')).toHaveLength(3);
+  });
+
+  it('refreshes token usage when the refresh button is clicked', async () => {
     useTokenUsageStore.setState({
       status: 'done',
       entries: createUsageHistory(10),
@@ -111,7 +132,7 @@ describe('Models page token usage cache', () => {
       await Promise.resolve();
     });
 
-    expect(hostApiFetchMock).not.toHaveBeenCalled();
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
 
     hostApiFetchMock.mockResolvedValueOnce(createUsageHistory(12));
 
@@ -120,7 +141,7 @@ describe('Models page token usage cache', () => {
       await Promise.resolve();
     });
 
-    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(2);
     expect(hostApiFetchMock).toHaveBeenCalledWith('/api/usage/recent-token-history');
   });
 

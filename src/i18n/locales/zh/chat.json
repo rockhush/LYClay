@@ -42,6 +42,7 @@
         "title": "执行关系图",
         "branchLabel": "分支",
         "thinkingLabel": "思考中",
+        "modelCallLabel": "模型调用",
         "agentRun": "{{agent}} 执行",
         "collapsedSummary": "{{toolCount}} 个工具调用，{{processCount}} 条过程消息",
         "collapseAction": "收起执行关系图"
@@ -109,8 +110,12 @@
     "errors": {
         "modelResponseTimeout": "较长时间未收到助手回复，本次请求已停止。请检查本机网络、AI 提供商配置或稍后重试。",
         "modelResponseTimeoutLong": "长时间未收到助手回复，已自动停止本次等待。可能是模型仍在排队或预热、服务不可用、限流，或 AI 提供商配置异常。请到「设置 → AI 提供商」检查，或切换模型后重试。",
+        "backendRunStopped": "后端 Agent 服务已停止响应（可能因模型调用超时或服务中断），本次任务未完成。请稍后重试，或缩小任务范围。",
+        "runAbortedBySystem": "运行被意外中断，本次任务未完成。请重试。",
+        "toolExecutionTimeout": "工具执行长时间无响应，已自动停止本次任务。请检查命令是否卡住，或缩小任务范围后重试。",
         "contextTooLarge": "当前会话上下文过大，自动压缩后仍超过当前模型限制。请开启更强压缩、切换更大上下文模型，或新建会话继续。",
         "currentMessageTooLarge": "本次输入过长，已超过当前模型可安全处理的上下文预算。请拆分输入，或改用文件/附件方式提供内容。",
-        "contextCompressionFailedRecentOnly": "上下文压缩失败。系统仅保留最近对话，较早历史未进入本次请求。"
+        "contextCompressionFailedRecentOnly": "上下文压缩失败。系统仅保留最近对话，较早历史未进入本次请求。",
+        "subagentStalled": "子任务「{{label}}」长时间无进展（可能已在模型调用中卡住），主任务尚未完成。请点停止或缩小子任务范围后重试。"
     }
 }

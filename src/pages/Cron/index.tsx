@@ -43,6 +43,7 @@ import type { CronJob, CronJobCreateInput, ScheduleType } from '@/types/cron';
 import { CHANNEL_ICONS, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
 import { useTranslation } from 'react-i18next';
 import { formatCronRelativeTime, resolveCronAgentLabel, translateCronError } from '@/lib/cron-error-i18n';
+import { subscribeHostEvent } from '@/lib/host-events';
 import type { TFunction } from 'i18next';
 
 // Common cron schedule presets
@@ -1025,6 +1026,14 @@ export function Cron() {
       void hostApiFetch('/api/cron/supervisor-nudge', { method: 'POST' }).catch(() => {});
       fetchJobs();
     }
+  }, [fetchJobs, isGatewayRunning]);
+
+  // Background catch-up/retry succeeded — refresh cards so stale error banners clear.
+  useEffect(() => {
+    if (!isGatewayRunning) return undefined;
+    return subscribeHostEvent('cron:updated', () => {
+      void fetchJobs();
+    });
   }, [fetchJobs, isGatewayRunning]);
 
   useEffect(() => {

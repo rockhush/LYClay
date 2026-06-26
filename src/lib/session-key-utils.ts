@@ -1,5 +1,13 @@
 import type { ChatSession } from '@/stores/chat';
 
+/** OpenClaw heartbeat / cron lane uses agent:<agentId>:main. */
+export function isHeartbeatSessionKey(sessionKey: string | undefined | null): boolean {
+  const normalized = sessionKey?.trim();
+  if (!normalized) return false;
+  const parts = normalized.split(':');
+  return parts.length === 3 && parts[0] === 'agent' && parts[2] === 'main';
+}
+
 /** OpenClaw child runs use keys like agent:main:subagent:<uuid>. */
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
   const normalized = sessionKey?.trim();
@@ -50,6 +58,10 @@ export function isChannelMirrorSessionKey(sessionKey: string | undefined | null)
 }
 export function isUserFacingSessionKey(sessionKey: string | undefined | null): boolean {
   return !isSubagentSessionKey(sessionKey) && !isChannelMirrorSessionKey(sessionKey);
+}
+
+export function filterUserFacingSessions(sessions: ChatSession[]): ChatSession[] {
+  return sessions.filter((session) => isUserFacingSessionKey(session.key));
 }
 
 export function pickUserFacingSession(

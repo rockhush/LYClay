@@ -10,6 +10,7 @@ import {
   getMessageText,
   stripGatewayUserMetadata,
   isInternalMessage,
+  isAbortErrorMessage,
   isSuppressedRunError,
   isToolResultRole,
   loadMissingPreviews,
@@ -68,6 +69,12 @@ export function createHistoryActions(
         const stopReason = (latestAssistantMessage as any).stopReason ?? (latestAssistantMessage as any).stop_reason;
         if (stopReason !== 'error') return null;
         return (latestAssistantMessage as any).errorMessage ?? (latestAssistantMessage as any).error_message ?? null;
+      };
+      const getUserDedupKey = (message: RawMessage): string | null => {
+        const text = stripGatewayUserMetadata(getMessageText(message.content))
+          .replace(/\s+/g, ' ')
+          .trim();
+        return text || null;
       };
       const mergeHydratedMessages = (
         currentMessages: RawMessage[],
@@ -134,17 +141,19 @@ export function createHistoryActions(
         const seenContent = new Set<string>();
         const deduplicatedMessages = finalMessages.filter((msg) => {
           if (msg.role === 'user') {
-            const content = msg.content;
-            if (seenContent.has(content)) {
+            const content = getUserDedupKey(msg);
+            if (content && seenContent.has(content)) {
               return false;
             }
-            seenContent.add(content);
+            if (content) seenContent.add(content);
           }
           return true;
         });
 
         const runErrorRaw = getRunErrorFromMessages(deduplicatedMessages);
-        const runError = runErrorRaw && isSuppressedRunError(runErrorRaw) ? null : runErrorRaw;
+        const runError = runErrorRaw && (isSuppressedRunError(runErrorRaw) || isAbortErrorMessage(runErrorRaw))
+          ? null
+          : runErrorRaw;
         set({ messages: deduplicatedMessages, thinkingLevel, loading: false, runError });
 
         const { pendingFinal, lastUserMessageAt, sending: isSendingNow } = get();

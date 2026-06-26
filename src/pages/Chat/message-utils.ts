@@ -40,6 +40,8 @@ function reformatCronTimeBlock(text: string): string {
  */
 function cleanUserText(text: string): string {
   return reformatCronTimeBlock(text)
+    // Remove /think directive prefix added by LYClaw
+    .replace(/\/think\s+(off|medium|high)\s+/i, '')
     // Remove [cron: uuid] scheduled-task id prefix
     .replace(/\s*\[cron:[^\]]*\]\s*/gi, ' ')
     // Remove the English cron delivery instruction boilerplate (trailing block)
@@ -74,6 +76,8 @@ function isInternalText(text: string): boolean {
   if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(normalized)) return true;
   if (/\b(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(normalized) && stripSilentReplyToken(text).trim().length === 0) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(normalized)) return true;
+  if (/^\[LYCLAW internal tool failure feedback\]/i.test(normalized)) return true;
+  if (/^\[LYCLAW internal convergence directive\]/i.test(normalized)) return true;
   if (/^\s*System\s*\(untrusted\)\s*:/i.test(normalized)) return true;
   if (/^\s*System\s*:/i.test(normalized)) return true;
   if (isModelCommandApprovalText(normalized)) return true;
@@ -486,24 +490,84 @@ export function extractToolUse(message: RawMessage | unknown): Array<{ id: strin
   return tools;
 }
 
+const GATEWAY_TIMESTAMP_PREFIX =
+  /\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})\s+GMT\+8\]/i;
+
+/** Normalize OpenClaw/Gateway timestamps (seconds, ms, or ISO string) to epoch ms. */
+export function normalizeTimestampToMs(timestamp: unknown): number | null {
+  if (timestamp == null || timestamp === '') return null;
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+    return timestamp > 1e12 ? timestamp : timestamp * 1000;
+  }
+  if (typeof timestamp === 'string') {
+    const trimmed = timestamp.trim();
+    if (!trimmed) return null;
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return numeric > 1e12 ? numeric : numeric * 1000;
+    }
+    const parsed = Date.parse(trimmed);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+/** Parse Gateway-injected `[Fri 2026-02-13 22:39 GMT+8]` prefixes from message text. */
+export function extractGatewayTimestampPrefixMs(text: string): number | null {
+  const match = text.match(GATEWAY_TIMESTAMP_PREFIX);
+  if (!match) return null;
+  const iso = `${match[1]}T${match[2]}:${match[3]}:00+08:00`;
+  const parsed = Date.parse(iso);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getMessageRawText(message: RawMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  if (!Array.isArray(message.content)) return '';
+  return message.content
+    .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
+    .join('\n');
+}
+
 /**
- * Format a Unix timestamp (seconds or milliseconds) to `YYYY-MM-DD HH:mm`.
+ * Timestamp for UI display. Prefer the Gateway `GMT+8` prefix (same as the model
+ * sees) over transcript `timestamp` fields that can drift by an hour.
  */
-export function formatTimestamp(timestamp: unknown): string {
-  if (!timestamp) return '';
-  const ts = typeof timestamp === 'number' ? timestamp : Number(timestamp);
-  if (!ts || isNaN(ts)) return '';
+export function resolveMessageDisplayTimestamp(message: RawMessage): unknown {
+  const fromPrefix = extractGatewayTimestampPrefixMs(getMessageRawText(message));
+  if (fromPrefix != null) return fromPrefix / 1000;
+  return message.timestamp;
+}
 
-  // OpenClaw timestamps can be in seconds or milliseconds
-  const ms = ts > 1e12 ? ts : ts * 1000;
-  const date = new Date(ms);
-  if (Number.isNaN(date.getTime())) return '';
+function formatTimestampMs(ms: number, timeZone?: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    ...(timeZone ? { timeZone } : {}),
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(ms));
 
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hour = String(date.getHours()).padStart(2, '0');
-  const minute = String(date.getMinutes()).padStart(2, '0');
+  const pick = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+
+  const year = pick('year');
+  const month = pick('month');
+  const day = pick('day');
+  const hour = pick('hour');
+  const minute = pick('minute');
+  if (!year || !month || !day || !hour || !minute) return '';
 
   return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+/**
+ * Format a message timestamp using the system local timezone: `YYYY-MM-DD HH:mm`.
+ */
+export function formatTimestamp(timestamp: unknown): string {
+  const ms = normalizeTimestampToMs(timestamp);
+  if (!ms) return '';
+  return formatTimestampMs(ms);
 }

@@ -1,12 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const invokeIpc = vi.fn();
-const beginChatRunPerf = vi.fn();
-const markChatRunRpcStarted = vi.fn();
-const markChatRunRpcCompleted = vi.fn();
-const beginFirstSessionPerf = vi.fn(() => false);
-const markFirstSessionRpcStarted = vi.fn();
-const markFirstSessionRpcCompleted = vi.fn();
 
 vi.mock('@/lib/api-client', () => ({
   invokeIpc: (...args: unknown[]) => invokeIpc(...args),
@@ -30,18 +24,6 @@ vi.mock('@/stores/settings', () => ({
 vi.mock('@/stores/chat/context-compactor', () => ({
   compressHistory: vi.fn(),
   resetCompactorSession: vi.fn(),
-}));
-
-vi.mock('@/stores/chat/chat-run-perf', () => ({
-  beginChatRunPerf: (...args: unknown[]) => beginChatRunPerf(...args),
-  markChatRunRpcStarted: (...args: unknown[]) => markChatRunRpcStarted(...args),
-  markChatRunRpcCompleted: (...args: unknown[]) => markChatRunRpcCompleted(...args),
-}));
-
-vi.mock('@/stores/chat/first-session-perf', () => ({
-  beginFirstSessionPerf: (...args: unknown[]) => beginFirstSessionPerf(...args),
-  markFirstSessionRpcStarted: (...args: unknown[]) => markFirstSessionRpcStarted(...args),
-  markFirstSessionRpcCompleted: (...args: unknown[]) => markFirstSessionRpcCompleted(...args),
 }));
 
 describe('createRuntimeSendActions', () => {

@@ -1043,7 +1043,7 @@ function verifyBundledDigitalEmployeeIsolation(outputDir) {
   const distDir = path.join(outputDir, 'dist');
   const chatFiles = findFilesByName(distDir, /^chat-.*\.js$/);
   const getReplyFiles = findFilesByName(distDir, /^get-reply-.*\.js$/);
-  const protocolFiles = findFilesByName(distDir, /^protocol-.*\.js$/);
+  const protocolFiles = findFilesByName(distDir, /^(protocol-|schema-).*\.js$/);
   const workspaceFiles = findFilesByName(distDir, /^workspace-.*\.js$/);
 
   if (chatFiles.length === 0 || getReplyFiles.length === 0 || protocolFiles.length === 0 || workspaceFiles.length === 0) {
@@ -1070,7 +1070,7 @@ function verifyBundledDigitalEmployeeIsolation(outputDir) {
     const workspaceSource = fs.readFileSync(workspaceFile, 'utf8');
     return (
       workspaceSource.includes('__digitalEmployeeOnly') &&
-      workspaceSource.includes('mergedEmployeeSkills')
+      (workspaceSource.includes('mergedEmployeeSkills') || workspaceSource.includes('merged.values()'))
     );
   });
 

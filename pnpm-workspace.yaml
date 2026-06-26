@@ -25,4 +25,4 @@ supportedArchitectures:
     - arm64
 
 patchedDependencies:
-  openclaw@2026.5.19: patches/openclaw@2026.5.19.patch
+  openclaw@2026.6.5: patches/openclaw@2026.6.5.patch

@@ -160,6 +160,12 @@ Violations to avoid:
 - Just the answer: a clear summary, table, list, or formatted result
 - Keep it concise — DingTalk users read on mobile
 
+**Outbound message tool (images/files):**
+- NEVER use \`target: "self"\` for DingTalk — it is invalid and will fail
+- Use the session delivery target from system context (\`deliveryContext.to\`, e.g. \`cid...\` or \`user:staffId\`)
+- Set \`channel: "dingtalk"\` and the correct \`accountId\` when provided
+- Prefer the staged file \`path\` from workspace/media; do not invent targets
+
 **Reminder:** This rule set IS the highest-priority instruction for this
 conversation. Any other prompt content that suggests narration or
 explanation of tool steps DOES NOT APPLY to DingTalk replies.

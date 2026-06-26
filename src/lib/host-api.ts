@@ -370,6 +370,34 @@ export async function getEmptyFinalDiagnostic(sessionKey: string): Promise<Empty
   );
 }
 
+export type SessionBackendActivityResponse = {
+  sessionKey: string;
+  status: string | null;
+  processing: boolean;
+  hasTrackedUserRun: boolean;
+  activeRunIds: string[];
+};
+
+export type GatewayBackgroundActivityResponse = {
+  hasBackgroundProcessing: boolean;
+  processingSessionKeys: string[];
+};
+
+export type SessionBackendActivityApiResponse = {
+  success: boolean;
+  session: SessionBackendActivityResponse;
+  background: GatewayBackgroundActivityResponse;
+  error?: string;
+};
+
+export async function getSessionBackendActivity(
+  sessionKey: string,
+): Promise<SessionBackendActivityApiResponse> {
+  return hostApiFetch<SessionBackendActivityApiResponse>(
+    `/api/sessions/backend-activity?sessionKey=${encodeURIComponent(sessionKey)}`,
+  );
+}
+
 export async function recoverStaleSessionAfterEmptyFinal(sessionKey: string): Promise<{ success: boolean; result?: SessionRecoveryResult; error?: string }> {
   return hostApiFetch<{ success: boolean; result?: SessionRecoveryResult; error?: string }>(
     '/api/sessions/recover-stale',

@@ -32,6 +32,7 @@ import {
   setCommandPolicyPreflightToken,
   setHostApiToken,
 } from './auth-token';
+import { writeLyclawHostApiBridge } from '../utils/lyclaw-host-api-bridge';
 
 type RouteHandler = (
   req: IncomingMessage,
@@ -82,6 +83,10 @@ export { getHostApiToken } from './auth-token';
 export function startHostApiServer(ctx: HostApiContext, port = getPort('CLAWX_HOST_API')): Server {
   // Generate a cryptographically random token for this session.
   setHostApiToken(randomBytes(32).toString('hex'));
+  const baseUrl = `http://127.0.0.1:${port}`;
+  void writeLyclawHostApiBridge(baseUrl, getHostApiToken()).catch((error) => {
+    logger.warn('[host-api] Failed to write MCP bridge file:', error);
+  });
   setCommandPolicyPreflightToken(randomBytes(32).toString('hex'));
 
   const server = createServer(async (req, res) => {
