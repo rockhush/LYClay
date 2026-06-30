@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { extractSessionRecords } from './session-util';
 import { getOpenClawConfigDir } from './paths';
 
@@ -114,6 +114,44 @@ export async function resolveSessionDeliveryContext(
   }
 
   return inferDeliveryContextFromSessionKey(trimmedKey);
+}
+
+export async function upsertSessionDeliveryContext(
+  sessionKey: string,
+  deliveryContext: SessionDeliveryContext,
+): Promise<void> {
+  const trimmedKey = sessionKey.trim();
+  if (!trimmedKey) return;
+
+  const agentId = parseAgentIdFromSessionKey(trimmedKey);
+  if (!agentId) return;
+
+  const sessionsPath = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions', 'sessions.json');
+  let store: JsonRecord = {};
+  try {
+    const raw = await readFile(sessionsPath, 'utf8');
+    if (raw.trim()) {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        store = parsed as JsonRecord;
+      }
+    }
+  } catch {
+    store = {};
+  }
+
+  const existing = store[trimmedKey] && typeof store[trimmedKey] === 'object' && !Array.isArray(store[trimmedKey])
+    ? store[trimmedKey] as JsonRecord
+    : {};
+  store[trimmedKey] = {
+    ...existing,
+    key: readNonEmptyString(existing.key) ?? trimmedKey,
+    sessionKey: readNonEmptyString(existing.sessionKey) ?? trimmedKey,
+    deliveryContext,
+  };
+
+  await mkdir(dirname(sessionsPath), { recursive: true });
+  await writeFile(sessionsPath, JSON.stringify(store, null, 2), 'utf8');
 }
 
 export function buildChannelMessageTargetSystemPrompt(

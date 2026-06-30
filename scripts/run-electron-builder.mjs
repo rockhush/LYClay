@@ -11,8 +11,7 @@ const ROOT = path.resolve(__dirname, '..');
 const ELECTRON_BUILDER_BIN = process.platform === 'win32'
   ? path.join(ROOT, 'node_modules', '.bin', 'electron-builder.cmd')
   : path.join(ROOT, 'node_modules', '.bin', 'electron-builder');
-const DEFAULT_ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/';
-const DEFAULT_ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/';
+const DEFAULT_ELECTRON_BUILDER_BINARIES_MIRROR = 'https://github.com/electron-userland/electron-builder-binaries/releases/download/';
 const args = process.argv.slice(2);
 
 function shellQuote(value) {
@@ -20,12 +19,17 @@ function shellQuote(value) {
 }
 
 function getElectronBuilderEnv() {
+  const electronBuilderBinariesMirror =
+    process.env.ELECTRON_BUILDER_BINARIES_MIRROR
+    || DEFAULT_ELECTRON_BUILDER_BINARIES_MIRROR;
+  const { ELECTRON_MIRROR, electron_mirror, ...envWithoutElectronMirror } = process.env;
+
   return {
-    ...process.env,
-    ELECTRON_BUILDER_BINARIES_MIRROR: process.env.ELECTRON_BUILDER_BINARIES_MIRROR
-      || DEFAULT_ELECTRON_BUILDER_BINARIES_MIRROR,
-    ELECTRON_MIRROR: process.env.ELECTRON_MIRROR
-      || DEFAULT_ELECTRON_MIRROR,
+    ...envWithoutElectronMirror,
+    ELECTRON_BUILDER_BINARIES_MIRROR: electronBuilderBinariesMirror,
+    NPM_CONFIG_ELECTRON_BUILDER_BINARIES_MIRROR: electronBuilderBinariesMirror,
+    npm_config_electron_builder_binaries_mirror: electronBuilderBinariesMirror,
+    npm_package_config_electron_builder_binaries_mirror: electronBuilderBinariesMirror,
   };
 }
 
@@ -64,7 +68,7 @@ function getElectronCacheDir() {
 function prePopulateCache(packagesSubDir, cacheDir) {
   // 1. D:\lycode\packages\ 全局离线目录 (优先)
   const localSrcDir = path.join('D:\\lycode\\packages', packagesSubDir);
-  // 2. packages/ 项目内目录 (兼容旧方式)
+  // 2. packages/ project-local directory (legacy-compatible)
   const srcDir = path.join(ROOT, 'packages', packagesSubDir);
 
   if (!existsSync(localSrcDir) && !existsSync(srcDir)) return;
@@ -85,7 +89,7 @@ function prePopulateCache(packagesSubDir, cacheDir) {
     }
   }
   if (copied > 0) {
-    console.log(`[run-electron-builder] ✅ Pre-populated ${copied} file(s) into ${cacheDir}`);
+    console.log(`[run-electron-builder] Pre-populated ${copied} file(s) into ${cacheDir}`);
   }
 }
 

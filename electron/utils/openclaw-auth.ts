@@ -785,6 +785,7 @@ interface RuntimeProviderConfigOverride {
   apiKeyEnv?: string;
   headers?: Record<string, string>;
   authHeader?: boolean;
+  timeoutSeconds?: number;
   modelOverrides?: Record<string, Record<string, unknown>>;
 }
 
@@ -798,6 +799,7 @@ type ProviderEntryBuildOptions = {
   modelOverrides?: Record<string, Record<string, unknown>>;
   includeRegistryModels?: boolean;
   mergeExistingModels?: boolean;
+  timeoutSeconds?: number;
 };
 
 function normalizeModelRef(provider: string, modelOverride?: string): string | undefined {
@@ -817,7 +819,7 @@ function extractFallbackModelIds(provider: string, fallbackModels: string[]): st
 }
 
 /** Keys that LYClaw/registry may attach but OpenClaw models.providers schema rejects. */
-const UNSUPPORTED_OPENCLAW_MODEL_KEYS = [] as const;
+const UNSUPPORTED_OPENCLAW_MODEL_KEYS = ['requestTimeoutMs'] as const;
 
 function stripUnsupportedOpenClawModelKeys(
   model: Record<string, unknown>,
@@ -894,6 +896,9 @@ function upsertOpenClawProviderEntry(
     nextProvider.authHeader = options.authHeader;
   } else {
     delete nextProvider.authHeader;
+  }
+  if (options.timeoutSeconds !== undefined) {
+    nextProvider.timeoutSeconds = options.timeoutSeconds;
   }
 
   providers[provider] = nextProvider;
@@ -1089,6 +1094,7 @@ export async function syncProviderConfigToOpenClaw(
         modelIds: modelId ? [modelId] : [],
         modelOverrides: override.modelOverrides,
         mergeExistingModels: true,
+        timeoutSeconds: override.timeoutSeconds,
       });
     }
 
@@ -1303,6 +1309,7 @@ export async function setOpenClawDefaultModelWithOverride(
         authHeader: override.authHeader,
         modelIds: [modelId, ...fallbackModelIds],
         modelOverrides: override.modelOverrides,
+        timeoutSeconds: override.timeoutSeconds,
       });
     }
 
@@ -1706,6 +1713,7 @@ type AgentModelProviderEntry = {
   apiKey?: string;
   /** When true, pi-ai sends Authorization: Bearer instead of x-api-key */
   authHeader?: boolean;
+  timeoutSeconds?: number;
 };
 
 async function updateModelsJsonProviderEntriesForAgents(
@@ -1737,7 +1745,7 @@ async function updateModelsJsonProviderEntriesForAgents(
 
     const mergedModels = (entry.models ?? []).map((m) => {
       const prev = existingModels.find((e) => e.id === m.id);
-      const merged = prev ? { ...prev, ...m, id: m.id, name: m.name } : { ...m };
+      const merged = stripUnsupportedOpenClawModelKeys(prev ? { ...prev, ...m, id: m.id, name: m.name } : { ...m });
       const id = typeof merged.id === 'string' ? merged.id : '';
       return syncOpenClawModelCatalogEntry(id, merged, { baseUrl: entry.baseUrl });
     });
@@ -1747,6 +1755,7 @@ async function updateModelsJsonProviderEntriesForAgents(
     if (mergedModels.length > 0) existing.models = mergedModels;
     if (entry.apiKey !== undefined) existing.apiKey = entry.apiKey;
     if (entry.authHeader !== undefined) existing.authHeader = entry.authHeader;
+    if (entry.timeoutSeconds !== undefined) existing.timeoutSeconds = entry.timeoutSeconds;
 
     providers[providerType] = existing;
     data.providers = providers;

@@ -11,7 +11,11 @@ import { removeProviderFromOpenClaw, syncProviderConfigToOpenClaw, updateAgentMo
 import { getOpenClawProviderKeyForType } from '../../utils/provider-keys';
 import { getProviderConfig } from '../../utils/provider-registry';
 import { proxyAwareFetch } from '../../utils/proxy-fetch';
-import { buildLyAutoModelOverrides, alignVllmCompilePluginState } from './ly-auto-compile-parity';
+import {
+  alignVllmCompilePluginState,
+  buildLyAutoModelOverrides,
+  LY_AUTO_REQUEST_TIMEOUT_SECONDS,
+} from './ly-auto-compile-parity';
 import { getProviderService } from './provider-service';
 import { deleteProvider, storeApiKey } from '../../utils/secure-storage';
 import { getProviderAccount, saveProviderAccount } from './provider-store';
@@ -179,6 +183,7 @@ async function syncManagedProviderToAgentModels(
   await updateAgentModelProvider(runtimeProviderKey, {
     baseUrl: account.baseUrl,
     api: account.apiProtocol,
+    timeoutSeconds: LY_AUTO_REQUEST_TIMEOUT_SECONDS,
     models: [modelEntry],
     apiKey: LY_AUTO_API_KEY,
   });
@@ -223,6 +228,7 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
   await syncProviderConfigToOpenClaw(runtimeProviderKey, modelId, {
     baseUrl: account.baseUrl,
     api: account.apiProtocol,
+    timeoutSeconds: LY_AUTO_REQUEST_TIMEOUT_SECONDS,
     modelOverrides: {
       [LY_AUTO_MODEL_ID]: modelOverrides,
     },

@@ -25,7 +25,11 @@ import { listAgentsSnapshot, resetAgentModelsForProvider } from '../../utils/age
 import { getSetting } from '../../utils/store';
 import { LY_AUTO_PROVIDER_ID } from '../../shared/providers/types';
 import { proxyAwareFetch } from '../../utils/proxy-fetch';
-import { buildLyAutoModelOverrides, alignVllmCompilePluginState } from './ly-auto-compile-parity';
+import {
+  alignVllmCompilePluginState,
+  buildLyAutoModelOverrides,
+  LY_AUTO_REQUEST_TIMEOUT_SECONDS,
+} from './ly-auto-compile-parity';
 import { isDeepSeekV4ModelId, sanitizeOpenClawModelInput, syncOpenClawModelCatalogEntry } from './known-model-capabilities';
 import { getOpenClawProviderKeyForType } from '../../utils/provider-keys';
 
@@ -481,6 +485,7 @@ async function syncRuntimeProviderConfig(
     api: context.api,
     apiKeyEnv: context.meta?.apiKeyEnv,
     headers,
+    timeoutSeconds: config.type === LY_AUTO_PROVIDER_ID ? LY_AUTO_REQUEST_TIMEOUT_SECONDS : undefined,
     modelOverrides,
   });
 

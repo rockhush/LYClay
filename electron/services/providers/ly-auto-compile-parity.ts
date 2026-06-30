@@ -8,6 +8,7 @@ import { withConfigLock } from '../../utils/config-mutex';
 import { logger } from '../../utils/logger';
 
 export const LY_AUTO_DEFAULT_INPUT = ['text', 'image'] as const;
+export const LY_AUTO_REQUEST_TIMEOUT_SECONDS = 180;
 
 export const LY_AUTO_VLLM_MODEL_OPTIONS: Record<string, unknown> = {
   compat: {
@@ -17,7 +18,6 @@ export const LY_AUTO_VLLM_MODEL_OPTIONS: Record<string, unknown> = {
   },
   reasoning: true,
   input: [...LY_AUTO_DEFAULT_INPUT],
-  requestTimeoutMs: 180_000,
 };
 
 /** OAuth/provider plugins that change tool inventory when active; off for vLLM paths. */

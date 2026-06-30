@@ -30,6 +30,12 @@ import { randomUUID } from 'node:crypto';
 import { logger } from '../utils/logger';
 import { getOpenClawConfigDir } from '../utils/paths';
 import {
+  buildChannelMessageTargetSystemPrompt,
+  mergeExtraSystemPrompt,
+  type SessionDeliveryContext,
+  upsertSessionDeliveryContext,
+} from '../utils/session-delivery-context';
+import {
   inferScheduleIntervalMs,
   isTransientCronError,
   previousScheduleOccurrenceMs,
@@ -80,7 +86,7 @@ interface SupervisedCronJob {
   createdAtMs?: number;
   schedule?: GatewayCronScheduleLike;
   payload?: { kind?: string; message?: string; text?: string };
-  delivery?: { mode?: string };
+  delivery?: { mode?: string; channel?: string; to?: string; accountId?: string };
   state?: {
     nextRunAtMs?: number;
     lastRunAtMs?: number;
@@ -239,12 +245,51 @@ interface ResolvedCronJobInfo {
   agentId: string;
   message: string;
   name?: string;
+  deliveryMode: string;
+  deliveryContext?: SessionDeliveryContext;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+class CronDeliveryConfigError extends Error {}
+
+function resolveCronDeliveryContext(job: Record<string, unknown>): {
+  deliveryMode: string;
+  deliveryContext?: SessionDeliveryContext;
+} {
+  const delivery = job.delivery && typeof job.delivery === 'object'
+    ? job.delivery as Record<string, unknown>
+    : undefined;
+  const deliveryMode = readNonEmptyString(delivery?.mode) ?? 'none';
+  if (deliveryMode === 'none') {
+    return { deliveryMode };
+  }
+
+  const channel = readNonEmptyString(delivery?.channel);
+  const to = readNonEmptyString(delivery?.to);
+  if (!channel || !to) {
+    throw new CronDeliveryConfigError(`cron job ${String(job.id ?? '(unknown)')} delivery.${!channel ? 'channel' : 'to'} is required for ${deliveryMode} delivery`);
+  }
+
+  const accountId = readNonEmptyString(delivery?.accountId);
+  return {
+    deliveryMode,
+    deliveryContext: {
+      channel,
+      to,
+      ...(accountId ? { accountId } : {}),
+    },
+  };
 }
 
 async function resolveCronJobInfo(jobId: string): Promise<ResolvedCronJobInfo> {
   let agentId = 'main';
   let message = 'Scheduled task';
   let name: string | undefined;
+  let deliveryMode = 'none';
+  let deliveryContext: SessionDeliveryContext | undefined;
   try {
     const result = await gateway!.rpc<unknown>('cron.list', { includeDisabled: true }, 8000);
     const jobs: Array<Record<string, unknown>> = Array.isArray(result)
@@ -267,11 +312,17 @@ async function resolveCronJobInfo(jobId: string): Promise<ResolvedCronJobInfo> {
       if (name && message === 'Scheduled task') {
         message = name;
       }
+      const delivery = resolveCronDeliveryContext(job);
+      deliveryMode = delivery.deliveryMode;
+      deliveryContext = delivery.deliveryContext;
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof CronDeliveryConfigError) {
+      throw error;
+    }
     // If cron.list fails, proceed with defaults — chat.send will still work.
   }
-  return { agentId, message, name };
+  return { agentId, message, name, deliveryMode, deliveryContext };
 }
 
 export async function setManagedCronJobEnabled(jobId: string, enabled: boolean): Promise<void> {
@@ -349,12 +400,20 @@ async function fireCronJobViaChatSend(
   const sessionKey = `agent:${info.agentId}:${sessionId}`;
   const idempotencyKey = `scheduled-task-${jobId}-${runSessionId}`;
   const startedAt = Date.now();
+  const deliveryPrompt = info.deliveryContext
+    ? buildChannelMessageTargetSystemPrompt(info.deliveryContext)
+    : undefined;
+
+  if (info.deliveryContext) {
+    await upsertSessionDeliveryContext(sessionKey, info.deliveryContext);
+  }
 
   const chatResult = await gateway!.rpc<{ runId?: string }>('chat.send', {
     sessionKey,
     sessionId,
     message: info.message,
-    deliver: false,
+    deliver: info.deliveryMode !== 'none',
+    ...(deliveryPrompt ? { extraSystemPrompt: mergeExtraSystemPrompt(undefined, deliveryPrompt) } : {}),
     idempotencyKey,
   }, timeoutMs);
 
