@@ -52,6 +52,8 @@ jobs:
       - name: Build macOS package
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ELECTRON_MIRROR: ''
+          ELECTRON_BUILDER_BINARIES_MIRROR: ''
         run: |
           export CSC_IDENTITY_AUTO_DISCOVERY=false
           export ELECTRON_BUILDER_DISABLE_CODE_SIGNING=true
