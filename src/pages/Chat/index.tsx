@@ -770,7 +770,40 @@ export function Chat() {
           || hasAnyStreamContent
           || (runStillExecutingTools && !error && !hasFinalReply)
         );
-    const replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
+    let replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
+    // Safety net for the latest run: a turn can stay "open" only because we're
+    // still waiting on the final-event confirmation (pendingFinal/sending) while
+    // no live stream content is being rendered. In that window a concluding
+    // answer already committed to history would be treated as narration, folded
+    // into the execution graph, and — with no streaming bubble to fall back on —
+    // never shown (the blank-reply symptom). Recover the real reply so the answer
+    // is always visible. Tightly gated so it never fires during active streaming,
+    // tool rounds, or subagent delegation, leaving all other behavior unchanged.
+    if (
+      replyIndexOffset === -1
+      && nextUserIndex === -1
+      && isLatestOpenRun
+      && !hasAnyStreamContent
+      && !runStillExecutingTools
+      && !segmentDelegationOpen
+      && !segmentHasPendingChild
+      && !segmentWaitingOnSubagent
+      && !stalledChildSessionKey
+    ) {
+      const recoveredOffset = findReplyMessageIndex(segmentMessages, false);
+      if (recoveredOffset !== -1) {
+        const candidate = segmentMessages[recoveredOffset];
+        // Only rescue a genuine concluding answer (pure text, no pending tool
+        // call) so intermediate narration is never surfaced as a final reply.
+        const hasPendingToolCall = Array.isArray(candidate?.content)
+          && (candidate.content as Array<{ type?: string }>).some(
+            (block) => block.type === 'tool_use' || block.type === 'toolCall',
+          );
+        if (!hasPendingToolCall) {
+          replyIndexOffset = recoveredOffset;
+        }
+      }
+    }
     const replyIndex = replyIndexOffset === -1 ? null : idx + 1 + replyIndexOffset;
 
     // Fold process narrations before any early return. History poll / session
