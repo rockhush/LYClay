@@ -1055,9 +1055,9 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                           agent={agent}
                           selected={agent.id === targetAgentId}
                           onSelect={() => {
-                            // Match Digital Employee page "chat" action: bind the
-                            // conversation to this employee so the header shows it.
-                            newSession(agent.id);
+                            // Selecting an @agent target must not switch sessions.
+                            // The next send stays in the current transcript and passes
+                            // executeAsAgentId so OpenClaw only changes resource scope.
                             setTargetAgentId(agent.id);
                             setPickerOpen(false);
                             textareaRef.current?.focus();

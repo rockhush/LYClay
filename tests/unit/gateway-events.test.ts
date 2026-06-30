@@ -21,6 +21,9 @@ const {
     currentSessionKey: 'agent:main:main',
     activeRunId: 'run-1',
     sending: true,
+    messages: [] as unknown[],
+    sessionLabels: {} as Record<string, string>,
+    sessionLastActivity: {} as Record<string, number>,
     sessions: [{ key: 'agent:main:main' }],
     sessionStreamingStates: {},
     loadHistory: vi.fn(),
@@ -60,6 +63,9 @@ describe('gateway store event wiring', () => {
     chatStateMock.currentSessionKey = 'agent:main:main';
     chatStateMock.activeRunId = 'run-1';
     chatStateMock.sending = true;
+    chatStateMock.messages = [];
+    chatStateMock.sessionLabels = {};
+    chatStateMock.sessionLastActivity = {};
     chatStateMock.sessions = [{ key: 'agent:main:main' }];
     chatStateMock.sessionStreamingStates = {};
     chatStateMock.loadHistory = chatLoadHistoryMock;
@@ -211,6 +217,31 @@ describe('gateway store event wiring', () => {
     await vi.waitFor(() => {
       expect(chatLoadSessionsMock).toHaveBeenCalledWith(true);
     }, { timeout: 2_000 });
+  });
+
+  it('skips forced session list refresh for bulk sessions.json updates on an empty scratchpad', async () => {
+    hostApiFetchMock.mockResolvedValue({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    chatStateMock.sending = false;
+    chatStateMock.activeRunId = null;
+    chatStateMock.messages = [];
+    chatStateMock.sessionLabels = {};
+    chatStateMock.sessionLastActivity = {};
+
+    handlers.get('session:updated')?.({ reason: 'sessions-json' });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chatLoadSessionsMock).not.toHaveBeenCalled();
+    expect(chatLoadHistoryMock).not.toHaveBeenCalled();
   });
 
   it('flushes a deferred session list refresh after the active run completes', async () => {

@@ -9,8 +9,13 @@ import { join, extname, basename } from 'node:path';
 import crypto from 'node:crypto';
 import { GatewayManager } from '../gateway/manager';
 import { ClawHubService, ClawHubSearchParams, ClawHubInstallParams, ClawHubUninstallParams } from '../gateway/clawhub';
-import { triggerCronJobManually } from '../gateway/cron-supervisor';
-import { clearStaleInAppDeliveryErrorState } from '../gateway/cron-stale-errors';
+import {
+  triggerCronJobStreaming,
+  setManagedCronJobEnabled,
+  removeManagedCronJobState,
+  resolveManagedCronJobEnabled,
+} from '../gateway/cron-supervisor';
+import { clearStaleInAppDeliveryErrorState, isUiInAppCronJob } from '../gateway/cron-stale-errors';
 import {
   type ProviderConfig,
 } from '../utils/secure-storage';
@@ -526,8 +531,8 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
         case 'cron': {
           if (request.action === 'list') {
             const result = await gatewayManager.rpc('cron.list', { includeDisabled: true });
-            const jobs = (result as { jobs?: GatewayCronJob[] })?.jobs ?? [];
-            data = jobs.map(transformCronJob);
+            const jobs = Array.isArray(result) ? result : (result as { jobs?: GatewayCronJob[] })?.jobs ?? [];
+            data = await transformCronJobsForResponse(jobs);
             break;
           }
           if (request.action === 'create') {
@@ -565,8 +570,21 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             if (gatewayInput.delivery.mode === 'announce' && unsupportedDeliveryError) {
               throw new Error(unsupportedDeliveryError);
             }
-            const created = await gatewayManager.rpc('cron.add', gatewayInput);
-            data = created && typeof created === 'object' ? transformCronJob(created as GatewayCronJob) : created;
+            const managedInApp = gatewayInput.delivery.mode === 'none';
+            const managedEnabled = input.enabled ?? true;
+            const created = await gatewayManager.rpc('cron.add', {
+              ...gatewayInput,
+              enabled: managedInApp ? false : managedEnabled,
+            });
+            if (created && typeof created === 'object') {
+              const job = created as GatewayCronJob;
+              if (managedInApp) {
+                await setManagedCronJobEnabled(job.id, managedEnabled);
+              }
+              data = transformCronJob(job, managedInApp ? managedEnabled : undefined);
+            } else {
+              data = created;
+            }
             break;
           }
           if (request.action === 'update') {
@@ -591,7 +609,40 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             if (unsupportedDeliveryError && deliveryMode !== 'none') {
               throw new Error(unsupportedDeliveryError);
             }
-            data = await gatewayManager.rpc('cron.update', { id, patch });
+            const existing = await findCronJobById(gatewayManager, id).catch(() => undefined);
+            const requestedEnabled = typeof input.enabled === 'boolean' ? input.enabled : undefined;
+            const existingInApp = existing ? isUiInAppCronJob(existing) : false;
+            const switchingToInApp = deliveryMode === 'none';
+            const switchingToExternal = Boolean(deliveryMode && deliveryMode !== 'none');
+
+            if (switchingToInApp || existingInApp) {
+              patch.enabled = false;
+            }
+            if (switchingToExternal && existingInApp) {
+              const restoredEnabled = requestedEnabled
+                ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
+                ?? existing?.enabled
+                ?? true;
+              patch.enabled = restoredEnabled;
+              await removeManagedCronJobState(id);
+            }
+
+            const result = await gatewayManager.rpc('cron.update', { id, patch });
+            if (result && typeof result === 'object') {
+              const job = result as GatewayCronJob;
+              if (switchingToInApp || (existingInApp && !switchingToExternal)) {
+                const enabledOverride = requestedEnabled
+                  ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
+                  ?? existing?.enabled
+                  ?? true;
+                await setManagedCronJobEnabled(id, enabledOverride);
+                data = transformCronJob(job, enabledOverride);
+              } else {
+                data = transformCronJob(job);
+              }
+            } else {
+              data = result;
+            }
             break;
           }
           if (request.action === 'delete') {
@@ -599,6 +650,7 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             const id = typeof payload === 'string' ? payload : payload?.id;
             if (!id) throw new Error('Invalid cron.delete payload');
             data = await gatewayManager.rpc('cron.remove', { id });
+            await removeManagedCronJobState(id);
             break;
           }
           if (request.action === 'toggle') {
@@ -606,14 +658,24 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             const id = Array.isArray(payload) ? payload[0] : payload?.id;
             const enabled = Array.isArray(payload) ? payload[1] : payload?.enabled;
             if (!id || typeof enabled !== 'boolean') throw new Error('Invalid cron.toggle payload');
-            data = await gatewayManager.rpc('cron.update', { id, patch: { enabled } });
+            const existing = await findCronJobById(gatewayManager, id).catch(() => undefined);
+            if (existing && isUiInAppCronJob(existing)) {
+              await setManagedCronJobEnabled(id, enabled);
+              const result = await gatewayManager.rpc('cron.update', { id, patch: { enabled: false } });
+              data = result && typeof result === 'object'
+                ? transformCronJob(result as GatewayCronJob, enabled)
+                : result;
+            } else {
+              await removeManagedCronJobState(id);
+              data = await gatewayManager.rpc('cron.update', { id, patch: { enabled } });
+            }
             break;
           }
           if (request.action === 'trigger') {
             const payload = request.payload as { id?: string } | string | undefined;
             const id = typeof payload === 'string' ? payload : payload?.id;
             if (!id) throw new Error('Invalid cron.trigger payload');
-            data = await triggerCronJobManually(gatewayManager, id);
+            data = await triggerCronJobStreaming(gatewayManager, id);
             break;
           }
           return {
@@ -845,12 +907,9 @@ function normalizeCronDeliveryPatch(rawDelivery: unknown): Record<string, unknow
   }
 
   // Switching to "仅在 LYClaw 内" (mode none) must clear any previously-set
-  // external target, otherwise the Gateway keeps a stale channel/to and still
-  // attempts channel delivery (e.g. DingTalk requires --to).
+  // external target. Omit channel/to/accountId rather than sending empty strings
+  // because cron.update rejects an empty-string channel in Gateway validation.
   if (patch.mode === 'none') {
-    patch.channel = '';
-    patch.to = '';
-    patch.accountId = '';
     return patch;
   }
 
@@ -899,7 +958,7 @@ function buildCronUpdatePatch(input: Record<string, unknown>): Record<string, un
 /**
  * Transform a Gateway CronJob to the frontend CronJob format
  */
-function transformCronJob(job: GatewayCronJob) {
+function transformCronJob(job: GatewayCronJob, enabledOverride?: boolean) {
   // Extract message from payload
   const message = job.payload?.message || job.payload?.text || '';
   const gatewayDelivery = normalizeCronDelivery(job.delivery);
@@ -935,12 +994,29 @@ function transformCronJob(job: GatewayCronJob) {
     schedule: job.schedule, // Pass the object through; frontend parseCronSchedule handles it
     delivery,
     target,
-    enabled: job.enabled,
+    enabled: enabledOverride ?? job.enabled,
     createdAt: new Date(job.createdAtMs).toISOString(),
     updatedAt: new Date(job.updatedAtMs).toISOString(),
     lastRun,
     nextRun,
   };
+}
+
+async function transformCronJobForResponse(job: GatewayCronJob): Promise<ReturnType<typeof transformCronJob>> {
+  const enabledOverride = isUiInAppCronJob(job)
+    ? await resolveManagedCronJobEnabled(job)
+    : undefined;
+  return transformCronJob(job, enabledOverride);
+}
+
+async function transformCronJobsForResponse(jobs: GatewayCronJob[]): Promise<ReturnType<typeof transformCronJob>[]> {
+  return Promise.all(jobs.map(transformCronJobForResponse));
+}
+
+async function findCronJobById(gatewayManager: GatewayManager, id: string): Promise<GatewayCronJob | undefined> {
+  const result = await gatewayManager.rpc('cron.list', { includeDisabled: true });
+  const jobs = Array.isArray(result) ? result : (result as { jobs?: GatewayCronJob[] })?.jobs ?? [];
+  return jobs.find((job) => job.id === id);
 }
 
 /**
@@ -988,7 +1064,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
       }
 
       // Transform Gateway format to frontend format
-      return jobs.map(transformCronJob);
+      return await transformCronJobsForResponse(jobs);
     } catch (error) {
       console.error('Failed to list cron jobs:', error);
       throw error;
@@ -1024,10 +1100,19 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
       if (gatewayInput.delivery.mode === 'announce' && unsupportedDeliveryError) {
         throw new Error(unsupportedDeliveryError);
       }
-      const result = await gatewayManager.rpc('cron.add', gatewayInput);
+      const managedInApp = gatewayInput.delivery.mode === 'none';
+      const managedEnabled = input.enabled ?? true;
+      const result = await gatewayManager.rpc('cron.add', {
+        ...gatewayInput,
+        enabled: managedInApp ? false : managedEnabled,
+      });
       // Transform the returned job to frontend format
       if (result && typeof result === 'object') {
-        return transformCronJob(result as GatewayCronJob);
+        const job = result as GatewayCronJob;
+        if (managedInApp) {
+          await setManagedCronJobEnabled(job.id, managedEnabled);
+        }
+        return transformCronJob(job, managedInApp ? managedEnabled : undefined);
       }
       return result;
     } catch (error) {
@@ -1053,8 +1138,38 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
       if (unsupportedDeliveryError && deliveryMode !== 'none') {
         throw new Error(unsupportedDeliveryError);
       }
+      const existing = await findCronJobById(gatewayManager, id).catch(() => undefined);
+      const requestedEnabled = typeof input.enabled === 'boolean' ? input.enabled : undefined;
+      const existingInApp = existing ? isUiInAppCronJob(existing) : false;
+      const switchingToInApp = deliveryMode === 'none';
+      const switchingToExternal = Boolean(deliveryMode && deliveryMode !== 'none');
+
+      if (switchingToInApp || existingInApp) {
+        patch.enabled = false;
+      }
+      if (switchingToExternal && existingInApp) {
+        const restoredEnabled = requestedEnabled
+          ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
+          ?? existing?.enabled
+          ?? true;
+        patch.enabled = restoredEnabled;
+        await removeManagedCronJobState(id);
+      }
+
       const result = await gatewayManager.rpc('cron.update', { id, patch });
-      return result && typeof result === 'object' ? transformCronJob(result as GatewayCronJob) : result;
+      if (result && typeof result === 'object') {
+        const job = result as GatewayCronJob;
+        if (switchingToInApp || (existingInApp && !switchingToExternal)) {
+          const enabledOverride = requestedEnabled
+            ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
+            ?? existing?.enabled
+            ?? true;
+          await setManagedCronJobEnabled(id, enabledOverride);
+          return transformCronJob(job, enabledOverride);
+        }
+        return transformCronJob(job);
+      }
+      return result;
     } catch (error) {
       console.error('Failed to update cron job:', error);
       throw error;
@@ -1065,6 +1180,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
   ipcMain.handle('cron:delete', async (_, id: string) => {
     try {
       const result = await gatewayManager.rpc('cron.remove', { id });
+      await removeManagedCronJobState(id);
       return result;
     } catch (error) {
       console.error('Failed to delete cron job:', error);
@@ -1075,6 +1191,15 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
   // Toggle a cron job enabled/disabled
   ipcMain.handle('cron:toggle', async (_, id: string, enabled: boolean) => {
     try {
+      const existing = await findCronJobById(gatewayManager, id).catch(() => undefined);
+      if (existing && isUiInAppCronJob(existing)) {
+        await setManagedCronJobEnabled(id, enabled);
+        const result = await gatewayManager.rpc('cron.update', { id, patch: { enabled: false } });
+        return result && typeof result === 'object'
+          ? transformCronJob(result as GatewayCronJob, enabled)
+          : result;
+      }
+      await removeManagedCronJobState(id);
       const result = await gatewayManager.rpc('cron.update', { id, patch: { enabled } });
       return result;
     } catch (error) {
@@ -1086,7 +1211,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
   // Trigger a cron job manually
   ipcMain.handle('cron:trigger', async (_, id: string) => {
     try {
-      const result = await triggerCronJobManually(gatewayManager, id);
+      const result = await triggerCronJobStreaming(gatewayManager, id);
       return result;
     } catch (error) {
       console.error('Failed to trigger cron job:', error);
@@ -1393,6 +1518,8 @@ function registerGatewayHandlers(
   const VISION_MIME_TYPES = new Set([
     'image/png', 'image/jpeg', 'image/bmp', 'image/webp',
   ]);
+  /** Max image size (bytes) for base64 attachment path to avoid Gateway stack overflow. */
+  const MAX_BASE64_ATTACHMENT_BYTES = 1_000_000; // 1MB
 
   ipcMain.handle('chat:sendWithMedia', async (_, params: {
     sessionKey: string;
@@ -1433,13 +1560,21 @@ function registerGatewayHandlers(
             // { content: base64String, mimeType: string, fileName?: string }
             // The Gateway normalizer looks for `a.content` (NOT `a.source.data`).
             const fileBuffer = await fsP.readFile(m.filePath);
-            const base64Data = fileBuffer.toString('base64');
-            logger.info(`[chat:sendWithMedia] Read ${fileBuffer.length} bytes, base64 length: ${base64Data.length}`);
-            imageAttachments.push({
-              content: base64Data,
-              mimeType: m.mimeType,
-              fileName: m.fileName,
-            });
+            if (fileBuffer.length > MAX_BASE64_ATTACHMENT_BYTES) {
+              // Large images (>1MB) skip Path A (base64 attachment) to avoid
+              // Gateway stack overflow in parseMessageWithAttachments.
+              // Path B ([media attached: ...]) still works — the Gateway
+              // reads the file from disk via detectAndLoadPromptImages.
+              logger.info(`[chat:sendWithMedia] Skipping base64 attachment for large image (${fileBuffer.length} bytes), using file-reference path only`);
+            } else {
+              const base64Data = fileBuffer.toString('base64');
+              logger.info(`[chat:sendWithMedia] Read ${fileBuffer.length} bytes, base64 length: ${base64Data.length}`);
+              imageAttachments.push({
+                content: base64Data,
+                mimeType: m.mimeType,
+                fileName: m.fileName,
+              });
+            }
           }
         }
       }

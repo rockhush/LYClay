@@ -41,11 +41,15 @@ vi.mock('@electron/utils/secure-storage', () => ({
 }));
 
 vi.mock('@electron/utils/provider-registry', () => ({
+  LY_AUTO_PROVIDER_ID: 'ly-auto',
   getProviderConfig: mocks.getProviderConfig,
   getProviderDefaultModel: mocks.getProviderDefaultModel,
 }));
 
 vi.mock('@electron/utils/openclaw-auth', () => ({
+  ensureAgentContextTokensCapForLargeModels: vi.fn(async () => false),
+  ensureAgentModelsJsonValid: vi.fn(async () => false),
+  ensureModelCatalogContextTokensForLargeModels: vi.fn(async () => false),
   removeProviderFromOpenClaw: mocks.removeProviderFromOpenClaw,
   removeProviderKeyFromOpenClaw: mocks.removeProviderKeyFromOpenClaw,
   saveOAuthTokenToOpenClaw: mocks.saveOAuthTokenToOpenClaw,
@@ -71,6 +75,7 @@ vi.mock('@electron/utils/logger', () => ({
 }));
 
 import {
+  getOpenClawProviderKey,
   syncAgentModelOverrideToRuntime,
   syncDefaultProviderToRuntime,
   syncDeletedProviderApiKeyToRuntime,
@@ -296,6 +301,81 @@ describe('provider-runtime-sync refresh strategy', () => {
             supportsPromptCacheKey: false,
           },
         }],
+      }),
+    );
+  });
+
+  it('syncs custom DeepSeek V4 provider with raised maxTokens', async () => {
+    const customProvider = createProvider({
+      id: 'customb5',
+      type: 'custom',
+      name: 'DeepSeek',
+      model: 'deepseek-v4-pro',
+      baseUrl: 'https://api.deepseek.com',
+    });
+
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getApiKey.mockResolvedValue('sk-test');
+
+    const gateway = createGateway('running');
+    await syncSavedProviderToRuntime(customProvider, undefined, gateway as GatewayManager);
+
+    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
+      'custom-customb5',
+      'deepseek-v4-pro',
+      expect.objectContaining({
+        modelOverrides: {
+          'deepseek-v4-pro': expect.objectContaining({
+            maxTokens: 65_536,
+            contextWindow: 1_048_576,
+            compat: {
+              supportsUsageInStreaming: true,
+              supportsPromptCacheKey: false,
+            },
+          }),
+        },
+      }),
+    );
+
+    expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
+      'custom-customb5',
+      expect.objectContaining({
+        models: [expect.objectContaining({
+          id: 'deepseek-v4-pro',
+          maxTokens: 65_536,
+          contextWindow: 1_048_576,
+        })],
+      }),
+    );
+  });
+
+  it('syncs openclaw-seeded custom provider ids to the matching runtime key', async () => {
+    const seededProvider = createProvider({
+      id: 'custom-customb5',
+      type: 'custom',
+      name: 'DeepSeek',
+      model: 'deepseek-v4-pro',
+      baseUrl: 'https://api.deepseek.com',
+    });
+
+    expect(getOpenClawProviderKey('custom', 'custom-customb5')).toBe('custom-customb5');
+
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getApiKey.mockResolvedValue('sk-test');
+
+    const gateway = createGateway('running');
+    await syncSavedProviderToRuntime(seededProvider, undefined, gateway as GatewayManager);
+
+    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
+      'custom-customb5',
+      'deepseek-v4-pro',
+      expect.objectContaining({
+        modelOverrides: {
+          'deepseek-v4-pro': expect.objectContaining({
+            maxTokens: 65_536,
+            contextWindow: 1_048_576,
+          }),
+        },
       }),
     );
   });

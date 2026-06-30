@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { applyOpenClawOpenAITransportPatches, hasOpenClawOpenAITransportPatches } from './openclaw-transport-patches.mjs';
 import { applyOpenClawSilentReplyPatches, hasOpenClawSilentReplyPatches } from './openclaw-silent-reply-patches.mjs';
 import { applyOpenClawUsageStreamingPatches, applyPiAiUsageStreamingPatches, hasOpenClawUsageStreamingPatches, hasPiAiUsageStreamingPatches } from './openclaw-usage-patches.mjs';
+import { inspectOpenClawDigitalEmployeeIsolation } from './openclaw-digital-employee-isolation-check.mjs';
 
 const ROOT = process.cwd();
 const openclawCandidates = [
@@ -174,6 +175,15 @@ function main() {
   }
   if (silentReplyPatched === 0) {
     console.warn('[patch-openclaw-dev] WARN: no selection bundle received silent-reply patch.');
+  }
+
+  const isolationStatus = inspectOpenClawDigitalEmployeeIsolation(openclawDir, { fs: { existsSync, readdirSync, readFileSync }, path: { join } });
+  console.log(`[patch-openclaw-dev] digital employee isolated skills/MCP=${isolationStatus.ok ? 'ok' : 'missing'}`);
+  if (!isolationStatus.ok) {
+    for (const item of isolationStatus.missing) {
+      console.error(`[patch-openclaw-dev] missing: ${item}`);
+    }
+    process.exit(1);
   }
 
   if (changedCount === 0) {

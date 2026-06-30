@@ -236,6 +236,7 @@ interface SkillsState {
   searchResults: MarketplaceSkill[];
   companyInstallMap: Record<string, string>;
   companyInstallEntries: Record<string, CompanyInstallEntry>;
+  companyInstallByPackageSlug: Record<string, CompanyInstallEntry & { marketplaceId: string }>;
   loading: boolean;
   searching: boolean;
   searchError: string | null;
@@ -280,6 +281,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   searchResults: [],
   companyInstallMap: {},
   companyInstallEntries: {},
+  companyInstallByPackageSlug: {},
   loading: false,
   searching: false,
   searchError: null,
@@ -319,6 +321,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         success: boolean;
         installs?: Record<string, string>;
         entries?: Record<string, CompanyInstallEntry>;
+        byPackageSlug?: Record<string, CompanyInstallEntry & { marketplaceId: string }>;
       }>('/api/clawhub/company-install-map');
       const bundledBootstrapPromise = hostApiFetch<{
         success: boolean;
@@ -376,9 +379,11 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
 
       let companyInstallMap = get().companyInstallMap;
       let companyInstallEntries = get().companyInstallEntries;
+      let companyInstallByPackageSlug = get().companyInstallByPackageSlug;
       if (companyInstallMapSettled.status === 'fulfilled' && companyInstallMapSettled.value.success) {
         companyInstallMap = companyInstallMapSettled.value.installs ?? {};
         companyInstallEntries = companyInstallMapSettled.value.entries ?? {};
+        companyInstallByPackageSlug = companyInstallMapSettled.value.byPackageSlug ?? {};
       }
 
       let marketplaceResults: MarketplaceSkill[] = [];
@@ -566,6 +571,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         skills: combinedSkills,
         companyInstallMap,
         companyInstallEntries,
+        companyInstallByPackageSlug,
         loading: false,
         ...(marketplaceResults.length > 0 && get().searchResults.length === 0
           ? { searchResults: marketplaceResults, marketplaceCatalogLoaded: true }

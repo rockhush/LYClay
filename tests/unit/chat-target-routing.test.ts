@@ -265,6 +265,57 @@ describe('chat target routing', () => {
     expect(useChatStore.getState().messages.at(-1)?.content).toBe('retry task');
   });
 
+  it('keeps a pending silent retry alive when the retry abort emits aborted before the timer fires', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      reasoningMode: 'fast',
+    });
+
+    await useChatStore.getState().sendMessage('retry after abort');
+    const sessionKey = useChatStore.getState().currentSessionKey;
+
+    useChatStore.getState().handleChatEvent({
+      state: 'error',
+      runId: 'run-text',
+      sessionKey,
+      errorMessage: 'list index out of range',
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'aborted',
+      runId: 'run-text',
+      sessionKey,
+    });
+
+    expect(useChatStore.getState().sending).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+
+    const chatSendCalls = gatewayRpcMock.mock.calls.filter(([method]) => method === 'chat.send');
+    expect(chatSendCalls).toHaveLength(2);
+    expect(useChatStore.getState().messages.filter((message) => message.role === 'user')).toHaveLength(1);
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe('retry after abort');
+  });
+
   it('finalizes a terminal tool stream error immediately when no silent retry is available', async () => {
     const { useChatStore } = await import('@/stores/chat');
 
@@ -750,6 +801,41 @@ describe('chat target routing', () => {
       sessionKey: 'agent:main:session-1773230400000',
     });
     expect(sendCall?.[1]).not.toHaveProperty('model');
+  });
+
+  it('does not treat normal @skill text as digital employee execution', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    await useChatStore.getState().sendMessage('@create-skill 帮我整理提示词');
+
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect(sendCall?.[1]).toMatchObject({
+      message: '/think off @create-skill 帮我整理提示词',
+      deliver: false,
+    });
+    expect(sendCall?.[1]).not.toHaveProperty('executeAsAgentId');
+    expect(sendCall?.[1]).not.toHaveProperty('executedByAgentName');
+    expect(useChatStore.getState().currentAgentId).toBe('main');
   });
 
   it('executes a selected digital employee in the current session for attachment sends', async () => {

@@ -16,11 +16,31 @@ export function filterProcessingSubagentKeys(sessionKeys: readonly string[]): st
   return sessionKeys.filter((key) => isSubagentSessionKey(key));
 }
 
+/**
+ * DISPLAY liveness: a child branch stays "running" (and keeps polling) until the
+ * parent transcript commits its completion marker OR the gateway stops listing it.
+ *
+ * This intentionally keeps the branch running across transient gaps in the
+ * gateway's `processingSessionKeys` right after spawn — otherwise the nested
+ * execution graph flips to "subagent run 完成" prematurely and stops updating.
+ *
+ * For TURN-FINALIZE decisions (whether the parent turn may end) use the
+ * gateway-only `isChildDelegationGatewayActive` instead, so a missing/late
+ * transcript marker can never strand the parent in a "thinking" state.
+ */
 export function isChildDelegationStillActive(
   binding: ChildDelegationBinding,
   processingSessionKeys: ReadonlySet<string>,
 ): boolean {
   if (!binding.completed) return true;
+  return processingSessionKeys.has(binding.childSessionKey);
+}
+
+/** Gateway-only liveness used for finalize/backend-work checks. */
+export function isChildDelegationGatewayActive(
+  binding: ChildDelegationBinding,
+  processingSessionKeys: ReadonlySet<string>,
+): boolean {
   return processingSessionKeys.has(binding.childSessionKey);
 }
 
@@ -30,6 +50,15 @@ export function hasActiveChildDelegations(
 ): boolean {
   const processing = new Set(processingSessionKeys);
   return bindings.some((binding) => isChildDelegationStillActive(binding, processing));
+}
+
+/** Gateway-only variant of {@link hasActiveChildDelegations} for finalize checks. */
+export function hasGatewayActiveChildDelegations(
+  bindings: readonly ChildDelegationBinding[],
+  processingSessionKeys: readonly string[],
+): boolean {
+  const processing = new Set(processingSessionKeys);
+  return bindings.some((binding) => isChildDelegationGatewayActive(binding, processing));
 }
 
 export function isSubagentStalledErrorMessage(error: string | null | undefined): boolean {

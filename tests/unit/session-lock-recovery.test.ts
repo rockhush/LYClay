@@ -130,6 +130,45 @@ describe('session transcript lock recovery', () => {
     expect(sessionsJson).toContain('"recoveryReason": "before-user-chat-send"');
   });
 
+  it('recovers a stale active same-gateway lock only when supersede recovery is explicitly allowed', async () => {
+    const { sessionKey, sessionFile, lockPath } = await writeSessionStore({ status: 'processing' });
+    await writeFile(
+      lockPath,
+      JSON.stringify({ pid: 1234, createdAt: '2026-06-08T01:23:40.000Z' }),
+      'utf8',
+    );
+
+    const blocked = await recoverOrphanedSessionTranscriptLock({
+      sessionKey,
+      openclawDir,
+      currentPid: 1234,
+      nowMs: Date.parse('2026-06-08T01:24:40.000Z'),
+      reason: 'terminal-user-chat-final',
+      logger,
+    });
+    expect(blocked).toMatchObject({ recovered: false, reason: 'session-active' });
+
+    const result = await recoverOrphanedSessionTranscriptLock({
+      sessionKey,
+      openclawDir,
+      currentPid: 1234,
+      nowMs: Date.parse('2026-06-08T01:24:40.000Z'),
+      allowCurrentGatewayActiveLockRecovery: true,
+      reason: 'superseded-by-new-user-message',
+      logger,
+    });
+
+    expect(result).toMatchObject({
+      recovered: true,
+      lockPath,
+      sessionFile,
+      lockPid: 1234,
+    });
+    await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    const sessionsJson = await readFile(path.join(openclawDir, 'agents', 'main', 'sessions', 'sessions.json'), 'utf8');
+    expect(sessionsJson).toContain('"status": "stale-recovered"');
+    expect(sessionsJson).toContain('"recoveryReason": "superseded-by-new-user-message"');
+  });
   it('keeps the lock when it belongs to a live other process', async () => {
     const { sessionKey, lockPath } = await writeSessionStore({ status: 'done' });
     await writeFile(
@@ -215,6 +254,34 @@ describe('session transcript lock recovery', () => {
     await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(path.join(openclawDir, 'agents', 'main', 'sessions', 'sessions.json'), 'utf8'))
       .toContain('"recoveryReason": "stale-empty-final"');
+  });
+
+  it('marks a done empty-final session recovered when no transcript lock remains', async () => {
+    const nowMs = Date.parse('2026-06-08T01:30:00.000Z');
+    const { sessionKey, lockPath } = await writeSessionStore({ status: 'done' });
+
+    const result = await recoverStaleSessionAfterEmptyFinal({
+      sessionKey,
+      openclawDir,
+      currentPid: 1234,
+      nowMs,
+      staleThresholdMs: 60_000,
+      hasRecentEmptyFinalNoOutput: true,
+      hasTrackedActiveRun: false,
+      logger,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      recovered: true,
+      sessionKey,
+      previousStatus: 'done',
+      nextStatus: 'stale-recovered',
+      removedLockPath: null,
+    });
+    await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await readFile(path.join(openclawDir, 'agents', 'main', 'sessions', 'sessions.json'), 'utf8'))[sessionKey])
+      .toMatchObject({ status: 'stale-recovered', recoveryReason: 'stale-empty-final' });
   });
 
   it('refuses stale recovery when the lock belongs to a live process', async () => {

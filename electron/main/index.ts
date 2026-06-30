@@ -595,6 +595,10 @@ async function initialize(): Promise<void> {
       await syncAllProviderAuthToRuntime().catch((error) => {
         logger.warn('Failed to re-sync provider compat after gateway start:', error);
       });
+      if (gatewayManager.getStatus().state !== 'stopped') {
+        logger.info('Reloading gateway after post-start provider sync');
+        gatewayManager.debouncedReload();
+      }
     } catch (error) {
       logger.error('Gateway auto-start failed:', error);
       mainWindow?.webContents.send('gateway:error', String(error));

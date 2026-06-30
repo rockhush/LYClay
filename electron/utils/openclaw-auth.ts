@@ -28,6 +28,11 @@ import {
 import { sanitizeLegacyMcpMetaFromOpenClawConfig } from './mcp-json';
 import { withConfigLock } from './config-mutex';
 import { ensureOpenClawAgentDefaults, ensureOpenClawSessionDefaults } from './openclaw-config-defaults';
+import {
+  syncOpenClawModelCatalogEntry,
+  DEEPSEEK_V4_CONTEXT_WINDOW,
+  isDeepSeekV4ModelId,
+} from '../services/providers/known-model-capabilities';
 
 const AUTH_STORE_VERSION = 1;
 const AUTH_PROFILE_FILENAME = 'auth-profiles.json';
@@ -872,7 +877,10 @@ function upsertOpenClawProviderEntry(
     ...existingProvider,
     baseUrl: options.baseUrl,
     api: options.api,
-    models: mergeProviderModels(registryModels, existingModels, runtimeModels),
+    models: mergeProviderModels(registryModels, existingModels, runtimeModels).map((model) => {
+      const id = typeof model.id === 'string' ? model.id : '';
+      return syncOpenClawModelCatalogEntry(id, model, { baseUrl: options.baseUrl });
+    }),
   };
   if (options.apiKeyEnv) nextProvider.apiKey = options.apiKeyEnv;
   if (options.headers !== undefined) {
@@ -1080,6 +1088,7 @@ export async function syncProviderConfigToOpenClaw(
         headers: override.headers,
         modelIds: modelId ? [modelId] : [],
         modelOverrides: override.modelOverrides,
+        mergeExistingModels: true,
       });
     }
 
@@ -1099,6 +1108,158 @@ export async function syncProviderConfigToOpenClaw(
     }
 
     await writeOpenClawJson(config);
+  });
+}
+
+/**
+ * Align models.providers.* catalog rows with endpoint-aware compat and context limits.
+ *
+ * Applies to every provider (custom, ly-auto, built-in): maxTokensField from baseUrl,
+ * contextTokens aligned with contextWindow, plus known-model catalog floors (e.g. DeepSeek V4).
+ */
+export async function ensureModelCatalogContextTokensForLargeModels(
+  _minimumContextTokens: number = DEEPSEEK_V4_CONTEXT_WINDOW,
+): Promise<boolean> {
+  return withConfigLock(async () => {
+    const config = await readOpenClawJson();
+    const models = (config.models ?? {}) as Record<string, unknown>;
+    const providers = (models.providers ?? {}) as Record<string, {
+      baseUrl?: string;
+      models?: Array<Record<string, unknown>>;
+    }>;
+
+    let changed = false;
+    for (const provider of Object.values(providers)) {
+      if (!Array.isArray(provider?.models)) continue;
+      const baseUrl = typeof provider.baseUrl === 'string' ? provider.baseUrl : undefined;
+      for (let index = 0; index < provider.models.length; index += 1) {
+        const model = provider.models[index];
+        if (!model || typeof model !== 'object') continue;
+        const id = typeof model.id === 'string' ? model.id : '';
+        const next = syncOpenClawModelCatalogEntry(id, model, { baseUrl });
+        if (JSON.stringify(next) !== JSON.stringify(model)) {
+          provider.models[index] = next;
+          changed = true;
+        }
+      }
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    config.models = models;
+    await writeOpenClawJson(config);
+    return true;
+  });
+}
+
+/**
+ * Repair agent models.json files so OpenClaw ModelRegistry can load them.
+ *
+ * One invalid model row (e.g. ly-auto input: ["text","image","video"]) rejects the
+ * entire file. When that happens custom providers like custom-customb5 disappear from
+ * the registry and the runtime falls back to catalog defaults (maxTokens: 8192).
+ */
+export async function ensureAgentModelsJsonValid(): Promise<boolean> {
+  const agentIds = await discoverAgentIds();
+  let changed = false;
+
+  for (const agentId of agentIds) {
+    const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
+    let data: Record<string, unknown>;
+    try {
+      data = (await readJsonFile<Record<string, unknown>>(modelsPath)) ?? {};
+    } catch {
+      continue;
+    }
+
+    const providers = data.providers;
+    if (!providers || typeof providers !== 'object') {
+      continue;
+    }
+
+    let fileChanged = false;
+    for (const provider of Object.values(providers as Record<string, {
+      baseUrl?: string;
+      models?: Array<Record<string, unknown>>;
+    }>)) {
+      if (!Array.isArray(provider?.models)) {
+        continue;
+      }
+      const baseUrl = typeof provider.baseUrl === 'string' ? provider.baseUrl : undefined;
+      for (let index = 0; index < provider.models.length; index += 1) {
+        const model = provider.models[index];
+        if (!model || typeof model !== 'object') {
+          continue;
+        }
+        const id = typeof model.id === 'string' ? model.id : '';
+        const next = syncOpenClawModelCatalogEntry(id, model, { baseUrl });
+        if (JSON.stringify(next) !== JSON.stringify(model)) {
+          provider.models[index] = next;
+          fileChanged = true;
+        }
+      }
+    }
+
+    if (!fileChanged) {
+      continue;
+    }
+
+    await writeJsonFile(modelsPath, data);
+    changed = true;
+    console.log(`Repaired models.json schema for agent "${agentId}"`);
+  }
+
+  return changed;
+}
+
+/**
+ * Raise agents.defaults.contextTokens when a large-context model (e.g. DeepSeek V4)
+ * is configured but the agent cap is lower.
+ *
+ * OpenClaw shrinks effectiveModel.contextWindow to this cap and, for custom
+ * openai-completions providers, clamps max_tokens to (effectiveContext - estimatedInput).
+ * A 128K effective context on a long session surfaces as output:8192 + stopReason:length
+ * even when models.providers.*.maxTokens is below the official DeepSeek V4 output cap.
+ */
+export async function ensureAgentContextTokensCapForLargeModels(
+  minimumContextTokens: number = DEEPSEEK_V4_CONTEXT_WINDOW,
+): Promise<boolean> {
+  return withConfigLock(async () => {
+    const config = await readOpenClawJson();
+    const models = (config.models ?? {}) as Record<string, unknown>;
+    const providers = (models.providers ?? {}) as Record<string, { models?: Array<{ id?: string; contextWindow?: number }> }>;
+
+    let needsLargeWindow = false;
+    for (const entry of Object.values(providers)) {
+      for (const model of entry?.models ?? []) {
+        const id = typeof model?.id === 'string' ? model.id : '';
+        const window = typeof model?.contextWindow === 'number' ? model.contextWindow : 0;
+        if (isDeepSeekV4ModelId(id) || window >= minimumContextTokens) {
+          needsLargeWindow = true;
+          break;
+        }
+      }
+      if (needsLargeWindow) break;
+    }
+
+    if (!needsLargeWindow) {
+      return false;
+    }
+
+    const agents = (config.agents ?? {}) as Record<string, unknown>;
+    const defaults = (agents.defaults ?? {}) as Record<string, unknown>;
+    const current = typeof defaults.contextTokens === 'number' ? defaults.contextTokens : undefined;
+    if (current !== undefined && current >= minimumContextTokens) {
+      return false;
+    }
+
+    defaults.contextTokens = minimumContextTokens;
+    agents.defaults = defaults;
+    config.agents = agents;
+    await writeOpenClawJson(config);
+    return true;
   });
 }
 
@@ -1576,7 +1737,9 @@ async function updateModelsJsonProviderEntriesForAgents(
 
     const mergedModels = (entry.models ?? []).map((m) => {
       const prev = existingModels.find((e) => e.id === m.id);
-      return prev ? { ...prev, ...m, id: m.id, name: m.name } : { ...m };
+      const merged = prev ? { ...prev, ...m, id: m.id, name: m.name } : { ...m };
+      const id = typeof merged.id === 'string' ? merged.id : '';
+      return syncOpenClawModelCatalogEntry(id, merged, { baseUrl: entry.baseUrl });
     });
 
     if (entry.baseUrl !== undefined) existing.baseUrl = entry.baseUrl;

@@ -23,7 +23,7 @@ import { getDwsDir } from '../utils/dws-env-setup';
 import { getUvMirrorEnv } from '../utils/uv-env';
 import { getManagedPythonEnv } from '../utils/uv-setup';
 import { cleanupDanglingWeChatPluginState, listConfiguredChannelsFromConfig, listConfiguredChannelAccountsFromConfig, readOpenClawConfig } from '../utils/channel-config';
-import { sanitizeOpenClawConfig, batchSyncConfigFields } from '../utils/openclaw-auth';
+import { sanitizeOpenClawConfig, batchSyncConfigFields, ensureAgentModelsJsonValid } from '../utils/openclaw-auth';
 import { buildProxyEnv, resolveProxySettings } from '../utils/proxy';
 import { syncProxyConfigToOpenClaw } from '../utils/openclaw-proxy';
 import { logger } from '../utils/logger';
@@ -41,6 +41,7 @@ import { ensureDingTalkDedicatedAgent, DINGTALK_DEDICATED_AGENT_ID } from '../ut
 import { stripSystemdSupervisorEnv } from './config-sync-env';
 import { getCommandPolicyPreflightToken } from '../api/auth-token';
 import { getPort } from '../utils/config';
+import { inspectOpenClawDigitalEmployeeIsolation } from '../utils/openclaw-digital-employee-isolation';
 
 
 export interface GatewayLaunchContext {
@@ -439,6 +440,15 @@ export async function syncGatewayConfigBeforeLaunch(
     logger.warn('Failed to sanitize openclaw.json:', err);
   }
 
+  try {
+    const repaired = await ensureAgentModelsJsonValid();
+    if (repaired) {
+      logger.info('[GatewaySync] Repaired agent models.json schema before launch');
+    }
+  } catch (err) {
+    logger.warn('Failed to repair agent models.json before launch:', err);
+  }
+
   // Plugin upgrade must run after sanitize completes (depends on config)
   try {
     const rawCfg = await readOpenClawConfig();
@@ -566,6 +576,17 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
 
   if (!existsSync(entryScript)) {
     throw new Error(`OpenClaw entry script not found at: ${entryScript}`);
+  }
+
+  const isolationStatus = await inspectOpenClawDigitalEmployeeIsolation(openclawDir);
+  if (isolationStatus.ok) {
+    logger.info(`[digital-employee-isolation] OpenClaw runtime verified: ${isolationStatus.openclawDir}`);
+  } else {
+    logger.warn('[digital-employee-isolation] OpenClaw runtime is missing digital employee resource isolation markers; @agent execution will continue but may load global resources.', {
+      openclawDir: isolationStatus.openclawDir,
+      missing: isolationStatus.missing,
+      details: isolationStatus.details,
+    });
   }
 
   const gatewayArgs = ['gateway', '--port', String(port), '--token', appSettings.gatewayToken, '--allow-unconfigured', '--verbose'];

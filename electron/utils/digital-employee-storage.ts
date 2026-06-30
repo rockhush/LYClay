@@ -129,6 +129,24 @@ export async function listDigitalEmployeeAgentIds(): Promise<Set<string>> {
   return new Set(employees.map((employee) => employee.agentId));
 }
 
+export async function findLocalDigitalEmployeeByAgentOrInstanceId(
+  id: string,
+): Promise<LocalDigitalEmployee | null> {
+  const normalizedId = id.trim();
+  if (!normalizedId) return null;
+  const employees = await listLocalDigitalEmployees();
+  return employees.find((employee) =>
+    employee.enabled !== false
+    && (employee.agentId === normalizedId || employee.instanceId === normalizedId),
+  ) ?? null;
+}
+
+export async function resolveDigitalEmployeeInstallPathByAgentOrInstanceId(
+  id: string,
+): Promise<string | null> {
+  return (await findLocalDigitalEmployeeByAgentOrInstanceId(id))?.installPath ?? null;
+}
+
 export async function findInstalledDigitalEmployeeByPackageId(
   packageId: string,
 ): Promise<DigitalEmployeeInstallRecord | null> {

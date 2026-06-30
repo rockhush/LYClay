@@ -133,6 +133,104 @@ export function isCompanyMarketplaceId(id: string | number | undefined): boolean
   return /^\d+$/.test(String(id).trim());
 }
 
+/** Company plaza cards use `slug: String(skill.id)` — same key as single-skill update. */
+export function isCompanyMarketplacePlazaSlug(slug: string | undefined | null): boolean {
+  return isCompanyMarketplaceId(slug ?? undefined);
+}
+
+export type CompanyInstallByPackageSlug = Record<string, {
+  packageSlug: string;
+  name: string;
+  version: string;
+  author?: string;
+  description?: string;
+  marketplaceId: string;
+}>;
+
+export function resolvePackageSlugForMarketplaceSkill(
+  skill: Pick<MarketplaceSkill, 'id' | 'slug'>,
+  companyInstallMap: Record<string, string>,
+): string | undefined {
+  const marketplaceId = skill.id != null ? String(skill.id).trim() : '';
+  if (marketplaceId && companyInstallMap[marketplaceId]) {
+    return companyInstallMap[marketplaceId];
+  }
+
+  const slug = skill.slug?.trim();
+  if (slug && !isCompanyMarketplacePlazaSlug(slug)) {
+    return slug;
+  }
+  if (slug && companyInstallMap[slug]) {
+    return companyInstallMap[slug];
+  }
+  return slug || undefined;
+}
+
+/** Resolve the plaza numeric id used by single-skill update (`handleUpdate(skill.slug)`). */
+export function resolveCompanyMarketplaceUpdateSlug(
+  skill: MarketplaceSkill,
+  companyInstallMap: Record<string, string>,
+  byPackageSlug?: CompanyInstallByPackageSlug,
+): string | undefined {
+  const packageSlug = resolvePackageSlugForMarketplaceSkill(skill, companyInstallMap);
+  if (packageSlug && byPackageSlug?.[packageSlug]?.marketplaceId) {
+    return byPackageSlug[packageSlug].marketplaceId;
+  }
+
+  if (isCompanyMarketplacePlazaSlug(skill.slug)) {
+    return skill.slug!.trim();
+  }
+
+  const marketplaceId = skill.id != null ? String(skill.id).trim() : '';
+  if (isCompanyMarketplaceId(marketplaceId) && companyInstallMap[marketplaceId]) {
+    return marketplaceId;
+  }
+
+  if (packageSlug) {
+    const matchingIds = Object.entries(companyInstallMap)
+      .filter(([, slug]) => slug === packageSlug)
+      .map(([id]) => id)
+      .filter((id) => isCompanyMarketplaceId(id));
+    if (marketplaceId && matchingIds.includes(marketplaceId)) {
+      return marketplaceId;
+    }
+    return matchingIds[0];
+  }
+
+  return isCompanyMarketplaceId(marketplaceId) ? marketplaceId : undefined;
+}
+
+export function normalizeMarketplaceSkillForUpdate(
+  skill: MarketplaceSkill,
+  companyInstallMap: Record<string, string>,
+  byPackageSlug?: CompanyInstallByPackageSlug,
+): MarketplaceSkill {
+  const updateSlug = resolveCompanyMarketplaceUpdateSlug(skill, companyInstallMap, byPackageSlug);
+  if (!updateSlug) return skill;
+  const numericId = Number(updateSlug);
+  return {
+    ...skill,
+    id: Number.isFinite(numericId) ? numericId : skill.id,
+    slug: updateSlug,
+  };
+}
+
+/** One installed package → one batch row; prefer plaza listing over registry-only rows. */
+export function dedupeInstalledMarketplaceSkillsForBatchUpdate(
+  skills: MarketplaceSkill[],
+  companyInstallMap: Record<string, string>,
+  byPackageSlug?: CompanyInstallByPackageSlug,
+): MarketplaceSkill[] {
+  const byPackage = new Map<string, MarketplaceSkill>();
+  for (const skill of skills) {
+    const normalized = normalizeMarketplaceSkillForUpdate(skill, companyInstallMap, byPackageSlug);
+    const packageSlug = resolvePackageSlugForMarketplaceSkill(normalized, companyInstallMap)
+      || getMarketplaceSkillKey(normalized);
+    byPackage.set(packageSlug, normalized);
+  }
+  return Array.from(byPackage.values());
+}
+
 /**
  * Whether a marketplace card should show as installed (技能广场 tab).
  * Company marketplace skills require a registry entry + on-disk folder match.

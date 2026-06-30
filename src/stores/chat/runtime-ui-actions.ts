@@ -2,13 +2,13 @@ import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
 import type { ReasoningMode } from './types';
 import { invokeIpc } from '@/lib/api-client';
 
-const REASONING_MODE_STORAGE_KEY = 'LYClaw:chat:reasoning-mode';
+const SESSION_REASONING_MODES_STORAGE_KEY = 'LYClaw:chat:session-reasoning-modes';
 
-function persistReasoningMode(mode: ReasoningMode): void {
+function persistSessionReasoningModes(modes: Record<string, ReasoningMode>): void {
   try {
-    window.localStorage.setItem(REASONING_MODE_STORAGE_KEY, mode);
+    window.localStorage.setItem(SESSION_REASONING_MODES_STORAGE_KEY, JSON.stringify(modes));
   } catch {
-    // Ignore storage failures; the current session still updates in memory.
+    // Ignore storage failures.
   }
 }
 
@@ -35,9 +35,17 @@ async function patchSessionThinkingLevel(sessionKey: string, mode: ReasoningMode
 export function createRuntimeUiActions(set: ChatSet, get: ChatGet): Pick<RuntimeActions, 'setReasoningMode' | 'refresh' | 'clearError'> {
   return {
     setReasoningMode: async (mode) => {
-      persistReasoningMode(mode);
-      set({ reasoningMode: mode, thinkingLevel: toThinkingLevel(mode) });
-      void patchSessionThinkingLevel(get().currentSessionKey, mode).catch((error) => {
+      const sessionKey = get().currentSessionKey;
+      set((s) => {
+        const nextModes = { ...s.sessionReasoningModes, [sessionKey]: mode };
+        persistSessionReasoningModes(nextModes);
+        return {
+          reasoningMode: mode,
+          thinkingLevel: toThinkingLevel(mode),
+          sessionReasoningModes: nextModes,
+        };
+      });
+      void patchSessionThinkingLevel(sessionKey, mode).catch((error) => {
         console.warn('[chat] Failed to persist thinking level; continuing with one-shot /think directive:', error);
       });
     },

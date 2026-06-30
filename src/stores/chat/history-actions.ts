@@ -18,7 +18,7 @@ import {
   normalizeComplexTaskControlUserMessages,
   toMs,
 } from './helpers';
-import { buildCronSessionHistoryPath, isCronSessionKey } from './cron-session-utils';
+import { buildCronSessionHistoryPath, isCronSessionKey, mergeCronSessionHistory } from './cron-session-utils';
 import {
   CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS,
   classifyHistoryStartupRetryError,
@@ -43,6 +43,16 @@ async function loadCronFallbackMessages(sessionKey: string, limit = 200): Promis
     console.warn('Failed to load cron fallback history:', error);
     return [];
   }
+}
+
+async function loadMergedCronSessionMessages(
+  sessionKey: string,
+  latestRunMessages: RawMessage[],
+  limit = 200,
+): Promise<RawMessage[]> {
+  if (!isCronSessionKey(sessionKey)) return latestRunMessages;
+  const aggregated = await loadCronFallbackMessages(sessionKey, limit);
+  return mergeCronSessionHistory(aggregated, latestRunMessages);
 }
 
 export function createHistoryActions(
@@ -258,7 +268,14 @@ export function createHistoryActions(
             console.log(`[PERF] Local history read took ${Date.now() - localStart}ms, success: ${response.success}, messages: ${response.messages?.length || 0}`);
             
             if (response.success && Array.isArray(response.messages)) {
-              const rawMessages = response.messages;
+              let rawMessages = response.messages;
+              if (isCronSessionKey(currentSessionKey)) {
+                rawMessages = await loadMergedCronSessionMessages(
+                  currentSessionKey,
+                  rawMessages,
+                  limits.messageLimit,
+                );
+              }
               const thinkingLevel = null;
               console.log(`[History] ✅ Loaded ${rawMessages.length} messages from LOCAL filesystem`);
 
@@ -334,8 +351,12 @@ export function createHistoryActions(
           const data = result.result;
           let rawMessages = Array.isArray(data.messages) ? data.messages as RawMessage[] : [];
           const thinkingLevel = data.thinkingLevel ? String(data.thinkingLevel) : null;
-          if (rawMessages.length === 0 && isCronSessionKey(currentSessionKey)) {
-            rawMessages = await loadCronFallbackMessages(currentSessionKey, limits.messageLimit);
+          if (isCronSessionKey(currentSessionKey)) {
+            rawMessages = await loadMergedCronSessionMessages(
+              currentSessionKey,
+              rawMessages,
+              limits.messageLimit,
+            );
           }
 
           const { messages: decayedMessages, stats } = applyTimeDecayStrategy(rawMessages, lastActivityMs);

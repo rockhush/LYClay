@@ -40,7 +40,8 @@ import { rendererExtensionRegistry } from '@/extensions/registry';
 import { useSettingsStore } from '@/stores/settings';
 import { useChatStore, type ChatSession } from '@/stores/chat';
 import { deriveIsExecuting, backendActivityForSession } from '@/stores/chat/user-turn-lifecycle';
-import { isWaitingOnSubagentDelegation } from '@/lib/subagent-delegation';
+import { ensureSessionBackendPolling } from '@/stores/chat/session-backend-bridge';
+import { isParentDelegationPhaseOpen } from '@/lib/delegation-turn-state';
 import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
 import { useTokenUsageStore } from '@/stores/token-usage';
@@ -69,6 +70,13 @@ import {
 import { buildBatchDeleteSessionGroups } from '@/lib/session-batch-delete-groups';
 import { BatchDeleteSessionsDialog } from '@/components/chat/BatchDeleteSessionsDialog';
 import { isUserFacingSessionKey } from '@/lib/session-key-utils';
+import { resolveSessionDisplayLabel, isPlaceholderSessionTitle } from '@/lib/session-label-utils';
+import {
+  formatCronSessionDisplayLabel,
+  isCronSessionKey,
+  parseCronSessionKey,
+} from '@/stores/chat/cron-session-utils';
+import { useCronStore } from '@/stores/cron';
 import logoSvg from '@/assets/1.png';
 
 /** While Chat shows first-response preparing, block switching sessions (sidebar + workspace). */
@@ -158,10 +166,16 @@ const STARTUP_LOAD_SESSIONS_DELAY_MS = 0;
 const STARTING_FALLBACK_LOAD_SESSIONS_DELAY_MS = 5_000;
 
 export function Sidebar() {
-  const { t } = useTranslation(['common', 'chat', 'settings']);
+  const { t } = useTranslation(['common', 'chat', 'settings', 'cron']);
   const sidebarCollapsed = useSettingsStore((state) => state.sidebarCollapsed);
   const setSidebarCollapsed = useSettingsStore((state) => state.setSidebarCollapsed);
   const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
+
+  const cronJobs = useCronStore((s) => s.jobs);
+  const cronJobNamesById = useMemo(
+    () => new Map(cronJobs.map((job) => [job.id, job.name])),
+    [cronJobs],
+  );
 
   const sessions = useChatStore((s) => s.sessions);
   const currentSessionKey = useChatStore((s) => s.currentSessionKey);
@@ -182,6 +196,8 @@ export function Sidebar() {
   const chatSending = useChatStore((s) => s.sending);
   const activeRunId = useChatStore((s) => s.activeRunId);
   const pendingFinal = useChatStore((s) => s.pendingFinal);
+  const runAborted = useChatStore((s) => s.runAborted);
+  const lastUserMessageAt = useChatStore((s) => s.lastUserMessageAt);
   const messages = useChatStore((s) => s.messages);
   const sessionBackendActivity = useChatStore((s) => s.sessionBackendActivity);
   const gatewayBackgroundActivity = useChatStore((s) => s.gatewayBackgroundActivity);
@@ -194,15 +210,28 @@ export function Sidebar() {
   const isGatewayReady = isGatewayRunning && gatewayStatus.gatewayReady === true;
   const updateStatus = useUpdateStore((s) => s.status);
   const checkForUpdatesAfterGatewayReady = useUpdateStore((s) => s.checkForUpdatesAfterGatewayReady);
-  const processingSubagentKeys = gatewayBackgroundActivity?.processingSessionKeys ?? [];
+  const processingSessionKeys = gatewayBackgroundActivity?.processingSessionKeys ?? [];
+  const processingSessionKeySet = useMemo(
+    () => new Set(processingSessionKeys),
+    [processingSessionKeys],
+  );
   const waitingOnSubagentDelegation = useMemo(
-    () => isWaitingOnSubagentDelegation(messages, processingSubagentKeys),
-    [messages, processingSubagentKeys],
+    () => isParentDelegationPhaseOpen(messages, processingSessionKeys, {
+      lastUserMessageAt,
+      streamingMessage,
+    }),
+    [messages, processingSessionKeys, lastUserMessageAt, streamingMessage],
   );
   const isChatActive = deriveIsExecuting(
-    { sending: chatSending, activeRunId, pendingFinal },
+    { sending: chatSending, activeRunId, pendingFinal, runAborted },
     backendActivityForSession(sessionBackendActivity, currentSessionKey),
-    { waitingOnSubagentDelegation },
+    {
+      waitingOnSubagentDelegation,
+      gatewayBackground: gatewayBackgroundActivity,
+      messages,
+      lastUserMessageAt,
+      streamingMessage,
+    },
   );
 
   const firstResponsePreparingLocksSwitch = useMemo(
@@ -222,6 +251,11 @@ export function Sidebar() {
       streamingTools,
     ],
   );
+
+  useEffect(() => {
+    if (!isGatewayRunning || !currentSessionKey) return;
+    ensureSessionBackendPolling(currentSessionKey, useChatStore.setState, useChatStore.getState);
+  }, [isGatewayRunning, currentSessionKey]);
 
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const temporaryWorkspaces = useWorkspacesStore((s) => s.temporaryWorkspaces);
@@ -269,9 +303,11 @@ export function Sidebar() {
     const key = session.key;
     if (customSessionLabels[key]?.trim()) return true;
     if (sessionLabels[key]?.trim()) return true;
-    if (session.label?.trim()) return true;
     if (session.firstUserMessagePreview?.trim()) return true;
-    if (session.displayName?.trim() && session.displayName !== key) return true;
+    if (session.label?.trim() && !isPlaceholderSessionTitle(session.label)) return true;
+    if (session.displayName?.trim() && session.displayName !== key && !isPlaceholderSessionTitle(session.displayName)) {
+      return true;
+    }
     return false;
   };
 
@@ -445,10 +481,25 @@ export function Sidebar() {
   const isNewChatActive = isOnChat && !currentSessionHasContent;
   const isSessionViewActive = isOnChat && currentSessionHasContent;
 
-  const getSessionLabel = (key: string, displayName?: string, label?: string) => {
-    const raw = customSessionLabels[key] ?? sessionLabels[key] ?? label ?? displayName ?? key;
-    return raw.replace(/\/think\s+(off|medium|high)\s+/i, '');
-  };
+  const getSessionLabel = useCallback((session: ChatSession) => {
+    const resolved = resolveSessionDisplayLabel({
+      sessionKey: session.key,
+      customLabel: customSessionLabels[session.key],
+      sessionLabel: sessionLabels[session.key],
+      firstUserMessagePreview: session.firstUserMessagePreview,
+      label: session.label,
+      displayName: session.displayName,
+    });
+    if (!isCronSessionKey(session.key)) {
+      return resolved;
+    }
+    const jobId = parseCronSessionKey(session.key)?.jobId;
+    const jobName = jobId ? cronJobNamesById.get(jobId) : undefined;
+    return formatCronSessionDisplayLabel(resolved, {
+      jobName,
+      fallback: t('cron:title', { defaultValue: '定时任务' }),
+    });
+  }, [customSessionLabels, sessionLabels, cronJobNamesById, t]);
 
   const openDevConsole = async () => {
     try {
@@ -603,10 +654,10 @@ export function Sidebar() {
     const otherSessionState = sessionStreamingStates[s.key];
     const otherMessages = otherSessionState?.messagesSnapshot ?? [];
     const isOtherWaitingOnSubagent = !isCurrent
-      && isWaitingOnSubagentDelegation(otherMessages, processingSubagentKeys);
+      && isParentDelegationPhaseOpen(otherMessages, processingSessionKeys);
     const isOtherSessionRunning =
       !isCurrent && (
-        processingSubagentKeys.includes(s.key)
+        processingSessionKeySet.has(s.key)
         || !!(otherSessionState?.sending || otherSessionState?.activeRunId || otherSessionState?.pendingFinal)
         || isOtherWaitingOnSubagent
       );
@@ -614,7 +665,7 @@ export function Sidebar() {
     const statusTitle = isRunning
       ? t('chat:sidebar.statusRunning', { defaultValue: '问答进行中' })
       : t('chat:sidebar.statusCompleted', { defaultValue: '已完成' });
-    const sessionLabel = getSessionLabel(s.key, s.displayName, s.label);
+    const sessionLabel = getSessionLabel(s);
     const isPinned = Number.isFinite(sessionPinnedAt[s.key]) && sessionPinnedAt[s.key] > 0;
     const pinLabel = isPinned
       ? t('common:sidebar.unpinSession')
@@ -735,7 +786,7 @@ export function Sidebar() {
                   setSessionMenuAnchor(null);
                   setSessionToDelete({
                     key: s.key,
-                    label: getSessionLabel(s.key, s.displayName, s.label),
+                    label: getSessionLabel(s),
                   });
                 }}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
@@ -769,7 +820,7 @@ export function Sidebar() {
                   e.stopPropagation();
                   setOpenSessionMenuKey(null);
                   setSessionMenuAnchor(null);
-                  const currentLabel = getSessionLabel(s.key, s.displayName, s.label);
+                  const currentLabel = getSessionLabel(s);
                   setSessionToRename({ key: s.key, label: currentLabel });
                   setRenameDraft(currentLabel);
                 }}
@@ -839,7 +890,7 @@ export function Sidebar() {
 
   const batchDeleteSessionGroups = useMemo(() => {
     const resolveTitle = (session: ChatSession) =>
-      getSessionLabel(session.key, session.displayName, session.label);
+      getSessionLabel(session);
 
     return buildBatchDeleteSessionGroups({
       sessions: orderedSidebarSessions,
@@ -868,8 +919,7 @@ export function Sidebar() {
     allWorkspaces,
     nowMs,
     t,
-    customSessionLabels,
-    sessionLabels,
+    getSessionLabel,
   ]);
 
   const batchDeleteSessionCount = useMemo(

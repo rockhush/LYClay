@@ -20,7 +20,7 @@ import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard, buildTurnRunAnchorId } from './ExecutionGraphCard';
 import { ChatToolbar } from './ChatToolbar';
 import { extractImages, extractText, extractThinking, extractToolUse, stripProcessMessagePrefix } from './message-utils';
-import { attachSubagentChildSteps, collectChildDelegationBindings, deriveTaskSteps, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
+import { attachSubagentChildSteps, collectChildDelegationBindings, deriveTaskSteps, filterHiddenExecutionGraphSteps, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
 import { cn } from '@/lib/utils';
@@ -32,8 +32,10 @@ import {
 import {
   collectActiveChildDelegations,
   deriveDelegationTurnSnapshot,
+  isParentDelegationPhaseOpen,
+  isSegmentDelegationPhaseOpen,
 } from '@/lib/delegation-turn-state';
-import { isWaitingOnSubagentDelegation, summarizeChildRunActivity, collectPendingChildDelegationBindings } from '@/lib/subagent-delegation';
+import { summarizeChildRunActivity, collectPendingChildDelegationBindings } from '@/lib/subagent-delegation';
 import {
   detectStalledChildDelegation,
   isChildDelegationStillActive,
@@ -191,6 +193,7 @@ export function Chat() {
   const loading = useChatStore((s) => s.loading);
   const sending = useChatStore((s) => s.sending);
   const activeRunId = useChatStore((s) => s.activeRunId);
+  const announcedChildSessionKeys = useChatStore((s) => s.announcedChildSessionKeys);
   const error = useChatStore((s) => s.error);
   const runError = useChatStore((s) => s.runError);
   const terminalRunError = runError ?? error;
@@ -200,6 +203,7 @@ export function Chat() {
   const streamingText = useChatStore((s) => s.streamingText);
   const streamingTools = useChatStore((s) => s.streamingTools);
   const pendingFinal = useChatStore((s) => s.pendingFinal);
+  const lastUserMessageAt = useChatStore((s) => s.lastUserMessageAt);
   const sessionBackendActivity = useChatStore((s) => s.sessionBackendActivity);
   const gatewayBackgroundActivity = useChatStore((s) => s.gatewayBackgroundActivity);
   const sendMessage = useChatStore((s) => s.sendMessage);
@@ -386,17 +390,15 @@ export function Chat() {
   }, [subagentCompletionInfos, childTranscripts]);
 
   const completedChildSessionKeys = useMemo(
-    () => new Set(
-      subagentCompletionInfos
+    () => new Set([
+      ...subagentCompletionInfos
         .filter((info): info is NonNullable<typeof info> => info != null)
         .map((info) => info.sessionKey),
-    ),
-    [subagentCompletionInfos],
-  );
-
-  const pendingChildDelegations = useMemo(
-    () => (runAborted ? [] : collectPendingChildDelegationBindings(messages)),
-    [messages, runAborted],
+      // A child that triggered a parent announce wrap-up has no transcript
+      // completion marker — fold in its run-id-derived key so its branch settles.
+      ...announcedChildSessionKeys,
+    ]),
+    [subagentCompletionInfos, announcedChildSessionKeys],
   );
 
   const processingSubagentKeys = useMemo(
@@ -404,36 +406,28 @@ export function Chat() {
     [gatewayBackgroundActivity],
   );
 
+  const pendingChildDelegations = useMemo(() => {
+    if (runAborted) return [];
+    const processing = new Set(processingSubagentKeys);
+    return collectPendingChildDelegationBindings(messages)
+      .filter((binding) => !completedChildSessionKeys.has(binding.childSessionKey))
+      .filter((binding) => isChildDelegationStillActive(binding, processing));
+  }, [messages, runAborted, processingSubagentKeys, completedChildSessionKeys]);
+
   useEffect(() => {
-    if (!isGatewayRunning) return undefined;
+    if (!isGatewayRunning || !currentSessionKey) return undefined;
     let cancelled = false;
-    const hasSubagentWatch = pendingChildDelegations.length > 0
-      || processingSubagentKeys.length > 0
-      || isWaitingOnSubagentDelegation(messages, processingSubagentKeys);
-    const pollMs = hasSubagentWatch ? 4_000 : 8_000;
-    const refreshBackground = async () => {
-      const snapshot = await refreshSessionBackendActivity(currentSessionKey);
+    void refreshSessionBackendActivity(currentSessionKey).then((snapshot) => {
       if (cancelled || !snapshot) return;
       useChatStore.setState({
         sessionBackendActivity: snapshot.session,
         gatewayBackgroundActivity: snapshot.background,
       });
-    };
-    void refreshBackground();
-    const intervalId = window.setInterval(() => {
-      void refreshBackground();
-    }, pollMs);
+    });
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
     };
-  }, [
-    currentSessionKey,
-    isGatewayRunning,
-    messages,
-    pendingChildDelegations.length,
-    processingSubagentKeys.length,
-  ]);
+  }, [currentSessionKey, isGatewayRunning]);
 
   const inFlightChildDelegation = useMemo(
     () => (runAborted
@@ -605,31 +599,50 @@ export function Chat() {
   });
 
   const waitingOnSubagentDelegation = useMemo(
-    () => !runAborted && isWaitingOnSubagentDelegation(messages, processingSubagentKeys),
-    [messages, processingSubagentKeys, runAborted],
-  );
-
-  const activeDelegations = useMemo(
-    () => (runAborted
-      ? []
-      : collectActiveChildDelegations(messages, processingSubagentKeys, stalledChildSessionKey)),
-    [messages, processingSubagentKeys, runAborted, stalledChildSessionKey],
+    () => !runAborted && isParentDelegationPhaseOpen(messages, processingSubagentKeys, {
+      lastUserMessageAt,
+      streamingMessage,
+    }),
+    [messages, processingSubagentKeys, runAborted, lastUserMessageAt, streamingMessage],
   );
 
   const isUserTurnExecuting = useMemo(
     () => deriveIsExecuting(
-      { sending, activeRunId, pendingFinal },
+      { sending, activeRunId, pendingFinal, runAborted },
       backendActivityForSession(sessionBackendActivity, currentSessionKey),
-      { waitingOnSubagentDelegation },
+      {
+        waitingOnSubagentDelegation,
+        gatewayBackground: gatewayBackgroundActivity,
+        messages,
+        lastUserMessageAt,
+        streamingMessage,
+      },
     ),
     [
+      runAborted,
       sending,
       activeRunId,
       pendingFinal,
       sessionBackendActivity,
       currentSessionKey,
       waitingOnSubagentDelegation,
+      gatewayBackgroundActivity,
+      messages,
+      lastUserMessageAt,
+      streamingMessage,
     ],
+  );
+
+  const activeDelegations = useMemo(
+    () => (runAborted
+      ? []
+      : collectActiveChildDelegations(
+        messages,
+        processingSubagentKeys,
+        stalledChildSessionKey,
+        completedChildSessionKeys,
+      )),
+    [messages, processingSubagentKeys, runAborted, stalledChildSessionKey, completedChildSessionKeys],
   );
 
   const isEmpty = messages.length === 0
@@ -699,6 +712,13 @@ export function Chat() {
     );
     const segmentHasPendingChild = !runAborted && delegationTurn.anyChildActive;
     const hasSpawnedSubagent = delegationTurn.hasSpawnedChildren;
+    const segmentDelegationOpen = !runAborted && isSegmentDelegationPhaseOpen(
+      segmentMessages,
+      processingSubagentKeys,
+      {
+        streamingMessage: nextUserIndex === -1 ? streamingMessage : null,
+      },
+    );
     const waitingOnSubagentReturn = hasSpawnedSubagent && segmentHasPendingChild;
     const segmentWaitingOnSubagent = nextUserIndex === -1 && waitingOnSubagentReturn;
     // A run is considered "open" (still active) when it's the last segment
@@ -735,44 +755,37 @@ export function Chat() {
       );
     });
       const runStillExecutingTools = hasToolActivity && !hasFinalReply;
-      const hasLiveRuntimeSignal = hasStreamText
-        || hasStreamThinking
-        || hasStreamTools
-        || hasStreamImages
-        || hasRunningStreamToolStatus;
-      const hasActiveRunSignal = deriveHasActiveRunSignal(
-        { sending, activeRunId, pendingFinal },
-        backendActivityForSession(sessionBackendActivity, currentSessionKey),
-        { waitingOnSubagentDelegation: segmentHasPendingChild },
-      );
-      const turnSettledWithAnswer = hasCommittedUserReplyInMessages(segmentMessages)
-        && delegationTurn.allChildrenSettled
-        && !stalledChildSessionKey
-        && !hasLiveRuntimeSignal
-        && !hasActiveRunSignal;
-      const isLatestOpenRun = nextUserIndex === -1
+      const segmentChildrenIdle = !delegationTurn.anyChildActive;
+      const turnVisiblyComplete = hasFinalReply && segmentChildrenIdle && !segmentDelegationOpen;
+      const isLatestOpenRun = !turnVisiblyComplete
+        && nextUserIndex === -1
         && !runAborted
-        && !turnSettledWithAnswer
         && (
-          segmentHasPendingChild
+          segmentDelegationOpen
+          || segmentHasPendingChild
           || segmentWaitingOnSubagent
           || Boolean(stalledChildSessionKey)
           || sending
           || pendingFinal
           || hasAnyStreamContent
-          // Keep the graph open between tool rounds only while the runtime still
-          // owns the turn. Stale transcript tool calls alone must not resurrect
-          // "thinking" after the backend has already stopped.
-          || (runStillExecutingTools && !error && !hasFinalReply && hasActiveRunSignal)
+          || (runStillExecutingTools && !error && !hasFinalReply)
         );
-    const hasCommittedTerminalReply = hasCommittedUserReplyInMessages(segmentMessages);
-    // While the run is still open we normally fold every assistant message into the
-    // graph and render the answer via streaming. If the terminal reply is already in
-    // messages[] (final event or history poll) but finalize is blocked — e.g. backend
-    // still reports processing — we must not hide it until the user hits stop.
-    const treatAsStreamingReply = isLatestOpenRun && !hasCommittedTerminalReply;
-    const replyIndexOffset = findReplyMessageIndex(segmentMessages, treatAsStreamingReply);
+    const replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
     const replyIndex = replyIndexOffset === -1 ? null : idx + 1 + replyIndexOffset;
+
+    // Fold process narrations before any early return. History poll / session
+    // snapshots can commit interim assistant messages that must not persist as
+    // orphan bubbles after switching between long-running sessions.
+    const segmentReplyOffset = replyIndexOffset;
+    for (let offset = 0; offset < segmentMessages.length; offset += 1) {
+      if (offset === segmentReplyOffset) continue;
+      const candidate = segmentMessages[offset];
+      if (!candidate || candidate.role !== 'assistant') continue;
+      const hasNarrationText = extractText(candidate).trim().length > 0;
+      const hasThinking = !!extractThinking(candidate);
+      if (!hasNarrationText && !hasThinking) continue;
+      folded.add(idx + 1 + offset);
+    }
 
     const buildSteps = (omitLastStreamingMessageSegment: boolean): TaskStep[] => {
       let builtSteps = deriveTaskSteps({
@@ -844,11 +857,13 @@ export function Chat() {
     const segmentSessionLabel = sessionLabels[currentSessionKey] || currentSessionKey;
 
     if (steps.length === 0) {
-      if (turnSettledWithAnswer && !segmentHasPendingChild) {
+      if (!isLatestOpenRun && !segmentDelegationOpen && !segmentHasPendingChild) {
         const cached = graphStepCache[runKey];
         if (cached) {
-          const cleanedSteps = cached.steps.filter(
-            (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+          const cleanedSteps = filterHiddenExecutionGraphSteps(
+            cached.steps.filter(
+              (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+            ),
           );
           return [{
             triggerIndex: idx,
@@ -866,37 +881,8 @@ export function Chat() {
         }
         return [];
       }
-      if (segmentHasPendingChild || waitingOnSubagentReturn || stalledChildSessionKey) {
-        let delegationSteps: TaskStep[] = [];
-        for (const binding of segmentBindings) {
-          if (binding.completed && !isChildDelegationStillActive(binding, processingKeySet)) continue;
-          const childMessages = childTranscripts[binding.childSessionKey] ?? [];
-          const isStalled = stalledChildSessionKey === binding.childSessionKey;
-          delegationSteps = attachSubagentChildSteps(
-            delegationSteps,
-            childMessages,
-            binding.childSessionKey,
-            {
-              branchLabel: binding.label,
-              spawnStepId: binding.spawnToolCallId,
-              forceChildRunning: isChildDelegationStillActive(binding, processingKeySet) && !isStalled,
-              forceChildError: isStalled,
-            },
-          );
-        }
-        return [{
-          triggerIndex: idx,
-          replyIndex,
-          active: isLatestOpenRun && !runAborted,
-          agentLabel: segmentAgentLabel,
-          sessionLabel: segmentSessionLabel,
-          segmentEnd: nextUserIndex === -1 ? messages.length - 1 : nextUserIndex - 1,
-          steps: delegationSteps,
-          messageStepTexts: getPrimaryMessageStepTexts(delegationSteps),
-          streamingReplyText: null,
-          suppressThinking: false,
-          isMimo,
-        }];
+      if (segmentDelegationOpen || segmentHasPendingChild || waitingOnSubagentReturn || stalledChildSessionKey) {
+        steps = buildSteps(false);
       }
       if (isLatestOpenRun && streamingReplyText == null && !showFirstResponseProgress) {
         return [{
@@ -919,8 +905,10 @@ export function Chat() {
       // generated message steps that include accumulated narration + reply
       // text.  Strip these out 鈥?historical message steps (from messages[])
       // will be properly recomputed on the next render with fresh data.
-      const cleanedSteps = cached.steps.filter(
-        (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+      const cleanedSteps = filterHiddenExecutionGraphSteps(
+        cached.steps.filter(
+          (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+        ),
       );
       return [{
         triggerIndex: idx,
@@ -936,30 +924,7 @@ export function Chat() {
         isMimo,
       }];
     }
-
-    // Mark intermediate assistant messages whose process output should be folded into
-    // the ExecutionGraphCard. We fold the text regardless of whether the
-    // message ALSO carries tool calls (mixed `text + toolCall` messages are
-    // common 鈥?e.g. "waiting for the page to load鈥? followed by a `wait`
-    // tool call). This prevents orphan narration bubbles from leaking into
-    // the chat stream once the graph is collapsed.
-    //
-    // When the run is still streaming (`isLatestOpenRun`) the final reply is
-    // not yet part of `segmentMessages`, so every assistant message in the
-    // segment counts as intermediate. For completed runs, we preserve the
-    // final reply bubble by skipping the message that `findReplyMessageIndex`
-    // identifies as the answer.
-    const segmentReplyOffset = findReplyMessageIndex(segmentMessages, treatAsStreamingReply);
-    for (let offset = 0; offset < segmentMessages.length; offset += 1) {
-      if (offset === segmentReplyOffset) continue;
-      const candidate = segmentMessages[offset];
-      if (!candidate || candidate.role !== 'assistant') continue;
-      const hasNarrationText = extractText(candidate).trim().length > 0;
-      const hasThinking = !!extractThinking(candidate);
-      if (!hasNarrationText && !hasThinking) continue;
-      folded.add(idx + 1 + offset);
-    }
-
+  
     // The graph should stay "active" (expanded, can show trailing thinking)
     // for the entire duration of the run 鈥?not just until a streaming reply
     // appears.  Tying active to streamingReplyText caused a flicker: a brief
@@ -967,15 +932,6 @@ export function Chat() {
     // uncontrolled path before the controlled `expanded` override could kick in.
     // When runAborted is true, card should not be active (user manually stopped)
     const cardActive = isLatestOpenRun && !runAborted;
-
-    if (!isLatestOpenRun && runStillExecutingTools && !hasFinalReply && !hasActiveRunSignal) {
-      const hasAnyAssistantNarration = segmentMessages.some(
-        (message) => message.role === 'assistant' && extractText(message).trim().length > 0,
-      );
-      if (!hasAnyAssistantNarration) {
-        return [];
-      }
-    }
 
     // Suppress the trailing "Thinking..." indicator only when the live stream is
     // currently rendered AS a streaming step inside this card's graph. In
@@ -1031,6 +987,7 @@ export function Chat() {
     isMimo,
     messages,
     pendingFinal,
+    lastUserMessageAt,
     sessionBackendActivity,
     runAborted,
     error,

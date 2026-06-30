@@ -3,7 +3,7 @@
  * Manages the OpenClaw Gateway process lifecycle
  */
 import { app } from 'electron';
-import { readFile, stat } from 'fs/promises';
+import { readFile, readdir, stat } from 'fs/promises';
 import path from 'path';
 import { homedir } from 'os';
 import { EventEmitter } from 'events';
@@ -14,7 +14,7 @@ import { logger } from '../utils/logger';
 import { protectMemoryRpcOutput } from '../security/memory-content-policy';
 import { enrichChatSendParams } from '../utils/chat-send-enrichment';
 import { captureTelemetryEvent, trackMetric } from '../utils/telemetry';
-// Dev-only Langfuse chat tracing — uncomment with electron/main/index.ts langfuse import.
+// Dev-only Langfuse chat tracing �?uncomment with electron/main/index.ts langfuse import.
 // import {
 //   beginChatSendTrace,
 //   finishChatRunTrace,
@@ -74,6 +74,7 @@ import {
 import { runGatewayStartupSequence } from './startup-orchestrator';
 import { isInvalidConfigSignal } from './startup-recovery';
 import { ensureClawXContext } from '../utils/openclaw-workspace';
+import { inspectOpenClawDigitalEmployeeIsolation } from '../utils/openclaw-digital-employee-isolation';
 import { handleGatewayExecApprovalRequested } from './exec-approval-bridge';
 import {
   recoverOrphanedSessionTranscriptLock,
@@ -87,6 +88,7 @@ import {
   type ToolRunHandle,
 } from '../runtime/tool-run-registry';
 import { isSessionProcessingLiveOnDisk } from './session-processing-liveness';
+import { hasActiveExecInSessionTranscript } from './session-exec-liveness';
 
 
 export interface GatewayStatus {
@@ -157,6 +159,20 @@ type GatewayChatEvent = {
   state?: unknown;
   runId?: unknown;
   message?: unknown;
+};
+
+type ChatRunMetric = {
+  kind: 'user' | 'warmup' | 'internal';
+  sessionKey?: string;
+  requestedAt: number;
+  acceptedAt: number;
+  rpcDurationMs: number;
+  firstEventAt?: number;
+  firstDeltaAt?: number;
+  firstVisibleProgressAt?: number;
+  firstVisibleProgressKind?: string;
+  firstEventWatchdogTimers?: NodeJS.Timeout[];
+  firstVisibleProgressWatchdogTimers?: NodeJS.Timeout[];
 };
 
 export type EmptyFinalDiagnostic = {
@@ -240,7 +256,7 @@ export class GatewayManager extends EventEmitter {
   private static readonly HEARTBEAT_INTERVAL_MS = 30_000;
   private static readonly HEARTBEAT_TIMEOUT_MS = 12_000;
   private static readonly HEARTBEAT_MAX_MISSES = 3;
-  // Windows-specific heartbeat parameters — more lenient to reduce log noise
+  // Windows-specific heartbeat parameters �?more lenient to reduce log noise
   // from false positives caused by Windows Defender scans, system updates,
   // and synchronous event-loop blocking in the gateway.
   private static readonly HEARTBEAT_INTERVAL_MS_WIN = 60_000;
@@ -266,19 +282,7 @@ export class GatewayManager extends EventEmitter {
     timeoutMs: number;
     sessionKey?: string;
   }>();
-  private chatRunMetrics = new Map<string, {
-    kind: 'user' | 'warmup' | 'internal';
-    sessionKey?: string;
-    requestedAt: number;
-    acceptedAt: number;
-    rpcDurationMs: number;
-    firstEventAt?: number;
-    firstDeltaAt?: number;
-    firstVisibleProgressAt?: number;
-    firstVisibleProgressKind?: string;
-    firstEventWatchdogTimers?: NodeJS.Timeout[];
-    firstVisibleProgressWatchdogTimers?: NodeJS.Timeout[];
-  }>();
+  private chatRunMetrics = new Map<string, ChatRunMetric>();
   private readonly emptyFinalDiagnosticsBySession = new Map<string, EmptyFinalDiagnostic>();
   private readonly terminalLockAuditTimersBySession = new Map<string, NodeJS.Timeout>();
   private warmupRunWaiters = new Map<string, {
@@ -335,7 +339,7 @@ export class GatewayManager extends EventEmitter {
       },
     });
     this.reconnectConfig = { ...DEFAULT_RECONNECT_CONFIG, ...config };
-    // Device identity is loaded lazily in start() — not in the constructor —
+    // Device identity is loaded lazily in start() �?not in the constructor �?
     // so that async file I/O and key generation don't block module loading.
 
     this.on('gateway:ready', () => {
@@ -465,7 +469,7 @@ export class GatewayManager extends EventEmitter {
           // Always read the current process pid dynamically so that retries
           // don't treat a just-spawned gateway as an orphan.  The ownedPid
           // snapshot captured at start() entry is stale after startProcess()
-          // replaces this.process — leading to the just-started pid being
+          // replaces this.process �?leading to the just-started pid being
           // immediately killed as a false orphan on the next retry iteration.
           return await findExistingGatewayProcess({ port, ownedPid: this.process?.pid });
         },
@@ -586,7 +590,7 @@ export class GatewayManager extends EventEmitter {
       }
     }
 
-    // Close WebSocket — use terminate() to force-close the TCP connection
+    // Close WebSocket �?use terminate() to force-close the TCP connection
     // immediately without waiting for the WebSocket close handshake.
     // ws.close() sends a close frame and waits for the server to respond;
     // if the gateway process is being killed concurrently, the handshake
@@ -729,7 +733,7 @@ export class GatewayManager extends EventEmitter {
   }
 
   /**
-   * Debounced restart — coalesces multiple rapid restart requests into a
+   * Debounced restart �?coalesces multiple rapid restart requests into a
    * single restart after `delayMs` of inactivity.  This prevents the
    * cascading stop/start cycles that occur when provider:save,
    * provider:setDefault and channel:saveConfig all fire within seconds
@@ -825,7 +829,7 @@ export class GatewayManager extends EventEmitter {
   }
 
   /**
-   * Debounced reload — coalesces multiple rapid config-change events into one
+   * Debounced reload �?coalesces multiple rapid config-change events into one
    * in-process reload when possible.
    */
   debouncedReload(delayMs?: number): void {
@@ -984,7 +988,7 @@ export class GatewayManager extends EventEmitter {
 
         logger.info('Gateway ready fallback triggered; probing RPC router before marking ready');
         
-        // 探测 RPC 路由器是否真的可用
+        // 探测 RPC 路由器是否真的可�?
         try {
           await this.rpc('system-presence', {}, GatewayManager.GATEWAY_READY_PROBE_TIMEOUT_MS);
           logger.info('Gateway ready fallback RPC router probe succeeded');
@@ -992,8 +996,8 @@ export class GatewayManager extends EventEmitter {
           this.warmupGateway();
         } catch (error) {
           logger.warn(`Gateway ready fallback RPC router probe failed: ${String(error)}`);
-          // RPC 路由器还没就绪，不设置 gatewayReady
-          // 前端会使用本地文件系统降级
+          // RPC 路由器还没就绪，不设�?gatewayReady
+          // 前端会使用本地文件系统降�?
           if (this.status.state === 'running' && !this.status.gatewayReady) {
             this.scheduleGatewayReadyFallback();
           }
@@ -1185,10 +1189,40 @@ export class GatewayManager extends EventEmitter {
     );
   }
 
+  private getExecuteAsAgentId(method: string, params?: unknown): string | null {
+    if (method !== 'chat.send' || !params || typeof params !== 'object') return null;
+    const value = (params as { executeAsAgentId?: unknown }).executeAsAgentId;
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  private async warnIfDigitalEmployeeIsolationMissing(method: string, params?: unknown): Promise<void> {
+    const executeAsAgentId = this.getExecuteAsAgentId(method, params);
+    if (!executeAsAgentId) return;
+    const isolationStatus = await inspectOpenClawDigitalEmployeeIsolation();
+    if (isolationStatus.ok) return;
+    logger.warn('[digital-employee-isolation] chat.send is executing a digital employee but the active OpenClaw runtime is missing isolation markers; execution is not blocked by policy.', {
+      executeAsAgentId,
+      openclawDir: isolationStatus.openclawDir,
+      missing: isolationStatus.missing,
+      details: isolationStatus.details,
+    });
+  }
+
   private isUserChatSend(method: string, params?: unknown): boolean {
     return method === 'chat.send'
       && !this.isWarmupChatSend(method, params)
-      && !this.isInternalToolFeedbackChatSend(method, params);
+      && !this.isInternalToolFeedbackChatSend(method, params)
+      && !this.isCronChatSend(params);
+  }
+
+  private isCronChatSend(params?: unknown): boolean {
+    if (!params || typeof params !== 'object') return false;
+    const sessionKey = (params as { sessionKey?: unknown }).sessionKey;
+    return typeof sessionKey === 'string' && (
+      sessionKey.includes(':cron:')
+      || sessionKey.includes(':cron-run:')
+      || sessionKey.includes(':scheduled-task:')
+    );
   }
 
   private hasInflightUserChatSend(): boolean {
@@ -1199,6 +1233,39 @@ export class GatewayManager extends EventEmitter {
 
   private hasActiveUserChatRun(): boolean {
     return [...this.chatRunMetrics.values()].some((run) => run.kind === 'user');
+  }
+
+  private getTrackedUserRunsForSession(sessionKey: string | undefined): Array<[string, ChatRunMetric]> {
+    const key = sessionKey?.trim();
+    if (!key) return [];
+    return [...this.chatRunMetrics.entries()]
+      .filter(([, run]) => run.kind === 'user' && run.sessionKey === key);
+  }
+
+  private settleTrackedUserRunLocally(
+    runId: string,
+    run: ChatRunMetric,
+    reason: string,
+  ): void {
+    this.clearChatRunMetricTimers(run);
+    this.chatRunMetrics.delete(runId);
+    logger.warn('[gateway:chat-run] settling tracked user run before new message', {
+      reason,
+      runId,
+      sessionKey: run.sessionKey,
+      ageSinceAcceptedMs: Date.now() - run.acceptedAt,
+      ageSinceRequestedMs: Date.now() - run.requestedAt,
+      hasFirstDelta: Boolean(run.firstDeltaAt),
+      hasFirstVisibleProgress: Boolean(run.firstVisibleProgressAt),
+    });
+    this.emit('chat:message', {
+      message: {
+        state: 'aborted',
+        runId,
+        sessionKey: run.sessionKey,
+        reason,
+      },
+    });
   }
 
   private getChatSendSessionKey(params?: unknown): string | undefined {
@@ -1700,8 +1767,78 @@ export class GatewayManager extends EventEmitter {
     return parts.length === 3 && parts[0] === 'agent' && parts[2] === 'main';
   }
 
+  /**
+   * The agent main session is also used for OpenClaw heartbeat polls. Those
+   * polls update sessions.json to `processing`, but they are internal work and
+   * their terminal chat events are intentionally suppressed before reaching the
+   * renderer. If backend-activity exposes that weak processing signal, the UI
+   * can re-adopt/keep a stale run and only clear when the user presses stop.
+   */
+  private async isLatestSessionUserTurnHeartbeat(
+    sessionKey: string,
+    sessionsJsonPath: string,
+    sessions: Record<string, { sessionFile?: unknown }>,
+  ): Promise<boolean> {
+    const rawSessionFile = sessions[sessionKey]?.sessionFile;
+    if (typeof rawSessionFile !== 'string' || !rawSessionFile.trim()) return false;
+
+    const transcriptPath = path.isAbsolute(rawSessionFile)
+      ? rawSessionFile
+      : path.join(path.dirname(sessionsJsonPath), rawSessionFile);
+
+    let raw: string;
+    try {
+      raw = await readFile(transcriptPath, 'utf8');
+    } catch {
+      return false;
+    }
+
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      let record: unknown;
+      try {
+        record = JSON.parse(lines[i]!);
+      } catch {
+        continue;
+      }
+      if (!record || typeof record !== 'object') continue;
+      const message = (record as Record<string, unknown>).message;
+      if (!message || typeof message !== 'object') continue;
+      const role = this.getMessageRole(message).toLowerCase();
+      if (role !== 'user') continue;
+      return this.isInternalHeartbeatMessage(message);
+    }
+    return false;
+  }
+
   private getGatewayProcessPid(): number {
     return this.process?.pid ?? this.status.pid ?? process.pid;
+  }
+
+  private async listAgentIds(): Promise<string[]> {
+    const agentsDir = path.join(homedir(), '.openclaw', 'agents');
+    try {
+      const entries = await readdir(agentsDir, { withFileTypes: true });
+      const ids = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+      return ids.length > 0 ? ids : ['main'];
+    } catch {
+      return ['main'];
+    }
+  }
+
+  private async isSessionLiveOnBackend(sessionKey: string, hasTrackedActiveRun: boolean): Promise<boolean> {
+    if (hasTrackedActiveRun) return true;
+
+    const [diskLive, execLive] = await Promise.all([
+      isSessionProcessingLiveOnDisk({
+        sessionKey,
+        hasTrackedActiveRun: false,
+        currentPid: this.getGatewayProcessPid(),
+      }),
+      hasActiveExecInSessionTranscript({ sessionKey }),
+    ]);
+
+    return diskLive || execLive;
   }
 
   async getSessionActivity(sessionKey: string | null | undefined): Promise<{
@@ -1727,15 +1864,17 @@ export class GatewayManager extends EventEmitter {
 
     const agentId = key.split(':')[1] || 'main';
     const sessionsJsonPath = path.join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
-    const sessionsJson = await this.readJsonSnapshot<Record<string, { status?: unknown }>>(sessionsJsonPath);
+    const sessionsJson = await this.readJsonSnapshot<Record<string, { sessionFile?: unknown; status?: unknown }>>(sessionsJsonPath);
     const status = sessionsJson.ok && sessionsJson.value[key]?.status != null
       ? String(sessionsJson.value[key].status)
       : null;
-    const processing = await isSessionProcessingLiveOnDisk({
-      sessionKey: key,
-      hasTrackedActiveRun: hasTrackedUserRun,
-      currentPid: this.getGatewayProcessPid(),
-    });
+    const internalHeartbeatOnly = !hasTrackedUserRun
+      && this.isHeartbeatSessionKey(key)
+      && sessionsJson.ok
+      && await this.isLatestSessionUserTurnHeartbeat(key, sessionsJsonPath, sessionsJson.value);
+    const processing = internalHeartbeatOnly
+      ? false
+      : hasTrackedUserRun || await this.isSessionLiveOnBackend(key, hasTrackedUserRun);
 
     return {
       sessionKey: key,
@@ -1750,19 +1889,15 @@ export class GatewayManager extends EventEmitter {
     hasBackgroundProcessing: boolean;
     processingSessionKeys: string[];
   }> {
-    const current = currentSessionKey?.trim() ?? '';
     const processingSessionKeys = new Set<string>();
 
     for (const run of this.chatRunMetrics.values()) {
-      if (run.kind !== 'user' || !run.sessionKey || run.sessionKey === current) continue;
+      if (run.kind !== 'user' || !run.sessionKey) continue;
       if (this.isHeartbeatSessionKey(run.sessionKey)) continue;
       processingSessionKeys.add(run.sessionKey);
     }
 
-    const agentIds = new Set<string>(['main']);
-    if (current.startsWith('agent:')) {
-      agentIds.add(current.split(':')[1] || 'main');
-    }
+    const agentIds = await this.listAgentIds();
 
     for (const agentId of agentIds) {
       const sessionsJsonPath = path.join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
@@ -1771,25 +1906,32 @@ export class GatewayManager extends EventEmitter {
 
       const candidateKeys: string[] = [];
       for (const [sessionKey, entry] of Object.entries(sessionsJson.value)) {
-        if (sessionKey === 'sessions' || sessionKey === current) continue;
-        if (this.isActiveSessionStatus(entry?.status) && !this.isHeartbeatSessionKey(sessionKey)) {
+        if (sessionKey === 'sessions') continue;
+        if (this.isHeartbeatSessionKey(sessionKey)) continue;
+        if (processingSessionKeys.has(sessionKey)) continue;
+        if (this.isActiveSessionStatus(entry?.status)) {
           candidateKeys.push(sessionKey);
         }
       }
 
       const liveKeys = await Promise.all(candidateKeys.map(async (sessionKey) => {
-        if (processingSessionKeys.has(sessionKey)) return null;
         const hasTracked = this.hasTrackedUserRunForSession(sessionKey);
-        const live = await isSessionProcessingLiveOnDisk({
-          sessionKey,
-          hasTrackedActiveRun: hasTracked,
-          currentPid: this.getGatewayProcessPid(),
-        });
+        const live = await this.isSessionLiveOnBackend(sessionKey, hasTracked);
         return live ? sessionKey : null;
       }));
 
       for (const sessionKey of liveKeys) {
         if (sessionKey) processingSessionKeys.add(sessionKey);
+      }
+    }
+
+    if (currentSessionKey?.trim()) {
+      const current = currentSessionKey.trim();
+      if (!this.isHeartbeatSessionKey(current)) {
+        const hasTracked = this.hasTrackedUserRunForSession(current);
+        if (hasTracked || await this.isSessionLiveOnBackend(current, hasTracked)) {
+          processingSessionKeys.add(current);
+        }
       }
     }
 
@@ -2457,6 +2599,8 @@ export class GatewayManager extends EventEmitter {
       return;
     }
 
+    await this.supersedeTrackedUserRunsBeforeChatSend(params);
+    await this.recoverStaleEmptyFinalBeforeChatSend(params);
     await this.recoverSessionTranscriptLockForChatSend(params, 'before-user-chat-send');
 
     if (this.warmupTimer) {
@@ -2535,6 +2679,57 @@ export class GatewayManager extends EventEmitter {
     }
   }
 
+  private async recoverStaleEmptyFinalBeforeChatSend(params: unknown): Promise<void> {
+    const sessionKey = this.getChatSendSessionKey(params);
+    if (!sessionKey) return;
+    const diagnostic = this.getLatestEmptyFinalDiagnostic(sessionKey);
+    if (!diagnostic) return;
+
+    const result = await this.recoverStaleSessionAfterEmptyFinal(sessionKey);
+    logger.info('[gateway:session-stale-recovery] checked before new user message', {
+      sessionKey,
+      previousRunId: diagnostic.runId,
+      recovered: result.ok ? result.recovered : false,
+      reason: result.ok ? result.reason : result.error,
+    });
+  }
+
+  private async supersedeTrackedUserRunsBeforeChatSend(params: unknown): Promise<void> {
+    const sessionKey = this.getChatSendSessionKey(params);
+    const trackedRuns = this.getTrackedUserRunsForSession(sessionKey);
+    if (!sessionKey || trackedRuns.length === 0) return;
+
+    const reason = 'superseded-by-new-user-message';
+    logger.warn('[gateway:chat-run] superseding tracked user runs before new message', {
+      reason,
+      sessionKey,
+      runs: trackedRuns.map(([runId, run]) => ({
+        runId,
+        ageSinceAcceptedMs: Date.now() - run.acceptedAt,
+        hasFirstDelta: Boolean(run.firstDeltaAt),
+        hasFirstVisibleProgress: Boolean(run.firstVisibleProgressAt),
+      })),
+    });
+
+    for (const [runId, run] of trackedRuns) {
+      try {
+        await this.rpc('sessions.abort', { key: sessionKey, runId }, 8_000);
+      } catch (error) {
+        logger.warn('[gateway:chat-run] failed to abort superseded run before new message', {
+          reason,
+          sessionKey,
+          runId,
+          error: String(error),
+        });
+      }
+      this.settleTrackedUserRunLocally(runId, run, reason);
+    }
+
+    await this.recoverSessionTranscriptLock(sessionKey, reason, {
+      allowCurrentGatewayActiveLockRecovery: true,
+    });
+  }
+
   private async recoverSessionTranscriptLockForChatSend(params: unknown, reason: string): Promise<void> {
     const sessionKey = this.getChatSendSessionKey(params);
     await this.recoverSessionTranscriptLock(sessionKey, reason);
@@ -2543,6 +2738,7 @@ export class GatewayManager extends EventEmitter {
   private async recoverSessionTranscriptLock(
     sessionKey: string | undefined,
     reason: string,
+    options: { allowCurrentGatewayActiveLockRecovery?: boolean } = {},
   ): Promise<SessionTranscriptLockRecoveryResult | undefined> {
     if (!sessionKey) return undefined;
     const hasTrackedActiveRun = [...this.chatRunMetrics.values()].some(
@@ -2563,6 +2759,7 @@ export class GatewayManager extends EventEmitter {
         currentPid: this.process?.pid ?? this.status.pid ?? process.pid,
         reason,
         logger,
+        allowCurrentGatewayActiveLockRecovery: options.allowCurrentGatewayActiveLockRecovery,
       });
       if (!result.recovered && result.reason !== 'lock-missing') {
         logger.info('[gateway:session-lock-recovery] skipped', {
@@ -2600,6 +2797,7 @@ export class GatewayManager extends EventEmitter {
     const effectiveParams = method === 'chat.send'
       ? await enrichChatSendParams(params)
       : params;
+    await this.warnIfDigitalEmployeeIsolationMissing(method, effectiveParams);
     await this.prepareForUserChatSend(method, effectiveParams);
     const rpcStart = Date.now();
     logger.info(`[rpc] ${method} started (timeout=${timeoutMs}ms)`);
@@ -2682,8 +2880,8 @@ export class GatewayManager extends EventEmitter {
         rpcDurationMs: duration,
       });
       this.recordRpcSuccess();
-      // Memory Doctor 返回值可能包含长期记忆正文。所有 Main 可控的 RPC
-      // 出口统一二次净化，避免旧 Memory 或 Runtime 侧写入绕过最新规则。
+      // Memory Doctor 返回值可能包含长期记忆正文。所�?Main 可控�?RPC
+      // 出口统一二次净化，避免�?Memory �?Runtime 侧写入绕过最新规则�?
       return protectMemoryRpcOutput(method, result);
     }).catch((error) => {
       const duration = Date.now() - rpcStart;
@@ -2779,7 +2977,7 @@ export class GatewayManager extends EventEmitter {
     await unloadLaunchctlGatewayService();
     this.processExitCode = null;
 
-    // Per-process dedup map for stderr lines — resets on each new spawn.
+    // Per-process dedup map for stderr lines �?resets on each new spawn.
     const stderrDedup = new Map<string, number>();
 
     const { child, lastSpawnSummary } = await launchGatewayProcess({
@@ -2839,13 +3037,13 @@ export class GatewayManager extends EventEmitter {
 
         // Always attempt reconnect from process exit.  scheduleReconnect()
         // internally checks shouldReconnect and reconnect-timer guards, so
-        // calling it unconditionally is safe — intentional stop() calls set
+        // calling it unconditionally is safe �?intentional stop() calls set
         // shouldReconnect=false which makes scheduleReconnect() no-op.
         //
         // On Windows, the WS close handler intentionally skips reconnect
         // (to avoid racing with this exit handler).  However, WS close
         // fires *before* process exit and sets state='stopped', which
-        // previously caused this handler to also skip reconnect — leaving
+        // previously caused this handler to also skip reconnect �?leaving
         // the gateway permanently dead with no recovery path.
         this.scheduleReconnect();
       },
@@ -2905,7 +3103,7 @@ export class GatewayManager extends EventEmitter {
           //
           // Exception: code=1012 means the Gateway is performing an in-process
           // restart (e.g. config reload).  The UtilityProcess stays alive, so
-          // `onExit` will never fire — we MUST reconnect from the WS close path.
+          // `onExit` will never fire �?we MUST reconnect from the WS close path.
           if (process.platform !== 'win32' || closeCode === 1012) {
             this.scheduleReconnect();
           }

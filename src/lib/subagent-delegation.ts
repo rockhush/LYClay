@@ -1,6 +1,6 @@
 import { extractText, extractToolUse } from '@/pages/Chat/message-utils';
 import type { RawMessage } from '@/stores/chat';
-import { hasActiveChildDelegations } from '@/lib/subagent-delegation-watch';
+import { hasActiveChildDelegations, isChildDelegationStillActive } from '@/lib/subagent-delegation-watch';
 
 export interface SubagentCompletionInfo {
   sessionKey: string;
@@ -39,6 +39,33 @@ function isToolResultMessage(message: RawMessage | undefined): boolean {
   return role === 'toolresult' || role === 'tool_result' || role === 'tool';
 }
 
+/** Gateway run that delivers the parent's wrap-up after a delegated child completes. */
+export function isSubagentDelegationAnnounceRun(runId: string): boolean {
+  return runId.startsWith('announce:') && runId.includes(':subagent:');
+}
+
+/**
+ * Recover the child session key embedded in an auto-announce wrap-up run id.
+ *
+ * Format: `announce:v1:<childSessionKey>:<gatewayRunId>` where `childSessionKey`
+ * is itself colon-delimited (e.g. `agent:main:subagent:<uuid>`) and the trailing
+ * segment is the child's gateway run id. The child that TRIGGERS the parent's
+ * announce wrap-up never gets an `[Internal task completion event]` written to
+ * the parent transcript (only later-finishing siblings do), so this run id is
+ * the only signal that that child has finished — without it, its execution-graph
+ * branch is stranded "running" forever.
+ */
+export function parseChildSessionKeyFromAnnounceRun(runId: string): string | null {
+  if (!isSubagentDelegationAnnounceRun(runId)) return null;
+  const withoutPrefix = runId.replace(/^announce:v\d+:/, '');
+  const parts = withoutPrefix.split(':');
+  const subagentIdx = parts.indexOf('subagent');
+  // Need `subagent`, the child id, and the trailing gateway run id.
+  if (subagentIdx < 0 || parts.length < subagentIdx + 3) return null;
+  const childKey = parts.slice(0, subagentIdx + 2).join(':');
+  return childKey || null;
+}
+
 export function parseAgentIdFromSessionKey(sessionKey: string): string | null {
   const parts = sessionKey.split(':');
   if (parts.length < 2 || parts[0] !== 'agent') return null;
@@ -72,7 +99,69 @@ export function collectCompletedSubagentSessionKeys(messages: RawMessage[]): Set
   return keys;
 }
 
-/** True while any spawned child is still in flight (transcript and/or gateway). */
+/** A committed tool result exists for the spawn at `spawnIndex` (matching `toolId` when present). */
+function spawnResultCommitted(
+  messages: readonly RawMessage[],
+  spawnIndex: number,
+  toolId: string | null,
+): boolean {
+  for (let j = spawnIndex + 1; j < messages.length; j += 1) {
+    const candidate = messages[j];
+    if (!isToolResultMessage(candidate)) continue;
+    if (toolId && candidate.toolCallId && candidate.toolCallId !== toolId) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Spawn was called but its tool result has not been committed to the transcript
+ * yet — the brief streaming gap before history commits.
+ *
+ * IMPORTANT: a spawn whose result HAS landed (even a fire-and-forget `mode:run`
+ * `{status:'accepted'}` with no `childSessionKey`, or a timed-out child) is NOT
+ * unresolved. Such children are tracked via the gateway's processing keys, never
+ * via this transcript signal. Treating an unbindable-but-committed spawn as
+ * "unresolved" would strand the parent turn in "thinking" forever, hiding the
+ * final reply until the user manually aborts.
+ */
+export function hasUnresolvedSpawnDelegation(messages: readonly RawMessage[]): boolean {
+  const completed = collectCompletedSubagentSessionKeys([...messages]);
+  const bindings = collectChildDelegationBindings([...messages], completed);
+  const boundToolIds = new Set(
+    bindings.map((binding) => binding.spawnToolCallId).filter((id): id is string => Boolean(id)),
+  );
+  const boundMessageIndexes = new Set(bindings.map((binding) => binding.spawnMessageIndex));
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    if (!message || message.role !== 'assistant') continue;
+    for (const tool of extractToolUse(message)) {
+      if (!/sessions_spawn/i.test(tool.name)) continue;
+      const toolId = tool.id || null;
+      if (toolId && boundToolIds.has(toolId)) continue;
+      if (!toolId && boundMessageIndexes.has(i)) continue;
+      if (spawnResultCommitted(messages, i, toolId)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Gateway-only idle check for parent session + spawned children (ignores stale backend snapshots). */
+export function isGatewayIdleForSpawnedChildren(
+  sessionKey: string,
+  messages: RawMessage[],
+  processingSessionKeys: readonly string[],
+): boolean {
+  const processing = new Set(processingSessionKeys);
+  if (processing.has(sessionKey)) return false;
+  const completed = collectCompletedSubagentSessionKeys(messages);
+  const bindings = collectChildDelegationBindings(messages, completed);
+  return !bindings.some((binding) => processing.has(binding.childSessionKey));
+}
+
+/** True while any spawned child is still in flight on the gateway. */
 export function isWaitingOnSubagentDelegation(
   messages: RawMessage[],
   processingSessionKeys: readonly string[] = [],
@@ -81,6 +170,32 @@ export function isWaitingOnSubagentDelegation(
   const bindings = collectChildDelegationBindings(messages, completed);
   if (bindings.length === 0) return false;
   return hasActiveChildDelegations(bindings, processingSessionKeys);
+}
+
+/**
+ * Parent turn must stay open: pending child in transcript, gateway processing,
+ * or a sessions_spawn still visible in the live stream before history commits.
+ */
+export function hasInFlightSubagentSignals(
+  messages: RawMessage[],
+  options?: {
+    streamingMessage?: unknown | null;
+    processingSessionKeys?: readonly string[];
+  },
+): boolean {
+  const processingSessionKeys = options?.processingSessionKeys ?? [];
+  if (hasUnresolvedSpawnDelegation(messages)) return true;
+  if (isWaitingOnSubagentDelegation(messages, processingSessionKeys)) return true;
+
+  const completed = collectCompletedSubagentSessionKeys(messages);
+  if (hasPendingChildDelegation(messages, completed, processingSessionKeys)) return true;
+
+  if (options?.streamingMessage && typeof options.streamingMessage === 'object') {
+    const tools = extractToolUse(options.streamingMessage as RawMessage);
+    if (tools.some((tool) => /sessions_spawn/i.test(tool.name))) return true;
+  }
+
+  return false;
 }
 
 /** All spawn → child-session bindings in transcript order. */
@@ -133,9 +248,10 @@ export function collectChildDelegationBindings(
 export function hasPendingChildDelegation(
   messages: RawMessage[],
   completedChildSessionKeys: ReadonlySet<string>,
+  processingSessionKeys: readonly string[] = [],
 ): boolean {
-  return collectChildDelegationBindings(messages, completedChildSessionKeys)
-    .some((binding) => !binding.completed);
+  const bindings = collectChildDelegationBindings(messages, completedChildSessionKeys);
+  return hasActiveChildDelegations(bindings, processingSessionKeys);
 }
 
 export function collectPendingChildDelegationBindings(
@@ -160,7 +276,7 @@ export function findInFlightChildDelegation(
   const processing = new Set(processingSessionKeys);
   for (let i = bindings.length - 1; i >= 0; i -= 1) {
     const binding = bindings[i]!;
-    if (!binding.completed || processing.has(binding.childSessionKey)) {
+    if (isChildDelegationStillActive(binding, processing)) {
       return {
         label: binding.label,
         childSessionKey: binding.childSessionKey,

@@ -5,12 +5,15 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NODE_VERSION = '22.19.0';
+// 本地离线包优先目录 (D:\lycode\packages)
+const LOCAL_PACKAGES_DIR = path.resolve('D:\\lycode\\packages\\node');
+const PACKAGES_DIR = path.join(ROOT_DIR, 'packages', 'node');
 const OUTPUT_BASE = path.join(ROOT_DIR, 'resources', 'bin');
 
 function buildDownloadUrls(filename) {
   return [
-    `https://nodejs.org/dist/v${NODE_VERSION}/${filename}`,
     `https://npmmirror.com/mirrors/node/v${NODE_VERSION}/${filename}`,
+    `https://nodejs.org/dist/v${NODE_VERSION}/${filename}`,
   ];
 }
 
@@ -19,7 +22,10 @@ async function downloadWithFallback(urls, archivePath) {
   for (const downloadUrl of urls) {
     try {
       echo`⬇️ Downloading: ${downloadUrl}`;
-      const response = await fetch(downloadUrl);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      const response = await fetch(downloadUrl, { signal: controller.signal });
+      clearTimeout(timeout);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} ${response.statusText}`);
       }
@@ -49,6 +55,19 @@ const PLATFORM_GROUPS = {
   win: ['win32-x64', 'win32-arm64'],
 };
 
+function resolveArchive(filename) {
+  // 1. D:\lycode\packages\node\ 全局离线目录 (优先)
+  const localPath = path.join(LOCAL_PACKAGES_DIR, filename);
+  if (fs.existsSync(localPath)) return localPath;
+  // 2. packages/node/ 项目内目录
+  const pkgPath = path.join(PACKAGES_DIR, filename);
+  if (fs.existsSync(pkgPath)) return pkgPath;
+  // 3. 项目根目录 (兼容旧方式)
+  const rootPath = path.join(ROOT_DIR, filename);
+  if (fs.existsSync(rootPath)) return rootPath;
+  return null;
+}
+
 async function setupTarget(id) {
   const target = TARGETS[id];
   if (!target) {
@@ -58,7 +77,6 @@ async function setupTarget(id) {
 
   const targetDir = path.join(OUTPUT_BASE, id);
   const tempDir = path.join(ROOT_DIR, 'temp_node_extract');
-  const archivePath = path.join(ROOT_DIR, target.filename);
   const downloadUrls = buildDownloadUrls(target.filename);
 
   echo(chalk.blue`\n📦 Setting up Node.js for ${id}...`);
@@ -79,7 +97,16 @@ async function setupTarget(id) {
   await fs.ensureDir(tempDir);
 
   try {
-    await downloadWithFallback(downloadUrls, archivePath);
+    // Use pre-downloaded archive if present, otherwise download from network
+    const localArchive = resolveArchive(target.filename);
+    if (localArchive) {
+      echo`📁 Using local archive: ${localArchive}`;
+      var archivePath = localArchive;
+    } else {
+      const dlPath = path.join(ROOT_DIR, target.filename);
+      await downloadWithFallback(downloadUrls, dlPath);
+      archivePath = dlPath;
+    }
 
     echo`📂 Extracting...`;
     if (os.platform() === 'win32') {
@@ -124,7 +151,14 @@ async function setupTarget(id) {
 
     echo(chalk.green`✅ Success: ${outputNode} + npm-cli.js`);
   } finally {
-    await fs.remove(archivePath);
+    // Cleanup — only delete temp downloads in project root, not packages/ or D:\lycode\packages\ files
+    const rootArchive = path.join(ROOT_DIR, target.filename);
+    if (await fs.pathExists(rootArchive)) {
+      await fs.remove(rootArchive);
+    }
+    // Also clean up the LOCAL_PACKAGES_DIR download if accidentally placed there as temp
+    const localTempArchive = path.join(LOCAL_PACKAGES_DIR, target.filename);
+    // (intentionally kept — it's the permanent local cache)
     await fs.remove(tempDir);
   }
 }

@@ -14,12 +14,12 @@ const OUTPUT_ROOT = join(ROOT, 'build', 'preinstalled-skills');
 const TMP_ROOT = join(ROOT, 'build', '.tmp-preinstalled-skills');
 const DEFAULT_GITHUB_BASE_URL = 'https://github.com';
 const DEFAULT_GIT_REMOTE_TEMPLATES = [
-  'https://github.com/{repo}.git',
-  'https://gitclone.com/github.com/{repo}.git',
   'https://hub.gitmirror.com/https://github.com/{repo}.git',
-  'https://gh-proxy.com/https://github.com/{repo}.git',
-  'https://gh.llkk.cc/https://github.com/{repo}.git',
   'https://ghfast.top/https://github.com/{repo}.git',
+  'https://gh.llkk.cc/https://github.com/{repo}.git',
+  'https://gh-proxy.com/https://github.com/{repo}.git',
+  'https://gitclone.com/github.com/{repo}.git',
+  'https://github.com/{repo}.git',
 ];
 const execFileAsync = promisify(execFile);
 

@@ -15,11 +15,12 @@ import {
   isAbortErrorMessage,
   isToolOnlyMessage,
   isToolResultRole,
-  isInternalMessageText,
+  shouldSuppressAssistantStreamingText,
   isUserSecurityDenialMessage,
   buildSecurityCancelNotice,
   isSuppressedRunError,
   isRecoverableRuntimeError,
+  isFatalRuntimeError,
   resolveRunFailureErrorMessage,
   shouldTreatAbortAsUserStop,
   truncateRunErrorMessage,
@@ -30,7 +31,10 @@ import {
   snapshotStreamingAssistantMessage,
   upsertToolStatuses,
 } from './helpers';
-import { buildClearedActiveRunPatch, shouldKeepRunActiveAfterAssistantFinal } from './run-lifecycle';
+import { buildClearedActiveRunPatch, findLatestVisibleUserIndex, shouldKeepRunActiveAfterAssistantFinal, shouldSilentlyFinalizeRunOnAssistantFinal } from './run-lifecycle';
+import { isSubagentDelegationAnnounceRun, parseChildSessionKeyFromAnnounceRun } from '@/lib/subagent-delegation';
+import { deferClearUserTurnForOpenDelegation, tryFinalizeUserTurnAfterAssistantFinal, trySyncClearAnnounceWrapUp } from './finalize-turn-bridge';
+import { hasOpenDelegatedBackendWork } from './user-turn-lifecycle';
 import { extractInvokedSkillIds } from './usage-report-extract';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
 
@@ -324,6 +328,20 @@ export function handleRuntimeEventState(
         return;
       }
 
+      // Record the child that triggered this announce wrap-up. Its completion is
+      // encoded only in the run id (never written to the parent transcript), so
+      // without this its execution-graph branch would stay stuck "running".
+      if (runId && isSubagentDelegationAnnounceRun(runId)) {
+        const announcedChildKey = parseChildSessionKeyFromAnnounceRun(runId);
+        if (announcedChildKey && !get().announcedChildSessionKeys.includes(announcedChildKey)) {
+          set((s) => (
+            s.announcedChildSessionKeys.includes(announcedChildKey)
+              ? {}
+              : { announcedChildSessionKeys: [...s.announcedChildSessionKeys, announcedChildKey] }
+          ));
+        }
+      }
+
       const { currentSessionKey, sessionStreamingStates } = get();
       const evtSessionKey = event.sessionKey != null ? String(event.sessionKey) : null;
       const inferredSessionKey = (() => {
@@ -418,7 +436,7 @@ export function handleRuntimeEventState(
                 return currentStream;
               }
               const msgContent = getMessageText(msgObj.content);
-              if (msgContent.trim() && isInternalMessageText(msgContent)) {
+              if (msgContent.trim() && shouldSuppressAssistantStreamingText(msgContent)) {
                 return null;
               }
             }
@@ -443,6 +461,7 @@ export function handleRuntimeEventState(
         case 'final': {
           clearErrorRecoveryTimer();
           if (get().error) set({ error: null });
+          if (get().runError) set({ runError: null });
           // Message complete - add to history and clear streaming
           const finalMsg = event.message as RawMessage | undefined;
           if (!isForegroundEvent) {
@@ -484,8 +503,23 @@ export function handleRuntimeEventState(
               break;
             }
 
-            const finalMsgContent = getMessageText(normalizedFinalMessage.content);
-            if (finalMsgContent.trim() && isInternalMessageText(finalMsgContent)) {
+            if (shouldSilentlyFinalizeRunOnAssistantFinal(normalizedFinalMessage)) {
+              const bgMessages = prev.messagesSnapshot ?? [];
+              if (hasOpenDelegatedBackendWork(
+                bgMessages,
+                get().gatewayBackgroundActivity,
+                get().sessionBackendActivity,
+              )) {
+                patchBackgroundSessionState({
+                  streamingText: '',
+                  streamingMessage: null,
+                  sending: true,
+                  activeRunId: prev.activeRunId || runId || null,
+                  pendingFinal: true,
+                });
+                clearHistoryPoll();
+                break;
+              }
               patchBackgroundSessionState({
                 streamingText: '',
                 streamingMessage: prev.streamingMessage,
@@ -532,9 +566,9 @@ export function handleRuntimeEventState(
               messagesSnapshot: nextSnapshot,
               streamingText: '',
               streamingMessage: null,
-              sending: hasOutput ? false : prev.sending,
-              activeRunId: hasOutput ? null : prev.activeRunId,
-              pendingFinal: hasOutput ? false : true,
+              sending: true,
+              activeRunId: prev.activeRunId || runId || null,
+              pendingFinal: true,
               streamingTools,
               pendingToolImages: [],
             });
@@ -587,11 +621,23 @@ export function handleRuntimeEventState(
               clearHistoryPoll();
               break;
             }
-            const finalMsgContent = getMessageText(normalizedFinalMessage.content);
-            if (finalMsgContent.trim() && isInternalMessageText(finalMsgContent)) {
-              set({
-                ...buildClearedActiveRunPatch(),
-                runError: null,
+            if (shouldSilentlyFinalizeRunOnAssistantFinal(normalizedFinalMessage)) {
+              if (!isSubagentDelegationAnnounceRun(runId)
+                && deferClearUserTurnForOpenDelegation(get, set, {
+                sessionKey: targetSessionKey,
+                runId,
+              })) {
+                clearHistoryPoll();
+                void get().loadHistory(true, { force: true });
+                break;
+              }
+              if (isSubagentDelegationAnnounceRun(runId)) {
+                trySyncClearAnnounceWrapUp(get, set, { sessionKey: targetSessionKey, runId });
+              }
+              void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
+                sessionKey: targetSessionKey,
+                runId,
+                terminalMessage: normalizedFinalMessage,
               });
               clearHistoryPoll();
               void get().loadHistory(true, { force: true });
@@ -697,9 +743,9 @@ export function handleRuntimeEventState(
                 } : {
                   streamingText: '',
                   streamingMessage: null,
-                  sending: hasOutput ? false : s.sending,
-                  activeRunId: hasOutput ? null : s.activeRunId,
-                  pendingFinal: hasOutput ? false : true,
+                  sending: s.sending,
+                  activeRunId: s.activeRunId,
+                  pendingFinal: true,
                   streamingTools,
                   ...clearPendingImages,
                 };
@@ -716,9 +762,9 @@ export function handleRuntimeEventState(
                 messages: [...s.messages, msgWithImages],
                 streamingText: '',
                 streamingMessage: null,
-                sending: hasOutput ? false : s.sending,
-                activeRunId: hasOutput ? null : s.activeRunId,
-                pendingFinal: hasOutput ? false : true,
+                sending: s.sending,
+                activeRunId: s.activeRunId,
+                pendingFinal: true,
                 streamingTools,
                 runError: null,
                 ...clearPendingImages,
@@ -729,9 +775,15 @@ export function handleRuntimeEventState(
             // the normalized payload so usage / tool_use blocks are stable.
             reportUsageFromFinalAssistant(normalizedFinalMessage, runId);
 
-            // After the final response, quietly reload history to surface all intermediate
-            // tool-use turns (thinking + tool blocks) from the Gateway's authoritative record.
-            if (!keepRunActiveAfterFinal) {
+            if (!keepRunActiveAfterFinal || isSubagentDelegationAnnounceRun(runId)) {
+              if (isSubagentDelegationAnnounceRun(runId)) {
+                trySyncClearAnnounceWrapUp(get, set, { sessionKey: targetSessionKey, runId });
+              }
+              void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
+                sessionKey: targetSessionKey,
+                runId,
+                terminalMessage: normalizedFinalMessage,
+              });
               clearHistoryPoll();
               void get().loadHistory(true);
               const pendingPlan = getPendingComplexTaskPlan(get().currentSessionKey);
@@ -772,6 +824,7 @@ export function handleRuntimeEventState(
           const summary = cleanupSucceeded === false
             ? `${toolName} 调用超时，底层资源清理失败；已反馈给模型换一种方式处理。`
             : `${toolName} 调用超时；已反馈给模型换一种方式处理。`;
+          console.warn(`[chat.tool_timeout] ${summary}`, { runId, toolName, cleanupSucceeded });
 
           if (isForegroundEvent) {
             set((s) => {
@@ -781,7 +834,7 @@ export function handleRuntimeEventState(
                 messages: timeoutMessage
                   ? [...s.messages, ...snapshotMsgs, timeoutMessage]
                   : [...s.messages, ...snapshotMsgs],
-                streamingText: summary,
+                streamingText: '',
                 streamingMessage: null,
                 pendingFinal: true,
                 runError: null,
@@ -804,7 +857,7 @@ export function handleRuntimeEventState(
               : [...currentMessages, ...snapshotMsgs];
             patchBackgroundSessionState({
               messagesSnapshot: nextMessages,
-              streamingText: summary,
+              streamingText: '',
               streamingMessage: null,
               pendingFinal: true,
               runError: null,
@@ -905,45 +958,93 @@ export function handleRuntimeEventState(
             }));
           }
 
-          set({
-            error: displayError,
-            runError: displayError,
-            streamingText: '',
-            streamingMessage: null,
-            streamingTools: [],
-            pendingFinal: false,
-            pendingToolImages: [],
-            ...(isRecoverableRuntimeError(errorMsg) ? {} : {
+          // 可恢复错误（terminated / rate limit / 502 / timeout 等）Gateway 会
+          // 内部重试恢复，不应立即展示 UI 错误栏。只清理 streaming 状态。
+          if (isRecoverableRuntimeError(errorMsg)) {
+            set({
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
+            });
+            if (wasSending) {
+              clearErrorRecoveryTimer();
+              const ERROR_RECOVERY_GRACE_MS = 5_000;
+              setErrorRecoveryTimer(setTimeout(() => {
+                setErrorRecoveryTimer(null);
+                const state = get();
+                if (state.sending && !state.streamingMessage) {
+                  clearHistoryPoll();
+                  set({
+                    sending: false,
+                    activeRunId: null,
+                    activeTool: null,
+                    lastUserMessageAt: null,
+                  });
+                  state.loadHistory(true);
+                }
+              }, ERROR_RECOVERY_GRACE_MS));
+            } else {
+              clearHistoryPoll();
+              set({ sending: false, activeRunId: null, lastUserMessageAt: null });
+            }
+            break;
+          }
+
+          // 只有真正阻塞任务继续的致命错误才展示给用户，
+          // 其他一切运行时错误只记日志，避免干扰用户体验。
+          if (isFatalRuntimeError(rawError)) {
+            const userIdx2 = findLatestVisibleUserIndex(get().messages);
+            const hasReply = userIdx2 >= 0
+              && get().messages.slice(userIdx2 + 1).some(
+                (m) => m.role === 'assistant' && hasVisibleAssistantContent(m),
+              );
+            if (hasReply) {
+              console.warn('[chat.error-suppressed] 任务已有回复，跳过致命错误展示', {
+                error: rawError,
+                runId,
+              });
+              set({
+                streamingText: '',
+                streamingMessage: null,
+                streamingTools: [],
+                pendingFinal: false,
+                pendingToolImages: [],
+                sending: false,
+                activeRunId: null,
+                lastUserMessageAt: null,
+              });
+              break;
+            }
+            set({
+              error: displayError,
+              runError: displayError,
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
               sending: false,
               activeRunId: null,
               lastUserMessageAt: null,
               runAborted: isAbortErrorMessage(rawError),
-            }),
-          });
-
-          if (wasSending && isRecoverableRuntimeError(errorMsg)) {
-            clearErrorRecoveryTimer();
-            const ERROR_RECOVERY_GRACE_MS = 5_000;
-            setErrorRecoveryTimer(setTimeout(() => {
-              setErrorRecoveryTimer(null);
-              const state = get();
-              if (state.sending && !state.streamingMessage) {
-                clearHistoryPoll();
-                set({
-                  sending: false,
-                  activeRunId: null,
-                  activeTool: null,
-                  lastUserMessageAt: null,
-                });
-                state.loadHistory(true);
-              }
-            }, ERROR_RECOVERY_GRACE_MS));
-          } else if (wasSending) {
-            clearHistoryPoll();
-            void get().loadHistory(true, { force: true });
+            });
           } else {
-            clearHistoryPoll();
-            set({ sending: false, activeRunId: null, lastUserMessageAt: null });
+            console.warn('[chat.error-suppressed] 非致命错误，跳过展示', {
+              error: rawError,
+              runId,
+            });
+            set({
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
+              sending: false,
+              activeRunId: null,
+              lastUserMessageAt: null,
+            });
           }
           break;
         }

@@ -147,6 +147,104 @@ describe('GatewayManager empty final diagnostics', () => {
     );
   });
 
+  it('supersedes a tracked user run before sending another message in the same session', async () => {
+    const { GatewayManager } = await import('@electron/gateway/manager');
+    const manager = new GatewayManager();
+    const sessionKey = 'agent:main:session-123';
+    const runId = 'run-stale';
+    const rpc = vi.fn(async () => ({ ok: true }));
+    const recoverSessionTranscriptLock = vi.fn(async () => ({
+      recovered: true,
+      lockPath: '/tmp/session.jsonl.lock',
+      sessionFile: '/tmp/session.jsonl',
+      lockAgeMs: 60_000,
+    }));
+    const emitted: unknown[] = [];
+    manager.on('chat:message', (event) => emitted.push(event));
+    (manager as unknown as { rpc: typeof rpc }).rpc = rpc;
+    (manager as unknown as {
+      recoverSessionTranscriptLock: typeof recoverSessionTranscriptLock;
+    }).recoverSessionTranscriptLock = recoverSessionTranscriptLock;
+
+    (manager as unknown as {
+      chatRunMetrics: Map<string, Record<string, unknown>>;
+      prepareForUserChatSend: (method: string, params?: unknown) => Promise<void>;
+    }).chatRunMetrics.set(runId, {
+      kind: 'user',
+      sessionKey,
+      requestedAt: Date.now() - 70_000,
+      acceptedAt: Date.now() - 60_000,
+      rpcDurationMs: 10,
+      firstDeltaAt: Date.now() - 59_000,
+    });
+
+    await (manager as unknown as {
+      prepareForUserChatSend: (method: string, params?: unknown) => Promise<void>;
+    }).prepareForUserChatSend('chat.send', { sessionKey, message: 'next', idempotencyKey: 'next-1' });
+
+    expect(rpc).toHaveBeenCalledWith('sessions.abort', { key: sessionKey, runId }, 8_000);
+    expect(manager.hasTrackedUserRunForSession(sessionKey)).toBe(false);
+    expect(recoverSessionTranscriptLock).toHaveBeenCalledWith(
+      sessionKey,
+      'superseded-by-new-user-message',
+      { allowCurrentGatewayActiveLockRecovery: true },
+    );
+    expect(recoverSessionTranscriptLock).toHaveBeenCalledWith(sessionKey, 'before-user-chat-send');
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          state: 'aborted',
+          runId,
+          sessionKey,
+          reason: 'superseded-by-new-user-message',
+        }),
+      }),
+    ]);
+  });
+
+  it('recovers a cached empty-final diagnostic before sending another message in the same session', async () => {
+    const { GatewayManager } = await import('@electron/gateway/manager');
+    const manager = new GatewayManager();
+    const sessionKey = 'agent:main:session-123';
+    const recoverStaleSessionAfterEmptyFinal = vi.fn(async () => ({
+      ok: true,
+      recovered: true,
+      sessionKey,
+      previousStatus: 'done',
+      nextStatus: 'stale-recovered',
+      removedLockPath: null,
+      reason: 'stale-empty-final',
+    }));
+    const recoverSessionTranscriptLock = vi.fn(async () => ({
+      recovered: false,
+      reason: 'lock-missing',
+    }));
+
+    (manager as unknown as {
+      emptyFinalDiagnosticsBySession: Map<string, Record<string, unknown>>;
+      recoverStaleSessionAfterEmptyFinal: typeof recoverStaleSessionAfterEmptyFinal;
+      recoverSessionTranscriptLock: typeof recoverSessionTranscriptLock;
+      prepareForUserChatSend: (method: string, params?: unknown) => Promise<void>;
+    }).emptyFinalDiagnosticsBySession.set(sessionKey, {
+      runId: 'run-empty-final',
+      sessionKey,
+      recordedAt: Date.now() - 5_000,
+    });
+    (manager as unknown as {
+      recoverStaleSessionAfterEmptyFinal: typeof recoverStaleSessionAfterEmptyFinal;
+    }).recoverStaleSessionAfterEmptyFinal = recoverStaleSessionAfterEmptyFinal;
+    (manager as unknown as {
+      recoverSessionTranscriptLock: typeof recoverSessionTranscriptLock;
+    }).recoverSessionTranscriptLock = recoverSessionTranscriptLock;
+
+    await (manager as unknown as {
+      prepareForUserChatSend: (method: string, params?: unknown) => Promise<void>;
+    }).prepareForUserChatSend('chat.send', { sessionKey, message: 'continue', idempotencyKey: 'next-1' });
+
+    expect(recoverStaleSessionAfterEmptyFinal).toHaveBeenCalledWith(sessionKey);
+    expect(recoverSessionTranscriptLock).toHaveBeenCalledWith(sessionKey, 'before-user-chat-send');
+  });
+
   it('aborts tracked user chat runs when the gateway stops', async () => {
     const { GatewayManager } = await import('@electron/gateway/manager');
     const manager = new GatewayManager();

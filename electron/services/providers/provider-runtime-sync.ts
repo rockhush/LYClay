@@ -7,6 +7,9 @@ import type { ProviderConfig } from '../../utils/secure-storage';
 import { getAllProviders, getApiKey, getDefaultProvider, getProvider } from '../../utils/secure-storage';
 import { getProviderConfig, getProviderDefaultModel } from '../../utils/provider-registry';
 import {
+  ensureAgentContextTokensCapForLargeModels,
+  ensureAgentModelsJsonValid,
+  ensureModelCatalogContextTokensForLargeModels,
   removeProviderFromOpenClaw,
   removeProviderKeyFromOpenClaw,
   saveOAuthTokenToOpenClaw,
@@ -23,6 +26,8 @@ import { getSetting } from '../../utils/store';
 import { LY_AUTO_PROVIDER_ID } from '../../shared/providers/types';
 import { proxyAwareFetch } from '../../utils/proxy-fetch';
 import { buildLyAutoModelOverrides, alignVllmCompilePluginState } from './ly-auto-compile-parity';
+import { isDeepSeekV4ModelId, sanitizeOpenClawModelInput, syncOpenClawModelCatalogEntry } from './known-model-capabilities';
+import { getOpenClawProviderKeyForType } from '../../utils/provider-keys';
 
 const GOOGLE_OAUTH_RUNTIME_PROVIDER = 'google-gemini-cli';
 const GOOGLE_OAUTH_DEFAULT_MODEL_REF = `${GOOGLE_OAUTH_RUNTIME_PROVIDER}/gemini-3-pro-preview`;
@@ -53,13 +58,18 @@ function withOpenAICompletionsStreamingCompat(
 
 function buildCustomOpenAICompletionsModels(
   modelId: string,
+  baseUrl?: string,
   registryModel?: Record<string, unknown>,
 ): Array<Record<string, unknown> & { id: string; name: string }> {
-  return [withOpenAICompletionsStreamingCompat({
-    ...(registryModel ?? {}),
-    id: modelId,
-    name: typeof registryModel?.name === 'string' ? registryModel.name : modelId,
-  }) as Record<string, unknown> & { id: string; name: string }];
+  return [syncOpenClawModelCatalogEntry(
+    modelId,
+    withOpenAICompletionsStreamingCompat({
+      ...(registryModel ?? {}),
+      id: modelId,
+      name: typeof registryModel?.name === 'string' ? registryModel.name : modelId,
+    }),
+    { baseUrl },
+  ) as Record<string, unknown> & { id: string; name: string }];
 }
 
 async function fetchNginxModelOverrides(baseUrl: string): Promise<Record<string, unknown> | null> {
@@ -143,25 +153,7 @@ function canHotUpdateGateway(gatewayManager?: GatewayManager): boolean {
   );
 }
 
-export function getOpenClawProviderKey(type: string, providerId: string): string {
-  if (isUnregisteredProviderType(type)) {
-    // If the providerId is already a runtime key (e.g. re-seeded from openclaw.json
-    // as "custom-XXXXXXXX"), return it directly to avoid double-hashing.
-    const prefix = `${type}-`;
-    if (providerId.startsWith(prefix)) {
-      const tail = providerId.slice(prefix.length);
-      if (tail.length === 8 && !tail.includes('-')) {
-        return providerId;
-      }
-    }
-    const suffix = providerId.replace(/-/g, '').slice(0, 8);
-    return `${type}-${suffix}`;
-  }
-  if (type === 'minimax-portal-cn') {
-    return 'minimax-portal';
-  }
-  return type;
-}
+export const getOpenClawProviderKey = getOpenClawProviderKeyForType;
 
 async function resolveRuntimeProviderKey(config: ProviderConfig): Promise<string> {
   const account = await getProviderAccount(config.id);
@@ -317,6 +309,30 @@ export async function syncAllProviderAuthToRuntime(): Promise<void> {
   } catch (err) {
     logger.warn('[provider-runtime] Failed to sync per-agent model registries during bulk sync:', err);
   }
+
+  try {
+    const [catalogAligned, modelsJsonAligned] = await Promise.all([
+      ensureModelCatalogContextTokensForLargeModels(),
+      ensureAgentModelsJsonValid(),
+    ]);
+    if (catalogAligned) {
+      logger.info('[provider-runtime] Aligned models.providers.*.contextTokens for large-context models');
+    }
+    if (modelsJsonAligned) {
+      logger.info('[provider-runtime] Repaired agent models.json schema (input modalities / DeepSeek caps)');
+    }
+  } catch (err) {
+    logger.warn('[provider-runtime] Failed to align model catalog contextTokens for large models:', err);
+  }
+
+  try {
+    const raised = await ensureAgentContextTokensCapForLargeModels();
+    if (raised) {
+      logger.info('[provider-runtime] Raised agents.defaults.contextTokens for large-context models');
+    }
+  } catch (err) {
+    logger.warn('[provider-runtime] Failed to align agents.defaults.contextTokens for large models:', err);
+  }
 }
 
 async function syncProviderSecretToRuntime(
@@ -425,7 +441,7 @@ async function syncRuntimeProviderConfig(
         }
         const overrides: Record<string, unknown> = { ...compat };
         if (typeof nginxEntry.reasoning === 'boolean') overrides.reasoning = nginxEntry.reasoning;
-        if (Array.isArray(nginxEntry.input)) overrides.input = nginxEntry.input;
+        if (Array.isArray(nginxEntry.input)) overrides.input = sanitizeOpenClawModelInput(nginxEntry.input);
         if (typeof nginxEntry.contextWindow === 'number') overrides.contextWindow = nginxEntry.contextWindow;
         if (typeof nginxEntry.maxTokens === 'number') overrides.maxTokens = nginxEntry.maxTokens;
         modelOverrides = { [config.model]: overrides };
@@ -439,9 +455,14 @@ async function syncRuntimeProviderConfig(
   }
 
   // Custom/ollama vLLM endpoints need explicit streaming usage compat in openclaw.json too.
-  if (isUnregisteredProviderType(config.type) && config.model) {
+  const normalizedBaseUrl = normalizeProviderBaseUrl(config, config.baseUrl || context.meta?.baseUrl, context.api);
+  if (config.model) {
+    const baseOverride = isUnregisteredProviderType(config.type)
+      ? withOpenAICompletionsStreamingCompat(modelOverrides?.[config.model] ?? {})
+      : (modelOverrides?.[config.model] ?? {});
     modelOverrides = {
-      [config.model]: withOpenAICompletionsStreamingCompat({}),
+      ...modelOverrides,
+      [config.model]: syncOpenClawModelCatalogEntry(config.model, baseOverride, { baseUrl: normalizedBaseUrl }),
     };
   }
 
@@ -456,7 +477,7 @@ async function syncRuntimeProviderConfig(
   }
 
   await syncProviderConfigToOpenClaw(context.runtimeProviderKey, config.model, {
-    baseUrl: normalizeProviderBaseUrl(config, config.baseUrl || context.meta?.baseUrl, context.api),
+    baseUrl: normalizedBaseUrl,
     api: context.api,
     apiKeyEnv: context.meta?.apiKeyEnv,
     headers,
@@ -497,10 +518,11 @@ async function syncCustomProviderAgentModel(
   }
 
   const modelId = config.model;
+  const baseUrl = normalizeProviderBaseUrl(config, config.baseUrl, config.apiProtocol || 'openai-completions');
   await updateAgentModelProvider(runtimeProviderKey, {
-    baseUrl: normalizeProviderBaseUrl(config, config.baseUrl, config.apiProtocol || 'openai-completions'),
+    baseUrl,
     api: config.apiProtocol || 'openai-completions',
-    models: modelId ? buildCustomOpenAICompletionsModels(modelId) : [],
+    models: modelId ? buildCustomOpenAICompletionsModels(modelId, baseUrl) : [],
     apiKey: resolvedKey,
   });
 }
@@ -614,18 +636,19 @@ async function buildAgentModelProviderEntry(
   }
 
   const registryModel = meta?.models?.find((model) => model.id === modelId) as Record<string, unknown> | undefined;
-  const modelEntry = {
-    ...(registryModel ?? {}),
-    id: modelId,
-    name: typeof registryModel?.name === 'string' ? registryModel.name : modelId,
-  };
+  const useOpenAICompletionsCompat = api === 'openai-completions'
+    && (isUnregisteredProviderType(config.type) || isDeepSeekV4ModelId(modelId));
 
   return {
     baseUrl,
     api,
-    models: isUnregisteredProviderType(config.type) && api === 'openai-completions'
-      ? buildCustomOpenAICompletionsModels(modelId, registryModel)
-      : [modelEntry as Record<string, unknown> & { id: string; name: string }],
+    models: useOpenAICompletionsCompat
+      ? buildCustomOpenAICompletionsModels(modelId, baseUrl, registryModel)
+      : [{
+          ...(registryModel ?? {}),
+          id: modelId,
+          name: typeof registryModel?.name === 'string' ? registryModel.name : modelId,
+        } as Record<string, unknown> & { id: string; name: string }],
     apiKey,
     authHeader,
   };

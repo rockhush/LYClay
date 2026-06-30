@@ -1,5 +1,5 @@
 diff --git a/dist/chat-DOMgZOP2.js b/dist/chat-DOMgZOP2.js
-index 2e65c247e158cbf3ec6d3212817c63a0aa9a3647..d6cd269553df4890e594b5323f4d832fcf2e9f15 100644
+index 2e65c24..d6cd269 100644
 --- a/dist/chat-DOMgZOP2.js
 +++ b/dist/chat-DOMgZOP2.js
 @@ -2683,6 +2683,9 @@ const chatHandlers = {
@@ -13,7 +13,7 @@ index 2e65c247e158cbf3ec6d3212817c63a0aa9a3647..d6cd269553df4890e594b5323f4d832f
  						onAgentRunStart: (runId) => {
  							agentRunStarted = true;
 diff --git a/dist/compaction-successor-transcript-DOYIvTa2.js b/dist/compaction-successor-transcript-DOYIvTa2.js
-index dc91ddb1897fe810a2932d5edd68cc3d1392349f..ea03db0837f4a0c03f13ccaaf6453abf42a7cfb3 100644
+index dc91ddb..ea03db0 100644
 --- a/dist/compaction-successor-transcript-DOYIvTa2.js
 +++ b/dist/compaction-successor-transcript-DOYIvTa2.js
 @@ -39,7 +39,7 @@ import { i as streamSimple, o as getApiProvider } from "./stream-CGV1FC9I.js";
@@ -136,8 +136,48 @@ index dc91ddb1897fe810a2932d5edd68cc3d1392349f..ea03db0837f4a0c03f13ccaaf6453abf
  			...block,
  			text: strippedText
  		});
+diff --git a/dist/context-window-guard-BEhHCr1H.js b/dist/context-window-guard-BEhHCr1H.js
+index 5432832..35ec5be 100644
+--- a/dist/context-window-guard-BEhHCr1H.js
++++ b/dist/context-window-guard-BEhHCr1H.js
+@@ -35,9 +35,14 @@ function resolveContextWindowInfo(params) {
+ 			provider: params.provider,
+ 			modelId: params.modelId
+ 		}));
+-		return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
++		const fromConfigTokens = normalizePositiveInt(match?.contextTokens);
++		const fromConfigWindow = normalizePositiveInt(match?.contextWindow);
++		if (fromConfigTokens !== void 0 && fromConfigWindow !== void 0) return Math.max(fromConfigTokens, fromConfigWindow);
++		return fromConfigTokens ?? fromConfigWindow;
+ 	})();
+-	const fromModel = normalizePositiveInt(params.modelContextTokens) ?? normalizePositiveInt(params.modelContextWindow);
++	const fromModelTokens = normalizePositiveInt(params.modelContextTokens);
++	const fromModelWindow = normalizePositiveInt(params.modelContextWindow);
++	const fromModel = fromModelTokens !== void 0 && fromModelWindow !== void 0 ? Math.max(fromModelTokens, fromModelWindow) : fromModelTokens ?? fromModelWindow;
+ 	const defaultTokens = normalizePositiveInt(params.defaultTokens) ?? 8e3;
+ 	const baseInfo = fromModelsConfig ? {
+ 		tokens: fromModelsConfig,
+diff --git a/dist/embedded-agent-CpxCz9I4.js b/dist/embedded-agent-CpxCz9I4.js
+index a611909..e2a6081 100644
+--- a/dist/embedded-agent-CpxCz9I4.js
++++ b/dist/embedded-agent-CpxCz9I4.js
+@@ -1874,10 +1874,11 @@ function resolveEffectiveRuntimeModel(params) {
+ 		modelContextWindow: params.runtimeModel.contextWindow,
+ 		defaultTokens: DEFAULT_CONTEXT_TOKENS
+ 	});
+-	const effectiveModel = ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity) ? {
++	const effectiveModel = {
+ 		...params.runtimeModel,
+-		contextWindow: ctxInfo.tokens
+-	} : params.runtimeModel;
++		...(ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity) ? { contextWindow: ctxInfo.tokens } : {}),
++		contextTokens: ctxInfo.tokens
++	};
+ 	const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
+ 	const runtimeBaseUrl = typeof params.runtimeModel.baseUrl === "string" ? params.runtimeModel.baseUrl : void 0;
+ 	if (ctxGuard.shouldWarn) log$1.warn(formatContextWindowWarningMessage({
 diff --git a/dist/get-reply-BpFiu3Nn.js b/dist/get-reply-BpFiu3Nn.js
-index 97733b6a8259ad04c3c8531825acc9e2295ecfff..441dc2be6d34d6a244ee0b12915e47e05c60c55d 100644
+index 97733b6..76c321a 100644
 --- a/dist/get-reply-BpFiu3Nn.js
 +++ b/dist/get-reply-BpFiu3Nn.js
 @@ -133,6 +133,7 @@ import fs from "node:fs";
@@ -284,19 +324,67 @@ index 97733b6a8259ad04c3c8531825acc9e2295ecfff..441dc2be6d34d6a244ee0b12915e47e0
  	const agentCfg = cfg.agents?.defaults;
  	const sessionCfg = cfg.session;
  	const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync("reply.resolve_default_model", () => resolveDefaultModel({
-@@ -5221,6 +5312,10 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
- 	const { sessionCtx, sessionEntry, previousSessionEntry, sessionStore, sessionKey, sessionId, isNewSession, resetTriggered, systemSent, storePath, sessionScope, groupResolution, isGroup, triggerBodyNormalized, bodyStripped } = sessionState;
- 	let { abortedLastRun } = sessionState;
+@@ -5218,9 +5309,16 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+ 		cfg,
+ 		commandAuthorized
+ 	}));
+-	const { sessionCtx, sessionEntry, previousSessionEntry, sessionStore, sessionKey, sessionId, isNewSession, resetTriggered, systemSent, storePath, sessionScope, groupResolution, isGroup, triggerBodyNormalized, bodyStripped } = sessionState;
+-	let { abortedLastRun } = sessionState;
++	const { sessionCtx, previousSessionEntry, sessionStore, sessionKey, sessionId, isNewSession, resetTriggered, systemSent, storePath, sessionScope, groupResolution, isGroup, triggerBodyNormalized, bodyStripped } = sessionState;
++	let { sessionEntry, abortedLastRun } = sessionState;
  	resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
-+	if (digitalEmployeeExecution && sessionEntry?.skillsSnapshot) {
-+		sessionState.sessionEntry = { ...sessionEntry, skillsSnapshot: void 0 };
++	if (digitalEmployeeExecution) {
++		if (sessionEntry?.skillsSnapshot) {
++			sessionState.sessionEntry = { ...sessionEntry, skillsSnapshot: void 0 };
++			sessionEntry = sessionState.sessionEntry;
++		}
 +		if (sessionStore && sessionKey) sessionStore[sessionKey] = { ...sessionStore[sessionKey], skillsSnapshot: void 0 };
 +	}
  	if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
  		const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
  		if (opts?.isHeartbeat) {
+diff --git a/dist/model-context-tokens-BdVmxFQp.js b/dist/model-context-tokens-BdVmxFQp.js
+index 4abb3a3..f71588e 100644
+--- a/dist/model-context-tokens-BdVmxFQp.js
++++ b/dist/model-context-tokens-BdVmxFQp.js
+@@ -538,10 +538,14 @@ async function runAfterCompactionHooks(params) {
+ //#endregion
+ //#region src/agents/embedded-agent-runner/model-context-tokens.ts
+ /** Returns finite context-token metadata when a model discovery source provided it. */
+-/** Prefer contextTokens, then contextWindow, when present on model metadata. */
++/** Use the larger of contextTokens and contextWindow when both are present. */
+ function readAgentModelContextTokens(model) {
+-	const value = model?.contextTokens;
+-	return typeof value === "number" && Number.isFinite(value) ? value : void 0;
++	const contextTokens = model?.contextTokens;
++	const contextWindow = model?.contextWindow;
++	const normalizedTokens = typeof contextTokens === "number" && Number.isFinite(contextTokens) ? contextTokens : void 0;
++	const normalizedWindow = typeof contextWindow === "number" && Number.isFinite(contextWindow) ? contextWindow : void 0;
++	if (normalizedTokens !== void 0 && normalizedWindow !== void 0) return Math.max(normalizedTokens, normalizedWindow);
++	return normalizedTokens ?? normalizedWindow;
+ }
+ //#endregion
+ export { runAfterCompactionHooks as a, captureCompactionCheckpointSnapshotAsync as c, getSessionCompactionCheckpoint as d, listSessionCompactionCheckpoints as f, resolveSessionCompactionCheckpointReason as h, estimateTokensAfterCompaction as i, cleanupCompactionCheckpointSnapshot as l, readSessionLeafIdFromTranscriptAsync as m, asCompactionHookRunner as n, runBeforeCompactionHooks as o, persistSessionCompactionCheckpoint as p, buildBeforeCompactionHookMetrics as r, runPostCompactionSideEffects as s, readAgentModelContextTokens as t, forkCompactionCheckpointTranscriptAsync as u };
+diff --git a/dist/openai-transport-stream-iDKSQw7Q.js b/dist/openai-transport-stream-iDKSQw7Q.js
+index 4bc953a..3f1cd31 100644
+--- a/dist/openai-transport-stream-iDKSQw7Q.js
++++ b/dist/openai-transport-stream-iDKSQw7Q.js
+@@ -3653,9 +3653,10 @@ function estimateOpenAICompletionsContentChars(value) {
+ 	return adjustedChars;
+ }
+ function resolveOpenAICompletionsEffectiveContextTokens(model) {
+-	const contextTokens = model.contextTokens;
+-	if (typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0) return contextTokens;
+-	return typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : void 0;
++	const contextTokens = typeof model.contextTokens === "number" && Number.isFinite(model.contextTokens) && model.contextTokens > 0 ? model.contextTokens : void 0;
++	const contextWindow = typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : void 0;
++	if (contextTokens !== void 0 && contextWindow !== void 0) return Math.max(contextTokens, contextWindow);
++	return contextTokens ?? contextWindow;
+ }
+ function isQwenOpenAICompletionsThinkingFormat(format) {
+ 	return format === "qwen" || format === "qwen-chat-template";
 diff --git a/dist/schema-KBhSSPA3.js b/dist/schema-KBhSSPA3.js
-index 8fabdd4d1f3ccd237c712cc35aa151d1158d5b63..d26472ff031a158ab0aa2d19987e6bc5b8cefc7c 100644
+index 8fabdd4..d26472f 100644
 --- a/dist/schema-KBhSSPA3.js
 +++ b/dist/schema-KBhSSPA3.js
 @@ -2745,8 +2745,11 @@ const ChatSendParamsSchema = Type.Object({
@@ -313,9 +401,18 @@ index 8fabdd4d1f3ccd237c712cc35aa151d1158d5b63..d26472ff031a158ab0aa2d19987e6bc5
  const ChatAbortParamsSchema = Type.Object({
  	sessionKey: NonEmptyString,
 diff --git a/dist/workspace-P8p68RCT.js b/dist/workspace-P8p68RCT.js
-index be7afdd3395bc064722d206e951c448af6b1269d..62b092f6483257879a10d08f9a24742dd4355545 100644
+index be7afdd..098700b 100644
 --- a/dist/workspace-P8p68RCT.js
 +++ b/dist/workspace-P8p68RCT.js
+@@ -865,7 +865,7 @@ function loadSkillEntries(workspaceDir, opts) {
+ 	const bundledSkillsDir = workspaceOnly ? void 0 : opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
+ 	const pluginSkillsDir = opts?.pluginSkillsDir ?? path.join(CONFIG_DIR, "plugin-skills");
+ 	const extraDirs = normalizeTrimmedStringList(workspaceOnly ? [] : opts?.config?.skills?.load?.extraDirs ?? []);
+-	const pluginSkillDirs = workspaceOnly ? [] : resolvePluginSkillDirs({
++	const pluginSkillDirs = (workspaceOnly || opts?.config?.skills?.__digitalEmployeeOnly) ? [] : resolvePluginSkillDirs({
+ 		workspaceDir,
+ 		config: opts?.config,
+ 		pluginSkillsDir
 @@ -907,6 +907,34 @@ function loadSkillEntries(workspaceDir, opts) {
  	});
  	const merged = /* @__PURE__ */ new Map();

@@ -277,10 +277,19 @@ export interface ChatState {
   sessionBackendActivity: import('./user-turn-lifecycle').SessionBackendActivity | null;
   /** Cached gateway background session activity from backend-activity polling (internal). */
   gatewayBackgroundActivity: import('./user-turn-lifecycle').GatewayBackgroundActivity | null;
+  /**
+   * Child session keys recovered from auto-announce wrap-up run ids. The child
+   * that triggers a parent's announce wrap-up never gets a transcript completion
+   * marker, so this is the only signal that it finished — used to settle its
+   * execution-graph branch instead of leaving it stuck "running".
+   */
+  announcedChildSessionKeys: string[];
 
   // Thinking
   thinkingLevel: string | null;
   reasoningMode: ReasoningMode;
+  /** Per-session reasoning mode. When switching sessions, reasoningMode is restored from this map. */
+  sessionReasoningModes: Record<string, ReasoningMode>;
 
   // Actions
   loadSessions: (force?: boolean) => Promise<void>;

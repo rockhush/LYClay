@@ -6,6 +6,7 @@ import { useGatewayStore } from '@/stores/gateway';
 import { getCanonicalPrefixFromSessions, toMs } from './helpers';
 import { DEFAULT_CANONICAL_PREFIX, DEFAULT_SESSION_KEY, type ChatSession } from './types';
 import type { ChatGet, ChatSet, SessionHistoryActions } from './store-api';
+import { clearFinalizeGraceTimer } from './finalize-turn-bridge';
 
 function getAgentIdFromSessionKey(sessionKey: string): string {
   if (!sessionKey.startsWith('agent:')) return 'main';
@@ -362,6 +363,7 @@ export function createSessionActions(
     // ── New session ──
 
     newSession: (agentId?: string) => {
+      clearFinalizeGraceTimer();
       // Generate a new unique session key and switch to it.
       // NOTE: We intentionally do NOT call sessions.reset on the old session.
       // sessions.reset archives (renames) the session JSONL file, making old
@@ -399,6 +401,9 @@ export function createSessionActions(
         error: null,
         emptyFinalRecovery: { status: 'idle' },
         pendingFinal: false,
+        sending: false,
+        runAborted: false,
+        loading: false,
         lastUserMessageAt: null,
         pendingToolImages: [],
         prefilledInput: null,

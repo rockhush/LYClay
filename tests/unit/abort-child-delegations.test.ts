@@ -45,4 +45,39 @@ describe('abortPendingChildDelegations', () => {
       10_000,
     );
   });
+
+  it('aborts children still processing on the gateway even when marked completed in transcript', async () => {
+    const messages: RawMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: { taskName: 'build_ppt' } }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'spawn-1',
+        content: JSON.stringify({
+          childSessionKey: 'agent:main:subagent:child-a',
+          runId: 'run-child-a',
+        }),
+      },
+      {
+        role: 'user',
+        content: '[Internal task completion event]\nsession_key: agent:main:subagent:child-a\nsession_id: done-a',
+      },
+    ];
+
+    const rpc = vi.fn().mockResolvedValue({ ok: true });
+    await abortPendingChildDelegations(
+      messages,
+      rpc,
+      ['agent:main:subagent:child-a'],
+    );
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith(
+      'sessions.abort',
+      { key: 'agent:main:subagent:child-a', runId: 'run-child-a' },
+      10_000,
+    );
+  });
 });

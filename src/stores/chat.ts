@@ -1,4 +1,4 @@
-/**
+﻿﻿/**
  * Chat State Store
  * Manages chat messages, sessions, and streaming state.
  * Communicates with OpenClaw Gateway via renderer WebSocket RPC.
@@ -10,7 +10,8 @@ import { toUserMessage, normalizeAppError } from '@/lib/api-client';
 import { useGatewayStore } from './gateway';
 import { useAgentsStore } from './agents';
 import { useWorkspacesStore } from './workspaces';
-import { buildCronSessionHistoryPath, isCronSessionKey } from './chat/cron-session-utils';
+import { buildCronSessionHistoryPath, isCronSessionKey, mergeCronSessionHistory } from './chat/cron-session-utils';
+import { collectAgentIdsFromSessionKeys, isPlaceholderSessionTitle } from '@/lib/session-label-utils';
 import {
   CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS,
   classifyHistoryStartupRetryError,
@@ -41,11 +42,13 @@ import {
   isSuppressedRunError,
   isAbortErrorMessage,
   isRecoverableRuntimeError,
+  isFatalRuntimeError,
   markUserAbort,
   resolveRunFailureErrorMessage,
   shouldTreatAbortAsUserStop,
   truncateRunErrorMessage,
   isWithinUserAbortWindow,
+  shouldSuppressAssistantStreamingText,
   dedupeEquivalentAttachmentUserMessages,
   matchesOptimisticUserMessage,
   getLatestOptimisticUserMessage,
@@ -63,13 +66,25 @@ import {
   isFailedAssistantMessage,
   isRunTerminalAssistantMessage,
   shouldKeepRunActiveAfterAssistantFinal,
+  shouldSilentlyFinalizeRunOnAssistantFinal,
 } from './chat/run-lifecycle';
 import {
+  canClearUserTurnNow,
   shouldFinalizeUserTurn,
   shouldForceAbortStuckRun,
+  buildReAdoptRunPatch,
+  hasOpenDelegatedBackendWork,
 } from './chat/user-turn-lifecycle';
 import {
+  deferClearUserTurnForOpenDelegation,
+  tryFinalizeUserTurnAfterAssistantFinal,
+  clearFinalizeGraceTimer,
+  getFinalizeGraceStartedAt,
+  scheduleDelegationFinalizeGraceIfNeeded,
+} from './chat/finalize-turn-bridge';
+import {
   clearSessionActivityPoll,
+  ensureSessionBackendPolling,
   refreshSessionBackendActivity,
   startSessionActivityPoll,
 } from './chat/session-backend-bridge';
@@ -79,6 +94,10 @@ import {
   persistUserAbortedSession,
 } from './chat/user-aborted-sessions';
 import { abortPendingChildDelegations } from './chat/abort-child-delegations';
+import {
+  isSubagentDelegationAnnounceRun,
+  parseChildSessionKeyFromAnnounceRun,
+} from '@/lib/subagent-delegation';
 import { prepareContextBeforeSend } from './chat/context-send-guard';
 import { applyTimeDecayStrategy, filterLargeToolResults } from './chat/history-time-decay';
 import {
@@ -98,6 +117,7 @@ import {
   filterUserFacingSessions,
   pickUserFacingSession,
 } from '@/lib/session-key-utils';
+import { isEmptyChatScratchpad } from '@/lib/chat-scratchpad';
 
 export type {
   AttachedFileMeta,
@@ -171,7 +191,7 @@ function toMs(ts: number): number {
 // poll chat.history to surface intermediate tool-call turns.
 let _historyPollTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Runs the user explicitly stopped — ignore late gateway deltas after abort clears activeRunId.
+// Runs the user explicitly stopped ??ignore late gateway deltas after abort clears activeRunId.
 const _abortedChatRunIds = new Set<string>();
 
 // Timestamp of the most recent user-initiated stop. Late abort-type error
@@ -220,21 +240,29 @@ type InterruptedSendSessionState = {
   sessionKey: string;
   activeRunId: string | null;
   lastUserMessageAt: number | null;
-  /** Last real user message when leaving — merge if history lags behind the gateway. */
+  /** Last real user message when leaving ??merge if history lags behind the gateway. */
   fallbackUserMessage: RawMessage | null;
 };
 
 /** Preserves mid-send UI when switching sessions; cleared after resume or completion. */
 let _interruptedSendSession: InterruptedSendSessionState | null = null;
 
-// ── Silent tool stream error retry ──
+// ���� Silent tool stream error retry ����
 // When a model produces a tool-call-stream error (list index out of range, malformed
 // tool_calls, etc.), we retry ONCE silently without showing the error to the user.
 // The retry replays the last sendMessage call with the same params. If it fails again,
 // the user sees a friendly error message.
-let _lastSendParams: { text: string; attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>; targetAgentId?: string | null } | null = null;
+type LastSendParams = { text: string; attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>; targetAgentId?: string | null };
+type PendingSilentRetry = {
+  failedRunId: string;
+  sessionKey: string;
+  params: LastSendParams;
+};
+
+let _lastSendParams: LastSendParams | null = null;
 let _retriedRunIds = new Set<string>();
 let _suppressNextOptimisticUserMessage = false;
+let _pendingSilentRetry: PendingSilentRetry | null = null;
 const _digitalEmployeeRuns = new Map<string, { agentId: string; name: string }>();
 
 function isToolStreamError(error: string): boolean {
@@ -296,6 +324,7 @@ function annotateDigitalEmployeeHistoryMessages(messages: RawMessage[]): RawMess
 
 const SESSION_LOAD_MIN_INTERVAL_MS = 1_200;
 const REASONING_MODE_STORAGE_KEY = 'LYClaw:chat:reasoning-mode';
+const SESSION_REASONING_MODES_STORAGE_KEY = 'LYClaw:chat:session-reasoning-modes';
 
 function isReasoningMode(value: unknown): value is ReasoningMode {
   return value === 'fast' || value === 'thinking';
@@ -310,13 +339,42 @@ function loadStoredReasoningMode(): ReasoningMode {
   }
 }
 
-function persistReasoningMode(mode: ReasoningMode): void {
+function loadSessionReasoningModesFromStorage(): Record<string, ReasoningMode> {
   try {
-    window.localStorage.setItem(REASONING_MODE_STORAGE_KEY, mode);
+    const raw = window.localStorage.getItem(SESSION_REASONING_MODES_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, ReasoningMode> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof k === 'string' && k && isReasoningMode(v)) {
+        out[k] = v;
+      }
+    }
+    return out;
   } catch {
-    // Ignore storage failures; the current session still updates in memory.
+    return {};
   }
 }
+
+function persistSessionReasoningModesToStorage(modes: Record<string, ReasoningMode>): void {
+  try {
+    window.localStorage.setItem(SESSION_REASONING_MODES_STORAGE_KEY, JSON.stringify(modes));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+let _lastPersistedSessionReasoningModes = '';
+
+function persistSessionReasoningModesIfChanged(modes: Record<string, ReasoningMode>): void {
+  const serialized = JSON.stringify(modes);
+  if (serialized === _lastPersistedSessionReasoningModes) return;
+  _lastPersistedSessionReasoningModes = serialized;
+  persistSessionReasoningModesToStorage(modes);
+}
+
+_lastPersistedSessionReasoningModes = JSON.stringify(loadSessionReasoningModesFromStorage());
 
 const SESSION_WORKSPACE_IDS_STORAGE_KEY = 'LYClaw:chat:session-workspace-ids';
 
@@ -680,6 +738,39 @@ function abortGatewayRun(sessionKey: string): void {
   });
 }
 
+function clearPendingSilentRetry(runId?: string | null): void {
+  if (!runId || _pendingSilentRetry?.failedRunId === runId) {
+    _pendingSilentRetry = null;
+  }
+}
+
+function scheduleSilentToolStreamRetry(
+  failedRunId: string,
+  sessionKey: string,
+  params: LastSendParams,
+  get: () => ChatState,
+): void {
+  _pendingSilentRetry = { failedRunId, sessionKey, params };
+  abortGatewayRun(sessionKey);
+
+  setTimeout(() => {
+    const pending = _pendingSilentRetry;
+    if (
+      !pending
+      || pending.failedRunId !== failedRunId
+      || pending.sessionKey !== sessionKey
+      || get().currentSessionKey !== sessionKey
+    ) {
+      return;
+    }
+
+    _pendingSilentRetry = null;
+    _suppressNextOptimisticUserMessage = true;
+    const state = get();
+    void state.sendMessage(pending.params.text, pending.params.attachments, pending.params.targetAgentId);
+  }, 100);
+}
+
 function applySessionThinkingLevelInBackground(
   sessionKey: string,
   mode: ReasoningMode,
@@ -899,7 +990,7 @@ function isDuplicateChatEvent(eventState: string, event: Record<string, unknown>
   return false;
 }
 
-// ── Local image cache ─────────────────────────────────────────
+// ���� Local image cache ����������������������������������������������������������������������������������
 // The Gateway doesn't store image attachments in session content blocks,
 // so we cache them locally keyed by staged file path (which appears in the
 // [media attached: <path> ...] reference in the Gateway's user message text).
@@ -1232,7 +1323,7 @@ function applyBackgroundChatEvent(
         const msgObj = event.message as RawMessage;
         if (!isToolResultRole(msgObj.role)) {
           const msgContent = getMessageText(msgObj.content);
-          next.streamingMessage = msgContent.trim() && isInternalMessageText(msgContent)
+          next.streamingMessage = msgContent.trim() && shouldSuppressAssistantStreamingText(msgContent)
             ? null
             : normalizeStreamingMessage(event.message ?? next.streamingMessage);
         }
@@ -1302,6 +1393,38 @@ function applyBackgroundChatEvent(
   };
 }
 
+/**
+ * Remove duplicate user messages that share the same normalized text content.
+ * This is a content-based safety net that catches duplicates missed by the
+ * timestamp-based `matchesOptimisticUserMessage` (which requires messages
+ * to be within 5 seconds of each other). When loading history, the pipeline
+ * (JSONL) and snapshot messages may have different timestamps yet identical
+ * content — the same user question should never appear twice in the UI.
+ */
+function dedupeUserMessagesByContent(messages: RawMessage[]): RawMessage[] {
+  if (messages.length < 2) return messages;
+
+  const seen = new Set<string>();
+  const result: RawMessage[] = [];
+
+  for (const message of messages) {
+    if (message.role !== 'user') {
+      result.push(message);
+      continue;
+    }
+    const key = normalizeComparableUserText(message.content);
+    if (!key) {
+      result.push(message);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(message);
+  }
+
+  return result.length === messages.length ? messages : result;
+}
+
 function resolveFinalMessagesWithLocalPreservation(
   sessionKey: string,
   pipelineMessages: RawMessage[],
@@ -1328,6 +1451,13 @@ function resolveFinalMessagesWithLocalPreservation(
   }
 
   finalMessages = dedupeEquivalentAttachmentUserMessages(finalMessages);
+
+  // Content-based user-message dedup: when the same user message appears in both
+  // the pipeline (from JSONL) and the local snapshot, the timestamp-based
+  // `matchesOptimisticUserMessage` may fail if timestamps differ by >5s.
+  // This safety net catches those remaining duplicates by comparing normalized
+  // text content — the same message with the same text should only appear once.
+  finalMessages = dedupeUserMessagesByContent(finalMessages);
 
   if (finalMessages.length > 0) return finalMessages;
   if (state.messages.length > 0) return dedupeEquivalentAttachmentUserMessages(state.messages);
@@ -1731,10 +1861,10 @@ function extractRawFilePaths(text: string): Array<{ filePath: string; mimeType: 
   const refs: Array<{ filePath: string; mimeType: string }> = [];
   const seen = new Set<string>();
   const exts = 'png|jpe?g|gif|webp|bmp|avif|svg|pdf|docx?|xlsx?|pptx?|txt|csv|md|rtf|epub|zip|tar|gz|rar|7z|mp3|wav|ogg|aac|flac|m4a|mp4|mov|avi|mkv|webm|m4v';
-  // Unix absolute paths (/... or ~/...) — lookbehind rejects mid-token slashes
+  // Unix absolute paths (/... or ~/...) ??lookbehind rejects mid-token slashes
   // (e.g. "path/to/file.mp4", "https://example.com/file.mp4")
   const unixRegex = new RegExp(`(?<![\\w./:])((?:\\/|~\\/)[^\\s\\n"'()\\[\\],<>]*?\\.(?:${exts}))`, 'gi');
-  // Windows absolute paths (C:\... D:\...) — lookbehind rejects drive letter glued to a word
+  // Windows absolute paths (C:\... D:\...) ??lookbehind rejects drive letter glued to a word
   const winRegex = new RegExp(`(?<![\\w])([A-Za-z]:\\\\[^\\s\\n"'()\\[\\],<>]*?\\.(?:${exts}))`, 'gi');
   for (const regex of [unixRegex, winRegex]) {
     let match;
@@ -1819,7 +1949,7 @@ function makeAttachedFile(
 function getToolCallFilePath(msg: RawMessage, toolCallId: string): string | undefined {
   if (!toolCallId) return undefined;
 
-  // Anthropic/normalized format — toolCall blocks in content array
+  // Anthropic/normalized format ??toolCall blocks in content array
   const content = msg.content;
   if (Array.isArray(content)) {
     for (const block of content as ContentBlock[]) {
@@ -1833,7 +1963,7 @@ function getToolCallFilePath(msg: RawMessage, toolCallId: string): string | unde
     }
   }
 
-  // OpenAI format — tool_calls array on the message itself
+  // OpenAI format ??tool_calls array on the message itself
   const msgAny = msg as unknown as Record<string, unknown>;
   const toolCalls = msgAny.tool_calls ?? msgAny.toolCalls;
   if (Array.isArray(toolCalls)) {
@@ -1974,14 +2104,14 @@ function enrichWithCachedImages(messages: RawMessage[]): RawMessage[] {
     if ((msg.role !== 'user' && msg.role !== 'assistant') || msg._attachedFiles) return msg;
     const text = getMessageText(msg.content);
 
-    // Path 1: [media attached: path (mime) | path] — guaranteed format from attachment button
+    // Path 1: [media attached: path (mime) | path] ??guaranteed format from attachment button
     const mediaRefs = extractMediaRefs(text);
     const mediaRefPaths = new Set(mediaRefs.map(r => r.filePath));
 
     // Path 2: Raw file paths.
     // For assistant messages: scan own text AND the nearest preceding user message text,
     // but only for non-tool-only assistant messages (i.e. the final answer turn).
-    // Tool-only messages (thinking + tool calls) should not show file previews — those
+    // Tool-only messages (thinking + tool calls) should not show file previews ??those
     // belong to the final answer message that comes after the tool results.
     // User messages never get raw-path previews so the image is not shown twice.
     let rawRefs: Array<{ filePath: string; mimeType: string }> = [];
@@ -2047,7 +2177,7 @@ async function loadMissingPreviews(messages: RawMessage[]): Promise<boolean> {
       }
     }
 
-    // Path 2: [media attached: ...] patterns (legacy — in case filePath wasn't stored)
+    // Path 2: [media attached: ...] patterns (legacy ??in case filePath wasn't stored)
     if (msg.role === 'user') {
       const text = getMessageText(msg.content);
       const refs = extractMediaRefs(text);
@@ -2151,12 +2281,18 @@ function parseSessionRecord(record: Record<string, unknown>): ChatSession | null
   const firstUserMessagePreview = record.firstUserMessagePreview
     ? String(record.firstUserMessagePreview).replace(/\/think\s+(off|medium|high)\s+/i, '')
     : undefined;
+  const rawLabel = record.label
+    ? String(record.label).replace(/\/think\s+(off|medium|high)\s+/i, '')
+    : undefined;
 
   return {
     key,
-    label: firstUserMessagePreview || (record.label ? String(record.label) : undefined),
+    label: firstUserMessagePreview
+      || (rawLabel && !isPlaceholderSessionTitle(rawLabel) ? rawLabel : undefined),
     firstUserMessagePreview,
-    displayName: record.displayName ? String(record.displayName) : undefined,
+    displayName: record.displayName && !isPlaceholderSessionTitle(String(record.displayName))
+      ? String(record.displayName)
+      : undefined,
     thinkingLevel: record.thinkingLevel ? String(record.thinkingLevel) : undefined,
     model: record.model ? String(record.model) : undefined,
     updatedAt: parseSessionUpdatedAtMs(record.updatedAt),
@@ -2178,6 +2314,19 @@ async function loadLocalSessionSummaries(agentId = 'main'): Promise<ChatSession[
   return response.sessions
     .map(parseSessionRecord)
     .filter((session): session is ChatSession => session != null);
+}
+
+async function loadLocalSessionSummariesForAgentIds(agentIds: string[]): Promise<ChatSession[]> {
+  const mergedByKey = new Map<string, ChatSession>();
+  const batches = await Promise.all(
+    agentIds.map((agentId) => loadLocalSessionSummaries(agentId).catch(() => [] as ChatSession[])),
+  );
+  for (const batch of batches) {
+    for (const session of batch) {
+      mergedByKey.set(session.key, session);
+    }
+  }
+  return [...mergedByKey.values()];
 }
 
 function mergeSessionSummariesWithLocalPreviews(
@@ -2205,7 +2354,7 @@ function mergeSessionSummariesWithLocalPreviews(
 function getSessionLabelsFromSessions(sessions: ChatSession[]): Record<string, string> {
   return Object.fromEntries(
     sessions
-      .filter((session) => session.label)
+      .filter((session) => session.label && !isPlaceholderSessionTitle(session.label))
       .map((session) => [session.key, session.label!]),
   );
 }
@@ -2221,6 +2370,16 @@ async function loadCronFallbackMessages(sessionKey: string, limit = 200): Promis
     console.warn('Failed to load cron fallback history:', error);
     return [];
   }
+}
+
+async function loadMergedCronSessionMessages(
+  sessionKey: string,
+  latestRunMessages: RawMessage[],
+  limit = 200,
+): Promise<RawMessage[]> {
+  if (!isCronSessionKey(sessionKey)) return latestRunMessages;
+  const aggregated = await loadCronFallbackMessages(sessionKey, limit);
+  return mergeCronSessionHistory(aggregated, latestRunMessages);
 }
 
 function normalizeAgentId(value: string | undefined | null): string {
@@ -2245,7 +2404,7 @@ function ensureSessionEntry(sessions: ChatSession[], sessionKey: string): ChatSe
   return [...sessions, { key: sessionKey, displayName: sessionKey }];
 }
 
-/** Empty `:main` is a shared scratchpad — promote to a dedicated session key before the first send. */
+/** Empty `:main` is a shared scratchpad ??promote to a dedicated session key before the first send. */
 function promoteEmptyMainSessionIfNeeded(
   get: () => ChatState,
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
@@ -2303,6 +2462,8 @@ function buildSessionSwitchPatch(
     | 'sessionWorkspaceIds'
     | 'sessionPinnedAt'
     | 'sessionStreamingStates'
+    | 'sessionReasoningModes'
+    | 'reasoningMode'
     | 'activeRunId'
     | 'streamingText'
     | 'streamingMessage'
@@ -2329,6 +2490,22 @@ function buildSessionSwitchPatch(
   const nextSessions = leavingEmpty
     ? state.sessions.filter((session) => session.key !== state.currentSessionKey)
     : state.sessions;
+
+  // Save the current session's reasoning mode before switching
+  const savedReasoningModes: Record<string, ReasoningMode> = {
+    ...state.sessionReasoningModes,
+    [state.currentSessionKey]: state.reasoningMode,
+  };
+
+  // Remove reasoning mode if leaving an empty session
+  const finalReasoningModes = leavingEmpty
+    ? clearSessionEntryFromMap(savedReasoningModes, state.currentSessionKey)
+    : savedReasoningModes;
+
+  persistSessionReasoningModesIfChanged(finalReasoningModes);
+
+  // Restore the target session's reasoning mode (default to 'fast')
+  const nextReasoningMode = finalReasoningModes[nextSessionKey] ?? 'fast';
 
   // Save the current session's streaming state before switching.
   // Also preserve the current visible messages snapshot so completed sessions
@@ -2430,6 +2607,10 @@ function buildSessionSwitchPatch(
     sending: effectiveNextSessionState.sending,
     loading: false,
     sessionBackendActivity: null,
+    // Restore per-session reasoning mode
+    sessionReasoningModes: finalReasoningModes,
+    reasoningMode: nextReasoningMode,
+    thinkingLevel: toThinkingLevel(nextReasoningMode),
  };
 }
 
@@ -2476,9 +2657,9 @@ function isToolOnlyMessage(message: RawMessage | undefined): boolean {
   const hasOpenAITools = Array.isArray(toolCalls) && toolCalls.length > 0;
 
   if (!Array.isArray(content)) {
-    // Content is not an array — check if there's OpenAI-format tool_calls
+    // Content is not an array ??check if there's OpenAI-format tool_calls
     if (hasOpenAITools) {
-      // Has tool calls but content might be empty/string — treat as tool-only
+      // Has tool calls but content might be empty/string ??treat as tool-only
       // if there's no meaningful text content
       const textContent = typeof content === 'string' ? content.trim() : '';
       return textContent.length === 0;
@@ -2500,7 +2681,7 @@ function isToolOnlyMessage(message: RawMessage | undefined): boolean {
       continue;
     }
     // Only actual image output disqualifies a tool-only message.
-    // Thinking blocks are internal reasoning that can accompany tool_use — they
+    // Thinking blocks are internal reasoning that can accompany tool_use ??they
     // should NOT prevent the message from being treated as an intermediate tool step.
     if (block.type === 'image') {
       hasNonToolContent = true;
@@ -2525,6 +2706,9 @@ function isInternalMessageText(text: string): boolean {
   if (/\b(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(text) && stripSilentReplyToken(text).trim().length === 0) return true;
   if (isChannelDeliveryConfirmationText(text)) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(text.trim())) return true;
+  // Contentless failed-turn placeholder (model request errored/timed out before
+  // producing output). Hide it so retries don't stack empty "完成" bubbles.
+  if (/^\[?\s*assistant turn failed before producing content\.?\s*\]?$/i.test(text.trim())) return true;
   return isRuntimeSystemInjection(text);
 }
 
@@ -2547,10 +2731,10 @@ function isInternalMessage(msg: { role?: unknown; content?: unknown }): boolean 
 /**
  * Detect runtime-injected system messages that should be hidden from the chat UI.
  * These are injected by the OpenClaw runtime as user-role messages and include:
- *   - "System (untrusted): ..." — exec results, tool output, etc.
- *   - "An async command ... has completed" — async completion notices
- *   - "Current time: ..." followed by nothing else — periodic heartbeat time pings
- *   - "Handle the result internally. Do not relay it to the user" — internal directives
+ *   - "System (untrusted): ..." ??exec results, tool output, etc.
+ *   - "An async command ... has completed" ??async completion notices
+ *   - "Current time: ..." followed by nothing else ??periodic heartbeat time pings
+ *   - "Handle the result internally. Do not relay it to the user" ??internal directives
  */
 function isRuntimeSystemInjection(text: string): boolean {
   if (!text) return false;
@@ -2629,7 +2813,7 @@ function extractToolUseUpdates(message: unknown): ToolStatus[] {
   const msg = message as Record<string, unknown>;
   const updates: ToolStatus[] = [];
 
-  // Path 1: Anthropic/normalized format — tool blocks inside content array
+  // Path 1: Anthropic/normalized format ??tool blocks inside content array
   const content = msg.content;
   if (Array.isArray(content)) {
     for (const block of content as ContentBlock[]) {
@@ -2644,7 +2828,7 @@ function extractToolUseUpdates(message: unknown): ToolStatus[] {
     }
   }
 
-  // Path 2: OpenAI format — tool_calls array on the message itself
+  // Path 2: OpenAI format ??tool_calls array on the message itself
   if (updates.length === 0) {
     const toolCalls = msg.tool_calls ?? msg.toolCalls;
     if (Array.isArray(toolCalls)) {
@@ -3090,7 +3274,7 @@ function userMessagesLikelySame(a: RawMessage, b: RawMessage): boolean {
   return areEquivalentAttachmentOnlyUserTexts(ta, tb);
 }
 
-/** Text/image reply only — excludes thinking-only snapshots so we can still show “waiting” UI. */
+/** Text/image reply only ??excludes thinking-only snapshots so we can still show ��waiting??UI. */
 function hasAssistantPrimaryReplyContent(message: RawMessage | undefined): boolean {
   if (!message) return false;
   if (typeof message.content === 'string' && message.content.trim()) return true;
@@ -3117,6 +3301,7 @@ function hasAssistantPrimaryReplyContent(message: RawMessage | undefined): boole
 function mergePreservedSessionsIntoGatewayList(
   dedupedSessions: ChatSession[],
   snapshot: Pick<ChatState, 'sessions' | 'sessionLabels' | 'sessionLastActivity' | 'sessionWorkspaceIds'>,
+  currentSessionKey?: string,
 ): ChatSession[] {
   const { sessions: prevSessions, sessionLabels, sessionLastActivity, sessionWorkspaceIds } = snapshot;
   const keys = new Set(dedupedSessions.map((s) => s.key));
@@ -3140,6 +3325,16 @@ function mergePreservedSessionsIntoGatewayList(
     if (sessionLabels[s.key] || sessionLastActivity[s.key] || sessionWorkspaceIds[s.key]) {
       addIfMissing(s.key, s.displayName);
     }
+  }
+
+  // Always preserve the session the user is currently viewing, even if it
+  // has no label, activity timestamp, or workspace binding. A newly-created
+  // digital-employee session enters the list as a minimal { key, displayName }
+  // entry and must not be dropped by subsequent loadSessions calls that run
+  // before the session is registered on the backend.
+  if (currentSessionKey && !keys.has(currentSessionKey)) {
+    const currentEntry = prevSessions.find((s) => s.key === currentSessionKey);
+    addIfMissing(currentSessionKey, currentEntry?.displayName);
   }
 
   return out;
@@ -3217,6 +3412,8 @@ function resolveInterruptedSendResume(
  * touching the visible (current-session) streaming fields.
  */
 function classifyBackgroundTermination(
+  get: () => ChatState,
+  eventSessionKey: string,
   event: Record<string, unknown>,
   resolvedState: string,
 ): { completed: boolean; aborted: boolean } {
@@ -3235,14 +3432,31 @@ function classifyBackgroundTermination(
     }
     const normalized = normalizeStreamingMessage(finalMsg) as RawMessage;
     const text = getMessageText(normalized.content);
-    const isInternal = Boolean(text.trim()) && isInternalMessageText(text);
-    // Tool steps and NO_REPLY/internal turns do not end the run; only a real
+    const isUiHidden = Boolean(text.trim()) && isInternalMessageText(text);
+    if (shouldSilentlyFinalizeRunOnAssistantFinal(normalized)) {
+      const state = get();
+      const messages = state.currentSessionKey === eventSessionKey
+        ? state.messages
+        : (state.sessionStreamingStates[eventSessionKey]?.messagesSnapshot ?? []);
+      const streamingMessage = state.currentSessionKey === eventSessionKey
+        ? state.streamingMessage
+        : state.sessionStreamingStates[eventSessionKey]?.streamingMessage;
+      if (hasOpenDelegatedBackendWork(
+        messages,
+        state.gatewayBackgroundActivity,
+        state.sessionBackendActivity,
+      )) {
+        return { completed: false, aborted: false };
+      }
+      return { completed: true, aborted: false };
+    }
+    // Tool steps and silent plumbing finals do not end the run; only a real
     // assistant response does.
     if (
       !isToolResultRole(normalized.role)
       && !isToolOnlyMessage(normalized)
       && hasNonToolAssistantContent(normalized)
-      && !isInternal
+      && !isUiHidden
     ) {
       return { completed: true, aborted: false };
     }
@@ -3254,7 +3468,7 @@ function classifyBackgroundTermination(
  * Keep a background session's saved streaming state in sync when its run
  * finishes while the user is viewing a different session. Without this, the
  * stale `sending`/`activeRunId` snapshot leaves the session stuck on
- * "thinking…" forever and blocks the switch-back `loadHistory` that would
+ * "thinking?? forever and blocks the switch-back `loadHistory` that would
  * surface the completed answer.
  */
 function finalizeBackgroundSessionRunIfCompleted(
@@ -3270,7 +3484,7 @@ function finalizeBackgroundSessionRunIfCompleted(
   // Ignore events from a different run than the one tracked for this session.
   if (prev.activeRunId && runId && prev.activeRunId !== runId) return;
 
-  const { completed, aborted } = classifyBackgroundTermination(event, resolvedState);
+  const { completed, aborted } = classifyBackgroundTermination(get, eventSessionKey, event, resolvedState);
   if (!completed) return;
 
   set((s) => ({
@@ -3295,7 +3509,7 @@ function finalizeBackgroundSessionRunIfCompleted(
   }));
 }
 
-// ── Store ────────────────────────────────────────────────────────
+// ���� Store ����������������������������������������������������������������������������������������������������������������
 
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
@@ -3331,15 +3545,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
   contextCompressionStatus: null,
   sessionBackendActivity: null,
   gatewayBackgroundActivity: null,
+  announcedChildSessionKeys: [],
   thinkingLevel: null,
-  reasoningMode: loadStoredReasoningMode(),
+  sessionReasoningModes: loadSessionReasoningModesFromStorage(),
+  reasoningMode: loadSessionReasoningModesFromStorage()[DEFAULT_SESSION_KEY] ?? loadStoredReasoningMode(),
 
   setReasoningMode: async (mode: ReasoningMode) => {
-    persistReasoningMode(mode);
-    set({ reasoningMode: mode });
-    const { needsPatch } = applySessionThinkingLevelInBackground(get().currentSessionKey, mode, set);
-    if (needsPatch) {
-      deferSessionThinkingLevelPatch(get().currentSessionKey, mode);
+    const sessionKey = get().currentSessionKey;
+    const snapshot = get();
+    set((s) => {
+      const nextModes = { ...s.sessionReasoningModes, [sessionKey]: mode };
+      persistSessionReasoningModesIfChanged(nextModes);
+      return {
+        reasoningMode: mode,
+        thinkingLevel: toThinkingLevel(mode),
+        sessionReasoningModes: nextModes,
+      };
+    });
+    // Empty scratchpads keep reasoning locally until the first send patches Gateway.
+    if (!isEmptyChatScratchpad(sessionKey, snapshot)) {
+      deferSessionThinkingLevelPatch(sessionKey, mode);
     }
   },
 
@@ -3412,7 +3637,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
   },
 
-  // ── Load sessions via sessions.list ──
+  // ���� Load sessions via sessions.list ����
   loadSessions: async (force = false) => {
     const now = Date.now();
     if (_loadSessionsInFlight) {
@@ -3433,7 +3658,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
             if (sessions.length > 0) {
               const mergedLocal = filterUserFacingSessions(
-                mergePreservedSessionsIntoGatewayList(sessions, get()),
+                mergePreservedSessionsIntoGatewayList(sessions, get(), get().currentSessionKey),
               );
               
               const { currentSessionKey } = get();
@@ -3443,7 +3668,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 if (redirected) nextSessionKey = redirected.key;
               }
               
-              // 从 updatedAt 填充 sessionLastActivity，防止会话被误判为空会话
+              // ??updatedAt ��� sessionLastActivity����ֹ�Ự������Ϊ�ջỰ
               const discoveredActivity = Object.fromEntries(
                 mergedLocal
                   .map((session) => {
@@ -3485,7 +3710,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             .filter((session): session is ChatSession => session != null);
           let localPreviewSessions: ChatSession[] = [];
           try {
-            localPreviewSessions = await loadLocalSessionSummaries('main');
+            const previewAgentIds = collectAgentIdsFromSessionKeys(
+              gatewaySessions.map((session) => session.key),
+            );
+            localPreviewSessions = await loadLocalSessionSummariesForAgentIds(previewAgentIds);
           } catch (error) {
             console.warn('[Sessions] Failed to load local session previews for Gateway list:', error);
           }
@@ -3511,7 +3739,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return true;
           });
 
-          const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(dedupedSessions, get());
+          const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(dedupedSessions, get(), get().currentSessionKey);
           const userFacingSessions = filterUserFacingSessions(mergedWithPreserved);
 
           const { currentSessionKey, sessions: localSessions } = get();
@@ -3530,7 +3758,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // Preserve only locally-created pending sessions. On initial boot the
             // default ghost key (`agent:main:main`) should yield to real history.
             const hasLocalPendingSession = localSessions.some((session) => session.key === nextSessionKey);
-            if (!hasLocalPendingSession) {
+            const viewingEmptyScratchpad = isEmptyChatScratchpad(currentSessionKey, get());
+            if (!hasLocalPendingSession && !viewingEmptyScratchpad) {
               const fallback = pickUserFacingSession(userFacingSessions);
               if (fallback) nextSessionKey = fallback.key;
             }
@@ -3542,6 +3771,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
               { key: nextSessionKey, displayName: nextSessionKey },
             ]
             : userFacingSessions;
+
+          if (
+            currentSessionKey
+            && nextSessionKey !== currentSessionKey
+            && sessionsWithCurrent.some((session) => session.key === currentSessionKey)
+          ) {
+            nextSessionKey = currentSessionKey;
+          }
 
           const discoveredActivity = Object.fromEntries(
             sessionsWithCurrent
@@ -3585,7 +3822,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  // ── Switch session ──
+  // ���� Switch session ����
 
   switchSession: (key: string) => {
     if (isSubagentSessionKey(key)) {
@@ -3608,20 +3845,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
         fallbackUserMessage: getLastRealUserSnapshot(prev.messages),
       };
     }
-    const { sessionStreamingStates } = get();
-    const nextState = sessionStreamingStates[key];
-    const hasActiveStream = nextState?.activeRunId || nextState?.sending;
     set((s) => buildSessionSwitchPatch(s, key));
     syncWorkspacePickerToSession(get().sessionWorkspaceIds, key);
-    if (!hasActiveStream) {
-      get().loadHistory();
-    }
+    void refreshSessionBackendActivity(key).then((snapshot) => {
+      const latest = get();
+      if (latest.currentSessionKey !== key || !snapshot) return;
+      set({
+        sessionBackendActivity: snapshot.session,
+        gatewayBackgroundActivity: snapshot.background,
+      });
+      const reAdopt = buildReAdoptRunPatch(
+        { ...get(), currentSessionKey: key },
+        key,
+        snapshot.session,
+        snapshot.background,
+      );
+      if (reAdopt) {
+        set(reAdopt);
+      }
+      ensureSessionBackendPolling(key, set, get);
+    });
+    // Always reconcile transcript after switch. messagesSnapshot is only a
+    // placeholder; skipping loadHistory on active streams left stale interim
+    // narrations as permanent orphan bubbles when hopping between sessions.
+    void get().loadHistory(true, { force: true });
   },
 
-  // ── Delete session ──
+  // ���� Delete session ����
   //
   // NOTE: The OpenClaw Gateway does NOT expose a sessions.delete (or equivalent)
-  // RPC — confirmed by inspecting client.ts, protocol.ts and the full codebase.
+  // RPC ??confirmed by inspecting client.ts, protocol.ts and the full codebase.
   // Deletion is therefore a local-only UI operation: the session is removed from
   // the sidebar list and its labels/activity maps are cleared.  The underlying
   // JSONL history file on disk is intentionally left intact, consistent with the
@@ -3629,7 +3882,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   deleteSession: async (key: string) => {
     // Soft-delete the session's JSONL transcript on disk.
-    // The main process renames <suffix>.jsonl → <suffix>.deleted.jsonl so that
+    // The main process renames <suffix>.jsonl ??<suffix>.deleted.jsonl so that
     // sessions.list skips it automatically.
     try {
       const result = await hostApiFetch<{
@@ -3655,7 +3908,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const remaining = sessions.filter((s) => s.key !== key);
 
     if (currentSessionKey === key) {
-      // Switched away from deleted session — pick the first remaining or create new
+      // Switched away from deleted session ??pick the first remaining or create new
       const next = remaining[0];
       set((s) => {
         const nextState = next ? s.sessionStreamingStates[next.key] : null;
@@ -3686,6 +3939,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           sessionPinnedAt: nextPinnedAt,
           sessionStreamingStates: Object.fromEntries(Object.entries(s.sessionStreamingStates).filter(([k]) => k !== key)),
           sessionCompressionState: Object.fromEntries(Object.entries(s.sessionCompressionState).filter(([k]) => k !== key)),
+          sessionReasoningModes: Object.fromEntries(Object.entries(s.sessionReasoningModes).filter(([k]) => k !== key)),
           // Restore messages snapshot if there's an active stream, otherwise clear for loadHistory
           messages: preservedMessages,
           error: null,
@@ -3733,12 +3987,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           sessionWorkspaceIds: Object.fromEntries(Object.entries(s.sessionWorkspaceIds).filter(([k]) => k !== key)),
           sessionPinnedAt: nextPinnedAt,
           sessionStreamingStates: Object.fromEntries(Object.entries(s.sessionStreamingStates).filter(([k]) => k !== key)),
+          sessionReasoningModes: Object.fromEntries(Object.entries(s.sessionReasoningModes).filter(([k]) => k !== key)),
         };
       });
     }
   },
 
-  // ── Rename session (persisted user-edited title) ──
+  // ���� Rename session (persisted user-edited title) ����
   //
   // We store the override in `customSessionLabels` (mirrored to localStorage),
   // not in the JSONL transcript or `sessions.json`, so we don't interfere with
@@ -3760,14 +4015,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
-  // ── New session ──
+  // ���� New session ����
 
   newSession: (agentId?: string) => {
     // Generate a new unique session key and switch to it.
     // NOTE: We intentionally do NOT call sessions.reset on the old session.
     // sessions.reset archives (renames) the session JSONL file, making old
     // conversation history inaccessible when the user switches back to it.
-    const { currentSessionKey, messages, sessionLastActivity, sessionLabels, activeRunId, streamingText, streamingMessage, streamingTools, pendingFinal, lastUserMessageAt, pendingToolImages, runAborted, sending } = get();
+    const { currentSessionKey, messages, sessionLastActivity, sessionLabels, activeRunId, streamingText, streamingMessage, streamingTools, pendingFinal, lastUserMessageAt, pendingToolImages, runAborted, sending, reasoningMode, sessionReasoningModes } = get();
     // Only treat sessions with no history records and no activity timestamp as empty
     const leavingEmpty = !currentSessionKey.endsWith(':main')
       && messages.length === 0
@@ -3805,6 +4060,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? clearSessionEntryFromMap(nextStreamingStates, currentSessionKey)
         : nextStreamingStates;
 
+      // Save current session's reasoning mode and prepare for new session
+      const nextReasoningModes: Record<string, ReasoningMode> = {
+        ...s.sessionReasoningModes,
+        [currentSessionKey]: reasoningMode,
+      };
+      const finalReasoningModes = leavingEmpty
+        ? clearSessionEntryFromMap(nextReasoningModes, currentSessionKey)
+        : nextReasoningModes;
+      persistSessionReasoningModesIfChanged(finalReasoningModes);
+
       return {
         currentSessionKey: newKey,
         currentAgentId: getAgentIdFromSessionKey(newKey),
@@ -3822,6 +4087,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ? clearSessionEntryFromMap(s.sessionWorkspaceIds, currentSessionKey)
           : s.sessionWorkspaceIds,
         sessionStreamingStates: finalStreamingStates,
+        sessionReasoningModes: finalReasoningModes,
+        reasoningMode: 'fast',
+        thinkingLevel: 'off',
         messages: [],
         error: null,
         runError: null,
@@ -3846,13 +4114,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     void get().loadHistory();
   },
 
-  // ── Set prefilled input text ──
+  // ���� Set prefilled input text ����
 
   setPrefilledInput: (text: string | null) => {
     set((s) => ({ ...s, prefilledInput: text }));
   },
 
-  // ── Cleanup empty session on navigate away ──
+  // ���� Cleanup empty session on navigate away ����
 
   cleanupEmptySession: () => {
     const { currentSessionKey, messages, sessionLastActivity, sessionLabels } = get();
@@ -3892,11 +4160,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessionCompressionState: Object.fromEntries(
         Object.entries(s.sessionCompressionState).filter(([k]) => k !== currentSessionKey),
       ),
+      sessionReasoningModes: Object.fromEntries(
+        Object.entries(s.sessionReasoningModes).filter(([k]) => k !== currentSessionKey),
+      ),
       };
     });
   },
 
-  // ── Load chat history ──
+  // ���� Load chat history ����
 
   loadHistory: async (quiet = false, opts?: { afterAwaitRetry?: boolean; force?: boolean }) => {
     const afterAwaitRetry = opts?.afterAwaitRetry === true;
@@ -3966,7 +4237,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     };
 
-    // If the RPC never settles (hang), we must drop the in-flight entry — otherwise
+    // If the RPC never settles (hang), we must drop the in-flight entry ??otherwise
     // every later `loadHistory` for this session awaits forever (see existingLoad branch)
     // and the UI can sit empty after the safety timer cleared `loading`.
     let loadingTimedOut = false;
@@ -4108,13 +4379,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       if ((isSendingNow || get().pendingFinal || get().activeRunId) && recentTerminalAssistant) {
-        if (!shouldFinalizeUserTurn(
-          finalMessages,
+        if (!canClearUserTurnNow({
+          messages: finalMessages,
           lastUserMessageAt,
-          backendSnapshot?.session ?? get().sessionBackendActivity,
-          recentTerminalAssistant,
-          backendSnapshot?.background ?? get().gatewayBackgroundActivity,
-        )) {
+          backendActivity: backendSnapshot?.session ?? get().sessionBackendActivity,
+          terminalMessage: recentTerminalAssistant,
+          gatewayBackground: backendSnapshot?.background ?? get().gatewayBackgroundActivity,
+          finalizeGraceStartedAt: getFinalizeGraceStartedAt(currentSessionKey),
+        })) {
           if (isSendingNow) {
             applySendingUiPatchFromTranscript(rawMessages, set, get);
           }
@@ -4135,12 +4407,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         } else {
           clearHistoryPoll();
-          clearSessionActivityPoll();
           clearErrorRecoveryTimer();
           set(buildClearedActiveRunPatch());
+          ensureSessionBackendPolling(currentSessionKey, set, get);
         }
       } else if (isSendingNow) {
         applySendingUiPatchFromTranscript(rawMessages, set, get);
+        // When the loaded history already ends with a visible assistant reply,
+        // clear any stale streaming state so the same content does not appear
+        // both as a committed message bubble and a streaming reply bubble.
+        const lastMsg = finalMessages[finalMessages.length - 1];
+        if (lastMsg?.role === 'assistant' && hasVisibleAssistantContent(lastMsg)) {
+          set({
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingToolImages: [],
+          });
+        }
       }
 
       const latestPromptError = getLatestPromptErrorAfterUser(promptErrors, lastUserMessageAt ? toMs(lastUserMessageAt) : 0);
@@ -4148,12 +4432,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const promptErrorText = typeof latestPromptError.error === 'string' ? latestPromptError.error : '';
         if (!isAbortErrorMessage(promptErrorText)) {
           const promptErrorAt = getPromptErrorTimestamp(latestPromptError);
-          const hasSuccessfulTerminalAfterError = [...rawMessages].reverse().some((msg) => {
-            if (!isRunTerminalAssistantMessage(msg)) return false;
+          // `isRunTerminalAssistantMessage` 需要 stop_reason，但很多正常回复
+          // 没有这个字段。增加检查任意有可见文本的 assistant 消息，
+          // 只要错误之后出现了正常回复，就认为 Gateway 已恢复，不展示错误。
+          const hasAssistantReplyAfterError = [...rawMessages].reverse().some((msg) => {
+            if (msg.role !== 'assistant') return false;
             if (!promptErrorAt || !msg.timestamp) return false;
-            return toMs(msg.timestamp) >= promptErrorAt;
+            if (toMs(msg.timestamp) < promptErrorAt) return false;
+            return isRunTerminalAssistantMessage(msg) || hasVisibleAssistantContent(msg);
           });
-          if (!hasSuccessfulTerminalAfterError) {
+          if (!hasAssistantReplyAfterError) {
             const displayError = promptErrorText
               ? resolveRunFailureErrorMessage(promptErrorText)
               : i18n.t('chat:errors.modelResponseTimeoutLong');
@@ -4222,7 +4510,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             console.debug(`[PERF] Local history read took ${Date.now() - localStart}ms, success: ${response.success}, messages: ${response.messages?.length || 0}`);
 
             if (response.success && Array.isArray(response.messages)) {
-              const rawMessages = response.messages;
+              let rawMessages = response.messages;
+              if (isCronSessionKey(currentSessionKey)) {
+                rawMessages = await loadMergedCronSessionMessages(currentSessionKey, rawMessages, 200);
+              }
               const thinkingLevel = null;
               if (rawMessages.length === 0 && gatewayReady === true) {
                 console.debug(`[History] Local history was empty for ${currentSessionKey}; falling back to Gateway RPC`);
@@ -4240,7 +4531,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
                 const applied = await applyLoadedMessages(decayResult.messages, thinkingLevel, response.promptErrors ?? []);
                 if (decayResult.stats.finalCount < decayResult.stats.originalCount) {
-                  console.log(`[history-time-decay] ${currentSessionKey}: ${decayResult.stats.originalCount}→${decayResult.stats.finalCount} messages, ~${decayResult.stats.estimatedTokens} tokens (${decayResult.stats.hoursAgo.toFixed(1)}h ago)`);
+                  console.log(`[history-time-decay] ${currentSessionKey}: ${decayResult.stats.originalCount}??{decayResult.stats.finalCount} messages, ~${decayResult.stats.estimatedTokens} tokens (${decayResult.stats.hoursAgo.toFixed(1)}h ago)`);
                 }
                 if (!applied) {
                   _historyApplyDiscardedForKey.add(currentSessionKey);
@@ -4306,8 +4597,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (data) {
           let rawMessages = Array.isArray(data.messages) ? data.messages as RawMessage[] : [];
           const thinkingLevel = data.thinkingLevel ? String(data.thinkingLevel) : null;
-          if (rawMessages.length === 0 && isCronSessionKey(currentSessionKey)) {
-            rawMessages = await loadCronFallbackMessages(currentSessionKey, 200);
+          if (isCronSessionKey(currentSessionKey)) {
+            rawMessages = await loadMergedCronSessionMessages(currentSessionKey, rawMessages, 200);
           }
 
           // Apply compression reconstruction or time decay
@@ -4321,7 +4612,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           const applied = await applyLoadedMessages(decayResult.messages, thinkingLevel);
           if (decayResult.stats.finalCount < decayResult.stats.originalCount) {
-            console.log(`[history-time-decay] ${currentSessionKey}: ${decayResult.stats.originalCount}→${decayResult.stats.finalCount} messages, ~${decayResult.stats.estimatedTokens} tokens (${decayResult.stats.hoursAgo.toFixed(1)}h ago)`);
+            console.log(`[history-time-decay] ${currentSessionKey}: ${decayResult.stats.originalCount}??{decayResult.stats.finalCount} messages, ~${decayResult.stats.estimatedTokens} tokens (${decayResult.stats.hoursAgo.toFixed(1)}h ago)`);
           }
           if (!applied) {
             _historyApplyDiscardedForKey.add(currentSessionKey);
@@ -4407,7 +4698,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  // ── Send message ──
+  // ���� Send message ����
 
   sendMessage: async (
     text: string,
@@ -4460,16 +4751,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
         });
       }
       if (!_deIsDigital) {
-        set({ error: `@${targetAgentId} 不是已安装的数字员工，当前 @agent 只支持数字员工。`, sending: false });
+        set({ error: `@${targetAgentId} 的数字员工未安装或不可用，@agent 仅支持数字员工`, sending: false });
         return;
       }
     }
+    // When entering a digital employee session via the "使用" button (newSession),
+    // targetAgentId is not set because the user didn't @mention. Auto-detect the
+    // digital employee from the current session key so that executeAsAgentId is
+    // always passed to chat.send, ensuring skills/MCP isolation.
+    if (!_deIsDigital) {
+      const currentAgentId = get().currentAgentId;
+      if (currentAgentId && currentAgentId !== 'main') {
+        const agentSummary = useAgentsStore.getState().agents.find(
+          (agent) => agent.id === currentAgentId && agent.isDigitalEmployee,
+        );
+        if (agentSummary) {
+          _deIsDigital = true;
+          _deAgentId = null;
+          _deDisplayName = agentSummary.name || currentAgentId;
+          console.info('[digital-employee] auto-resolved from session agent', {
+            agentId: currentAgentId,
+            sessionKey: get().currentSessionKey,
+          });
+        }
+      }
+    }
+    // Resolve the effective target agent ID: prefer explicit @mention parameter,
+    // fall back to the current session's agent ID when auto-detected as digital employee.
+    const _resolvedTargetAgentId = targetAgentId ?? (_deIsDigital ? get().currentAgentId : null);
     const trimmed = text.trim();
     if (!trimmed && (!attachments || attachments.length === 0)) return;
     const suppressOptimisticUserMessage = _suppressNextOptimisticUserMessage;
     _suppressNextOptimisticUserMessage = false;
 
     clearAbortedChatRuns();
+    set({ emptyFinalRecovery: { status: 'idle' } });
 
     const targetSessionKey = resolveMainSessionKeyForAgent(_deAgentId) ?? get().currentSessionKey;
 
@@ -4552,8 +4868,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content: trimmed || (attachments?.length ? '(file attached)' : ''),
       timestamp: nowMs / 1000,
       id: crypto.randomUUID(),
-      _agentMention: targetAgentId || void 0,
-      _agentMentionName: _deDisplayName || targetAgentId || void 0,
+      _agentMention: _resolvedTargetAgentId || void 0,
+      _agentMentionName: _deDisplayName || _resolvedTargetAgentId || void 0,
       _attachedFiles: attachments?.map(a => ({
         fileName: a.fileName,
         mimeType: a.mimeType,
@@ -4564,7 +4880,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
 
     // Save send params for potential silent retry
-    _lastSendParams = { text, attachments, targetAgentId };
+    clearPendingSilentRetry();
+    _lastSendParams = { text, attachments, _resolvedTargetAgentId };
     _retriedRunIds = new Set();
 
     const contextGuard = await prepareContextBeforeSend({
@@ -4664,13 +4981,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     // Start the local transcript fallback and safety timeout IMMEDIATELY (before the
     // RPC await) because the gateway's chat.send RPC may block until the
-    // entire agentic conversation finishes — the poll must run in parallel.
+    // entire agentic conversation finishes ??the poll must run in parallel.
     _lastChatEventAt = Date.now();
     clearHistoryPoll();
     clearErrorRecoveryTimer();
     _lastRuntimeTranscriptProgressSignatureBySession.delete(currentSessionKey);
     startActiveSendHistoryFallback(currentSessionKey);
-    startSessionActivityPoll(currentSessionKey, set, get);
+    ensureSessionBackendPolling(currentSessionKey, set, get);
 
     const SAFETY_TIMEOUT_MS = 15 * 60_000;
     // Removed polling mechanism to prevent duplicate user messages.
@@ -4696,7 +5013,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
         }
         const backendActivity = backendSnapshot?.session ?? get().sessionBackendActivity;
-        const backendStillActive = backendActivity && !shouldForceAbortStuckRun(backendActivity);
+        const gatewayBackground = backendSnapshot?.background ?? get().gatewayBackgroundActivity;
+        const backendStillActive = backendActivity && !shouldForceAbortStuckRun(
+          backendActivity,
+          gatewayBackground,
+          get().messages,
+        );
 
         if (hasRunningTools && idleMs >= TOOL_EXECUTION_STALE_MS) {
           if (backendStillActive) {
@@ -4707,8 +5029,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           clearSessionActivityPoll();
           abortGatewayRun(currentSessionKey);
           _pendingComplexTaskPlans.delete(currentSessionKey);
+          console.warn('[chat.safety-timeout] 工具执行长时间无响应，已自动停止本次任务', { sessionKey: currentSessionKey });
           set({
-            error: i18n.t('chat:errors.toolExecutionTimeout'),
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
@@ -4817,10 +5139,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setTimeout(checkStuck, 30_000);
 
     const idempotencyKey = crypto.randomUUID();
-    if (_deIsDigital && targetAgentId) {
+    if (_deIsDigital && _resolvedTargetAgentId) {
       _digitalEmployeeRuns.set(idempotencyKey, {
-        agentId: targetAgentId,
-        name: _deDisplayName || targetAgentId,
+        agentId: _resolvedTargetAgentId,
+        name: _deDisplayName || _resolvedTargetAgentId,
       });
     }
     try {
@@ -4851,10 +5173,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         runtimeMessage + (_deIsDigital ? '' : workspaceContext),
         effectiveReasoningMode,
       );
-      const executeAsParams = _deIsDigital && targetAgentId
+      const executeAsParams = _deIsDigital && _resolvedTargetAgentId
         ? {
-          executeAsAgentId: targetAgentId,
-          executedByAgentName: _deDisplayName || targetAgentId,
+          executeAsAgentId: _resolvedTargetAgentId,
+          executedByAgentName: _deDisplayName || _resolvedTargetAgentId,
         }
         : {};
 
@@ -4918,10 +5240,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       } else if (result.result?.runId && get().sending) {
         const runId = result.result.runId;
-        if (_deIsDigital && targetAgentId) {
+        if (_deIsDigital && _resolvedTargetAgentId) {
           _digitalEmployeeRuns.set(runId, {
-            agentId: targetAgentId,
-            name: _deDisplayName || targetAgentId,
+            agentId: _resolvedTargetAgentId,
+            name: _deDisplayName || _resolvedTargetAgentId,
           });
         }
         const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
@@ -4972,14 +5294,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  // ── Abort active run ──
+  // ���� Abort active run ����
 
   abortRun: async () => {
     clearHistoryPoll();
     clearSessionActivityPoll();
     clearErrorRecoveryTimer();
+    clearPendingSilentRetry();
     markAbortHistoryQuietPeriod();
-    const { currentSessionKey, messages, activeRunId } = get();
+    const { currentSessionKey, messages, activeRunId, gatewayBackgroundActivity } = get();
     markUserAbort();
     if (activeRunId) {
       markAbortedChatRun(activeRunId);
@@ -5026,10 +5349,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
           },
           10_000,
         ),
-        abortPendingChildDelegations(messages, rpc),
+        abortPendingChildDelegations(
+          messages,
+          rpc,
+          gatewayBackgroundActivity?.processingSessionKeys ?? [],
+        ),
       ]);
     } catch (err) {
-      // 忽略 abort 错误，因为用户主动终止会话时 RPC 可能被中止
+      // ���� abort ������Ϊ�û�������ֹ�Ựʱ RPC ���ܱ���??
       const errStr = String(err);
       if (!errStr.includes('aborted') && !errStr.includes('abort')) {
         set({ error: errStr });
@@ -5041,7 +5368,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     void get().loadHistory(true, { force: true });
   },
 
-  // ── Handle incoming chat events from Gateway ──
+  // ���� Handle incoming chat events from Gateway ����
 
   handleChatEvent: (event: Record<string, unknown>) => {
     const runId = String(event.runId || '');
@@ -5049,6 +5376,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const eventSessionKey = event.sessionKey != null ? String(event.sessionKey) : null;
     const { activeRunId, currentSessionKey } = get();
     const isCurrentSessionEvent = eventSessionKey == null || eventSessionKey === currentSessionKey;
+
+    // The child that triggers a parent's auto-announce wrap-up never gets an
+    // `[Internal task completion event]` written to the parent transcript — its
+    // completion is encoded only in this run id. Record it so its execution-graph
+    // branch settles instead of being stranded "running".
+    if (runId && isSubagentDelegationAnnounceRun(runId)) {
+      const announcedChildKey = parseChildSessionKeyFromAnnounceRun(runId);
+      if (announcedChildKey && !get().announcedChildSessionKeys.includes(announcedChildKey)) {
+        set((s) => (
+          s.announcedChildSessionKeys.includes(announcedChildKey)
+            ? {}
+            : { announcedChildSessionKeys: [...s.announcedChildSessionKeys, announcedChildKey] }
+        ));
+      }
+    }
 
     if (!isCurrentSessionEvent) {
       if (isDuplicateChatEvent(eventState, event)) return;
@@ -5118,7 +5460,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Events for a session the user isn't currently viewing must not mutate the
     // visible streaming fields. We still finalize that background session's
     // saved streaming state when its run completes, otherwise switching back
-    // strands it on a frozen "thinking…" indicator and blocks the loadHistory
+    // strands it on a frozen "thinking?? indicator and blocks the loadHistory
     // that would surface the finished answer.
     if (eventSessionKey != null && eventSessionKey !== currentSessionKey) {
       finalizeBackgroundSessionRunIfCompleted(set, get, eventSessionKey, event, resolvedState, runId);
@@ -5222,7 +5564,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 return s.streamingMessage;
               }
               const msgContent = getMessageText(msgObj.content);
-              if (msgContent.trim() && isInternalMessageText(msgContent)) {
+              if (msgContent.trim() && shouldSuppressAssistantStreamingText(msgContent)) {
                 return null;
               }
             }
@@ -5264,6 +5606,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         });
         clearErrorRecoveryTimer();
         if (get().error) set({ error: null });
+        if (get().runError) set({ runError: null });
         // Message complete - add to history and clear streaming
         const finalMsg = event.message as RawMessage | undefined;
         if (finalMsg) {
@@ -5279,7 +5622,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             contentSize: JSON.stringify(normalizedFinalMessage.content).length,
           });
 
-          // ── Silent retry for tool stream errors ──
+          // ���� Silent retry for tool stream errors ����
           if (
             normalizedFinalMessage.role === 'assistant'
             && runId
@@ -5320,7 +5663,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
                   const params = _lastSendParams!;
                   _suppressNextOptimisticUserMessage = true;
-                  void state.sendMessage(params.text, params.attachments, params.targetAgentId);
+                  void state.sendMessage(params.text, params.attachments, params._resolvedTargetAgentId);
                 })();
 
                 // Don't snapshot the failed message, don't set error, don't loadHistory
@@ -5379,11 +5722,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             break;
           }
 
-          const finalMsgContent = getMessageText(normalizedFinalMessage.content);
-          if (finalMsgContent.trim() && isInternalMessageText(finalMsgContent)) {
-            set({
-              ...buildClearedActiveRunPatch(),
-              runError: null,
+          if (shouldSilentlyFinalizeRunOnAssistantFinal(normalizedFinalMessage)) {
+            if (deferClearUserTurnForOpenDelegation(get, set, {
+              sessionKey: get().currentSessionKey,
+              runId,
+            })) {
+              clearHistoryPoll();
+              void get().loadHistory(true, { force: true });
+              break;
+            }
+            void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
+              sessionKey: get().currentSessionKey,
+              runId,
+              terminalMessage: normalizedFinalMessage,
             });
             clearHistoryPoll();
             void get().loadHistory(true, { force: true });
@@ -5421,7 +5772,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             set((s) => {
               // Snapshot the current streaming assistant message (thinking + tool_use) into
               // messages[] before clearing it. The Gateway does NOT send separate 'final'
-              // events for intermediate tool-use turns — it only sends deltas and then the
+              // events for intermediate tool-use turns ??it only sends deltas and then the
               // tool result. Without snapshotting here, the intermediate thinking+tool steps
               // would be overwritten by the next turn's deltas and never appear in the UI.
               const currentStream = s.streamingMessage as RawMessage | null;
@@ -5447,9 +5798,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             normalizedFinalMessage,
             [...turnMessages, normalizedFinalMessage],
           );
+          // Pure text Q&A without tool activity: the assistant's visible reply
+          // is the final answer. Treat it as terminal so the run can finalize
+          // even when the provider omits stopReason on the message.
+          const hasToolActivityInTurn = turnMessages.some((m) => {
+            if (isToolResultRole(m.role)) return true;
+            if (m.role !== 'assistant') return false;
+            return isToolOnlyMessage(m);
+          });
+          const isSimpleTextResponse = !hasToolActivityInTurn && hasOutput && !toolOnly;
           const keepRunActiveAfterFinal = !isExecApprovalFollowupRun(runId)
             && !isRunTerminalAssistantMessage(normalizedFinalMessage)
             && !isConcluding
+            && !isSimpleTextResponse
             && shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage);
           const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
           set((s) => {
@@ -5493,6 +5854,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               streamingMessage: null,
               pendingFinal: true,
               streamingTools,
+              runError: null,
               ...clearPendingImages,
             } : {
               messages: [...s.messages, msgWithImages],
@@ -5502,14 +5864,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
               activeRunId: keepRunActiveAfterFinal ? s.activeRunId : null,
               pendingFinal: keepRunActiveAfterFinal ? true : false,
               streamingTools,
+              runError: null,
               ...clearPendingImages,
             };
           });
-          // After the final response, quietly reload history to surface all intermediate
-          // tool-use turns (thinking + tool blocks) from the Gateway's authoritative record.
+          // After the final response, always reload history to surface all intermediate
+          // tool-use turns (thinking + tool blocks) from the Gateway's authoritative
+          // record and to let applyLoadedMessages detect terminal/concluding replies.
+          clearHistoryPoll();
+          void get().loadHistory(true, { force: true });
+
           if (!keepRunActiveAfterFinal) {
-            clearHistoryPoll();
-            void get().loadHistory(true, { force: true });
+            void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
+              sessionKey: get().currentSessionKey,
+              runId,
+              terminalMessage: normalizedFinalMessage,
+            });
             const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
             const finalText = getMessageText(normalizedFinalMessage.content);
             const isPlanningRun = pendingPlan
@@ -5526,6 +5896,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 void state.sendMessage(executionRequest);
               }, 250);
             }
+          } else {
+            // Even when the final message lacks a terminal stopReason and the
+            // turn had no tool activity (simple text Q&A), still attempt to
+            // finalize so the run doesn't stay stuck in pendingFinal indefinitely.
+            void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
+              sessionKey: get().currentSessionKey,
+              runId,
+              terminalMessage: normalizedFinalMessage,
+            });
           }
         } else {
           const { activeRunId: currentActiveRunId } = get();
@@ -5582,7 +5961,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ?? 'An error occurred',
         );
 
-        // ── User-initiated stop ──
+        // ���� User-initiated stop ����
         // When the user clicks the stop button, the runtime may still emit an
         // `error` event carrying an "abort" message. Treat that as a clean stop
         // and suppress the error bar instead of surfacing it to the user.
@@ -5608,7 +5987,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           break;
         }
 
-        // ── Silent retry for tool stream errors ──
+        // ���� Silent retry for tool stream errors ����
         if (runId && !_retriedRunIds.has(runId) && isToolStreamError(rawErrorMsg) && _lastSendParams) {
           console.warn('[chat.runtime] tool stream error event, attempting silent retry once', {
             runId,
@@ -5638,7 +6017,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
             const params = _lastSendParams!;
             _suppressNextOptimisticUserMessage = true;
-            void state.sendMessage(params.text, params.attachments, params.targetAgentId);
+            void state.sendMessage(params.text, params.attachments, params._resolvedTargetAgentId);
           })();
           break;
         }
@@ -5676,12 +6055,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
 
         if (wasSending && isGenericError) {
-          void get().loadHistory(true, { force: true });
-          scheduleRunRecoveryOrFinalize(set, get, {
-            runId,
-            graceMs: GENERIC_ERROR_RECOVERY_MS,
-            sessionKey: currentSessionKey,
+          // 空泛错误（"An error occurred"）通常是 Gateway 内部瞬时抖动，不展示
+          // UI 错误栏，静默刷新历史即可。
+          set({
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
           });
+          void get().loadHistory(true, { force: true });
           break;
         }
 
@@ -5701,30 +6084,85 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
 
         const recoverableError = isRecoverableRuntimeError(errorMsg);
-        const displayError = resolveRunFailureErrorMessage(rawErrorMsg);
-        set({
-          error: displayError,
-          runError: displayError,
-          streamingText: '',
-          streamingMessage: null,
-          streamingTools: [],
-          pendingFinal: false,
-          pendingToolImages: [],
-          ...(recoverableError ? {} : {
+
+        // 可恢复错误（terminated / rate limit / 502 / timeout 等）Gateway 会内部
+        // 重试恢复，不应立即展示 UI 错误栏。只清理 streaming 状态，静默等待恢复。
+        if (recoverableError) {
+          set({
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+          });
+          if (wasSending) {
+            scheduleRunRecoveryOrFinalize(set, get, {
+              runId,
+              graceMs: RUNTIME_ERROR_RECOVERY_GRACE_MS,
+              sessionKey: currentSessionKey,
+            });
+          }
+          break;
+        }
+
+        // 只有真正阻塞任务继续的致命错误才展示给用户，
+        // 其他一切运行时错误只记日志，避免干扰用户体验。
+        if (isFatalRuntimeError(rawErrorMsg)) {
+          const userIdx2 = findLatestVisibleUserIndex(get().messages);
+          const hasReply = userIdx2 >= 0
+            && get().messages.slice(userIdx2 + 1).some(
+              (m) => m.role === 'assistant' && hasVisibleAssistantContent(m),
+            );
+          if (hasReply) {
+            // 致命错误但任务已有回复，说明实际已完成，只记日志
+            console.warn('[chat.error-suppressed] 任务已有回复，跳过致命错误展示', {
+              error: rawErrorMsg,
+              runId,
+            });
+            set({
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingFinal: false,
+              pendingToolImages: [],
+              sending: false,
+              activeRunId: null,
+              lastUserMessageAt: null,
+            });
+            break;
+          }
+          const displayError = resolveRunFailureErrorMessage(rawErrorMsg);
+          set({
+            error: displayError,
+            runError: displayError,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
             sending: false,
             activeRunId: null,
             lastUserMessageAt: null,
             runAborted: isAbortErrorMessage(rawErrorMsg),
-          }),
-        });
-
-        if (wasSending && recoverableError) {
-          scheduleRunRecoveryOrFinalize(set, get, {
-            runId,
-            graceMs: RUNTIME_ERROR_RECOVERY_GRACE_MS,
-            sessionKey: currentSessionKey,
           });
-        } else if (wasSending) {
+        } else {
+          console.warn('[chat.error-suppressed] 非致命错误，跳过展示', {
+            error: rawErrorMsg,
+            runId,
+          });
+          set({
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            sending: false,
+            activeRunId: null,
+            lastUserMessageAt: null,
+          });
+        }
+
+        if (wasSending) {
           clearHistoryPoll();
           void get().loadHistory(true, { force: true });
         }
@@ -5733,7 +6171,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case 'aborted': {
         clearHistoryPoll();
         clearErrorRecoveryTimer();
-        const isUserAbort = Boolean(runId && isAbortedChatRun(runId));
+        // Recognize a user-initiated stop broadly. The run id is already
+        // forgotten above (line ~5199) for terminal states, so re-checking
+        // `isAbortedChatRun(runId)` alone misses the user's own stop and shows
+        // the "运行被意外中断" banner. Mirror the `error` path: honor the run id
+        // captured before the forget, the runAborted flag, the post-stop time
+        // window, and the user-aborted-session marker. A genuine system abort
+        // (no user-stop signal) still surfaces the banner.
+        const isUserAbort = wasUserAbortedRun
+          || Boolean(runId && isAbortedChatRun(runId))
+          || get().runAborted
+          || isWithinUserAbortWindow()
+          || isUserAbortedSession(foregroundSessionKey);
         if (isUserAbort) {
           if (runId) forgetAbortedChatRun(runId);
           const lastUser = getLastRealUserSnapshot(get().messages);
@@ -5776,7 +6225,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
       default: {
-        // Unknown or empty state — if we're currently sending and receive an event
+        // Unknown or empty state ??if we're currently sending and receive an event
         // with a message, attempt to process it as streaming data. This handles
         // edge cases where the Gateway sends events without a state field.
         const { sending, runAborted } = get();
@@ -5845,17 +6294,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
         }
 
-        if (shouldFinalizeUserTurn(
-          next.messages,
-          next.lastUserMessageAt,
-          backendSnapshot?.session ?? next.sessionBackendActivity,
-          undefined,
-          backendSnapshot?.background ?? next.gatewayBackgroundActivity,
-        )) {
+        if (canClearUserTurnNow({
+          messages: next.messages,
+          lastUserMessageAt: next.lastUserMessageAt,
+          backendActivity: backendSnapshot?.session ?? next.sessionBackendActivity,
+          gatewayBackground: backendSnapshot?.background ?? next.gatewayBackgroundActivity,
+          finalizeGraceStartedAt: getFinalizeGraceStartedAt(resolvedSessionKey),
+        })) {
+          clearFinalizeGraceTimer();
           clearHistoryPoll();
-          clearSessionActivityPoll();
           clearErrorRecoveryTimer();
           set(buildClearedActiveRunPatch());
+          ensureSessionBackendPolling(resolvedSessionKey, set, get);
           return;
         }
 
@@ -5870,10 +6320,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
           streamingText: '',
           streamingMessage: null,
           streamingTools: [],
-          pendingFinal: next.pendingFinal || next.sending || Boolean(next.activeRunId),
-          sending: next.sending || Boolean(backendSnapshot?.session.processing),
+          pendingFinal: true,
+          sending: next.sending
+            || hasOpenDelegatedBackendWork(
+              next.messages,
+              backendSnapshot?.background ?? next.gatewayBackgroundActivity,
+              backendSnapshot?.session ?? next.sessionBackendActivity,
+            ),
           activeRunId: next.activeRunId ?? backendSnapshot?.session.activeRunIds[0] ?? null,
         });
+        scheduleDelegationFinalizeGraceIfNeeded(get, set, resolvedSessionKey, {
+          runId: resolvedRunId ?? undefined,
+        });
+        ensureSessionBackendPolling(resolvedSessionKey, set, get);
       });
     };
 
@@ -5961,6 +6420,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   clearSecurityCancelNotice: () => set({ securityCancelNotice: null }),
 }));
+
+export function kickSessionBackendPolling(): void {
+  const state = useChatStore.getState();
+  if (!state.currentSessionKey) return;
+  ensureSessionBackendPolling(state.currentSessionKey, useChatStore.setState, useChatStore.getState);
+}
 
 useChatStore.subscribe((state) => {
   persistSessionWorkspaceIdsIfChanged(state.sessionWorkspaceIds);

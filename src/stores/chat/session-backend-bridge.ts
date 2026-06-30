@@ -1,25 +1,85 @@
 import { getSessionBackendActivity } from '@/lib/host-api';
+import { useGatewayStore } from '@/stores/gateway';
 import { isWaitingOnSubagentDelegation } from '@/lib/subagent-delegation';
 import type { ChatState } from './types';
+import type { ChatGet, ChatSet } from './store-api';
 import {
   buildReAdoptRunPatch,
-  isBackendSessionActive,
+  backendActivityForSession,
+  hasLocalRunSignals,
+  hasOpenBackendWorkForUserTurn,
+  isBackendStronglyActive,
   type GatewayBackgroundActivity,
   type SessionBackendActivity,
 } from './user-turn-lifecycle';
 
-const SESSION_ACTIVITY_POLL_MS = 4_000;
+const RECONCILE_DEBOUNCE_MS = 500;
 
-let _pollTimer: ReturnType<typeof setTimeout> | null = null;
-let _pollSessionKey: string | null = null;
+let _reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+let _reconcileSessionKey: string | null = null;
 
 export function clearSessionActivityPoll(): void {
-  if (_pollTimer) {
-    clearTimeout(_pollTimer);
-    _pollTimer = null;
+  if (_reconcileTimer) {
+    clearTimeout(_reconcileTimer);
+    _reconcileTimer = null;
   }
-  _pollSessionKey = null;
+  _reconcileSessionKey = null;
 }
+
+function isGatewayRunning(): boolean {
+  return useGatewayStore.getState().status.state === 'running';
+}
+
+function hasAnyBackgroundSessionActivity(state: ChatState, sessionKey: string): boolean {
+  const sessionActivity = backendActivityForSession(state.sessionBackendActivity, sessionKey);
+  return hasOpenBackendWorkForUserTurn(
+    state.gatewayBackgroundActivity,
+    sessionActivity,
+    state.messages,
+  );
+}
+
+function hasAnySavedStreamingActivity(state: ChatState): boolean {
+  return Object.values(state.sessionStreamingStates).some((entry) => (
+    Boolean(entry?.sending || entry?.activeRunId || entry?.pendingFinal)
+  ));
+}
+
+/** Whether an on-demand backend reconcile is worthwhile for this session. */
+export function shouldScheduleBackendReconcile(state: ChatState, sessionKey: string): boolean {
+  if (!isGatewayRunning()) return false;
+  if (state.currentSessionKey !== sessionKey) return false;
+  if (state.runAborted) return false;
+
+  if (hasLocalRunSignals({
+    sending: state.sending,
+    activeRunId: state.activeRunId,
+    pendingFinal: state.pendingFinal,
+  })) {
+    return true;
+  }
+
+  const sessionActivity = backendActivityForSession(state.sessionBackendActivity, sessionKey);
+  if (isBackendStronglyActive(sessionActivity)) return true;
+  if (hasAnyBackgroundSessionActivity(state, sessionKey)) return true;
+  if (hasAnySavedStreamingActivity(state)) return true;
+
+  if (state.emptyFinalRecovery.status === 'waiting' || state.emptyFinalRecovery.status === 'checking') {
+    return true;
+  }
+
+  if (isWaitingOnSubagentDelegation(
+    state.messages,
+    state.gatewayBackgroundActivity?.processingSessionKeys ?? [],
+  )) {
+    return true;
+  }
+
+  return false;
+}
+
+/** @deprecated Use shouldScheduleBackendReconcile — kept for existing tests/callers. */
+export const shouldContinueBackendPolling = shouldScheduleBackendReconcile;
 
 export async function refreshSessionBackendActivity(
   sessionKey: string,
@@ -37,77 +97,88 @@ export async function refreshSessionBackendActivity(
   }
 }
 
-export function startSessionActivityPoll(
+async function runBackendReconcileOnce(
   sessionKey: string,
   apply: (partial: Partial<ChatState>) => void,
   getState: () => ChatState,
-): void {
-  clearSessionActivityPoll();
-  _pollSessionKey = sessionKey;
+): Promise<void> {
+  if (_reconcileSessionKey !== sessionKey) return;
 
-  const tick = async () => {
-    if (_pollSessionKey !== sessionKey) return;
+  const state = getState();
+  if (state.currentSessionKey !== sessionKey) {
+    clearSessionActivityPoll();
+    return;
+  }
 
-    const state = getState();
-    const shouldPoll = state.currentSessionKey === sessionKey && (
-      state.sending
-      || state.pendingFinal
-      || Boolean(state.activeRunId)
-      || state.emptyFinalRecovery.status === 'waiting'
-      || state.emptyFinalRecovery.status === 'checking'
-      || isWaitingOnSubagentDelegation(
-        state.messages,
-        state.gatewayBackgroundActivity?.processingSessionKeys ?? [],
-      )
-      || Boolean(state.gatewayBackgroundActivity?.hasBackgroundProcessing)
-    );
+  if (!shouldScheduleBackendReconcile(state, sessionKey)) {
+    clearSessionActivityPoll();
+    return;
+  }
 
-    if (!shouldPoll) {
-      clearSessionActivityPoll();
-      return;
-    }
+  const snapshot = await refreshSessionBackendActivity(sessionKey);
+  if (_reconcileSessionKey !== sessionKey) return;
 
-    const snapshot = await refreshSessionBackendActivity(sessionKey);
-    if (_pollSessionKey !== sessionKey || !snapshot) {
-      scheduleNext();
-      return;
-    }
+  const nextState = getState();
+  if (nextState.currentSessionKey !== sessionKey) {
+    clearSessionActivityPoll();
+    return;
+  }
 
-    const nextState = getState();
-    if (nextState.currentSessionKey !== sessionKey) {
-      clearSessionActivityPoll();
-      return;
-    }
-
+  if (snapshot) {
     apply({
       sessionBackendActivity: snapshot.session,
       gatewayBackgroundActivity: snapshot.background,
     });
 
     const reAdopt = buildReAdoptRunPatch(
-      { ...nextState, currentSessionKey: sessionKey },
+      { ...getState(), currentSessionKey: sessionKey },
       sessionKey,
       snapshot.session,
+      snapshot.background,
     );
     if (reAdopt) {
       apply(reAdopt);
     }
+  }
 
-    scheduleNext();
-  };
-
-  const scheduleNext = () => {
-    if (_pollSessionKey !== sessionKey) return;
-    _pollTimer = setTimeout(() => {
-      void tick();
-    }, SESSION_ACTIVITY_POLL_MS);
-  };
-
-  void tick();
+  clearSessionActivityPoll();
 }
+
+/**
+ * Debounced one-shot backend reconcile (no 4s loop).
+ * Triggered by push events: send, final, phase=completed, session switch.
+ */
+export function scheduleBackendReconcileOnce(
+  sessionKey: string,
+  apply: (partial: Partial<ChatState>) => void,
+  getState: () => ChatState,
+): void {
+  if (!isGatewayRunning()) return;
+  if (!shouldScheduleBackendReconcile(getState(), sessionKey)) return;
+  if (_reconcileSessionKey === sessionKey && _reconcileTimer) return;
+
+  clearSessionActivityPoll();
+  _reconcileSessionKey = sessionKey;
+  _reconcileTimer = setTimeout(() => {
+    void runBackendReconcileOnce(sessionKey, apply, getState);
+  }, RECONCILE_DEBOUNCE_MS);
+}
+
+/** Debounced one-shot reconcile wired to zustand set/get. */
+export function ensureSessionBackendPolling(
+  sessionKey: string,
+  set: ChatSet,
+  get: ChatGet,
+): void {
+  scheduleBackendReconcileOnce(sessionKey, set, get);
+}
+
+/** @deprecated Alias for ensureSessionBackendPolling. */
+export const startSessionActivityPoll = ensureSessionBackendPolling;
 
 export function isSessionStillProcessingOnBackend(
   activity: SessionBackendActivity | null | undefined,
 ): boolean {
-  return isBackendSessionActive(activity);
+  if (!activity) return false;
+  return activity.hasTrackedUserRun;
 }

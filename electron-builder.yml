@@ -36,6 +36,16 @@ extraResources:
   # Pre-bundled third-party skills (full directories, not only SKILL.md)
   - from: build/preinstalled-skills/
     to: resources/preinstalled-skills/
+  # Company skill marketplace CLI (技能广场). Must ship as REAL on-disk files
+  # under resources/ (NOT inside app.asar): the OpenClaw gateway runs as a
+  # separate node process and `exec`s `node <script>`, and an external node
+  # process cannot read files inside app.asar. Without this the packaged app
+  # has no marketplace CLI, so skill search/install silently fails.
+  - from: scripts/
+    to: scripts/
+    filter:
+      - lyclaw-marketplace-cli.mjs
+      - lyclaw-marketplace-args.mjs
   # Pre-bundled DWS CLI binaries (extracted at runtime to ~/.dws/)
   # This ensures Skills can find and execute dws commands
   - from: resources/dws-bundles/

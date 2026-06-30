@@ -32,6 +32,7 @@ import {
   applyOpenClawSilentReplyPatches,
   hasOpenClawSilentReplyPatches,
 } from './openclaw-silent-reply-patches.mjs';
+import { inspectOpenClawDigitalEmployeeIsolation } from './openclaw-digital-employee-isolation-check.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
@@ -1040,46 +1041,7 @@ function findFilesByName(rootDir, matcher) {
 }
 
 function verifyBundledDigitalEmployeeIsolation(outputDir) {
-  const distDir = path.join(outputDir, 'dist');
-  const chatFiles = findFilesByName(distDir, /^chat-.*\.js$/);
-  const getReplyFiles = findFilesByName(distDir, /^get-reply-.*\.js$/);
-  const protocolFiles = findFilesByName(distDir, /^(protocol-|schema-).*\.js$/);
-  const workspaceFiles = findFilesByName(distDir, /^workspace-.*\.js$/);
-
-  if (chatFiles.length === 0 || getReplyFiles.length === 0 || protocolFiles.length === 0 || workspaceFiles.length === 0) {
-    return false;
-  }
-
-  const hasChatExecutionTarget = chatFiles.some((chatFile) => {
-    const chatSource = fs.readFileSync(chatFile, 'utf8');
-    return chatSource.includes('executeAsAgentId') && chatSource.includes('executedByAgentName');
-  });
-  const hasProtocolExecutionTarget = protocolFiles.some((protocolFile) => {
-    const protocolSource = fs.readFileSync(protocolFile, 'utf8');
-    return protocolSource.includes('executeAsAgentId: Type.Optional(Type.String())');
-  });
-  const hasGetReplyEmployeeIsolation = getReplyFiles.some((getReplyFile) => {
-    const getReplySource = fs.readFileSync(getReplyFile, 'utf8');
-    return (
-      getReplySource.includes('resolveDigitalEmployeeExecutionContext') &&
-      getReplySource.includes('buildDigitalEmployeeMcpServers') &&
-      getReplySource.includes('__digitalEmployeeOnly: true')
-    );
-  });
-  const workspaceSourceHasEmployeeOnly = workspaceFiles.some((workspaceFile) => {
-    const workspaceSource = fs.readFileSync(workspaceFile, 'utf8');
-    return (
-      workspaceSource.includes('__digitalEmployeeOnly') &&
-      (workspaceSource.includes('mergedEmployeeSkills') || workspaceSource.includes('merged.values()'))
-    );
-  });
-
-  return (
-    hasChatExecutionTarget &&
-    hasProtocolExecutionTarget &&
-    hasGetReplyEmployeeIsolation &&
-    workspaceSourceHasEmployeeOnly
-  );
+  return inspectOpenClawDigitalEmployeeIsolation(outputDir, { fs, path });
 }
 
 function patchBundledRuntime(outputDir) {
@@ -1309,7 +1271,10 @@ patchBundledRuntime(OUTPUT);
 // 8. Verify the bundle
 const entryExists = fs.existsSync(path.join(OUTPUT, 'openclaw.mjs'));
 const distExists = fs.existsSync(path.join(OUTPUT, 'dist', 'entry.js'));
-const digitalEmployeeIsolationVerified = distExists && verifyBundledDigitalEmployeeIsolation(OUTPUT);
+const digitalEmployeeIsolationStatus = distExists
+  ? verifyBundledDigitalEmployeeIsolation(OUTPUT)
+  : { ok: false, missing: ['dist/entry.js missing'], details: {}, openclawDir: OUTPUT };
+const digitalEmployeeIsolationVerified = digitalEmployeeIsolationStatus.ok;
 
 echo``;
 echo`✅ Bundle complete: ${OUTPUT}`;
@@ -1322,6 +1287,12 @@ echo`   dist/entry.js: ${distExists ? '✓' : '✗'}`;
 echo`   digital employee isolated skills/MCP: ${digitalEmployeeIsolationVerified ? '✓' : '✗'}`;
 
 if (!entryExists || !distExists || !digitalEmployeeIsolationVerified) {
+  if (!digitalEmployeeIsolationVerified) {
+    echo`   missing digital employee isolation markers:`;
+    for (const item of digitalEmployeeIsolationStatus.missing) {
+      echo`     - ${item}`;
+    }
+  }
   echo`❌ Bundle verification failed!`;
   process.exit(1);
 }

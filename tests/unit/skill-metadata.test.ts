@@ -14,7 +14,10 @@ import {
   getMarketplaceSkillKey,
   isMarketplaceSkillInstalledOnDisk,
   companyInstallEntriesToMarketplaceSkills,
+  dedupeInstalledMarketplaceSkillsForBatchUpdate,
   mergeSkillWithMarketplaceMetadata,
+  normalizeMarketplaceSkillForUpdate,
+  resolveCompanyMarketplaceUpdateSlug,
   normalizeSkillLookupKey,
   resolveSkillDisplayName,
   resolveSkillListVersionForDisplay,
@@ -454,5 +457,70 @@ describe('skill metadata helpers', () => {
         { '377': 'frontend-design' },
       ),
     ).toBe(false);
+  });
+
+  it('resolves batch update slug from sidecar-backed package lookup', () => {
+    const byPackageSlug = {
+      'logistics-ai-tool': {
+        packageSlug: 'logistics-ai-tool',
+        name: '物流AI应用工具',
+        version: '1.0.7',
+        marketplaceId: '398',
+      },
+    };
+    const registrySkill = companyInstallEntriesToMarketplaceSkills({
+      '999': {
+        packageSlug: 'logistics-ai-tool',
+        name: '物流AI应用工具',
+        version: '1.0.7',
+      },
+    })[0]!;
+
+    expect(resolveCompanyMarketplaceUpdateSlug(
+      registrySkill,
+      { '999': 'logistics-ai-tool', '398': 'logistics-ai-tool' },
+      byPackageSlug,
+    )).toBe('398');
+
+    expect(normalizeMarketplaceSkillForUpdate(
+      registrySkill,
+      { '999': 'logistics-ai-tool', '398': 'logistics-ai-tool' },
+      byPackageSlug,
+    )).toMatchObject({ id: 398, slug: '398' });
+  });
+
+  it('dedupes installed batch rows by package folder and prefers plaza listing', () => {
+    const companyInstallMap = { '398': 'logistics-ai-tool', '999': 'logistics-ai-tool' };
+    const byPackageSlug = {
+      'logistics-ai-tool': {
+        packageSlug: 'logistics-ai-tool',
+        name: '物流AI应用工具',
+        version: '1.0.7',
+        marketplaceId: '398',
+      },
+    };
+    const registrySkill = companyInstallEntriesToMarketplaceSkills({
+      '999': {
+        packageSlug: 'logistics-ai-tool',
+        name: '物流AI应用工具',
+        version: '1.0.7',
+      },
+    })[0]!;
+    const plazaSkill: MarketplaceSkill = {
+      id: 398,
+      slug: '398',
+      name: '物流AI应用工具',
+      description: '',
+      version: '1.0.7',
+    };
+
+    const deduped = dedupeInstalledMarketplaceSkillsForBatchUpdate(
+      [registrySkill, plazaSkill],
+      companyInstallMap,
+      byPackageSlug,
+    );
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]).toMatchObject({ id: 398, slug: '398' });
   });
 });

@@ -11,6 +11,7 @@ import {
   isToolResultRole,
   normalizeStreamingMessage,
   setLastChatEventAt,
+  shouldSuppressAssistantStreamingText,
   upsertToolStatuses,
 } from './helpers';
 import { invokeIpc } from '@/lib/api-client';
@@ -18,6 +19,9 @@ import type { ChatGet, ChatSet, RuntimeActions } from './store-api';
 import { handleRuntimeEventState } from './runtime-event-handlers';
 import type { RawMessage, RunawayToolObservation, SessionStreamingState } from './types';
 import { observeRunawayToolEvent } from './runaway-tool-observer';
+import { isSubagentDelegationAnnounceRun } from '@/lib/subagent-delegation';
+import { shouldKeepRunActiveAfterAssistantFinal, shouldSilentlyFinalizeRunOnAssistantFinal } from './run-lifecycle';
+import { hasOpenDelegatedBackendWork } from './user-turn-lifecycle';
 import { shouldUpgradeConvergenceDirective } from './task-convergence-strategy';
 
 function createEmptySessionStreamingState(): SessionStreamingState {
@@ -68,7 +72,8 @@ function isExecApprovalFollowupRun(runId: string): boolean {
 
 function shouldProcessSessionRunEvent(activeRunId: string | null, runId: string): boolean {
   if (!activeRunId || !runId || runId === activeRunId) return true;
-  return isExecApprovalFollowupRun(runId);
+  if (isExecApprovalFollowupRun(runId)) return true;
+  return isSubagentDelegationAnnounceRun(runId);
 }
 
 function applyBackgroundChatEvent(
@@ -98,7 +103,7 @@ function applyBackgroundChatEvent(
         const msgObj = event.message as RawMessage;
         if (!isToolResultRole(msgObj.role)) {
           const msgContent = getMessageText(msgObj.content);
-          next.streamingMessage = msgContent.trim() && isInternalMessageText(msgContent)
+          next.streamingMessage = msgContent.trim() && shouldSuppressAssistantStreamingText(msgContent)
             ? null
             : normalizeStreamingMessage(event.message ?? next.streamingMessage);
         }
@@ -133,6 +138,12 @@ function applyBackgroundChatEvent(
           next.streamingTools = updates.length > 0 ? upsertToolStatuses(next.streamingTools, updates) : next.streamingTools;
           next.pendingFinal = true;
           next.sending = true;
+          break;
+        }
+        if (shouldKeepRunActiveAfterAssistantFinal(normalized) || hasOutput) {
+          next.pendingFinal = true;
+          next.sending = true;
+          next.activeRunId = next.activeRunId || runId || null;
           break;
         }
       }
@@ -177,6 +188,8 @@ function applyBackgroundChatEvent(
  * touching the top-level (current-session) streaming fields.
  */
 function classifyBackgroundTermination(
+  get: ChatGet,
+  eventSessionKey: string,
   event: Record<string, unknown>,
   resolvedState: string,
 ): { completed: boolean; aborted: boolean } {
@@ -196,14 +209,31 @@ function classifyBackgroundTermination(
     }
     const normalized = normalizeStreamingMessage(finalMsg) as RawMessage;
     const text = getMessageText(normalized.content);
-    const isInternal = Boolean(text.trim()) && isInternalMessageText(text);
-    // Tool steps and NO_REPLY/internal turns do not end the run; only a real
+    const isUiHidden = Boolean(text.trim()) && isInternalMessageText(text);
+    // Tool steps and silent plumbing finals do not end the run; only a real
     // assistant response does.
+    if (shouldSilentlyFinalizeRunOnAssistantFinal(normalized)) {
+      const state = get();
+      const messages = state.currentSessionKey === eventSessionKey
+        ? state.messages
+        : (state.sessionStreamingStates[eventSessionKey]?.messagesSnapshot ?? []);
+      const streamingMessage = state.currentSessionKey === eventSessionKey
+        ? state.streamingMessage
+        : state.sessionStreamingStates[eventSessionKey]?.streamingMessage;
+      if (hasOpenDelegatedBackendWork(
+        messages,
+        state.gatewayBackgroundActivity,
+        state.sessionBackendActivity,
+      )) {
+        return { completed: false, aborted: false };
+      }
+      return { completed: true, aborted: false };
+    }
     if (
       !isToolResultRole(normalized.role)
       && !isToolOnlyMessage(normalized)
       && hasVisibleAssistantContent(normalized)
-      && !isInternal
+      && !isUiHidden
     ) {
       return { completed: true, aborted: false };
     }
@@ -231,7 +261,7 @@ function finalizeBackgroundSessionRunIfCompleted(
   // Ignore events from a different run than the one tracked for this session.
   if (prev.activeRunId && runId && prev.activeRunId !== runId) return;
 
-  const { completed, aborted } = classifyBackgroundTermination(event, resolvedState);
+  const { completed, aborted } = classifyBackgroundTermination(get, eventSessionKey, event, resolvedState);
   if (!completed) return;
 
   set((s) => ({
@@ -371,13 +401,18 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
         }
       }
 
-      // Only process events for the active run on the foreground session,
-      // or for a matching known background run.
+      // Only process events for the active run (or if no active run set).
+      // Subagent announce wrap-up runs use a different runId but belong to the
+      // same user turn on the parent session.
       if (activeRunId && runId && runId !== activeRunId) {
         const isCurrentRun = resolvedSessionKey == null || resolvedSessionKey === currentSessionKey;
         const isKnownBackgroundRun = resolvedSessionKey != null
           && sessionStreamingStates[resolvedSessionKey]?.activeRunId === runId;
-        if (isCurrentRun || !isKnownBackgroundRun) return;
+        const isDelegationAnnounceOnCurrentSession = isSubagentDelegationAnnounceRun(runId)
+          && isCurrentRun;
+        if (!isDelegationAnnounceOnCurrentSession && (isCurrentRun || !isKnownBackgroundRun)) {
+          return;
+        }
       }
 
       setLastChatEventAt(Date.now());
@@ -443,7 +478,15 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
         clearHistoryPoll();
         if (isForegroundEvent) {
           const { sending } = get();
-          if (!sending && runId && !isAbortedChatRun(runId)) {
+          if (isSubagentDelegationAnnounceRun(runId)) {
+            set({
+              sending: true,
+              activeRunId: runId,
+              pendingFinal: true,
+              runAborted: false,
+              error: null,
+            });
+          } else if (!sending && runId && !isAbortedChatRun(runId)) {
             set({ sending: true, activeRunId: runId, error: null });
           }
         }

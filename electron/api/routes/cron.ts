@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+﻿import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { join } from 'node:path';
 import type { HostApiContext } from '../context';
@@ -7,8 +7,23 @@ import { getOpenClawConfigDir } from '../../utils/paths';
 import { resolveAccountIdFromSessionHistory } from '../../utils/session-util';
 import { toOpenClawChannelType, toUiChannelType } from '../../utils/channel-alias';
 import { resolveAgentIdFromChannel } from '../../utils/agent-config';
-import { triggerCronJobManually, requestCronSupervisorPass } from '../../gateway/cron-supervisor';
-import { clearStaleInAppDeliveryErrorState } from '../../gateway/cron-stale-errors';
+import {
+  triggerCronJobStreaming,
+  requestCronSupervisorPass,
+  emitCronJobsUpdated,
+  setManagedCronJobEnabled,
+  removeManagedCronJobState,
+  resolveManagedCronJobEnabled,
+} from '../../gateway/cron-supervisor';
+import { clearStaleInAppDeliveryErrorState, isUiInAppCronJob } from '../../gateway/cron-stale-errors';
+import {
+  readCronRunLog,
+  resolveInAppCronLastRun,
+} from '../../gateway/cron-run-log';
+import {
+  buildCronSessionHistoryMessages,
+  buildSessionFileIndex,
+} from '../../gateway/cron-session-history';
 
 /**
  * Find agentId from session history by delivery "to" address.
@@ -35,41 +50,29 @@ interface GatewayCronJob {
   };
 }
 
-interface CronRunLogEntry {
-  jobId?: string;
-  action?: string;
-  status?: string;
-  error?: string;
-  summary?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  ts?: number;
-  runAtMs?: number;
-  durationMs?: number;
-  model?: string;
-  provider?: string;
-}
-
 interface CronSessionKeyParts {
   agentId: string;
   jobId: string;
   runSessionId?: string;
 }
 
-interface CronSessionFallbackMessage {
-  id: string;
-  role: 'assistant' | 'system';
-  content: string;
-  timestamp: number;
-  isError?: boolean;
-}
-
 function parseCronSessionKey(sessionKey: string): CronSessionKeyParts | null {
   if (!sessionKey.startsWith('agent:')) return null;
   const parts = sessionKey.split(':');
-  if (parts.length < 4 || parts[2] !== 'cron') return null;
+  if (parts.length < 4) return null;
 
   const agentId = parts[1] || 'main';
+  const namespace = parts[2];
+
+  if ((namespace === 'scheduled-task' || namespace === 'cron-run') && parts.length >= 5) {
+    const jobId = parts[3];
+    const runSessionId = parts[4];
+    if (!jobId || !runSessionId) return null;
+    return { agentId, jobId, runSessionId };
+  }
+
+  if (namespace !== 'cron') return null;
+
   const jobId = parts[3];
   if (!jobId) return null;
 
@@ -95,74 +98,6 @@ function normalizeTimestampMs(value: unknown): number | undefined {
     }
   }
   return undefined;
-}
-
-function formatDuration(durationMs: number | undefined): string | null {
-  if (!durationMs || !Number.isFinite(durationMs)) return null;
-  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
-  if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(1)}s`;
-  return `${Math.round(durationMs / 1000)}s`;
-}
-
-function buildCronRunMessage(entry: CronRunLogEntry, index: number): CronSessionFallbackMessage | null {
-  const timestamp = normalizeTimestampMs(entry.ts) ?? normalizeTimestampMs(entry.runAtMs);
-  if (!timestamp) return null;
-
-  const status = typeof entry.status === 'string' ? entry.status.toLowerCase() : '';
-  const summary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
-  const error = typeof entry.error === 'string' ? entry.error.trim() : '';
-  let content = summary || error;
-
-  if (!content) {
-    content = status === 'error'
-      ? 'Scheduled task failed.'
-      : 'Scheduled task completed.';
-  }
-
-  if (status === 'error' && !content.toLowerCase().startsWith('run failed:')) {
-    content = `Run failed: ${content}`;
-  }
-
-  const meta: string[] = [];
-  const duration = formatDuration(entry.durationMs);
-  if (duration) meta.push(`Duration: ${duration}`);
-  if (entry.provider && entry.model) {
-    meta.push(`Model: ${entry.provider}/${entry.model}`);
-  } else if (entry.model) {
-    meta.push(`Model: ${entry.model}`);
-  }
-  if (meta.length > 0) {
-    content = `${content}\n\n${meta.join(' | ')}`;
-  }
-
-  return {
-    id: `cron-run-${entry.sessionId ?? entry.ts ?? index}`,
-    role: status === 'error' ? 'system' : 'assistant',
-    content,
-    timestamp,
-    ...(status === 'error' ? { isError: true } : {}),
-  };
-}
-
-async function readCronRunLog(jobId: string): Promise<CronRunLogEntry[]> {
-  const logPath = join(getOpenClawConfigDir(), 'cron', 'runs', `${jobId}.jsonl`);
-  const raw = await readFile(logPath, 'utf8').catch(() => '');
-  if (!raw.trim()) return [];
-
-  const entries: CronRunLogEntry[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const entry = JSON.parse(trimmed) as CronRunLogEntry;
-      if (!entry || entry.jobId !== jobId) continue;
-      if (entry.action && entry.action !== 'finished') continue;
-      entries.push(entry);
-    } catch {
-      // Ignore malformed log lines so one bad entry does not hide the rest.
-    }
-  }
-  return entries;
 }
 
 async function readSessionStoreEntry(
@@ -196,78 +131,6 @@ async function readSessionStoreEntry(
   }
 
   return undefined;
-}
-
-export function buildCronSessionFallbackMessages(params: {
-  sessionKey: string;
-  job?: Pick<GatewayCronJob, 'name' | 'payload' | 'state'>;
-  runs: CronRunLogEntry[];
-  sessionEntry?: { label?: string; updatedAt?: number };
-  limit?: number;
-}): CronSessionFallbackMessage[] {
-  const parsed = parseCronSessionKey(params.sessionKey);
-  if (!parsed) return [];
-
-  const matchingRuns = params.runs
-    .filter((entry) => {
-      if (!parsed.runSessionId) return true;
-      return entry.sessionId === parsed.runSessionId
-        || entry.sessionKey === `${params.sessionKey}`;
-    })
-    .sort((a, b) => {
-      const left = normalizeTimestampMs(a.ts) ?? normalizeTimestampMs(a.runAtMs) ?? 0;
-      const right = normalizeTimestampMs(b.ts) ?? normalizeTimestampMs(b.runAtMs) ?? 0;
-      return left - right;
-    });
-
-  const messages: CronSessionFallbackMessage[] = [];
-  const prompt = params.job?.payload?.message || params.job?.payload?.text || '';
-  const taskName = params.job?.name?.trim()
-    || params.sessionEntry?.label?.replace(/^Cron:\s*/, '').trim()
-    || '';
-  const firstRelevantTimestamp = matchingRuns.length > 0
-    ? (normalizeTimestampMs(matchingRuns[0]?.runAtMs) ?? normalizeTimestampMs(matchingRuns[0]?.ts))
-    : (normalizeTimestampMs(params.job?.state?.runningAtMs) ?? params.sessionEntry?.updatedAt);
-
-  if (taskName || prompt) {
-    const lines = [taskName ? `Scheduled task: ${taskName}` : 'Scheduled task'];
-    if (prompt) lines.push(`Prompt: ${prompt}`);
-    messages.push({
-      id: `cron-meta-${parsed.jobId}`,
-      role: 'system',
-      content: lines.join('\n'),
-      timestamp: Math.max(0, (firstRelevantTimestamp ?? Date.now()) - 1),
-    });
-  }
-
-  matchingRuns.forEach((entry, index) => {
-    const message = buildCronRunMessage(entry, index);
-    if (message) messages.push(message);
-  });
-
-  if (matchingRuns.length === 0) {
-    const runningAt = normalizeTimestampMs(params.job?.state?.runningAtMs);
-    if (runningAt) {
-      messages.push({
-        id: `cron-running-${parsed.jobId}`,
-        role: 'system',
-        content: 'This scheduled task is still running in OpenClaw, but no chat transcript is available yet.',
-        timestamp: runningAt,
-      });
-    } else if (messages.length === 0) {
-      messages.push({
-        id: `cron-empty-${parsed.jobId}`,
-        role: 'system',
-        content: 'No chat transcript is available for this scheduled task yet.',
-        timestamp: params.sessionEntry?.updatedAt ?? Date.now(),
-      });
-    }
-  }
-
-  const limit = typeof params.limit === 'number' && Number.isFinite(params.limit)
-    ? Math.max(1, Math.floor(params.limit))
-    : messages.length;
-  return messages.slice(-limit);
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -335,12 +198,12 @@ function normalizeCronDeliveryPatch(rawDelivery: unknown): Record<string, unknow
 
   // Switching to "仅在 LYClaw 内" (mode none) must clear any previously-set
   // external target, otherwise the Gateway keeps a stale channel/to and still
-  // attempts channel delivery (e.g. DingTalk requires --to). Explicitly wipe
-  // channel/to/accountId even when the UI only sends `{ mode: 'none' }`.
+  // attempts channel delivery (e.g. DingTalk requires --to).
+  // We omit channel/to/accountId rather than setting them to "" because the
+  // Gateway rejects empty-string channel in cron.update validation.
+  // The Gateway is responsible for clearing stale external targets when mode
+  // transitions to "none".
   if (patch.mode === 'none') {
-    patch.channel = '';
-    patch.to = '';
-    patch.accountId = '';
     return patch;
   }
 
@@ -386,7 +249,11 @@ function buildCronUpdatePatch(input: Record<string, unknown>): Record<string, un
   return patch;
 }
 
-function transformCronJob(job: GatewayCronJob) {
+function transformCronJob(
+  job: GatewayCronJob,
+  lastRunOverride?: ReturnType<typeof resolveInAppCronLastRun>,
+  enabledOverride?: boolean,
+) {
   const message = job.payload?.message || job.payload?.text || '';
   const gatewayDelivery = normalizeCronDelivery(job.delivery);
   const channelType = gatewayDelivery.channel ? toUiChannelType(gatewayDelivery.channel) : undefined;
@@ -401,14 +268,14 @@ function transformCronJob(job: GatewayCronJob) {
       recipient: delivery.to,
     }
     : undefined;
-  const lastRun = job.state?.lastRunAtMs
+  const lastRun = lastRunOverride ?? (job.state?.lastRunAtMs
     ? {
       time: new Date(job.state.lastRunAtMs).toISOString(),
       success: job.state.lastStatus === 'ok',
       error: job.state.lastError,
       duration: job.state.lastDurationMs,
     }
-    : undefined;
+    : undefined);
   const nextRun = job.state?.nextRunAtMs
     ? new Date(job.state.nextRunAtMs).toISOString()
     : undefined;
@@ -423,13 +290,29 @@ function transformCronJob(job: GatewayCronJob) {
     schedule: job.schedule,
     delivery,
     target,
-    enabled: job.enabled,
+    enabled: enabledOverride ?? job.enabled,
     createdAt: new Date(job.createdAtMs).toISOString(),
     updatedAt: new Date(job.updatedAtMs).toISOString(),
     lastRun,
     nextRun,
     agentId,
   };
+}
+
+async function enrichCronJobsForResponse(jobs: GatewayCronJob[]): Promise<ReturnType<typeof transformCronJob>[]> {
+  return Promise.all(jobs.map(async (job) => {
+    const inAppJob = isUiInAppCronJob(job);
+    const runs = inAppJob ? await readCronRunLog(job.id) : [];
+    const lastRun = resolveInAppCronLastRun(job, runs);
+    const enabledOverride = inAppJob ? await resolveManagedCronJobEnabled(job) : undefined;
+    return transformCronJob(job, lastRun, enabledOverride);
+  }));
+}
+
+async function findCronJobById(ctx: HostApiContext, id: string): Promise<GatewayCronJob | undefined> {
+  const result = await ctx.gatewayManager.rpc('cron.list', { includeDisabled: true }, 8000);
+  const jobs = (result as { jobs?: GatewayCronJob[] }).jobs ?? (Array.isArray(result) ? result as GatewayCronJob[] : []);
+  return jobs.find((job) => job.id === id);
 }
 
 export async function handleCronRoutes(
@@ -461,7 +344,11 @@ export async function handleCronRoutes(
 
       const jobs = (jobsResult as { jobs?: GatewayCronJob[] }).jobs ?? [];
       const job = jobs.find((item) => item.id === parsedSession.jobId);
-      const messages = buildCronSessionFallbackMessages({
+      const sessionsDir = join(getOpenClawConfigDir(), 'agents', parsedSession.agentId, 'sessions');
+      const filesBySessionKey = await buildSessionFileIndex(join(sessionsDir, 'sessions.json'));
+      const messages = await buildCronSessionHistoryMessages({
+        agentId: parsedSession.agentId,
+        jobId: parsedSession.jobId,
         sessionKey,
         job,
         runs,
@@ -469,6 +356,8 @@ export async function handleCronRoutes(
           label: typeof sessionEntry.label === 'string' ? sessionEntry.label : undefined,
           updatedAt: normalizeTimestampMs(sessionEntry.updatedAt),
         } : undefined,
+        sessionsDir,
+        filesBySessionKey,
         limit,
       });
 
@@ -537,7 +426,7 @@ export async function handleCronRoutes(
                   id: job.id,
                   // Explicitly clear the stale external target so the Gateway
                   // stops attempting channel delivery.
-                  patch: { delivery: { mode: 'none', channel: '', to: '', accountId: '' } },
+                  patch: { delivery: { mode: 'none' } },
                 });
               } catch {
                 // ignore per-job repair failure
@@ -623,7 +512,9 @@ export async function handleCronRoutes(
         }
       }
 
-      sendJson(res, 200, jobs.map((job) => ({ ...transformCronJob(job), ...(usedFallback ? { _fromFallback: true } : {}) })));
+      sendJson(res, 200, await enrichCronJobsForResponse(jobs).then((enriched) => (
+        enriched.map((job) => ({ ...job, ...(usedFallback ? { _fromFallback: true } : {}) }))
+      )));
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
@@ -651,17 +542,29 @@ export async function handleCronRoutes(
         sendJson(res, 400, { success: false, error: unsupportedDeliveryError });
         return true;
       }
+      const managedInApp = delivery.mode === 'none';
+      const managedEnabled = input.enabled ?? true;
       const result = await ctx.gatewayManager.rpc('cron.add', {
         name: input.name,
         schedule: { kind: 'cron', expr: input.schedule, tz: Intl.DateTimeFormat().resolvedOptions().timeZone },
         payload: { kind: 'agentTurn', message: input.message },
-        enabled: input.enabled ?? true,
+        // LYClaw-managed in-app jobs are kept disabled in OpenClaw's own
+        // scheduler so they cannot fire via cron.run and bypass chat streaming.
+        enabled: managedInApp ? false : managedEnabled,
         wakeMode: 'next-heartbeat',
         sessionTarget: 'isolated',
         agentId,
         delivery,
       });
-      sendJson(res, 200, result && typeof result === 'object' ? transformCronJob(result as GatewayCronJob) : result);
+      if (result && typeof result === 'object') {
+        const job = result as GatewayCronJob;
+        if (managedInApp) {
+          await setManagedCronJobEnabled(job.id, managedEnabled);
+        }
+        sendJson(res, 200, transformCronJob(job, undefined, managedInApp ? managedEnabled : undefined));
+      } else {
+        sendJson(res, 200, result);
+      }
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
@@ -687,8 +590,42 @@ export async function handleCronRoutes(
         sendJson(res, 400, { success: false, error: unsupportedDeliveryError });
         return true;
       }
+      const existing = await findCronJobById(ctx, id).catch(() => undefined);
+      const requestedEnabled = typeof input.enabled === 'boolean' ? input.enabled : undefined;
+      const existingInApp = existing ? isUiInAppCronJob(existing) : false;
+      const switchingToInApp = deliveryMode === 'none';
+      const switchingToExternal = Boolean(deliveryMode && deliveryMode !== 'none');
+
+      if (switchingToInApp || existingInApp) {
+        // LYClaw owns in-app execution; keep OpenClaw's own scheduler disabled
+        // so only the chat.send streaming supervisor fires the task.
+        patch.enabled = false;
+      }
+      if (switchingToExternal && existingInApp) {
+        const restoredEnabled = requestedEnabled
+          ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
+          ?? existing?.enabled
+          ?? true;
+        patch.enabled = restoredEnabled;
+        await removeManagedCronJobState(id);
+      }
+
       const result = await ctx.gatewayManager.rpc('cron.update', { id, patch });
-      sendJson(res, 200, result && typeof result === 'object' ? transformCronJob(result as GatewayCronJob) : result);
+      if (result && typeof result === 'object') {
+        const job = result as GatewayCronJob;
+        const inAppJob = isUiInAppCronJob(job);
+        let enabledOverride: boolean | undefined;
+        if (inAppJob) {
+          enabledOverride = requestedEnabled
+            ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
+            ?? existing?.enabled
+            ?? true;
+          await setManagedCronJobEnabled(id, enabledOverride);
+        }
+        sendJson(res, 200, transformCronJob(job, undefined, enabledOverride));
+      } else {
+        sendJson(res, 200, result);
+      }
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
@@ -698,7 +635,9 @@ export async function handleCronRoutes(
   if (url.pathname.startsWith('/api/cron/jobs/') && req.method === 'DELETE') {
     try {
       const id = decodeURIComponent(url.pathname.slice('/api/cron/jobs/'.length));
-      sendJson(res, 200, await ctx.gatewayManager.rpc('cron.remove', { id }));
+      const result = await ctx.gatewayManager.rpc('cron.remove', { id });
+      await removeManagedCronJobState(id);
+      sendJson(res, 200, result);
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
@@ -708,7 +647,17 @@ export async function handleCronRoutes(
   if (url.pathname === '/api/cron/toggle' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{ id: string; enabled: boolean }>(req);
-      sendJson(res, 200, await ctx.gatewayManager.rpc('cron.update', { id: body.id, patch: { enabled: body.enabled } }));
+      const existing = await findCronJobById(ctx, body.id).catch(() => undefined);
+      if (existing && isUiInAppCronJob(existing)) {
+        await setManagedCronJobEnabled(body.id, body.enabled);
+        const result = await ctx.gatewayManager.rpc('cron.update', { id: body.id, patch: { enabled: false } });
+        sendJson(res, 200, result && typeof result === 'object'
+          ? transformCronJob(result as GatewayCronJob, undefined, body.enabled)
+          : result);
+      } else {
+        await removeManagedCronJobState(body.id);
+        sendJson(res, 200, await ctx.gatewayManager.rpc('cron.update', { id: body.id, patch: { enabled: body.enabled } }));
+      }
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
@@ -718,7 +667,9 @@ export async function handleCronRoutes(
   if (url.pathname === '/api/cron/trigger' && req.method === 'POST') {
     try {
       const body = await parseJsonBody<{ id: string }>(req);
-      sendJson(res, 200, await triggerCronJobManually(ctx.gatewayManager, body.id));
+      const result = await triggerCronJobStreaming(ctx.gatewayManager, body.id);
+      emitCronJobsUpdated('manual-trigger', body.id);
+      sendJson(res, 200, { success: true, id: body.id, sessionKey: result.sessionKey, runId: result.runId });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }

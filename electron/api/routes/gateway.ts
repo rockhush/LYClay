@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { PORTS } from '../../utils/config';
+import { logger } from '../../utils/logger';
 import { buildOpenClawControlUiUrl } from '../../utils/openclaw-control-ui';
 import { getSetting } from '../../utils/store';
 import type { HostApiContext } from '../context';
@@ -145,6 +146,8 @@ export async function handleGatewayRoutes(
       const VISION_MIME_TYPES = new Set([
         'image/png', 'image/jpeg', 'image/bmp', 'image/webp',
       ]);
+      /** Max image size (bytes) for base64 attachment path to avoid Gateway stack overflow. */
+      const MAX_BASE64_ATTACHMENT_BYTES = 1_000_000; // 1MB
       const imageAttachments: Array<{ content: string; mimeType: string; fileName: string }> = [];
       const fileReferences: string[] = [];
       if (body.media && body.media.length > 0) {
@@ -153,11 +156,15 @@ export async function handleGatewayRoutes(
           fileReferences.push(`[media attached: ${m.filePath} (${m.mimeType}) | ${m.filePath}]`);
           if (VISION_MIME_TYPES.has(m.mimeType)) {
             const fileBuffer = await fsP.readFile(m.filePath);
-            imageAttachments.push({
-              content: fileBuffer.toString('base64'),
-              mimeType: m.mimeType,
-              fileName: m.fileName,
-            });
+            if (fileBuffer.length > MAX_BASE64_ATTACHMENT_BYTES) {
+              logger.info(`[hostapi:chat.send-with-media] Skipping base64 attachment for large image (${fileBuffer.length} bytes), using file-reference path only`);
+            } else {
+              imageAttachments.push({
+                content: fileBuffer.toString('base64'),
+                mimeType: m.mimeType,
+                fileName: m.fileName,
+              });
+            }
           }
         }
       }

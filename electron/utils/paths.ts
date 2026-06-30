@@ -172,10 +172,27 @@ export function getClawHubCliBinPath(): string {
 }
 
 /**
+ * Base directory that contains the bundled `scripts/` folder.
+ * - Packaged: `process.resourcesPath` (electron-builder copies the marketplace
+ *   CLI to `resources/scripts/` via extraResources — real on-disk files the
+ *   external OpenClaw gateway node process can `exec`, unlike app.asar).
+ * - Development: the app/repo root, where `scripts/` already lives.
+ *
+ * This is also the value substituted for the `<lyclaw-app>` placeholder in the
+ * agent context docs, so the agent gets a real absolute path at runtime.
+ */
+export function getLyclawScriptsBaseDir(): string {
+  if (getElectronApp().isPackaged) {
+    return process.resourcesPath;
+  }
+  return getElectronApp().getAppPath();
+}
+
+/**
  * Get LYClaw company marketplace CLI script path
  */
 export function getLyclawMarketplaceCliPath(): string {
-  return join(getElectronApp().getAppPath(), 'scripts', 'lyclaw-marketplace-cli.mjs');
+  return join(getLyclawScriptsBaseDir(), 'scripts', 'lyclaw-marketplace-cli.mjs');
 }
 
 /**

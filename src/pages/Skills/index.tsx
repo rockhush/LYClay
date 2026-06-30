@@ -55,6 +55,9 @@ import {
   findInstalledSkillForMarketplace,
   getMarketplaceSkillKey,
   isMarketplaceSkillInstalledOnDisk,
+  dedupeInstalledMarketplaceSkillsForBatchUpdate,
+  normalizeMarketplaceSkillForUpdate,
+  resolveCompanyMarketplaceUpdateSlug,
   formatSkillVersionLabel,
   resolveSkillListVersionForDisplay,
   resolveSkillListDescriptionForDisplay,
@@ -697,6 +700,7 @@ export function Skills() {
     installing,
     companyInstallMap,
     companyInstallEntries,
+    companyInstallByPackageSlug,
   } = useSkillsStore();
   const { t } = useTranslation('skills');
   const gatewayStatus = useGatewayStore((state) => state.status);
@@ -877,7 +881,7 @@ export function Skills() {
   }, []);
 
   const resolveMarketplaceSkillBySlug = useCallback((slug: string): MarketplaceSkill | undefined => {
-    const { searchResults, companyInstallEntries } = useSkillsStore.getState();
+    const { searchResults, companyInstallEntries, companyInstallByPackageSlug } = useSkillsStore.getState();
     const fromSearch = searchResults.find(
       (item) => item.slug === slug || String(item.id) === slug,
     );
@@ -890,14 +894,56 @@ export function Skills() {
       }
     }
 
+    const sidecarEntry = companyInstallByPackageSlug[slug];
+    if (sidecarEntry?.marketplaceId) {
+      const marketplaceId = sidecarEntry.marketplaceId;
+      const fromSearchBySidecar = searchResults.find((item) => String(item.id) === marketplaceId);
+      if (fromSearchBySidecar) return fromSearchBySidecar;
+      return companyInstallEntriesToMarketplaceSkills({
+        [marketplaceId]: {
+          packageSlug: sidecarEntry.packageSlug,
+          name: sidecarEntry.name,
+          version: sidecarEntry.version,
+          author: sidecarEntry.author,
+          description: sidecarEntry.description,
+        },
+      })[0];
+    }
+
     for (const [marketplaceId, entry] of Object.entries(companyInstallEntries)) {
       if (entry.packageSlug === slug) {
+        const fromSearchByPackage = searchResults.find(
+          (item) => String(item.id) === marketplaceId,
+        );
+        if (fromSearchByPackage) return fromSearchByPackage;
         return companyInstallEntriesToMarketplaceSkills({ [marketplaceId]: entry })[0];
       }
     }
 
     return undefined;
   }, []);
+
+  /** Same resolution path as handleUpdate(slug): use plaza numeric id for check + install. */
+  const resolveSkillUpdateTarget = useCallback((skill: MarketplaceSkill): {
+    updateSlug: string;
+    marketplaceSkill: MarketplaceSkill;
+  } | null => {
+    const { companyInstallMap, companyInstallByPackageSlug } = useSkillsStore.getState();
+    const normalized = normalizeMarketplaceSkillForUpdate(
+      skill,
+      companyInstallMap,
+      companyInstallByPackageSlug,
+    );
+    const updateSlug = resolveCompanyMarketplaceUpdateSlug(
+      normalized,
+      companyInstallMap,
+      companyInstallByPackageSlug,
+    );
+    if (!updateSlug) return null;
+
+    const marketplaceSkill = resolveMarketplaceSkillBySlug(updateSlug) ?? normalized;
+    return { updateSlug, marketplaceSkill };
+  }, [resolveMarketplaceSkillBySlug]);
 
   const syncDisplayCacheFromMarketplace = useCallback(async (
     slug: string,
@@ -972,20 +1018,16 @@ export function Skills() {
   });
 
   const installedForBatchUpdate = useMemo(() => {
-    const byKey = new Map<string, MarketplaceSkill>();
-    for (const skill of searchResults) {
-      byKey.set(getMarketplaceSkillKey(skill), skill);
-    }
-    for (const skill of companyInstallEntriesToMarketplaceSkills(companyInstallEntries)) {
-      const key = getMarketplaceSkillKey(skill);
-      if (!byKey.has(key)) {
-        byKey.set(key, skill);
-      }
-    }
-    return Array.from(byKey.values()).filter((skill) =>
-      isMarketplaceSkillInstalledOnDisk(skill, safeSkills, companyInstallMap),
-    );
-  }, [searchResults, companyInstallEntries, safeSkills, companyInstallMap]);
+    const merged = [
+      ...companyInstallEntriesToMarketplaceSkills(companyInstallEntries),
+      ...searchResults,
+    ];
+    return dedupeInstalledMarketplaceSkillsForBatchUpdate(
+      merged,
+      companyInstallMap,
+      companyInstallByPackageSlug,
+    ).filter((skill) => isMarketplaceSkillInstalledOnDisk(skill, safeSkills, companyInstallMap));
+  }, [searchResults, companyInstallEntries, companyInstallMap, companyInstallByPackageSlug, safeSkills]);
 
   const skillsForBatchEnable = useMemo(
     () => safeSkills.filter((skill) => !skill.isCore && !skill.enabled),
@@ -1438,7 +1480,6 @@ export function Skills() {
     }
 
     setIsUpdating(true);
-    setBatchUpdateProgress({ current: 0, total: selectedSkills.length });
     const currentScroll = listRef.current?.scrollTop || 0;
     const summary = { updated: 0, skipped: 0, failed: 0 };
     const failures: Array<{ name: string; reason: string }> = [];
@@ -1454,55 +1495,81 @@ export function Skills() {
       marketplaceId: string;
     }> = [];
 
-    try {
-      for (let index = 0; index < selectedSkills.length; index += 1) {
-        const skill = selectedSkills[index];
-        setBatchUpdateProgress({ current: index + 1, total: selectedSkills.length });
+    // Resolve + dedupe by marketplace id (same skill can appear twice in the picker).
+    const seenMarketplaceIds = new Set<string>();
+    const batchTasks = selectedSkills.flatMap((skill) => {
+      const target = resolveSkillUpdateTarget(skill);
+      if (!target) {
+        return [{ skill, target: null as null }];
+      }
+      const marketplaceId = target.marketplaceSkill.id != null
+        ? String(target.marketplaceSkill.id).trim()
+        : '';
+      if (marketplaceId && /^\d+$/.test(marketplaceId)) {
+        if (seenMarketplaceIds.has(marketplaceId)) return [];
+        seenMarketplaceIds.add(marketplaceId);
+      }
+      return [{ skill, target }];
+    });
 
-        const checkResult = await checkSkillUpdateForMarketplace(skill);
+    try {
+      setBatchUpdateProgress({ current: 0, total: batchTasks.length });
+      for (let index = 0; index < batchTasks.length; index += 1) {
+        const { skill, target } = batchTasks[index];
+        setBatchUpdateProgress({ current: index + 1, total: batchTasks.length });
+
+        if (!target) {
+          summary.failed += 1;
+          recordFailure(skill, t('toast.failReasonUseIntranet'));
+          markSkillUpdateFailed(skill.slug);
+          continue;
+        }
+
+        const { updateSlug, marketplaceSkill } = target;
+        const checkResult = await checkSkillUpdateForMarketplace(marketplaceSkill);
         if (checkResult.status === 'failed') {
           summary.failed += 1;
           recordFailure(
-            skill,
+            marketplaceSkill,
             formatSkillBatchUpdateFailureReason(checkResult.error ?? '', {
               skillNotInMarketplace: t('toast.failReasonSkillNotInMarketplace'),
               rateLimited: t('toast.failReasonRateLimited'),
               useIntranet: t('toast.failReasonUseIntranet'),
             }) || t('toast.failReasonCheckFailed'),
           );
-          markSkillUpdateFailed(skill.slug);
+          markSkillUpdateFailed(updateSlug);
           continue;
         }
         if (checkResult.status === 'skipped') {
           const { skills, companyInstallMap, companyInstallEntries } = useSkillsStore.getState();
           if (hasSkillVersionMismatch(
-            skill,
+            marketplaceSkill,
             skills,
             companyInstallMap,
             companyInstallEntries,
             checkResult.latestVersion,
           )) {
             summary.failed += 1;
-            recordFailure(skill, t('toast.failReasonVersionMismatch'));
-            markSkillUpdateFailed(skill.slug);
+            recordFailure(marketplaceSkill, t('toast.failReasonVersionMismatch'));
+            markSkillUpdateFailed(updateSlug);
           } else {
             summary.skipped += 1;
-            clearSkillUpdateFailed(skill.slug);
+            clearSkillUpdateFailed(updateSlug);
           }
           continue;
         }
 
         try {
-          await performSkillUpdate(skill.slug, checkResult.latestVersion);
+          await performSkillUpdate(updateSlug, checkResult.latestVersion);
           updatedSkills.push({
-            slug: skill.slug,
+            slug: updateSlug,
             latestVersion: checkResult.latestVersion,
             marketplaceId: checkResult.marketplaceId,
           });
           summary.updated += 1;
-          clearSkillUpdateFailed(skill.slug);
+          clearSkillUpdateFailed(updateSlug);
         } catch (error) {
-          console.error('[Skills] Batch update failed for', skill.slug, error);
+          console.error('[Skills] Batch update failed for', updateSlug, error);
           summary.failed += 1;
           const errorMessage = error instanceof Error ? error.message : String(error);
           const reason = INSTALL_ERROR_CODES.has(errorMessage)
@@ -1512,8 +1579,8 @@ export function Skills() {
               rateLimited: t('toast.failReasonRateLimited'),
               useIntranet: t('toast.failReasonUseIntranet'),
             }) || errorMessage.trim() || t('toast.failReasonUnknown'));
-          recordFailure(skill, reason);
-          markSkillUpdateFailed(skill.slug);
+          recordFailure(marketplaceSkill, reason);
+          markSkillUpdateFailed(updateSlug);
         }
       }
 
@@ -1574,6 +1641,7 @@ export function Skills() {
   }, [
     checkSkillUpdateForMarketplace,
     performSkillUpdate,
+    resolveSkillUpdateTarget,
     syncDisplayCacheFromMarketplace,
     searchSkills,
     fetchSkills,

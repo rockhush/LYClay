@@ -4,7 +4,13 @@ import 'zx/globals';
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const UV_VERSION = '0.10.0';
-const BASE_URL = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
+// 本地离线包优先目录 (D:\lycode\packages)
+const LOCAL_PACKAGES_DIR = path.resolve('D:\\lycode\\packages\\uv');
+const PACKAGES_DIR = path.join(ROOT_DIR, 'packages', 'uv');
+const DOWNLOAD_URLS = [
+  `https://ghfast.top/https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`,
+  `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`,
+];
 const OUTPUT_BASE = path.join(ROOT_DIR, 'resources', 'bin');
 
 // Mapping Node platforms/archs to uv release naming
@@ -42,6 +48,42 @@ const PLATFORM_GROUPS = {
   'linux': ['linux-x64', 'linux-arm64']
 };
 
+function resolveArchive(filename) {
+  // 1. D:\lycode\packages\uv\ 全局离线目录 (优先)
+  const localPath = path.join(LOCAL_PACKAGES_DIR, filename);
+  if (fs.existsSync(localPath)) return localPath;
+  // 2. packages/uv/ 项目内目录
+  const pkgPath = path.join(PACKAGES_DIR, filename);
+  if (fs.existsSync(pkgPath)) return pkgPath;
+  // 3. 项目根目录 (兼容旧方式)
+  const rootPath = path.join(ROOT_DIR, filename);
+  if (fs.existsSync(rootPath)) return rootPath;
+  return null;
+}
+
+async function downloadArchive(filename, archivePath) {
+  echo`⬇️ Downloading ${filename}...`;
+  let lastError = null;
+  for (const baseUrl of DOWNLOAD_URLS) {
+    const downloadUrl = `${baseUrl}/${filename}`;
+    try {
+      echo`   trying: ${downloadUrl}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const response = await fetch(downloadUrl, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      const buffer = await response.arrayBuffer();
+      await fs.writeFile(archivePath, Buffer.from(buffer));
+      return;
+    } catch (error) {
+      lastError = error;
+      echo(chalk.yellow`   ⚠️ Failed: ${error.message}`);
+    }
+  }
+  throw lastError;
+}
+
 async function setupTarget(id) {
   const target = TARGETS[id];
   if (!target) {
@@ -51,8 +93,13 @@ async function setupTarget(id) {
 
   const targetDir = path.join(OUTPUT_BASE, id);
   const tempDir = path.join(ROOT_DIR, 'temp_uv_extract');
-  const archivePath = path.join(ROOT_DIR, target.filename);
-  const downloadUrl = `${BASE_URL}/${target.filename}`;
+
+  // If binary already exists, skip entirely
+  const destBin = path.join(targetDir, target.binName);
+  if (await fs.pathExists(destBin)) {
+    echo(chalk.green`✅ uv binary already exists for ${id}, skipping download.`);
+    return;
+  }
 
   echo(chalk.blue`\n📦 Setting up uv for ${id}...`);
 
@@ -63,12 +110,16 @@ async function setupTarget(id) {
   await fs.ensureDir(tempDir);
 
   try {
-    // Download
-    echo`⬇️ Downloading: ${downloadUrl}`;
-    const response = await fetch(downloadUrl);
-    if (!response.ok) throw new Error(`Failed to download: ${response.statusText}`);
-    const buffer = await response.arrayBuffer();
-    await fs.writeFile(archivePath, Buffer.from(buffer));
+    // Use pre-downloaded archive if present, otherwise download from network
+    const localArchive = resolveArchive(target.filename);
+    if (localArchive) {
+      echo`📁 Using local archive: ${localArchive}`;
+    } else {
+      const archivePath = path.join(ROOT_DIR, target.filename);
+      await downloadArchive(target.filename, archivePath);
+      var usedArchive = archivePath;
+    }
+    const archivePath = localArchive || usedArchive;
 
     // Extract
     echo`📂 Extracting...`;
@@ -109,8 +160,11 @@ async function setupTarget(id) {
 
     echo(chalk.green`✅ Success: ${destBin}`);
   } finally {
-    // Cleanup
-    await fs.remove(archivePath);
+    // Cleanup — only delete temp downloads in project root, not packages/ files
+    const rootArchive = path.join(ROOT_DIR, target.filename);
+    if (await fs.pathExists(rootArchive)) {
+      await fs.remove(rootArchive);
+    }
     await fs.remove(tempDir);
   }
 }
@@ -133,7 +187,7 @@ if (downloadAll) {
     echo(`Available platforms: ${Object.keys(PLATFORM_GROUPS).join(', ')}`);
     process.exit(1);
   }
-  
+
   echo(chalk.cyan`🎯 Downloading uv binaries for platform: ${platform}`);
   echo(`   Architectures: ${targets.join(', ')}`);
   for (const id of targets) {
@@ -143,7 +197,7 @@ if (downloadAll) {
   // Download for current system only (default for local dev)
   const currentId = `${os.platform()}-${os.arch()}`;
   echo(chalk.cyan`💻 Detected system: ${currentId}`);
-  
+
   if (TARGETS[currentId]) {
     await setupTarget(currentId);
   } else {

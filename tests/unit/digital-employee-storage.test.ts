@@ -79,6 +79,31 @@ describe('digital employee storage', () => {
     expect(reloaded.find((entry) => entry.instanceId === 'emp-toggle')?.enabled).toBe(true);
   });
 
+  it('resolves enabled employees by agentId or instanceId', async () => {
+    await writeEmployee('emp-resolve', 'active');
+
+    const {
+      findLocalDigitalEmployeeByAgentOrInstanceId,
+      resolveDigitalEmployeeInstallPathByAgentOrInstanceId,
+    } = await import('@electron/utils/digital-employee-storage');
+
+    expect((await findLocalDigitalEmployeeByAgentOrInstanceId('emp-resolve-agent'))?.instanceId)
+      .toBe('emp-resolve');
+    expect((await findLocalDigitalEmployeeByAgentOrInstanceId('emp-resolve'))?.agentId)
+      .toBe('emp-resolve-agent');
+    expect(await resolveDigitalEmployeeInstallPathByAgentOrInstanceId('emp-resolve-agent'))
+      .toBe(join(root, 'emp-resolve'));
+  });
+
+  it('does not resolve disabled employees for execution diagnostics', async () => {
+    await writeEmployee('emp-disabled', 'active');
+
+    const { setDigitalEmployeeEnabled, findLocalDigitalEmployeeByAgentOrInstanceId } = await import('@electron/utils/digital-employee-storage');
+    await setDigitalEmployeeEnabled('emp-disabled', false);
+
+    expect(await findLocalDigitalEmployeeByAgentOrInstanceId('emp-disabled-agent')).toBeNull();
+  });
+
   it('rejects invalid instance ids before resolving an installation path', async () => {
     const { getDigitalEmployeeInstallPath } = await import('@electron/utils/digital-employee-storage');
 

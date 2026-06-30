@@ -22,11 +22,11 @@ const PROVIDER_KEY_ALIASES: Record<string, string> = {
 export function getOpenClawProviderKeyForType(type: string, providerId: string): string {
   if (MULTI_INSTANCE_PROVIDER_TYPES.has(type)) {
     // If the providerId is already a runtime key (e.g. re-seeded from openclaw.json
-    // as "custom-XXXXXXXX"), return it directly to avoid double-hashing.
+    // as "custom-customb5"), return it directly to avoid double-hashing.
     const prefix = `${type}-`;
     if (providerId.startsWith(prefix)) {
       const tail = providerId.slice(prefix.length);
-      if (tail.length === 8 && !tail.includes('-')) {
+      if (tail.length >= 1 && !tail.includes('-')) {
         return providerId;
       }
     }

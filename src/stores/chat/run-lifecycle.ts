@@ -1,6 +1,16 @@
-import { getMessageText, hasVisibleAssistantContent, isInternalMessageText } from './helpers';
+import {
+  getMessageText,
+  hasVisibleAssistantContent,
+  isChannelDeliveryConfirmationText,
+  isInternalMessageText,
+  stripSilentReplyToken,
+} from './helpers';
 import type { ChatState, RawMessage } from './types';
 import { extractToolUse } from '@/pages/Chat/message-utils';
+
+function containsSilentReplyToken(text: string): boolean {
+  return /\b(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(text);
+}
 
 function isToolResultRole(role: unknown): boolean {
   if (!role) return false;
@@ -68,12 +78,34 @@ export function isTerminalAssistantMessage(message: RawMessage | undefined): boo
   return isExplicitAssistantStopReason(getAssistantStopReason(message));
 }
 
-/** Silent assistant reply (NO_REPLY / HEARTBEAT_OK) that closes the run. */
-export function isSilentTerminalAssistantMessage(message: RawMessage | undefined): boolean {
+/**
+ * Whitelist: assistant finals that should clear the active run without user-visible output.
+ * UI hiding (`isInternalMessageText`) is broader; do not use that blacklist here.
+ */
+export function shouldSilentlyFinalizeRunOnAssistantFinal(message: RawMessage | undefined): boolean {
   if (!message || message.role !== 'assistant') return false;
   if (isFailedAssistantMessage(message)) return false;
-  if (!isInternalMessageText(getMessageText(message.content))) return false;
-  return isExplicitAssistantStopReason(getAssistantStopReason(message));
+
+  const rawText = getMessageText(message.content).trim();
+  if (!rawText) return false;
+
+  if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(rawText)) return true;
+
+  const hasTerminalStop = isExplicitAssistantStopReason(getAssistantStopReason(message));
+  if (!hasTerminalStop) return false;
+
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(rawText)) return true;
+  if (containsSilentReplyToken(rawText) && stripSilentReplyToken(rawText).trim().length === 0) return true;
+
+  const visibleText = stripSilentReplyToken(rawText).trim();
+  if (visibleText && isChannelDeliveryConfirmationText(visibleText)) return true;
+
+  return false;
+}
+
+/** Silent assistant reply (NO_REPLY / HEARTBEAT_OK) that closes the run. */
+export function isSilentTerminalAssistantMessage(message: RawMessage | undefined): boolean {
+  return shouldSilentlyFinalizeRunOnAssistantFinal(message);
 }
 
 export function isRunTerminalAssistantMessage(message: RawMessage | undefined): boolean {
@@ -196,5 +228,7 @@ export function buildClearedActiveRunPatch(): Partial<ChatState> {
     pendingToolImages: [],
     lastUserMessageAt: null,
     runAborted: false,
+    error: null,
+    runError: null,
   };
 }

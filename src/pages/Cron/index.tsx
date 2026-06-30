@@ -3,6 +3,7 @@
  * Manage scheduled tasks
  */
 import { useEffect, useState, useCallback, useRef, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus,
   Clock,
@@ -827,7 +828,7 @@ interface CronJobCardProps {
   onToggle: (enabled: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
-  onTrigger: () => Promise<void>;
+  onTrigger: () => Promise<{ sessionKey: string; runId: string }>;
 }
 
 function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onTrigger }: CronJobCardProps) {
@@ -835,13 +836,17 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
   const [triggering, setTriggering] = useState(false);
   const agents = useAgentsStore((s) => s.agents);
   const agentName = resolveCronAgentLabel(job.agentId, agents, t);
+  const navigate = useNavigate();
 
   const handleTrigger = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setTriggering(true);
     try {
-      await onTrigger();
+      const { sessionKey } = await onTrigger();
       toast.success(t('toast.triggered'));
+      // Navigate to the cron session to watch streaming execution live.
+      useChatStore.getState().switchSession(sessionKey);
+      navigate('/');
     } catch (error) {
       console.error('Failed to trigger cron job:', error);
       toast.error(t('toast.failedTrigger', {
@@ -1035,6 +1040,57 @@ export function Cron() {
       void fetchJobs();
     });
   }, [fetchJobs, isGatewayRunning]);
+
+  // Safety-net auto-refresh while the page is visible: the main-process
+  // `cron:updated` event can be delayed/missed when the gateway is busy
+  // executing an in-app task (cron.list RPC times out during the run), so a
+  // lightweight poll guarantees the cards reflect the latest run without a
+  // manual refresh. fetchJobs merges results (never clears on empty), so this
+  // does not cause flicker.
+  useEffect(() => {
+    if (!isGatewayRunning || showDialog) {
+      // Pause polling while the create/edit dialog is open so it doesn't
+      // clobber in-progress edits with stale server data.
+      return undefined;
+    }
+    const CRON_PAGE_POLL_INTERVAL_MS = 10_000;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const start = (): void => {
+      if (timer != null) return;
+      timer = setInterval(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        void fetchJobs();
+      }, CRON_PAGE_POLL_INTERVAL_MS);
+    };
+    const stop = (): void => {
+      if (timer != null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') {
+        void fetchJobs();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    start();
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+
+    return () => {
+      stop();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
+  }, [fetchJobs, isGatewayRunning, showDialog]);
 
   useEffect(() => {
     void fetchConfiguredChannels();

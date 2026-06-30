@@ -9,7 +9,7 @@ import { constants } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from './logger';
-import { getResourcesDir } from './paths';
+import { getResourcesDir, getLyclawScriptsBaseDir } from './paths';
 import { readUiState } from './ui-state';
 import { ensureWorkspaceMemoryFile } from '../services/workspace-memory-service';
 
@@ -276,7 +276,14 @@ async function mergeClawXContextOnce(): Promise<number> {
         .replace('.clawx.md', '.md');
       const targetPath = join(workspaceDir, targetName);
 
-      const section = await readFile(join(contextDir, file), 'utf-8');
+      // Resolve the `<lyclaw-app>` placeholder to a real absolute base dir so
+      // the agent can `exec node "<base>/scripts/lyclaw-marketplace-cli.mjs"`.
+      // Packaged builds resolve to process.resourcesPath (where extraResources
+      // ships the CLI); dev resolves to the repo root. Without this the agent
+      // would run the literal `<lyclaw-app>` path and skill download fails.
+      const section = (await readFile(join(contextDir, file), 'utf-8'))
+        .split('<lyclaw-app>')
+        .join(getLyclawScriptsBaseDir());
       let existing: string;
       let originalExisting: string;
 

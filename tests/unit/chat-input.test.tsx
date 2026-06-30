@@ -233,13 +233,46 @@ describe('ChatInput agent targeting', () => {
     fireEvent.click(screen.getByTitle('Choose agent'));
     fireEvent.click(screen.getByText('内联探针数字员工'));
 
-    expect(chatState.newSession).toHaveBeenCalledWith('inline-probe--local');
+    expect(chatState.newSession).not.toHaveBeenCalled();
     expect(screen.getByText('@内联探针数字员工')).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Hello direct agent' } });
     fireEvent.click(screen.getByTitle('Send'));
 
+    expect(chatState.newSession).not.toHaveBeenCalled();
+    expect(chatState.currentSessionKey).toBe('agent:main:main');
+    expect(chatState.currentAgentId).toBe('main');
     expect(onSend).toHaveBeenCalledWith('Hello direct agent', undefined, 'inline-probe--local');
+  });
+
+  it('parses a typed leading @agentId as current-session digital employee execution', () => {
+    const onSend = vi.fn();
+    digitalEmployeesState.employees = [
+      {
+        instanceId: 'inline-probe--local',
+        marketEmployeeId: 'inline-probe',
+        packageId: 'inline-probe',
+        packageVersion: '1.0.0',
+        name: '内联探针数字员工',
+        description: 'Probe current-session execution.',
+        tags: [],
+        installPath: 'C:\\Users\\test\\.openclaw\\digital-employees\\inline-probe--local',
+        agentId: 'inline-probe--local',
+        sessionKey: 'agent:inline-probe--local:main',
+        status: 'active',
+        warnings: [],
+      },
+    ];
+
+    renderChatInput(onSend);
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@inline-probe--local 帮我写周报' } });
+    fireEvent.click(screen.getByTitle('Send'));
+
+    expect(chatState.newSession).not.toHaveBeenCalled();
+    expect(chatState.currentSessionKey).toBe('agent:main:main');
+    expect(chatState.currentAgentId).toBe('main');
+    expect(onSend).toHaveBeenCalledWith('帮我写周报', undefined, 'inline-probe--local');
   });
 
   it('does not show repair-required digital employee records in the @agent picker', () => {

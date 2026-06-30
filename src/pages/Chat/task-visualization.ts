@@ -1,6 +1,6 @@
 import { extractText, extractTextSegments, extractThinkingSegments, extractToolUse } from './message-utils';
 import type { ContentBlock, RawMessage, ToolStatus } from '@/stores/chat';
-import { summarizeChildRunActivity } from '@/lib/subagent-delegation';
+import { parseSubagentCompletionInfo, summarizeChildRunActivity } from '@/lib/subagent-delegation';
 
 export type {
   ChildDelegationBinding,
@@ -55,6 +55,11 @@ export function findReplyMessageIndex(messages: RawMessage[], hasStreamingReply:
     const message = messages[idx];
     if (!message || message.role !== 'assistant') continue;
     if (extractText(message).trim().length === 0) continue;
+    // Internal subagent completion markers ("[Internal task completion event]")
+    // carry text but are never the user-facing reply. If picked, the real
+    // parent wrap-up reply would be folded into the graph and the completion
+    // marker itself is not rendered — leaving only "subagent run 完成".
+    if (parseSubagentCompletionInfo(message)) continue;
     return idx;
   }
   return -1;
@@ -89,6 +94,12 @@ export function isSubagentOrchestrationToolName(name: string | undefined | null)
   return /^(sessions_spawn|sessions_yield)$/i.test(name.trim());
 }
 
+/** Shell exec tool — hidden from the execution graph UI (not user-friendly). */
+export function isHiddenExecutionGraphToolName(name: string | undefined | null): boolean {
+  if (!name) return false;
+  return /^exec$/i.test(name.trim());
+}
+
 function isSubagentOrchestrationStep(step: TaskStep): boolean {
   if (step.kind === 'tool' && isSubagentOrchestrationToolName(step.label)) return true;
   if (step.kind === 'system' && /\bsubagent\b/i.test(step.label)) return true;
@@ -115,6 +126,14 @@ export function filterSubagentOrchestrationSteps(steps: TaskStep[]): TaskStep[] 
   return steps.filter((step) => !isSubagentOrchestrationStep(step));
 }
 
+function isHiddenExecutionGraphStep(step: TaskStep): boolean {
+  return step.kind === 'tool' && isHiddenExecutionGraphToolName(step.label);
+}
+
+export function filterHiddenExecutionGraphSteps(steps: TaskStep[]): TaskStep[] {
+  return steps.filter((step) => !isHiddenExecutionGraphStep(step));
+}
+
 function tryParseJsonObject(detail: string | undefined): Record<string, unknown> | null {
   if (!detail) return null;
   try {
@@ -129,6 +148,14 @@ function extractBranchAgent(step: TaskStep): string | null {
   const parsed = tryParseJsonObject(step.detail);
   const agentId = parsed?.agentId;
   if (typeof agentId === 'string' && agentId.trim()) return agentId.trim();
+
+  // sessions_spawn often identifies the work by task name rather than agentId
+  // (e.g. { taskName: 'ppt_digital_employee', task: '…' }). Prefer those so the
+  // branch reads "<task> run" instead of a generic "subagent run".
+  const label = parsed?.label;
+  if (typeof label === 'string' && label.trim()) return label.trim();
+  const taskName = parsed?.taskName;
+  if (typeof taskName === 'string' && taskName.trim()) return taskName.trim();
 
   const message = typeof parsed?.message === 'string' ? parsed.message : step.detail;
   if (!message) return null;
@@ -160,7 +187,11 @@ function attachTopology(steps: TaskStep[]): TaskStep[] {
         depth: 2,
         parentId: step.id,
       });
-      activeBranchNodeId = branchNodeId;
+      // The branch only hosts the CHILD session's own steps, which are attached
+      // separately via attachSubagentChildSteps. The parent's subsequent inline
+      // steps (e.g. it continues working after a subagent times out) are
+      // parent-level — do NOT keep nesting them under the branch.
+      activeBranchNodeId = null;
       continue;
     }
 
@@ -403,7 +434,7 @@ export function deriveTaskSteps({
     });
   }
 
-  return attachTopology(steps);
+  return attachTopology(filterHiddenExecutionGraphSteps(steps));
 }
 
 export function findLatestSpawnStepId(steps: TaskStep[]): string | null {
@@ -427,11 +458,6 @@ function findSubagentBranchNodeId(steps: TaskStep[], spawnStepId?: string | null
   return null;
 }
 
-function formatSubagentBranchLabel(branchLabel: string | null | undefined, childRunning: boolean): string {
-  const name = branchLabel?.trim() || '子 Agent';
-  return childRunning ? `子任务执行中 · ${name}` : `子任务 · ${name}`;
-}
-
 function resolveSubagentBranchNode(
   parentSteps: TaskStep[],
   branchKey: string,
@@ -443,22 +469,22 @@ function resolveSubagentBranchNode(
 ): { steps: TaskStep[]; branchNodeId: string } {
   const resolvedSpawnStepId = spawnStepId ?? findLatestSpawnStepId(parentSteps);
   let branchNodeId = findSubagentBranchNodeId(parentSteps, resolvedSpawnStepId);
-  const label = childError
-    ? `子任务无响应 · ${branchLabel?.trim() || '子 Agent'}`
-    : formatSubagentBranchLabel(branchLabel, childRunning);
+  const name = branchLabel?.trim() || 'subagent';
   const detail = childError
     ? (childActivityDetail?.trim() || '子 Agent 长时间无进展，可能已在模型调用中卡住')
     : (childActivityDetail?.trim()
-      || (childRunning ? '子 Agent 正在后台执行' : `Subagent: ${branchLabel?.trim() || 'subagent'}`));
+      || (childRunning ? '子 Agent 正在后台执行' : `Subagent: ${name}`));
   if (!branchNodeId) {
-    branchNodeId = `${branchKey}:branch`;
+    // Prefer pinning the new branch to its spawn step so child steps nest under
+    // the same `${spawnStepId}:branch` node the parent graph already uses.
+    branchNodeId = resolvedSpawnStepId ? `${resolvedSpawnStepId}:branch` : `${branchKey}:branch`;
     return {
       branchNodeId,
       steps: [
         ...parentSteps,
         {
           id: branchNodeId,
-          label,
+          label: `${name} run`,
           status: childError ? 'error' : (childRunning ? 'running' : 'completed'),
           kind: 'system',
           detail,
@@ -469,13 +495,14 @@ function resolveSubagentBranchNode(
     };
   }
 
+  // Preserve the branch label that the parent graph already produced (e.g.
+  // "coder run"); only the live status/detail needs to track child progress.
   return {
     branchNodeId,
     steps: parentSteps.map((step) => {
       if (step.id !== branchNodeId) return step;
       return {
         ...step,
-        label,
         detail,
         status: childError ? 'error' : (childRunning ? 'running' : step.status),
       };

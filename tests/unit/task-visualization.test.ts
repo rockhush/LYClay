@@ -1,7 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import { deriveTaskSteps, attachSubagentChildSteps, findInFlightChildDelegation, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo } from '@/pages/Chat/task-visualization';
+import { deriveTaskSteps, attachSubagentChildSteps, findInFlightChildDelegation, findReplyMessageIndex, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo } from '@/pages/Chat/task-visualization';
 import { stripProcessMessagePrefix } from '@/pages/Chat/message-utils';
 import type { RawMessage, ToolStatus } from '@/stores/chat';
+
+describe('findReplyMessageIndex', () => {
+  it('returns the last assistant text message', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'first narration' },
+      { role: 'assistant', content: 'final reply' },
+    ];
+    expect(findReplyMessageIndex(messages, false)).toBe(2);
+  });
+
+  it('skips internal subagent completion markers when picking the reply', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'build ppt' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: {} }],
+      },
+      { role: 'assistant', content: 'PPT 已生成完毕，文件在 workspace。' },
+      {
+        role: 'assistant',
+        content: '[Internal task completion event]\nsession_key: agent:main:subagent:child-1\nsession_id: id-1',
+      },
+    ];
+    // The completion marker is the last text message, but it must not be picked
+    // as the reply — the parent wrap-up at index 2 is the real reply.
+    expect(findReplyMessageIndex(messages, false)).toBe(2);
+  });
+
+  it('returns -1 while a reply is still streaming', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'partial' },
+    ];
+    expect(findReplyMessageIndex(messages, true)).toBe(-1);
+  });
+});
 
 describe('deriveTaskSteps', () => {
   it('builds running steps from streaming thinking and tool status', () => {
@@ -83,6 +120,41 @@ describe('deriveTaskSteps', () => {
         kind: 'tool',
       }),
     ]);
+  });
+
+  it('hides exec tool steps from the execution graph while keeping other tools', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-history',
+          content: [
+            { type: 'tool_use', id: 'tool-read', name: 'read', input: { path: '/tmp/skill.md' } },
+            { type: 'tool_use', id: 'tool-exec-1', name: 'exec', input: { command: 'python -c "print(1)"' } },
+            { type: 'tool_use', id: 'tool-exec-2', name: 'exec', input: { command: 'uv pip install pypinyin' } },
+          ],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [
+        {
+          toolCallId: 'tool-exec-live',
+          name: 'exec',
+          status: 'running',
+          updatedAt: Date.now(),
+          summary: 'uv run python -c ...',
+        },
+      ],
+    });
+
+    expect(steps).toEqual([
+      expect.objectContaining({
+        id: 'tool-read',
+        label: 'read',
+        kind: 'tool',
+      }),
+    ]);
+    expect(steps.some((step) => step.label === 'exec')).toBe(false);
   });
 
   it('upgrades a completed historical tool step when streaming status reports a later state', () => {
@@ -514,6 +586,11 @@ describe('deriveTaskSteps', () => {
         id: 'assistant-4',
         content: [{ type: 'text', text: '检查完成，结论如下。' }],
       },
+      {
+        role: 'assistant',
+        id: 'assistant-5',
+        content: [{ type: 'text', text: '这是最终答复。' }],
+      },
     ];
 
     const steps = deriveTaskSteps({
@@ -522,6 +599,8 @@ describe('deriveTaskSteps', () => {
       streamingTools: [],
     });
 
+    // Intermediate narration is folded into the graph; only the final reply
+    // (assistant-5) goes to the bubble, so both narration lines stay in steps.
     expect(steps.some((step) => step.detail?.includes('调度子agent'))).toBe(true);
     expect(steps.some((step) => step.detail?.includes('检查完成'))).toBe(true);
   });
@@ -683,6 +762,92 @@ describe('findInFlightChildDelegation', () => {
   });
 });
 
+describe('post-spawn parent topology', () => {
+  it('keeps the parent\'s own steps at top level after a sessions_spawn (not nested under the branch)', () => {
+    // Reproduces the case where the subagent times out and the main agent
+    // continues working inline. Those parent tool steps must stay at agent
+    // level, not collapse under the "<task> run" subagent branch.
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-spawn',
+          content: [{
+            type: 'tool_use',
+            id: 'spawn-1',
+            name: 'sessions_spawn',
+            input: { taskName: 'ppt_digital_employee', mode: 'run' },
+          }],
+        },
+        {
+          role: 'assistant',
+          id: 'assistant-takeover',
+          content: [
+            { type: 'tool_use', id: 'tool-write', name: 'write', input: { path: 'build.js' } },
+            { type: 'tool_use', id: 'tool-exec', name: 'exec', input: { command: 'node build.js' } },
+          ],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    const branchNode = steps.find((step) => step.id === 'spawn-1:branch');
+    expect(branchNode).toBeTruthy();
+
+    for (const id of ['tool-write', 'tool-exec']) {
+      const step = steps.find((s) => s.id === id);
+      expect(step?.parentId).toBe('agent-run');
+      expect(step?.depth).toBe(1);
+    }
+  });
+});
+
+describe('spawn branch labeling', () => {
+  it('uses the spawn taskName for the branch label when no agentId is provided', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-spawn',
+          content: [{
+            type: 'tool_use',
+            id: 'spawn-1',
+            name: 'sessions_spawn',
+            input: { taskName: 'ppt_digital_employee', task: 'build a deck', mode: 'run' },
+          }],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    const branchStep = steps.find((step) => step.id === 'spawn-1:branch');
+    expect(branchStep?.label).toBe('ppt_digital_employee run');
+  });
+
+  it('still prefers agentId over taskName for the branch label', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-spawn',
+          content: [{
+            type: 'tool_use',
+            id: 'spawn-1',
+            name: 'sessions_spawn',
+            input: { agentId: 'coder', taskName: 'ppt_digital_employee' },
+          }],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps.find((step) => step.id === 'spawn-1:branch')?.label).toBe('coder run');
+  });
+});
+
 describe('attachSubagentChildSteps', () => {
   it('nests child transcript steps under the spawn branch in the execution graph', () => {
     const parentSteps = deriveTaskSteps({
@@ -710,7 +875,7 @@ describe('attachSubagentChildSteps', () => {
           id: 'child-assistant',
           content: [{
             type: 'tool_use',
-            id: 'child-read',
+            id: 'tool-child-read',
             name: 'read',
             input: { path: 'README.md' },
           }],
@@ -789,7 +954,7 @@ describe('attachSubagentChildSteps', () => {
         id: 'child-assistant',
         content: [{
           type: 'tool_use',
-          id: 'child-read',
+          id: 'tool-child-read',
           name: 'read',
           input: { path: 'README.md' },
         }],

@@ -136,3 +136,16 @@ type SessionRecoveryResult =
 - `chat-event-dedupe.test.ts`：确认过的空 final 只有在 Main 诊断确认疑似 stale 后才展示恢复状态；恢复成功后不会自动重发。
 - `chat-event-dedupe.test.ts`：如果 Main 诊断显示会话仍可能活跃，Renderer 保持等待/确认状态，不显示恢复入口。
 - route test：diagnostics 和 recover route 校验 sessionKey，使用 Main-owned API，并返回结构化 reason。
+
+## Superseded Active Run Follow-up
+
+When a user sends a new message in the same chat session while GatewayManager still tracks an older user run for that session, Main may treat the older run as superseded by explicit user action before dispatching the new `chat.send`.
+
+Acceptance additions:
+- Before the new `chat.send`, GatewayManager best-effort calls `sessions.abort` for same-session tracked user runs only.
+- GatewayManager locally settles those superseded run metrics so stale `chatRunMetrics` entries cannot permanently block transcript-lock recovery.
+- Superseded recovery may allow a stale active lock owned by the current Gateway process to be removed only through `recoverOrphanedSessionTranscriptLock` with an explicit `superseded-by-new-user-message` reason; it must still reject locks owned by another live process and must still respect the minimum lock-age guard.
+- This flow must not add renderer-side direct Gateway HTTP or IPC calls.
+
+Required tests addition:
+- pnpm exec vitest run tests/unit/session-lock-recovery.test.ts tests/unit/gateway-empty-final-diagnostics.test.ts

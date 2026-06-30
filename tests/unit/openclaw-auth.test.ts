@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { testHome, testUserData } = vi.hoisted(() => {
@@ -1387,5 +1387,206 @@ describe('auth-backed provider discovery', () => {
     expect(allow).toEqual(['custom-plugin']);
     expect(entries['minimax-portal-auth']).toBeUndefined();
     expect(entries['custom-plugin']).toEqual({ enabled: true });
+  });
+});
+
+describe('ensureAgentContextTokensCapForLargeModels', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    await rm(testHome, { recursive: true, force: true });
+  });
+
+  it('raises agents.defaults.contextTokens when DeepSeek V4 is configured below 1M cap', async () => {
+    await writeOpenClawJson({
+      models: {
+        providers: {
+          'custom-customb5': {
+            baseUrl: 'https://api.deepseek.com',
+            api: 'openai-completions',
+            models: [{
+              id: 'deepseek-v4-pro',
+              name: 'deepseek-v4-pro',
+              contextWindow: 1_048_576,
+              maxTokens: 65_536,
+            }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          contextTokens: 128_000,
+        },
+      },
+    });
+
+    const { ensureAgentContextTokensCapForLargeModels } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureAgentContextTokensCapForLargeModels();
+    expect(changed).toBe(true);
+
+    const result = await readOpenClawJson();
+    const defaults = (result.agents as Record<string, unknown>).defaults as Record<string, unknown>;
+    expect(defaults.contextTokens).toBe(1_048_576);
+  });
+
+  it('leaves contextTokens unchanged when already above the large-model floor', async () => {
+    await writeOpenClawJson({
+      models: {
+        providers: {
+          'custom-customb5': {
+            models: [{ id: 'deepseek-v4-pro', contextWindow: 1_048_576 }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          contextTokens: 1_048_576,
+        },
+      },
+    });
+
+    const { ensureAgentContextTokensCapForLargeModels } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureAgentContextTokensCapForLargeModels();
+    expect(changed).toBe(false);
+  });
+});
+
+describe('ensureModelCatalogContextTokensForLargeModels', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    await rm(testHome, { recursive: true, force: true });
+  });
+
+  it('adds contextTokens when only contextWindow is configured for DeepSeek V4', async () => {
+    await writeOpenClawJson({
+      models: {
+        providers: {
+          'custom-customb5': {
+            models: [{
+              id: 'deepseek-v4-pro',
+              contextWindow: 1_048_576,
+              maxTokens: 65_536,
+            }],
+          },
+        },
+      },
+    });
+
+    const { ensureModelCatalogContextTokensForLargeModels } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureModelCatalogContextTokensForLargeModels();
+    expect(changed).toBe(true);
+
+    const result = await readOpenClawJson();
+    const model = (
+      (result.models as Record<string, unknown>).providers as Record<string, { models: Array<Record<string, unknown>> }>
+    )['custom-customb5'].models[0];
+    expect(model.contextTokens).toBe(1_048_576);
+    expect(model.contextWindow).toBe(1_048_576);
+  });
+
+  it('raises stale contextTokens below the large-model floor', async () => {
+    await writeOpenClawJson({
+      models: {
+        providers: {
+          'custom-customb5': {
+            models: [{
+              id: 'deepseek-v4-pro',
+              contextWindow: 1_048_576,
+              contextTokens: 128_000,
+            }],
+          },
+        },
+      },
+    });
+
+    const { ensureModelCatalogContextTokensForLargeModels } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureModelCatalogContextTokensForLargeModels();
+    expect(changed).toBe(true);
+
+    const result = await readOpenClawJson();
+    const model = (
+      (result.models as Record<string, unknown>).providers as Record<string, { models: Array<Record<string, unknown>> }>
+    )['custom-customb5'].models[0];
+    expect(model.contextTokens).toBe(1_048_576);
+  });
+
+  it('raises maxTokens for DeepSeek V4 when missing or too low', async () => {
+    await writeOpenClawJson({
+      models: {
+        providers: {
+          'custom-customb5': {
+            models: [{
+              id: 'deepseek-v4-pro',
+              contextWindow: 1_048_576,
+              contextTokens: 1_048_576,
+              maxTokens: 8192,
+            }],
+          },
+        },
+      },
+    });
+
+    const { ensureModelCatalogContextTokensForLargeModels } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureModelCatalogContextTokensForLargeModels();
+    expect(changed).toBe(true);
+
+    const result = await readOpenClawJson();
+    const model = (
+      (result.models as Record<string, unknown>).providers as Record<string, { models: Array<Record<string, unknown>> }>
+    )['custom-customb5'].models[0];
+    expect(model.maxTokens).toBe(65_536);
+  });
+});
+
+describe('ensureAgentModelsJsonValid', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    await rm(testHome, { recursive: true, force: true });
+  });
+
+  it('strips unsupported input modalities so models.json can load', async () => {
+    const modelsPath = join(testHome, '.openclaw', 'agents', 'main', 'agent', 'models.json');
+    await mkdir(dirname(modelsPath), { recursive: true });
+    await writeFile(modelsPath, JSON.stringify({
+      providers: {
+        'ly-auto': {
+          baseUrl: 'https://example.com',
+          apiKey: 'test-key',
+          api: 'openai-completions',
+          models: [{
+            id: 'auto',
+            name: 'auto',
+            input: ['text', 'image', 'video'],
+            contextWindow: 128000,
+            maxTokens: 16384,
+            api: 'openai-completions',
+          }],
+        },
+        'custom-customb5': {
+          baseUrl: 'https://api.deepseek.com',
+          apiKey: 'test-key',
+          api: 'openai-completions',
+          models: [{
+            id: 'deepseek-v4-pro',
+            name: 'deepseek-v4-pro',
+            contextWindow: 1_048_576,
+            maxTokens: 65536,
+            api: 'openai-completions',
+          }],
+        },
+      },
+    }, null, 2));
+
+    const { ensureAgentModelsJsonValid } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureAgentModelsJsonValid();
+    expect(changed).toBe(true);
+
+    const repaired = JSON.parse(await readFile(modelsPath, 'utf8')) as {
+      providers: Record<string, { models: Array<{ input?: string[]; contextTokens?: number }> }>;
+    };
+    expect(repaired.providers['ly-auto'].models[0].input).toEqual(['text', 'image']);
+    expect(repaired.providers['custom-customb5'].models[0].contextTokens).toBe(1_048_576);
   });
 });

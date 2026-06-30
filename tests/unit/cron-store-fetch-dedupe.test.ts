@@ -49,4 +49,28 @@ describe('cron store fetchJobs dedupe', () => {
 
     expect(useCronStore.getState().jobs.map((job) => job.id)).toEqual(['job-1']);
   });
+
+  it('triggerJob returns sessionKey and runId from the streaming trigger API', async () => {
+    hostApiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/cron/trigger') {
+        return { success: true, id: 'job-a', sessionKey: 'agent:main:cron:job-a:run-uuid', runId: 'run-1' };
+      }
+      return [];
+    });
+
+    const { useCronStore } = await import('@/stores/cron');
+    useCronStore.setState({
+      jobs: [{
+        id: 'job-a',
+        name: '看球了',
+        enabled: true,
+      } as never],
+      loading: false,
+      error: null,
+    });
+
+    const result = await useCronStore.getState().triggerJob('job-a');
+
+    expect(result).toEqual({ sessionKey: 'agent:main:cron:job-a:run-uuid', runId: 'run-1' });
+  });
 });

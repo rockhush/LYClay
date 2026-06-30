@@ -7,6 +7,7 @@ import { hostApiFetch } from '@/lib/host-api';
 import { invokeIpc } from '@/lib/api-client';
 import { subscribeHostEvent } from '@/lib/host-events';
 import type { GatewayStatus } from '../types/gateway';
+import { isEmptyChatScratchpad } from '@/lib/chat-scratchpad';
 import { reabortPersistedUserSessions } from './chat/user-aborted-sessions';
 
 let gatewayInitPromise: Promise<void> | null = null;
@@ -242,7 +243,13 @@ function handleSessionUpdated(payload: SessionUpdatedPayload | undefined): void 
   loadChatStoreModule()
     .then(({ useChatStore }) => {
       const state = useChatStore.getState();
-      maybeLoadSessions(state, true);
+      const isBulkSessionsJson = payload.reason === 'sessions-json' && !sessionKey;
+      const onEmptyScratchpad = isEmptyChatScratchpad(state.currentSessionKey, state);
+      // Thinking-level patches and other sessions.json metadata writes should not
+      // force a sidebar reload that can reset the active empty scratchpad.
+      if (!(isBulkSessionsJson && onEmptyScratchpad)) {
+        maybeLoadSessions(state, true);
+      }
 
       if (sessionKey && sessionKey === state.currentSessionKey) {
         maybeLoadHistory(state, true);
@@ -360,17 +367,27 @@ function handleGatewayNotification(notification: { method?: string; params?: Rec
       ?? p.errorMessage
       ?? 'An error occurred',
     );
-    forwardAgentEventToChat({
-      state: 'error',
-      runId,
-      sessionKey: String(sessionKey),
-      errorMessage,
-    });
-    loadChatStoreModule()
-      .then(({ useChatStore }) => {
-        refreshActiveAgentSessionHistory(useChatStore.getState(), runId, sessionKey, true);
-      })
-      .catch(() => {});
+    // 可恢复错误（terminated / rate limit / 502 / timeout 等）Gateway 会内部
+    // 重试恢复，不应转发为 UI error，静默刷新历史即可。
+    if (/terminated|temporarily unavailable|rate limit|overloaded|429|502|503|504|timeout/i.test(errorMessage)) {
+      loadChatStoreModule()
+        .then(({ useChatStore }) => {
+          refreshActiveAgentSessionHistory(useChatStore.getState(), runId, sessionKey, true);
+        })
+        .catch(() => {});
+    } else {
+      forwardAgentEventToChat({
+        state: 'error',
+        runId,
+        sessionKey: String(sessionKey),
+        errorMessage,
+      });
+      loadChatStoreModule()
+        .then(({ useChatStore }) => {
+          refreshActiveAgentSessionHistory(useChatStore.getState(), runId, sessionKey, true);
+        })
+        .catch(() => {});
+    }
   }
 
   // Gateway emits phase=end after each tool round; that is not a full run completion.
@@ -569,8 +586,9 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
             // Reset first message flag when gateway starts/restarts
             if (payload.state === 'running') {
               loadChatStoreModule()
-                .then(({ resetFirstMessageFlag }) => {
+                .then(({ resetFirstMessageFlag, kickSessionBackendPolling }) => {
                   resetFirstMessageFlag();
+                  kickSessionBackendPolling();
                 })
                 .catch(() => {});
             }
@@ -608,6 +626,22 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
           }));
           unsubscribers.push(subscribeHostEvent<SessionUpdatedPayload>('session:updated', (payload) => {
             handleSessionUpdated(payload);
+          }));
+          unsubscribers.push(subscribeHostEvent<{ reason?: string; jobId?: string }>('cron:updated', () => {
+            void import('./cron')
+              .then(({ useCronStore }) => {
+                useCronStore.getState().fetchJobs();
+              })
+              .catch(() => {});
+            loadChatStoreModule()
+              .then(({ useChatStore }) => {
+                const state = useChatStore.getState();
+                void state.loadSessions(true);
+                if (!state.sending && !state.activeRunId) {
+                  void state.loadHistory(true, { force: true });
+                }
+              })
+              .catch(() => {});
           }));
           unsubscribers.push(subscribeHostEvent<{ channelId?: string; status?: string }>(
             'gateway:channel-status',

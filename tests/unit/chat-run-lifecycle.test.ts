@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   filterChannelOutboundEchoMessages,
   isChannelDeliveryConfirmationText,
+  shouldSuppressAssistantStreamingText,
   stripSilentReplyToken,
 } from '@/stores/chat/helpers';
 import {
@@ -14,6 +15,7 @@ import {
   isSilentTerminalAssistantMessage,
   isTerminalAssistantMessage,
   shouldKeepRunActiveAfterAssistantFinal,
+  shouldSilentlyFinalizeRunOnAssistantFinal,
 } from '@/stores/chat/run-lifecycle';
 import type { RawMessage } from '@/stores/chat/types';
 
@@ -31,6 +33,11 @@ describe('channel delivery assistant filtering', () => {
   it('treats DingTalk delivery confirmations as internal text', () => {
     expect(isChannelDeliveryConfirmationText('已通过钉钉发送。\n\nNO_REPLY')).toBe(true);
     expect(isChannelDeliveryConfirmationText('已向张三发送消息。')).toBe(true);
+  });
+
+  it('does not treat pre-tool DingTalk planning as a delivery confirmation', () => {
+    expect(isChannelDeliveryConfirmationText('接下来我会通过钉钉发送会议通知。')).toBe(false);
+    expect(isChannelDeliveryConfirmationText('我先整理内容，再通过钉钉发送给张三。')).toBe(false);
   });
 
   it('filters assistant echoes of outbound channel payloads', () => {
@@ -261,5 +268,54 @@ describe('chat run lifecycle helpers', () => {
     ];
 
     expect(findConcludingAssistantReply(messages.slice(1))).toBeUndefined();
+  });
+});
+
+describe('silent run finalization whitelist', () => {
+  it('finalizes only explicit silent plumbing with terminal stop reason', () => {
+    expect(shouldSilentlyFinalizeRunOnAssistantFinal({
+      role: 'assistant',
+      content: 'NO_REPLY',
+      stopReason: 'stop',
+    })).toBe(true);
+
+    expect(shouldSilentlyFinalizeRunOnAssistantFinal({
+      role: 'assistant',
+      content: '已通过钉钉发送。\n\nNO_REPLY',
+      stopReason: 'stop',
+    })).toBe(true);
+  });
+
+  it('does not finalize approve narration or pre-tool channel planning', () => {
+    expect(shouldSilentlyFinalizeRunOnAssistantFinal({
+      role: 'assistant',
+      content: '请回复 /approve d0aebe53 来放行。',
+      stopReason: 'stop',
+    })).toBe(false);
+
+    expect(shouldSilentlyFinalizeRunOnAssistantFinal({
+      role: 'assistant',
+      content: '接下来我会通过钉钉发送会议通知。',
+      stopReason: 'toolUse',
+    })).toBe(false);
+
+    expect(shouldKeepRunActiveAfterAssistantFinal({
+      role: 'assistant',
+      content: '请回复 /approve d0aebe53 来放行。',
+      stopReason: 'toolUse',
+    })).toBe(true);
+  });
+
+  it('does not finalize bare NO_REPLY without terminal stop reason', () => {
+    expect(shouldSilentlyFinalizeRunOnAssistantFinal({
+      role: 'assistant',
+      content: 'NO_REPLY',
+    })).toBe(false);
+  });
+
+  it('suppresses streaming only for silent tokens, not approval narration', () => {
+    expect(shouldSuppressAssistantStreamingText('NO_REPLY')).toBe(true);
+    expect(shouldSuppressAssistantStreamingText('请回复 /approve d0aebe53 来放行。')).toBe(false);
+    expect(shouldSuppressAssistantStreamingText('接下来我会通过钉钉发送会议通知。')).toBe(false);
   });
 });

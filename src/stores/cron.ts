@@ -9,6 +9,15 @@ import type { CronJob, CronJobCreateInput, CronJobUpdateInput } from '../types/c
 
 let _fetchJobsInFlight: Promise<void> | null = null;
 
+function mergeCronJobLists(currentJobs: CronJob[], fetchedJobs: CronJob[]): CronJob[] {
+  const resultIds = new Set(fetchedJobs.map((job) => job.id));
+  const extraJobs = currentJobs.filter((job) => !resultIds.has(job.id));
+  if (fetchedJobs.length === 0 && currentJobs.length > 0) {
+    return currentJobs;
+  }
+  return [...fetchedJobs, ...extraJobs];
+}
+
 interface CronState {
   jobs: CronJob[];
   loading: boolean;
@@ -20,7 +29,7 @@ interface CronState {
   updateJob: (id: string, input: CronJobUpdateInput) => Promise<void>;
   deleteJob: (id: string) => Promise<void>;
   toggleJob: (id: string, enabled: boolean) => Promise<void>;
-  triggerJob: (id: string) => Promise<void>;
+  triggerJob: (id: string) => Promise<{ sessionKey: string; runId: string }>;
   setJobs: (jobs: CronJob[]) => void;
 }
 
@@ -50,11 +59,7 @@ export const useCronStore = create<CronState>((set) => ({
         // Gateway now correctly returns agentId for all jobs.
         // If Gateway returned fewer jobs than we have (e.g. race condition), preserve
         // the extra ones from current state to avoid losing data.
-        const resultIds = new Set(result.map((j) => j.id));
-        const extraJobs = currentJobs.filter((j) => !resultIds.has(j.id));
-        const allJobs = [...result, ...extraJobs];
-
-        set({ jobs: allJobs, loading: false });
+        set({ jobs: mergeCronJobLists(currentJobs, result), loading: false });
       } catch (error) {
         // Preserve previous jobs on error so the user sees stale data instead of nothing.
         set({ error: String(error), loading: false });
@@ -134,26 +139,14 @@ export const useCronStore = create<CronState>((set) => ({
 
   triggerJob: async (id) => {
     try {
-      await hostApiFetch('/api/cron/trigger', {
-        method: 'POST',
-        body: JSON.stringify({ id }),
-      });
-      // Refresh after trigger; poll briefly so Gateway state can settle before
-      // we decide whether the card still shows a stale failure banner.
-      const pollDelaysMs = [0, 750, 1500, 2500];
-      for (const delayMs of pollDelaysMs) {
-        if (delayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-        }
-        try {
-          const result = await hostApiFetch<CronJob[]>('/api/cron/jobs');
-          set({ jobs: result });
-          const job = result.find((entry) => entry.id === id);
-          if (job?.lastRun?.success) return;
-        } catch {
-          // Ignore refresh errors between poll attempts.
-        }
+      const result = await hostApiFetch<{ success: boolean; id: string; sessionKey: string; runId: string; error?: string }>(
+        '/api/cron/trigger',
+        { method: 'POST', body: JSON.stringify({ id }) },
+      );
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to trigger cron job');
       }
+      return { sessionKey: result.sessionKey, runId: result.runId };
     } catch (error) {
       console.error('Failed to trigger cron job:', error);
       throw error;

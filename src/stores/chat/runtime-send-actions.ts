@@ -19,7 +19,8 @@ import {
 
 import type { ChatSession, RawMessage, ReasoningMode } from './types';
 import { buildClearedActiveRunPatch } from './run-lifecycle';
-import { refreshSessionBackendActivity } from './session-backend-bridge';
+import { refreshSessionBackendActivity, clearSessionActivityPoll } from './session-backend-bridge';
+import { clearFinalizeGraceTimer } from './finalize-turn-bridge';
 import { shouldForceAbortStuckRun } from './user-turn-lifecycle';
 import { abortPendingChildDelegations } from './abort-child-delegations';
 import { persistUserAbortedSession } from './user-aborted-sessions';
@@ -298,6 +299,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       if (!trimmed && (!attachments || attachments.length === 0)) return;
 
       clearAbortedChatRuns();
+      clearFinalizeGraceTimer();
       set({ emptyFinalRecovery: { status: 'idle' } });
 
       const targetSessionKey = resolveMainSessionKeyForAgent(targetAgentId) ?? get().currentSessionKey;
@@ -384,6 +386,7 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
           : dedupeEquivalentAttachmentUserMessages([...s.messages, userMsg]),
         sending: true,
         error: null,
+        runError: null,
         securityCancelNotice: null,
         streamingText: '',
         streamingMessage: null,
@@ -448,7 +451,12 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             });
           }
           const backendActivity = backendSnapshot?.session ?? get().sessionBackendActivity;
-          const backendStillActive = backendActivity && !shouldForceAbortStuckRun(backendActivity);
+          const gatewayBackground = backendSnapshot?.background ?? get().gatewayBackgroundActivity;
+          const backendStillActive = backendActivity && !shouldForceAbortStuckRun(
+            backendActivity,
+            gatewayBackground,
+            get().messages,
+          );
 
           if (hasRunningTools && idleMs >= TOOL_EXECUTION_STALE_MS) {
             if (backendStillActive) {
@@ -458,8 +466,8 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             clearHistoryPoll();
             abortGatewayRun(currentSessionKey);
             clearPendingComplexTaskPlan(currentSessionKey);
+            console.warn('[chat.safety-timeout] 工具执行长时间无响应，已自动停止本次任务', { sessionKey: currentSessionKey });
             set({
-              error: i18n.t('chat:errors.toolExecutionTimeout'),
               streamingText: '',
               streamingMessage: null,
               streamingTools: [],
@@ -480,7 +488,13 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
                 const next = get();
                 if (next.currentSessionKey !== currentSessionKey || !next.sending) return;
                 if (Date.now() - getLastChatEventAt() < PENDING_FINAL_STUCK_MS / 2) return;
-                if (next.sessionBackendActivity && !shouldForceAbortStuckRun(next.sessionBackendActivity)) return;
+                if (next.sessionBackendActivity
+                  && !shouldForceAbortStuckRun(
+                    next.sessionBackendActivity,
+                    next.gatewayBackgroundActivity,
+                    next.messages,
+                  )) return;
+                clearFinalizeGraceTimer();
                 clearHistoryPoll();
                 clearErrorRecoveryTimer();
                 set(buildClearedActiveRunPatch());
@@ -676,10 +690,12 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
 
     abortRun: async () => {
       clearHistoryPoll();
+      clearSessionActivityPoll();
       clearErrorRecoveryTimer();
+      clearFinalizeGraceTimer();
       markAbortHistoryQuietPeriod();
       markUserAbort();
-      const { currentSessionKey, activeRunId, messages } = get();
+      const { currentSessionKey, activeRunId, messages, gatewayBackgroundActivity } = get();
       if (activeRunId) {
         markAbortedChatRun(activeRunId);
       }
@@ -715,7 +731,11 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             },
             10_000,
           ),
-          abortPendingChildDelegations(messages, rpc),
+          abortPendingChildDelegations(
+            messages,
+            rpc,
+            get().gatewayBackgroundActivity?.processingSessionKeys ?? [],
+          ),
         ]).catch((err) => {
           console.warn('[abortRun] Failed to abort run:', err);
         });

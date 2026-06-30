@@ -86,6 +86,23 @@ status: completed successfully`;
     expect(isInternalMessage({ role: 'user', content: '[OpenClaw heartbeat poll]' })).toBe(true);
   });
 
+  it('filters the contentless failed-turn placeholder (request timed out)', () => {
+    expect(isInternalMessage({
+      role: 'assistant',
+      content: '[assistant turn failed before producing content]',
+    })).toBe(true);
+    expect(isInternalMessage({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'assistant turn failed before producing content' }],
+    })).toBe(true);
+  });
+
+  it('does not filter a normal assistant message that merely mentions a failed turn', () => {
+    const content = 'The previous assistant turn failed before producing content because the request timed out — here is what to try next.';
+
+    expect(isInternalMessage({ role: 'assistant', content })).toBe(false);
+  });
+
   it('filters internal tool failure feedback control messages', () => {
     const content = [
       '[LYCLAW internal tool failure feedback]',

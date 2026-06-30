@@ -159,6 +159,16 @@ export function isRecoverableRuntimeError(message: string): boolean {
 }
 
 /**
+ * Errors that genuinely prevent the task from continuing and should be shown
+ * to the user. Everything else is transient / internal and gets logged only.
+ */
+const FATAL_RUNTIME_ERROR_PATTERN = /api[_\s]?key|apikey|authentication|unauthorized|401|403|model not found|model not available|insufficient[_\s]?quota|billing|invalid.*(?:api|key|token|credential)|permission denied.*(?:model|api)/i;
+
+export function isFatalRuntimeError(message: string): boolean {
+  return FATAL_RUNTIME_ERROR_PATTERN.test(message);
+}
+
+/**
  * 把一条「用户拒绝安全确认」的错误消息转成会话内的温和取消提示。
  * 能从文件路径拒绝里提取具体路径，其余拒绝类型回退到通用文案。
  */
@@ -1329,8 +1339,30 @@ function isChannelDeliveryConfirmationText(text: string): boolean {
     /^sent (?:the )?message (?:via|through) dingtalk[。.!]?$/i,
     /^message sent (?:via|through) dingtalk[。.!]?$/i,
   ];
-  if (patterns.some((pattern) => pattern.test(normalized))) return true;
-  if (/钉钉/.test(normalized) && /发送/.test(normalized) && normalized.length <= 96) return true;
+  return patterns.some((pattern) => pattern.test(normalized));
+}
+
+/** Assistant text that should not count as user-visible output for run lifecycle. */
+function isAssistantTextHiddenFromUser(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  const visible = stripSilentReplyToken(trimmed).trim();
+  if (!visible) return true;
+  if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(visible)) return true;
+  if (isChannelDeliveryConfirmationText(visible)) return true;
+  return false;
+}
+
+/**
+ * Suppress live streaming bubbles for silent plumbing only (not approval narration
+ * or pre-tool planning that mentions channels).
+ */
+function shouldSuppressAssistantStreamingText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(trimmed)) return true;
+  if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(trimmed)) return true;
+  if (containsSilentReplyToken(trimmed) && stripSilentReplyToken(trimmed).trim().length === 0) return true;
   return false;
 }
 
@@ -1373,7 +1405,18 @@ function isInternalMessageText(text: string): boolean {
   if (containsSilentReplyToken(text) && stripSilentReplyToken(text).trim().length === 0) return true;
   if (isChannelDeliveryConfirmationText(text)) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(text.trim())) return true;
+  if (isFailedTurnPlaceholderText(text)) return true;
   return isRuntimeSystemInjection(text);
+}
+
+/**
+ * Runtime placeholder for an assistant turn that errored before generating any
+ * content (e.g. `{stopReason:'error', errorMessage:'Request timed out.'}`).
+ * It carries zero user-facing content, so rendering it as a normal reply just
+ * stacks confusing empty "完成" bubbles on retries. Hide it from the chat.
+ */
+export function isFailedTurnPlaceholderText(text: string): boolean {
+  return /^\[?\s*assistant turn failed before producing content\.?\s*\]?$/i.test(text.trim());
 }
 
 /** Whether assistant text includes OpenClaw silent reply tokens. */
@@ -1659,13 +1702,13 @@ function hasVisibleAssistantContent(message: RawMessage | undefined): boolean {
   if (!message) return false;
   if (typeof message.content === 'string') {
     const text = message.content.trim();
-    return Boolean(text) && !isInternalMessageText(text);
+    return Boolean(text) && !isAssistantTextHiddenFromUser(text);
   }
 
   const content = message.content;
   if (Array.isArray(content)) {
     for (const block of content as ContentBlock[]) {
-      if (block.type === 'text' && block.text?.trim() && !isInternalMessageText(block.text)) {
+      if (block.type === 'text' && block.text?.trim() && !isAssistantTextHiddenFromUser(block.text)) {
         return true;
       }
       if (block.type === 'image') return true;
@@ -1673,7 +1716,7 @@ function hasVisibleAssistantContent(message: RawMessage | undefined): boolean {
   }
 
   const msg = message as unknown as Record<string, unknown>;
-  if (typeof msg.text === 'string' && msg.text.trim() && !isInternalMessageText(msg.text)) {
+  if (typeof msg.text === 'string' && msg.text.trim() && !isAssistantTextHiddenFromUser(msg.text)) {
     return true;
   }
 
@@ -1719,6 +1762,7 @@ export {
   isChannelOutboundEchoMessage,
   filterChannelOutboundEchoMessages,
   stripSilentReplyToken,
+  shouldSuppressAssistantStreamingText,
   isToolResultRole,
   enrichWithCachedImages,
   normalizeComplexTaskControlUserMessages,
