@@ -22,6 +22,7 @@ import {
   formatTimestamp,
   resolveMessageDisplayTimestamp,
 } from './message-utils';
+import { isVisibleExecutionGraphToolName } from './task-visualization';
 
 interface ChatMessageProps {
   message: RawMessage;
@@ -131,7 +132,9 @@ export const ChatMessage = memo(function ChatMessage({
   const hasText = !hideAssistantText && text.trim().length > 0;
   const images = extractImages(message);
   const tools = extractToolUse(message);
-  const visibleTools = suppressToolCards ? [] : tools;
+  const visibleTools = suppressToolCards
+    ? []
+    : tools.filter((tool) => isVisibleExecutionGraphToolName(tool.name));
   const shouldHideProcessAttachments = suppressProcessAttachments
     && (hasText || images.length > 0 || visibleTools.length > 0);
 
@@ -143,7 +146,10 @@ export const ChatMessage = memo(function ChatMessage({
   // Never render tool result messages in chat UI
   if (isToolResult) return null;
 
-  const hasStreamingToolStatus = isStreaming && streamingTools.length > 0;
+  const visibleStreamingTools = streamingTools.filter(
+    (tool) => isVisibleExecutionGraphToolName(tool.name),
+  );
+  const hasStreamingToolStatus = isStreaming && visibleStreamingTools.length > 0;
   if (!hasText && images.length === 0 && visibleTools.length === 0 && attachedFiles.length === 0 && !hasStreamingToolStatus) return null;
 
   const displayTimestamp = formatTimestamp(resolveMessageDisplayTimestamp(message));
@@ -169,8 +175,8 @@ export const ChatMessage = memo(function ChatMessage({
           isUser ? 'items-end' : 'items-start',
         )}
       >
-        {isStreaming && !isUser && streamingTools.length > 0 && (
-          <ToolStatusBar tools={streamingTools} />
+        {hasStreamingToolStatus && (
+          <ToolStatusBar tools={visibleStreamingTools} />
         )}
 
         {/* Tool use cards */}
@@ -349,9 +355,12 @@ function ToolStatusBar({
     summary?: string;
   }>;
 }) {
+  const visibleTools = tools.filter((tool) => isVisibleExecutionGraphToolName(tool.name));
+  if (visibleTools.length === 0) return null;
+
   return (
     <div className="w-full space-y-1">
-      {tools.map((tool) => {
+      {visibleTools.map((tool) => {
         const isRunning = tool.status === 'running';
         const isError = tool.status === 'error';
         return (

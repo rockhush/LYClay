@@ -74,6 +74,7 @@ import {
   shouldForceAbortStuckRun,
   buildReAdoptRunPatch,
   hasOpenDelegatedBackendWork,
+  hasOpenBackendWorkForUserTurn,
 } from './chat/user-turn-lifecycle';
 import {
   deferClearUserTurnForOpenDelegation,
@@ -5441,10 +5442,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return;
     }
 
-    // Approval followups resume the same user-visible run with a synthetic
-    // runId. Let those continuation events close the current session state.
-    if (!shouldProcessCurrentSessionRunEvent(activeRunId, runId)) return;
-
     // Defensive: if state is missing but we have a message, try to infer state.
     let resolvedState = eventState;
     if (!resolvedState && event.message && typeof event.message === 'object') {
@@ -5456,6 +5453,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         resolvedState = 'delta';
       }
     }
+
+    const isTerminalEvent = resolvedState === 'final' || resolvedState === 'error' || resolvedState === 'aborted';
+    // Approval followups resume the same user-visible run with a synthetic
+    // runId. Let terminal events reconcile even if the active run snapshot is
+    // stale, but keep non-terminal deltas isolated to the current run.
+    const matchesCurrentRun = shouldProcessCurrentSessionRunEvent(activeRunId, runId);
+    if (!isTerminalEvent && !matchesCurrentRun) return;
 
     // Events for a session the user isn't currently viewing must not mutate the
     // visible streaming fields. We still finalize that background session's
@@ -5578,6 +5582,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
       case 'final': {
+        if (!matchesCurrentRun) {
+          clearHistoryPoll();
+          void get().loadHistory(true, { force: true }).finally(() => {
+            ensureSessionBackendPolling(currentSessionKey, set, get);
+          });
+          break;
+        }
+
         const finalBeforeState = get();
         console.info('[chat.final.before]', {
           runId,
@@ -5907,6 +5919,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
             });
           }
         } else {
+          if (isExecApprovalFollowupRun(runId)) {
+            set({
+              streamingText: '',
+              streamingMessage: null,
+              sending: false,
+              activeRunId: null,
+              pendingFinal: false,
+              lastUserMessageAt: null,
+              pendingToolImages: [],
+              error: null,
+              runError: null,
+            });
+            void get().loadHistory(true, { force: true });
+            break;
+          }
+
           const { activeRunId: currentActiveRunId } = get();
           if (runId && currentActiveRunId && runId !== currentActiveRunId) {
             const skippedState = get();
@@ -5924,7 +5952,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
             });
             break;
           }
-          void get().loadHistory(true, { force: true });
+
+          void get().loadHistory(true, { force: true }).finally(async () => {
+            const latest = get();
+            if (latest.currentSessionKey !== currentSessionKey) return;
+            if (runId && latest.activeRunId && latest.activeRunId !== runId) return;
+            if (!latest.sending && !latest.pendingFinal && !latest.activeRunId) return;
+
+            const backendSnapshot = await refreshSessionBackendActivity(currentSessionKey);
+            if (backendSnapshot) {
+              set({
+                sessionBackendActivity: backendSnapshot.session,
+                gatewayBackgroundActivity: backendSnapshot.background,
+              });
+            }
+
+            const postRefresh = get();
+            if (postRefresh.currentSessionKey !== currentSessionKey) return;
+            if (runId && postRefresh.activeRunId && postRefresh.activeRunId !== runId) return;
+
+            const backendActivity = backendSnapshot?.session ?? postRefresh.sessionBackendActivity;
+            const gatewayBackground = backendSnapshot?.background ?? postRefresh.gatewayBackgroundActivity;
+            if (!hasOpenBackendWorkForUserTurn(gatewayBackground, backendActivity, postRefresh.messages)) {
+              clearHistoryPoll();
+              clearErrorRecoveryTimer();
+              set(buildClearedActiveRunPatch());
+            }
+
+            ensureSessionBackendPolling(currentSessionKey, set, get);
+          });
         }
         const finalAfterState = get();
         console.info('[chat.final.after]', {

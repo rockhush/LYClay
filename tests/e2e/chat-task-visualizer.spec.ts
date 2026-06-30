@@ -271,14 +271,14 @@ test.describe('ClawX chat execution graph', () => {
       }
       await expect(
         page.locator('[data-testid="chat-execution-graph"] [data-testid="chat-execution-step"]').getByText('sessions_spawn', { exact: true }),
-      ).toBeVisible();
+      ).toHaveCount(0);
       await expect(page.getByText('[Internal task completion event]')).toHaveCount(0);
       await expect(
         page.locator('[data-testid="chat-execution-graph"] [data-testid="chat-execution-step"]').getByText('exec', { exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page.locator('[data-testid="chat-execution-graph"] [data-testid="chat-execution-step"]').getByText(/coder run/i),
       ).toBeVisible();
-      const execRow = page.locator('[data-testid="chat-execution-step"]').filter({ hasText: 'exec' }).first();
-      await execRow.click();
-      await expect(execRow.locator('pre')).toBeVisible();
       await expect(page.getByText('Coder has finished the analysis, here are the conclusions.')).toBeVisible();
       await expect(page.getByText('CHECKLIST.md')).toHaveCount(0);
       await expect(page.getByTestId('chat-execution-step-thinking-trailing')).toHaveCount(0);

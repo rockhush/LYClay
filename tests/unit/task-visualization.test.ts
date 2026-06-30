@@ -70,12 +70,8 @@ describe('deriveTaskSteps', () => {
         status: 'running',
         kind: 'thinking',
       }),
-      expect.objectContaining({
-        label: 'web_search',
-        status: 'running',
-        kind: 'tool',
-      }),
     ]);
+    expect(steps.some((step) => step.label === 'web_search')).toBe(false);
   });
 
   it('keeps completed tool steps visible while a later tool is still streaming', () => {
@@ -113,16 +109,11 @@ describe('deriveTaskSteps', () => {
         status: 'completed',
         kind: 'tool',
       }),
-      expect.objectContaining({
-        id: 'tool-grep',
-        label: 'grep',
-        status: 'running',
-        kind: 'tool',
-      }),
     ]);
+    expect(steps.some((step) => step.label === 'grep')).toBe(false);
   });
 
-  it('hides exec tool steps from the execution graph while keeping other tools', () => {
+  it('hides non-whitelisted tool steps such as exec and cron from the execution graph', () => {
     const steps = deriveTaskSteps({
       messages: [
         {
@@ -155,6 +146,28 @@ describe('deriveTaskSteps', () => {
       }),
     ]);
     expect(steps.some((step) => step.label === 'exec')).toBe(false);
+  });
+
+  it('hides cron and process tool steps while keeping read and write', () => {
+    const steps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-tools',
+          content: [
+            { type: 'tool_use', id: 'tool-read', name: 'read', input: { path: '/tmp/a.md' } },
+            { type: 'tool_use', id: 'tool-write', name: 'write', input: { path: '/tmp/b.md' } },
+            { type: 'tool_use', id: 'tool-cron', name: 'cron', input: { action: 'add' } },
+            { type: 'tool_use', id: 'tool-process', name: 'process', input: { step: 1 } },
+            { type: 'tool_use', id: 'tool-pdf', name: 'pdf', input: { path: '/tmp/a.pdf' } },
+          ],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps.map((step) => step.label)).toEqual(['read', 'write']);
   });
 
   it('upgrades a completed historical tool step when streaming status reports a later state', () => {
@@ -219,17 +232,13 @@ describe('deriveTaskSteps', () => {
       ],
     });
 
-    expect(steps).toHaveLength(10);
+    expect(steps).toHaveLength(9);
     expect(steps[0]).toEqual(expect.objectContaining({
       id: 'tool-0',
       label: 'read_0',
       status: 'completed',
     }));
-    expect(steps.at(-1)).toEqual(expect.objectContaining({
-      id: 'tool-live',
-      label: 'grep_live',
-      status: 'running',
-    }));
+    expect(steps.some((step) => step.label === 'grep_live')).toBe(false);
   });
 
   it('keeps recent completed steps from assistant history', () => {
@@ -365,11 +374,7 @@ describe('deriveTaskSteps', () => {
       streamingTools: [],
     });
 
-    expect(steps).toEqual([
-      expect.objectContaining({ id: 'exec-1', label: 'exec', kind: 'tool' }),
-      expect.objectContaining({ id: 'exec-2', label: 'exec', kind: 'tool' }),
-    ]);
-    expect(steps.some((step) => step.kind === 'message')).toBe(false);
+    expect(steps).toEqual([]);
   });
 
   it('filters approve-token command narration from execution graph', () => {
@@ -396,9 +401,7 @@ describe('deriveTaskSteps', () => {
       streamingTools: [],
     });
 
-    expect(steps).toEqual([
-      expect.objectContaining({ id: 'exec-token', label: 'exec', kind: 'tool' }),
-    ]);
+    expect(steps).toEqual([]);
   });
 
   it('filters short approve-token followup narration from execution graph', () => {
@@ -458,11 +461,6 @@ describe('deriveTaskSteps', () => {
         id: 'history-message-assistant-normal-narration-0',
         kind: 'message',
         detail: '图标只显示了最后几个。让我用更完整的方式搜索所需图标。',
-      }),
-      expect.objectContaining({
-        id: 'exec-normal',
-        label: 'exec',
-        kind: 'tool',
       }),
     ]);
   });
@@ -542,7 +540,7 @@ describe('deriveTaskSteps', () => {
     expect(stripProcessMessagePrefix(reply, [processBlock])).toBe('最终答案在这里。');
   });
 
-  it('shows subagent orchestration tools in the execution graph', () => {
+  it('hides subagent orchestration tool rows while keeping branch system nodes', () => {
     const messages: RawMessage[] = [
       {
         role: 'assistant',
@@ -570,8 +568,9 @@ describe('deriveTaskSteps', () => {
       streamingTools: [],
     });
 
-    expect(steps.some((step) => step.label === 'sessions_spawn')).toBe(true);
-    expect(steps.some((step) => step.label === 'sessions_yield')).toBe(true);
+    expect(steps.some((step) => step.label === 'sessions_spawn')).toBe(false);
+    expect(steps.some((step) => step.label === 'sessions_yield')).toBe(false);
+    expect(steps.some((step) => step.detail?.includes('Spawned branch'))).toBe(true);
   });
 
   it('keeps subagent orchestration narration in graph message steps', () => {
@@ -795,11 +794,12 @@ describe('post-spawn parent topology', () => {
     const branchNode = steps.find((step) => step.id === 'spawn-1:branch');
     expect(branchNode).toBeTruthy();
 
-    for (const id of ['tool-write', 'tool-exec']) {
+    for (const id of ['tool-write'] as const) {
       const step = steps.find((s) => s.id === id);
       expect(step?.parentId).toBe('agent-run');
       expect(step?.depth).toBe(1);
     }
+    expect(steps.some((step) => step.id === 'tool-exec')).toBe(false);
   });
 });
 

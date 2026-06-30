@@ -88,16 +88,30 @@ function hasThinkingBlock(message: RawMessage): boolean {
   return (message.content as ContentBlock[]).some((block) => block.type === 'thinking');
 }
 
+/**
+ * Tool name prefixes shown as wrench rows in the execution graph.
+ * Extend this list to reveal additional tool types in the UI.
+ */
+export const EXECUTION_GRAPH_VISIBLE_TOOL_NAME_PREFIXES = ['read', 'write'] as const;
+
+export function isVisibleExecutionGraphToolName(name: string | undefined | null): boolean {
+  if (!name) return false;
+  const normalized = name.trim().toLowerCase();
+  return EXECUTION_GRAPH_VISIBLE_TOOL_NAME_PREFIXES.some(
+    (prefix) => normalized === prefix || normalized.startsWith(prefix),
+  );
+}
+
 /** OpenClaw session orchestration tools — hidden from the execution graph UI. */
 export function isSubagentOrchestrationToolName(name: string | undefined | null): boolean {
   if (!name) return false;
   return /^(sessions_spawn|sessions_yield)$/i.test(name.trim());
 }
 
-/** Shell exec tool — hidden from the execution graph UI (not user-friendly). */
+/** Tools not on {@link EXECUTION_GRAPH_VISIBLE_TOOL_NAME_PREFIXES} are hidden from the graph. */
 export function isHiddenExecutionGraphToolName(name: string | undefined | null): boolean {
   if (!name) return false;
-  return /^exec$/i.test(name.trim());
+  return !isVisibleExecutionGraphToolName(name);
 }
 
 function isSubagentOrchestrationStep(step: TaskStep): boolean {
@@ -434,7 +448,7 @@ export function deriveTaskSteps({
     });
   }
 
-  return attachTopology(filterHiddenExecutionGraphSteps(steps));
+  return filterHiddenExecutionGraphSteps(attachTopology(steps));
 }
 
 export function findLatestSpawnStepId(steps: TaskStep[]): string | null {

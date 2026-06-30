@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { extractText } from '@/pages/Chat/message-utils';
 
-const { gatewayRpcMock, hostApiFetchMock, agentsState } = vi.hoisted(() => ({
+const { gatewayRpcMock, hostApiFetchMock, getSessionBackendActivityMock, agentsState } = vi.hoisted(() => ({
   gatewayRpcMock: vi.fn(),
   hostApiFetchMock: vi.fn(),
+  getSessionBackendActivityMock: vi.fn(),
   agentsState: {
     agents: [] as Array<Record<string, unknown>>,
   },
@@ -27,6 +28,7 @@ vi.mock('@/stores/agents', () => ({
 vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
   getEmptyFinalDiagnostic: (...args: unknown[]) => hostApiFetchMock(...args),
+  getSessionBackendActivity: (...args: unknown[]) => getSessionBackendActivityMock(...args),
   recoverStaleSessionAfterEmptyFinal: (...args: unknown[]) => hostApiFetchMock(...args),
 }));
 
@@ -41,7 +43,22 @@ describe('chat event dedupe', () => {
     window.localStorage.clear();
     gatewayRpcMock.mockReset();
     hostApiFetchMock.mockReset();
+    getSessionBackendActivityMock.mockReset();
     hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
+    getSessionBackendActivityMock.mockResolvedValue({
+      success: false,
+      session: {
+        sessionKey: 'agent:main:main',
+        status: null,
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+      background: {
+        hasBackgroundProcessing: false,
+        processingSessionKeys: [],
+      },
+    });
     agentsState.agents = [];
   });
 
@@ -440,7 +457,111 @@ describe('chat event dedupe', () => {
     expect(extractText(state.messages.at(-1))).toBe('PPT generated successfully.');
   });
 
-  it('ignores unrelated mismatched final events for the current session', async () => {
+  it('clears a same-run empty final only after backend is idle', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
+    getSessionBackendActivityMock.mockResolvedValue({
+      success: true,
+      session: {
+        sessionKey: 'agent:main:main',
+        status: 'idle',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+      background: {
+        hasBackgroundProcessing: false,
+        processingSessionKeys: [],
+      },
+    });
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'hello', timestamp: 123 }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-empty-final',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-empty-final',
+      sessionKey: 'agent:main:main',
+    });
+
+    await vi.waitFor(() => expect(useChatStore.getState().sending).toBe(false));
+    expect(useChatStore.getState().activeRunId).toBeNull();
+    expect(useChatStore.getState().pendingFinal).toBe(false);
+    expect(getSessionBackendActivityMock).toHaveBeenCalledWith('agent:main:main');
+  });
+
+  it('keeps a same-run empty final active while backend still tracks work', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
+    getSessionBackendActivityMock.mockResolvedValue({
+      success: true,
+      session: {
+        sessionKey: 'agent:main:main',
+        status: 'processing',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['run-empty-final-active'],
+      },
+      background: {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: ['agent:main:main'],
+      },
+    });
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'hello', timestamp: 123 }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-empty-final-active',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-empty-final-active',
+      sessionKey: 'agent:main:main',
+    });
+
+    await vi.waitFor(() => expect(getSessionBackendActivityMock).toHaveBeenCalledWith('agent:main:main'));
+    expect(useChatStore.getState().sending).toBe(true);
+    expect(useChatStore.getState().activeRunId).toBe('run-empty-final-active');
+    expect(useChatStore.getState().pendingFinal).toBe(true);
+  });
+
+  it('reconciles mismatched final events without appending their message directly', async () => {
     const { useChatStore } = await import('@/stores/chat');
 
     useChatStore.setState({
@@ -468,12 +589,19 @@ describe('chat event dedupe', () => {
       state: 'final',
       runId: 'run-other',
       sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        id: 'stale-final',
+        content: [{ type: 'text', text: 'Stale final should come from history only.' }],
+      },
     });
 
     expect(useChatStore.getState().sending).toBe(true);
     expect(useChatStore.getState().activeRunId).toBe('run-original');
     expect(useChatStore.getState().pendingFinal).toBe(true);
     expect(useChatStore.getState().lastUserMessageAt).toBe(123);
+    expect(useChatStore.getState().messages).toEqual([]);
+    await vi.waitFor(() => expect(hostApiFetchMock).toHaveBeenCalled());
   });
 
   it('closes a text final even when prior messages used tools', async () => {

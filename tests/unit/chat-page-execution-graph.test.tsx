@@ -715,7 +715,8 @@ status: completed successfully`,
     render(<Chat />);
 
     expect(screen.getByTestId('chat-execution-graph')).toBeInTheDocument();
-    expect(screen.getByText('sessions_spawn')).toBeInTheDocument();
+    expect(screen.queryByText('sessions_spawn')).not.toBeInTheDocument();
+    expect(screen.getByText(/coder run|Spawned branch/i)).toBeInTheDocument();
   });
 
   it('does not keep the execution graph active from stale tool history after the run has stopped', async () => {
