@@ -5,7 +5,7 @@
  */
 import { create } from 'zustand';
 import i18n from '@/i18n';
-import { hostApiFetch, recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
+import { getEmptyFinalDiagnostic, hostApiFetch, recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
 import { toUserMessage, normalizeAppError } from '@/lib/api-client';
 import { useGatewayStore } from './gateway';
 import { useAgentsStore } from './agents';
@@ -74,7 +74,6 @@ import {
   shouldForceAbortStuckRun,
   buildReAdoptRunPatch,
   hasOpenDelegatedBackendWork,
-  hasOpenBackendWorkForUserTurn,
 } from './chat/user-turn-lifecycle';
 import {
   deferClearUserTurnForOpenDelegation,
@@ -334,9 +333,9 @@ function isReasoningMode(value: unknown): value is ReasoningMode {
 function loadStoredReasoningMode(): ReasoningMode {
   try {
     const stored = window.localStorage.getItem(REASONING_MODE_STORAGE_KEY);
-    return isReasoningMode(stored) ? stored : 'fast';
+    return isReasoningMode(stored) ? stored : 'thinking';
   } catch {
-    return 'fast';
+    return 'thinking';
   }
 }
 
@@ -2505,8 +2504,8 @@ function buildSessionSwitchPatch(
 
   persistSessionReasoningModesIfChanged(finalReasoningModes);
 
-  // Restore the target session's reasoning mode (default to 'fast')
-  const nextReasoningMode = finalReasoningModes[nextSessionKey] ?? 'fast';
+  // Restore the target session's reasoning mode (default to 'thinking')
+  const nextReasoningMode = finalReasoningModes[nextSessionKey] ?? 'thinking';
 
   // Save the current session's streaming state before switching.
   // Also preserve the current visible messages snapshot so completed sessions
@@ -2637,6 +2636,214 @@ function isExecApprovalFollowupRun(runId: string): boolean {
 function shouldProcessCurrentSessionRunEvent(activeRunId: string | null, runId: string): boolean {
   if (!activeRunId || !runId || runId === activeRunId) return true;
   return isExecApprovalFollowupRun(runId);
+}
+
+const EMPTY_FINAL_HISTORY_RETRY_MS = 2_000;
+const EMPTY_FINAL_NO_RESPONSE_ERROR =
+  'Run ended without a response. The current session may have a stale active run or transcript lock. Stop the run, retry, or start a new session.';
+
+function countAssistantOutputs(messages: RawMessage[]): number {
+  return messages.filter((message) => message.role === 'assistant' && hasNonToolAssistantContent(message)).length;
+}
+
+function hasNewAssistantOutput(beforeMessages: RawMessage[], afterMessages: RawMessage[]): boolean {
+  if (countAssistantOutputs(afterMessages) > countAssistantOutputs(beforeMessages)) {
+    return true;
+  }
+  const beforeLastRole = beforeMessages.at(-1)?.role;
+  const afterLast = afterMessages.at(-1);
+  return beforeLastRole === 'user'
+    && afterLast?.role === 'assistant'
+    && hasNonToolAssistantContent(afterLast);
+}
+
+function waitForEmptyFinalRetry(): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, EMPTY_FINAL_HISTORY_RETRY_MS);
+  });
+}
+
+function getRecoverySkipReason(diagnostic: Record<string, unknown> | null | undefined): string {
+  const recoveryResult = diagnostic?.recoveryResult;
+  if (recoveryResult && typeof recoveryResult === 'object') {
+    const reason = (recoveryResult as Record<string, unknown>).reason;
+    if (typeof reason === 'string' && reason.trim()) return reason;
+  }
+  return 'empty-final-no-output';
+}
+
+function isDiagnosticRecoverable(diagnostic: Record<string, unknown> | null | undefined): boolean {
+  const recoveryResult = diagnostic?.recoveryResult;
+  if (recoveryResult && typeof recoveryResult === 'object') {
+    const reason = (recoveryResult as Record<string, unknown>).reason;
+    if (reason === 'lock-too-new' || reason === 'session-active') return false;
+  }
+
+  const lockOwner = diagnostic?.transcriptLockOwner;
+  if (lockOwner && typeof lockOwner === 'object') {
+    const pidAlive = (lockOwner as Record<string, unknown>).pidAlive;
+    if (pidAlive === true) return false;
+  }
+
+  return true;
+}
+
+function isDuplicateAssistantFinal(messages: RawMessage[], messageId: string, message: RawMessage): boolean {
+  if (messages.some((existing) => existing.id === messageId)) return true;
+
+  const text = getMessageText(message.content).trim();
+  if (!text) return false;
+
+  const latestUserIdx = findLatestVisibleUserIndex(messages);
+  const currentTurnMessages = latestUserIdx >= 0 ? messages.slice(latestUserIdx + 1) : messages;
+  return currentTurnMessages.some((existing) => (
+    existing.role === 'assistant'
+    && getMessageText(existing.content).trim() === text
+  ));
+}
+
+function isStillConfirmingEmptyFinal(get: () => ChatState, sessionKey: string, runId: string): boolean {
+  const state = get();
+  return state.currentSessionKey === sessionKey
+    && (!runId || !state.activeRunId || state.activeRunId === runId);
+}
+
+function hasActiveRunningTool(get: () => ChatState, sessionKey: string, runId: string): boolean {
+  const state = get();
+  const activeTool = state.currentSessionKey === sessionKey
+    ? state.activeTool
+    : state.sessionStreamingStates[sessionKey]?.activeTool;
+  return Boolean(
+    activeTool
+      && activeTool.status === 'running'
+      && (!runId || !activeTool.runId || activeTool.runId === runId),
+  );
+}
+
+function completeEmptyFinalFromHistory(
+  set: (partial: Partial<ChatState>) => void,
+  get: () => ChatState,
+  sessionKey: string,
+  runId: string,
+): void {
+  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
+  clearHistoryPoll();
+  set({
+    sending: false,
+    activeRunId: null,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingFinal: false,
+    pendingToolImages: [],
+    lastUserMessageAt: null,
+    runError: null,
+  });
+}
+
+async function confirmEmptyFinalWithHistory(
+  set: (partial: Partial<ChatState>) => void,
+  get: () => ChatState,
+  runId: string,
+): Promise<void> {
+  const sessionKey = get().currentSessionKey;
+  const beforeMessages = [...get().messages];
+
+  set({
+    streamingText: '',
+    streamingMessage: null,
+    pendingFinal: true,
+    runError: null,
+  });
+
+  await get().loadHistory(true, { force: true });
+  if (isStillConfirmingEmptyFinal(get, sessionKey, runId) && hasNewAssistantOutput(beforeMessages, get().messages)) {
+    completeEmptyFinalFromHistory(set, get, sessionKey, runId);
+    return;
+  }
+
+  await waitForEmptyFinalRetry();
+  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
+
+  await get().loadHistory(true, { force: true });
+  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
+  if (hasNewAssistantOutput(beforeMessages, get().messages)) {
+    completeEmptyFinalFromHistory(set, get, sessionKey, runId);
+    return;
+  }
+
+  if (hasActiveRunningTool(get, sessionKey, runId)) {
+    set({
+      emptyFinalRecovery: {
+        status: 'waiting',
+        sessionKey,
+        runId,
+        reason: 'tracked-active-tool',
+        diagnostic: { activeTool: get().activeTool ?? get().sessionStreamingStates[sessionKey]?.activeTool ?? null },
+      },
+      runError: null,
+      pendingFinal: true,
+      sending: false,
+      activeRunId: null,
+    });
+    return;
+  }
+
+  set({
+    emptyFinalRecovery: {
+      status: 'checking',
+      sessionKey,
+      runId,
+    },
+  });
+  let diagnostic: Record<string, unknown> | null = null;
+  let hasTrackedActiveRun = false;
+  try {
+    const response = await getEmptyFinalDiagnostic(sessionKey);
+    diagnostic = response.diagnostic ?? null;
+    hasTrackedActiveRun = Boolean(response.hasTrackedActiveRun);
+  } catch (error) {
+    diagnostic = { error: String(error) };
+  }
+  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
+
+  if (hasTrackedActiveRun || !diagnostic || !isDiagnosticRecoverable(diagnostic)) {
+    set({
+      emptyFinalRecovery: {
+        status: 'waiting',
+        sessionKey,
+        runId,
+        reason: hasTrackedActiveRun ? 'tracked-active-run' : diagnostic ? getRecoverySkipReason(diagnostic) : 'missing-diagnostic',
+        diagnostic,
+      },
+      runError: null,
+      pendingFinal: true,
+      sending: hasTrackedActiveRun ? true : get().sending,
+      activeRunId: hasTrackedActiveRun ? (runId || get().activeRunId) : get().activeRunId,
+    });
+    return;
+  }
+
+  clearHistoryPoll();
+  set({
+    error: null,
+    runError: EMPTY_FINAL_NO_RESPONSE_ERROR,
+    emptyFinalRecovery: {
+      status: 'stale',
+      sessionKey,
+      runId,
+      reason: getRecoverySkipReason(diagnostic),
+      diagnostic,
+    },
+    sending: false,
+    activeRunId: null,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingFinal: false,
+    pendingToolImages: [],
+    lastUserMessageAt: null,
+  });
 }
 
 function getCanonicalPrefixFromSessionKey(sessionKey: string): string | null {
@@ -4089,8 +4296,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : s.sessionWorkspaceIds,
         sessionStreamingStates: finalStreamingStates,
         sessionReasoningModes: finalReasoningModes,
-        reasoningMode: 'fast',
-        thinkingLevel: 'off',
+        reasoningMode: 'thinking',
+        thinkingLevel: 'medium',
         messages: [],
         error: null,
         runError: null,
@@ -5818,13 +6025,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (m.role !== 'assistant') return false;
             return isToolOnlyMessage(m);
           });
-          const isSimpleTextResponse = !hasToolActivityInTurn && hasOutput && !toolOnly;
+          const currentHasToolActivity = toolOnly || updates.length > 0;
+          const isSimpleTextResponse = !hasToolActivityInTurn && !currentHasToolActivity && hasOutput;
           const keepRunActiveAfterFinal = !isExecApprovalFollowupRun(runId)
             && !isRunTerminalAssistantMessage(normalizedFinalMessage)
             && !isConcluding
-            && !isSimpleTextResponse
-            && shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage);
+            && (
+              currentHasToolActivity
+              || isSimpleTextResponse
+              || shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
+            );
           const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
+          let skippedDuplicateFinal = false;
           set((s) => {
             const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
             const streamingTools = hasOutput && !keepRunActiveAfterFinal ? [] : nextTools;
@@ -5842,8 +6054,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const clearPendingImages = { pendingToolImages: [] as AttachedFileMeta[] };
 
             // Check if message already exists (prevent duplicates)
-            const alreadyExists = s.messages.some(m => m.id === msgId);
+            const alreadyExists = isDuplicateAssistantFinal(s.messages, msgId, msgWithImages);
             if (alreadyExists) {
+              skippedDuplicateFinal = true;
               return keepRunActiveAfterFinal ? {
                 streamingText: '',
                 streamingMessage: null,
@@ -5880,13 +6093,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...clearPendingImages,
             };
           });
-          // After the final response, always reload history to surface all intermediate
-          // tool-use turns (thinking + tool blocks) from the Gateway's authoritative
-          // record and to let applyLoadedMessages detect terminal/concluding replies.
-          clearHistoryPoll();
-          void get().loadHistory(true, { force: true });
+          if (!skippedDuplicateFinal) {
+            // After the final response, always reload history to surface all intermediate
+            // tool-use turns (thinking + tool blocks) from the Gateway's authoritative
+            // record and to let applyLoadedMessages detect terminal/concluding replies.
+            clearHistoryPoll();
+            void get().loadHistory(true, { force: true });
+          }
 
-          if (!keepRunActiveAfterFinal) {
+          if (!keepRunActiveAfterFinal || isSimpleTextResponse) {
             void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
               sessionKey: get().currentSessionKey,
               runId,
@@ -5919,24 +6134,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
             });
           }
         } else {
+          const { activeRunId: currentActiveRunId } = get();
           if (isExecApprovalFollowupRun(runId)) {
-            set({
-              streamingText: '',
-              streamingMessage: null,
-              sending: false,
-              activeRunId: null,
-              pendingFinal: false,
-              lastUserMessageAt: null,
-              pendingToolImages: [],
-              error: null,
-              runError: null,
-            });
-            void get().loadHistory(true, { force: true });
+            clearHistoryPoll();
+            set(buildClearedActiveRunPatch());
             break;
           }
-
-          const { activeRunId: currentActiveRunId } = get();
-          if (runId && currentActiveRunId && runId !== currentActiveRunId) {
+          if (runId && currentActiveRunId && runId !== currentActiveRunId && !isExecApprovalFollowupRun(runId)) {
             const skippedState = get();
             console.info('[chat.final.after]', {
               runId,
@@ -5952,35 +6156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             });
             break;
           }
-
-          void get().loadHistory(true, { force: true }).finally(async () => {
-            const latest = get();
-            if (latest.currentSessionKey !== currentSessionKey) return;
-            if (runId && latest.activeRunId && latest.activeRunId !== runId) return;
-            if (!latest.sending && !latest.pendingFinal && !latest.activeRunId) return;
-
-            const backendSnapshot = await refreshSessionBackendActivity(currentSessionKey);
-            if (backendSnapshot) {
-              set({
-                sessionBackendActivity: backendSnapshot.session,
-                gatewayBackgroundActivity: backendSnapshot.background,
-              });
-            }
-
-            const postRefresh = get();
-            if (postRefresh.currentSessionKey !== currentSessionKey) return;
-            if (runId && postRefresh.activeRunId && postRefresh.activeRunId !== runId) return;
-
-            const backendActivity = backendSnapshot?.session ?? postRefresh.sessionBackendActivity;
-            const gatewayBackground = backendSnapshot?.background ?? postRefresh.gatewayBackgroundActivity;
-            if (!hasOpenBackendWorkForUserTurn(gatewayBackground, backendActivity, postRefresh.messages)) {
-              clearHistoryPoll();
-              clearErrorRecoveryTimer();
-              set(buildClearedActiveRunPatch());
-            }
-
-            ensureSessionBackendPolling(currentSessionKey, set, get);
-          });
+          void confirmEmptyFinalWithHistory(set, get, runId);
         }
         const finalAfterState = get();
         console.info('[chat.final.after]', {

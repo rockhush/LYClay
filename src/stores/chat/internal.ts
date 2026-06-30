@@ -19,7 +19,7 @@ function loadStoredReasoningMode(): ChatState['reasoningMode'] {
   } catch {
     // Keep default when storage is unavailable.
   }
-  return 'fast';
+  return 'thinking';
 }
 
 function loadSessionReasoningModesFromStorage(): Record<string, ChatState['reasoningMode']> {

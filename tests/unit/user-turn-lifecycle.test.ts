@@ -6,6 +6,7 @@ import {
   DELEGATION_FINALIZE_GRACE_MS,
   deriveHasActiveRunSignal,
   deriveIsExecuting,
+  deriveSidebarSessionIsExecuting,
   isBackendSessionActive,
   isTranscriptOnlyDelegationDefer,
   shouldFinalizeUserTurn,
@@ -70,6 +71,44 @@ describe('user-turn-lifecycle', () => {
       hasTrackedUserRun: false,
       activeRunIds: [],
     })).toBe(true);
+  });
+
+  it('finalizes after a terminal reply even if current session has weak background processing', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'open platform', timestamp: 1000 },
+      terminalAssistant,
+    ];
+    const backend = {
+      sessionKey: 'agent:main:session-1',
+      status: 'processing',
+      processing: true,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+    const background = {
+      hasBackgroundProcessing: true,
+      processingSessionKeys: ['agent:main:session-1'],
+    };
+
+    expect(shouldFinalizeUserTurn(
+      messages,
+      1000,
+      backend,
+      terminalAssistant,
+      background,
+    )).toBe(true);
+    expect(canClearUserTurnNow({
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: backend,
+      terminalMessage: terminalAssistant,
+      gatewayBackground: background,
+    })).toBe(true);
+    expect(deriveIsExecuting(
+      { sending: true, activeRunId: 'stale-run', pendingFinal: true },
+      backend,
+      { messages, lastUserMessageAt: 1000, gatewayBackground: background },
+    )).toBe(false);
   });
 
   it('keeps tool-round finals active even when backend is idle', () => {
@@ -650,5 +689,110 @@ describe('user-turn-lifecycle', () => {
         gatewayBackground: { hasBackgroundProcessing: false, processingSessionKeys: [] },
       },
     )).toBe(false);
+  });
+
+  it('stops executing when a visible final reply is committed and only local run flags are stale', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'open the RFQ platform', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: 'The RFQ platform is open. Please upload your Excel file.',
+        stopReason: 'stop',
+        timestamp: 2000,
+      },
+    ];
+
+    expect(deriveIsExecuting(
+      { sending: true, activeRunId: 'run-stale-local', pendingFinal: true },
+      {
+        sessionKey: 'agent:main:session-1',
+        status: 'idle',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+      {
+        messages,
+        lastUserMessageAt: 1000,
+        gatewayBackground: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+      },
+    )).toBe(false);
+  });
+
+  it('deriveSidebarSessionIsExecuting treats completed background snapshots as idle despite stale run ids', () => {
+    const sessionKey = 'agent:main:session-a';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'ten english words', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: 'word list',
+        stopReason: 'stop',
+        timestamp: 2000,
+      },
+    ];
+
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: false,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: [],
+      currentLastUserMessageAt: null,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: null,
+      gatewayBackground: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+      snapshot: {
+        activeRunId: 'run-stale',
+        pendingFinal: true,
+        sending: false,
+        runAborted: false,
+        lastUserMessageAt: 1000,
+        streamingMessage: null,
+        messagesSnapshot: messages,
+      },
+    })).toBe(false);
+  });
+
+  it('deriveSidebarSessionIsExecuting keeps background sessions running when gateway still processes them', () => {
+    const sessionKey = 'agent:main:session-b';
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: false,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: [],
+      currentLastUserMessageAt: null,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: null,
+      gatewayBackground: {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: [sessionKey],
+      },
+      snapshot: null,
+    })).toBe(true);
+  });
+
+  it('deriveSidebarSessionIsExecuting keeps actively streaming background snapshots running', () => {
+    const sessionKey = 'agent:main:session-c';
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: false,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: [],
+      currentLastUserMessageAt: null,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: null,
+      gatewayBackground: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+      snapshot: {
+        activeRunId: 'run-live',
+        pendingFinal: true,
+        sending: true,
+        runAborted: false,
+        lastUserMessageAt: Date.now(),
+        streamingMessage: { role: 'assistant', content: 'partial' },
+        messagesSnapshot: [{ role: 'user', content: 'go', timestamp: 1000 }],
+      },
+    })).toBe(true);
   });
 });

@@ -805,9 +805,10 @@ export function handleRuntimeEventState(
               }
             }
           } else {
-            // No message in final event - reload history to get complete data
+            // No message in final event - confirm against history/diagnostics before
+            // deciding whether this is a clean completion or stale active run.
             set({ streamingText: '', streamingMessage: null, pendingFinal: true, runError: null });
-            get().loadHistory();
+            void confirmEmptyFinalWithHistory(set, get, runId);
           }
           break;
         }

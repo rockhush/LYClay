@@ -46,10 +46,10 @@ describe('chat event dedupe', () => {
     getSessionBackendActivityMock.mockReset();
     hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
     getSessionBackendActivityMock.mockResolvedValue({
-      success: false,
+      success: true,
       session: {
         sessionKey: 'agent:main:main',
-        status: null,
+        status: 'completed',
         processing: false,
         hasTrackedUserRun: false,
         activeRunIds: [],
@@ -449,6 +449,10 @@ describe('chat event dedupe', () => {
       },
     });
 
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sending).toBe(false);
+    });
+
     const state = useChatStore.getState();
     expect(state.sending).toBe(false);
     expect(state.activeRunId).toBeNull();
@@ -458,23 +462,22 @@ describe('chat event dedupe', () => {
   });
 
   it('clears a same-run empty final only after backend is idle', async () => {
+    vi.useFakeTimers();
     const { useChatStore } = await import('@/stores/chat');
 
-    hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
-    getSessionBackendActivityMock.mockResolvedValue({
-      success: true,
-      session: {
-        sessionKey: 'agent:main:main',
-        status: 'idle',
-        processing: false,
-        hasTrackedUserRun: false,
-        activeRunIds: [],
-      },
-      background: {
-        hasBackgroundProcessing: false,
-        processingSessionKeys: [],
-      },
+    hostApiFetchMock.mockImplementation((path: string) => {
+      if (path === 'agent:main:main' || path.startsWith('/api/sessions/empty-final-diagnostic')) {
+        return Promise.resolve({
+          success: true,
+          diagnostic: {
+            recoveryResult: { recovered: false, reason: 'lock-missing' },
+          },
+          hasTrackedActiveRun: false,
+        });
+      }
+      return Promise.resolve({ success: false, messages: [], error: 'local miss' });
     });
+    gatewayRpcMock.mockResolvedValue({ messages: [] });
 
     useChatStore.setState({
       currentSessionKey: 'agent:main:main',
@@ -503,30 +506,34 @@ describe('chat event dedupe', () => {
       sessionKey: 'agent:main:main',
     });
 
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+
     await vi.waitFor(() => expect(useChatStore.getState().sending).toBe(false));
     expect(useChatStore.getState().activeRunId).toBeNull();
     expect(useChatStore.getState().pendingFinal).toBe(false);
-    expect(getSessionBackendActivityMock).toHaveBeenCalledWith('agent:main:main');
+    expect(hostApiFetchMock).toHaveBeenCalledWith('agent:main:main');
+    vi.useRealTimers();
   });
 
   it('keeps a same-run empty final active while backend still tracks work', async () => {
+    vi.useFakeTimers();
     const { useChatStore } = await import('@/stores/chat');
 
-    hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
-    getSessionBackendActivityMock.mockResolvedValue({
-      success: true,
-      session: {
-        sessionKey: 'agent:main:main',
-        status: 'processing',
-        processing: true,
-        hasTrackedUserRun: true,
-        activeRunIds: ['run-empty-final-active'],
-      },
-      background: {
-        hasBackgroundProcessing: true,
-        processingSessionKeys: ['agent:main:main'],
-      },
+    hostApiFetchMock.mockImplementation((path: string) => {
+      if (path === 'agent:main:main' || path.startsWith('/api/sessions/empty-final-diagnostic')) {
+        return Promise.resolve({
+          success: true,
+          diagnostic: {
+            recoveryResult: { recovered: false, reason: 'session-active' },
+          },
+          hasTrackedActiveRun: true,
+        });
+      }
+      return Promise.resolve({ success: false, messages: [], error: 'local miss' });
     });
+    gatewayRpcMock.mockResolvedValue({ messages: [] });
 
     useChatStore.setState({
       currentSessionKey: 'agent:main:main',
@@ -555,10 +562,15 @@ describe('chat event dedupe', () => {
       sessionKey: 'agent:main:main',
     });
 
-    await vi.waitFor(() => expect(getSessionBackendActivityMock).toHaveBeenCalledWith('agent:main:main'));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.waitFor(() => expect(hostApiFetchMock).toHaveBeenCalledWith('agent:main:main'));
     expect(useChatStore.getState().sending).toBe(true);
     expect(useChatStore.getState().activeRunId).toBe('run-empty-final-active');
     expect(useChatStore.getState().pendingFinal).toBe(true);
+    vi.useRealTimers();
   });
 
   it('reconciles mismatched final events without appending their message directly', async () => {
@@ -653,6 +665,10 @@ describe('chat event dedupe', () => {
       },
     });
 
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sending).toBe(false);
+    });
+
     const state = useChatStore.getState();
     expect(state.sending).toBe(false);
     expect(state.activeRunId).toBeNull();
@@ -708,6 +724,20 @@ describe('chat event dedupe', () => {
 
   it('keeps run active for narration-only interim finals between tool rounds', async () => {
     const { useChatStore } = await import('@/stores/chat');
+    getSessionBackendActivityMock.mockResolvedValueOnce({
+      success: true,
+      session: {
+        sessionKey: 'agent:main:main',
+        status: 'processing',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['run-narration-gap'],
+      },
+      background: {
+        hasBackgroundProcessing: false,
+        processingSessionKeys: [],
+      },
+    });
 
     useChatStore.setState({
       currentSessionKey: 'agent:main:main',

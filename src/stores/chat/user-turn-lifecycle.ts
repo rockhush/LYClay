@@ -1,9 +1,10 @@
 import {
   findConcludingAssistantForActiveTurn,
   findTerminalAssistantForActiveTurn,
+  isVisibleAssistantTextWithoutToolUse,
   shouldKeepRunActiveAfterAssistantFinal,
 } from './run-lifecycle';
-import type { RawMessage } from './types';
+import type { RawMessage, SessionStreamingState } from './types';
 import {
   collectChildDelegationBindings,
   collectCompletedSubagentSessionKeys,
@@ -58,7 +59,6 @@ export function hasOpenBackendWorkForUserTurn(
 
   const sessionKey = backendActivity?.sessionKey;
   const processingKeys = gatewayBackground?.processingSessionKeys ?? [];
-  if (sessionKey && processingKeys.includes(sessionKey)) return true;
 
   if (messages.length > 0 && processingKeys.length > 0) {
     const completedChildKeys = collectCompletedSubagentSessionKeys(messages);
@@ -143,6 +143,14 @@ export function deriveIsExecuting(
   })) {
     return true;
   }
+  if (hasLocalRunSignals(state) && messages.length > 0 && canClearUserTurnNow({
+    messages,
+    lastUserMessageAt: options?.lastUserMessageAt ?? null,
+    backendActivity,
+    gatewayBackground: options?.gatewayBackground,
+  })) {
+    return false;
+  }
   return isUserTurnOpen(
     state,
     backendActivity,
@@ -157,6 +165,77 @@ export function deriveHasActiveRunSignal(
   options?: UserTurnActiveRunOptions,
 ): boolean {
   return deriveIsExecuting(state, backendActivity, options);
+}
+
+export type DeriveSidebarSessionIsExecutingInput = {
+  sessionKey: string;
+  isCurrent: boolean;
+  currentUi: UserTurnUiSignals;
+  currentMessages: RawMessage[];
+  currentLastUserMessageAt: number | null;
+  currentStreamingMessage: unknown | null;
+  waitingOnSubagentDelegation: boolean;
+  sessionBackendActivity: SessionBackendActivity | null | undefined;
+  gatewayBackground: GatewayBackgroundActivity | null | undefined;
+  snapshot?: Pick<
+    SessionStreamingState,
+    | 'activeRunId'
+    | 'pendingFinal'
+    | 'sending'
+    | 'runAborted'
+    | 'lastUserMessageAt'
+    | 'streamingMessage'
+    | 'messagesSnapshot'
+  > | null;
+};
+
+/** Sidebar session row status — same finalize rules for current and background sessions. */
+export function deriveSidebarSessionIsExecuting(
+  input: DeriveSidebarSessionIsExecutingInput,
+): boolean {
+  const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
+
+  if (!input.isCurrent && processingKeys.includes(input.sessionKey)) {
+    return true;
+  }
+
+  if (input.isCurrent) {
+    return deriveIsExecuting(
+      input.currentUi,
+      backendActivityForSession(input.sessionBackendActivity, input.sessionKey),
+      {
+        waitingOnSubagentDelegation: input.waitingOnSubagentDelegation,
+        gatewayBackground: input.gatewayBackground,
+        messages: input.currentMessages,
+        lastUserMessageAt: input.currentLastUserMessageAt,
+        streamingMessage: input.currentStreamingMessage,
+      },
+    );
+  }
+
+  const snapshot = input.snapshot;
+  if (!snapshot) return false;
+
+  const messages = snapshot.messagesSnapshot ?? [];
+  return deriveIsExecuting(
+    {
+      sending: snapshot.sending ?? false,
+      activeRunId: snapshot.activeRunId ?? null,
+      pendingFinal: snapshot.pendingFinal ?? false,
+      runAborted: snapshot.runAborted ?? false,
+    },
+    null,
+    {
+      waitingOnSubagentDelegation: isParentDelegationPhaseOpen(messages, processingKeys, {
+        lastUserMessageAt: snapshot.lastUserMessageAt ?? null,
+        streamingMessage: snapshot.streamingMessage ?? null,
+      }),
+      gatewayBackground: input.gatewayBackground,
+      messages,
+      lastUserMessageAt: snapshot.lastUserMessageAt ?? null,
+      streamingMessage: snapshot.streamingMessage ?? null,
+    },
+  );
 }
 
 export type CanClearUserTurnInput = {
@@ -310,7 +389,9 @@ export function shouldFinalizeUserTurn(
   const strictTerminal = terminalMessage
     ?? findTerminalAssistantForActiveTurn(messages, lastUserMessageAt);
   if (strictTerminal) {
-    if (shouldKeepRunActiveAfterAssistantFinal(strictTerminal)) return false;
+    if (shouldKeepRunActiveAfterAssistantFinal(strictTerminal)) {
+      return isVisibleAssistantTextWithoutToolUse(strictTerminal);
+    }
     return !isBackendStronglyActive(backendActivity);
   }
   const concluding = findConcludingAssistantForActiveTurn(messages, lastUserMessageAt);

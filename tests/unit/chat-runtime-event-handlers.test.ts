@@ -45,7 +45,6 @@ const makeAttachedFile = vi.fn((ref: { filePath: string; mimeType: string }, sou
   source,
 }));
 const normalizeStreamingMessage = vi.fn((message: unknown) => message);
-const isAbortedChatRun = vi.fn(() => false);
 const setErrorRecoveryTimer = vi.fn();
 const snapshotStreamingAssistantMessage = vi.fn((currentStream: unknown) => currentStream ? [currentStream] : []);
 const upsertToolStatuses = vi.fn((_current, updates) => updates);

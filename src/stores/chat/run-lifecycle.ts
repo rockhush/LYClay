@@ -22,6 +22,12 @@ function messageHasToolUse(message: RawMessage): boolean {
   return extractToolUse(message).length > 0;
 }
 
+export function isVisibleAssistantTextWithoutToolUse(message: RawMessage | undefined): boolean {
+  if (!message || message.role !== 'assistant') return false;
+  if (!hasVisibleAssistantContent(message)) return false;
+  return !messageHasToolUse(message);
+}
+
 function findLastToolActivityIndex(messages: readonly RawMessage[]): number {
   let last = -1;
   for (let i = 0; i < messages.length; i += 1) {

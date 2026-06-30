@@ -39,7 +39,11 @@ import { cn } from '@/lib/utils';
 import { rendererExtensionRegistry } from '@/extensions/registry';
 import { useSettingsStore } from '@/stores/settings';
 import { useChatStore, type ChatSession } from '@/stores/chat';
-import { deriveIsExecuting, backendActivityForSession } from '@/stores/chat/user-turn-lifecycle';
+import {
+  deriveIsExecuting,
+  deriveSidebarSessionIsExecuting,
+  backendActivityForSession,
+} from '@/stores/chat/user-turn-lifecycle';
 import { ensureSessionBackendPolling } from '@/stores/chat/session-backend-bridge';
 import { isParentDelegationPhaseOpen } from '@/lib/delegation-turn-state';
 import { useGatewayStore } from '@/stores/gateway';
@@ -211,10 +215,6 @@ export function Sidebar() {
   const updateStatus = useUpdateStore((s) => s.status);
   const checkForUpdatesAfterGatewayReady = useUpdateStore((s) => s.checkForUpdatesAfterGatewayReady);
   const processingSessionKeys = gatewayBackgroundActivity?.processingSessionKeys ?? [];
-  const processingSessionKeySet = useMemo(
-    () => new Set(processingSessionKeys),
-    [processingSessionKeys],
-  );
   const waitingOnSubagentDelegation = useMemo(
     () => isParentDelegationPhaseOpen(messages, processingSessionKeys, {
       lastUserMessageAt,
@@ -646,22 +646,18 @@ export function Sidebar() {
     const agentId = getAgentIdFromSessionKey(s.key);
     const agentName = agentNameById[agentId] || agentId;
     const isCurrent = currentSessionKey === s.key;
-    // Per-session running status. For the currently-viewed session, use the
-    // live `isChatActive` flag (sending / activeRunId). For other sessions,
-    // fall back to the snapshot saved in `sessionStreamingStates` when the
-    // user switched away — so a session still streaming in the background
-    // keeps its orange indicator no matter which session is being viewed.
-    const otherSessionState = sessionStreamingStates[s.key];
-    const otherMessages = otherSessionState?.messagesSnapshot ?? [];
-    const isOtherWaitingOnSubagent = !isCurrent
-      && isParentDelegationPhaseOpen(otherMessages, processingSessionKeys);
-    const isOtherSessionRunning =
-      !isCurrent && (
-        processingSessionKeySet.has(s.key)
-        || !!(otherSessionState?.sending || otherSessionState?.activeRunId || otherSessionState?.pendingFinal)
-        || isOtherWaitingOnSubagent
-      );
-    const isRunning = isCurrent ? isChatActive : isOtherSessionRunning;
+    const isRunning = deriveSidebarSessionIsExecuting({
+      sessionKey: s.key,
+      isCurrent,
+      currentUi: { sending: chatSending, activeRunId, pendingFinal, runAborted },
+      currentMessages: messages,
+      currentLastUserMessageAt: lastUserMessageAt,
+      currentStreamingMessage: streamingMessage,
+      waitingOnSubagentDelegation,
+      sessionBackendActivity,
+      gatewayBackground: gatewayBackgroundActivity,
+      snapshot: sessionStreamingStates[s.key],
+    });
     const statusTitle = isRunning
       ? t('chat:sidebar.statusRunning', { defaultValue: '问答进行中' })
       : t('chat:sidebar.statusCompleted', { defaultValue: '已完成' });
