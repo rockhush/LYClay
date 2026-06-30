@@ -15,20 +15,45 @@ const DEFAULT_ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/
 const DEFAULT_ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/';
 const args = process.argv.slice(2);
 
+const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+function resolveMirror(envKey, localDefault) {
+  const value = process.env[envKey];
+  // 已显式设置（含 workflow 里的空字符串）时尊重外部配置
+  if (value !== undefined && value !== '') return value;
+  if (isCI) return undefined;
+  return localDefault;
+}
+
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 function getElectronBuilderEnv() {
-  return {
-    ...process.env,
-    ELECTRON_BUILDER_BINARIES_MIRROR: process.env.ELECTRON_BUILDER_BINARIES_MIRROR
-      || DEFAULT_ELECTRON_BUILDER_BINARIES_MIRROR,
-    ELECTRON_MIRROR: process.env.ELECTRON_MIRROR
-      || DEFAULT_ELECTRON_MIRROR,
-  };
-}
+  const env = { ...process.env };
 
+  const binariesMirror = resolveMirror(
+    'ELECTRON_BUILDER_BINARIES_MIRROR',
+    DEFAULT_ELECTRON_BUILDER_BINARIES_MIRROR,
+  );
+  const electronMirror = resolveMirror(
+    'ELECTRON_MIRROR',
+    DEFAULT_ELECTRON_MIRROR,
+  );
+
+  if (binariesMirror !== undefined) {
+    env.ELECTRON_BUILDER_BINARIES_MIRROR = binariesMirror;
+  } else {
+    delete env.ELECTRON_BUILDER_BINARIES_MIRROR;
+  }
+
+  if (electronMirror !== undefined) {
+    env.ELECTRON_MIRROR = electronMirror;
+  } else {
+    delete env.ELECTRON_MIRROR;
+  }
+
+  return env;
+}
 // Pre-populate electron-builder cache from packages/ directory.
 // electron-builder caches tools at:
 //   Windows: %LOCALAPPDATA%/electron-builder/Cache/<tool>
