@@ -863,8 +863,6 @@ const ACTIVE_SEND_HISTORY_FALLBACK_DELAYS_MS = [3_000, 5_000];
 const ACTIVE_SEND_HISTORY_FALLBACK_REPEAT_MS = 6_000;
 const ACTIVE_SEND_HISTORY_FALLBACK_STREAMING_DELAY_MS = 10_000;
 const TOOL_EXECUTION_STALE_MS = 2 * 60_000;
-const GENERIC_ERROR_RECOVERY_MS = 45_000;
-const RUNTIME_ERROR_RECOVERY_GRACE_MS = 5_000;
 const CHAT_EVENT_DEDUPE_TTL_MS = 30_000;
 const _chatEventDedupe = new Map<string, number>();
 const _lastRuntimeTranscriptProgressSignatureBySession = new Map<string, string>();
@@ -3315,23 +3313,6 @@ function getRuntimeEventErrorMessage(event: Record<string, unknown>): string {
   }
 
   return 'An error occurred';
-}
-
-function scheduleRunRecoveryOrFinalize(
-  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
-  get: () => ChatState,
-  options: { runId?: string | null; graceMs: number; sessionKey: string },
-): void {
-  clearErrorRecoveryTimer();
-  _errorRecoveryTimer = setTimeout(() => {
-    _errorRecoveryTimer = null;
-    const state = get();
-    if (!state.sending || state.currentSessionKey !== options.sessionKey) return;
-    if (Date.now() - _lastChatEventAt < Math.min(options.graceMs / 2, 10_000)) return;
-    clearHistoryPoll();
-    set(buildClearedActiveRunPatch());
-    void state.loadHistory(true, { force: true });
-  }, options.graceMs);
 }
 
 function isTerminalAssistantErrorMessage(message: RawMessage | undefined): boolean {
@@ -6287,14 +6268,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
 
         if (wasSending && isGenericError) {
-          // 空泛错误（"An error occurred"）通常是 Gateway 内部瞬时抖动，不展示
-          // UI 错误栏，静默刷新历史即可。
+          // 空泛错误（"An error occurred"）通常是 Gateway 内部瞬时抖动。
+          // 但 Gateway 已明确放弃本次 run，不应继续等待；终止 sending 状态。
+          clearErrorRecoveryTimer();
+          clearHistoryPoll();
           set({
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
             pendingFinal: false,
             pendingToolImages: [],
+            sending: false,
+            activeRunId: null,
+            lastUserMessageAt: null,
           });
           void get().loadHistory(true, { force: true });
           break;
@@ -6317,22 +6303,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         const recoverableError = isRecoverableRuntimeError(errorMsg);
 
-        // 可恢复错误（terminated / rate limit / 502 / timeout 等）Gateway 会内部
-        // 重试恢复，不应立即展示 UI 错误栏。只清理 streaming 状态，静默等待恢复。
+        // Gateway 发出 error 事件意味着其内部重试（指数退避 + 模型回退）已全部
+        // 耗尽，不会再自动恢复。此时应终止 thinking 状态，避免 UI 卡在"思考中"。
+        // loadHistory 会从后端拉取最新消息（如果 Gateway 在最后时刻 commit 了部分
+        // 回复），用户至少能看到已完成的内容。
         if (recoverableError) {
+          clearErrorRecoveryTimer();
+          clearHistoryPoll();
           set({
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
             pendingFinal: false,
             pendingToolImages: [],
+            sending: false,
+            activeRunId: null,
+            lastUserMessageAt: null,
           });
           if (wasSending) {
-            scheduleRunRecoveryOrFinalize(set, get, {
-              runId,
-              graceMs: RUNTIME_ERROR_RECOVERY_GRACE_MS,
-              sessionKey: currentSessionKey,
-            });
+            void get().loadHistory(true, { force: true });
           }
           break;
         }
@@ -6346,12 +6335,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
               (m) => m.role === 'assistant' && hasVisibleAssistantContent(m),
             );
           if (hasReply) {
-            // 致命错误但任务已有回复，说明实际已完成，只记日志
-            console.warn('[chat.error-suppressed] 任务已有回复，跳过致命错误展示', {
+            // 致命错误（API key / 认证等）即使已有部分回复也应告知用户。
+            // 任务可能在中间状态中断，静默吞掉会让用户误以为一切正常。
+            const displayError = resolveRunFailureErrorMessage(rawErrorMsg);
+            console.warn('[chat.error-fatal] 致命错误（已有回复），仍展示提示', {
               error: rawErrorMsg,
               runId,
             });
             set({
+              error: displayError,
+              runError: displayError,
               streamingText: '',
               streamingMessage: null,
               streamingTools: [],
@@ -6360,6 +6353,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               sending: false,
               activeRunId: null,
               lastUserMessageAt: null,
+              runAborted: isAbortErrorMessage(rawErrorMsg),
             });
             break;
           }
@@ -6378,11 +6372,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
             runAborted: isAbortErrorMessage(rawErrorMsg),
           });
         } else {
-          console.warn('[chat.error-suppressed] 非致命错误，跳过展示', {
+          // 非致命但不在已知可恢复/致命模式内的错误。Gateway 已放弃本次 run，
+          // 不应静默吞掉。展示简短的终止提示让用户知道任务未正常完成。
+          const displayError = resolveRunFailureErrorMessage(rawErrorMsg);
+          console.warn('[chat.error-fallback] 未识别错误类型，终止本次运行', {
             error: rawErrorMsg,
+            displayError,
             runId,
           });
           set({
+            error: displayError,
+            runError: displayError,
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
@@ -6391,6 +6391,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sending: false,
             activeRunId: null,
             lastUserMessageAt: null,
+            runAborted: isAbortErrorMessage(rawErrorMsg),
           });
         }
 

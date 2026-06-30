@@ -217,6 +217,7 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     logger.warn('[provider-bootstrap] Failed to fetch nginx model config, using defaults');
   }
   const modelOverrides = buildModelOverrides(nginxConfig);
+  logger.info(`[provider-bootstrap] modelOverrides for ly-auto: ${JSON.stringify(modelOverrides)}`);
 
   // Sync provider config to openclaw.json
   await syncProviderConfigToOpenClaw(runtimeProviderKey, modelId, {

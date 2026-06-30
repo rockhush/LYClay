@@ -27,7 +27,6 @@ import {
   makeAttachedFile,
   attachmentFileNameFromPath,
   normalizeStreamingMessage,
-  setErrorRecoveryTimer,
   snapshotStreamingAssistantMessage,
   upsertToolStatuses,
 } from './helpers';
@@ -959,36 +958,26 @@ export function handleRuntimeEventState(
             }));
           }
 
-          // 可恢复错误（terminated / rate limit / 502 / timeout 等）Gateway 会
-          // 内部重试恢复，不应立即展示 UI 错误栏。只清理 streaming 状态。
+          // Gateway 发出 error 事件意味着其内部重试（指数退避 + 模型回退）已全部
+          // 耗尽，不会再自动恢复。此时应终止 thinking 状态，避免 UI 卡在"思考中"。
+          // loadHistory 会从后端拉取最新消息（如果 Gateway 在最后时刻 commit 了部分
+          // 回复），用户至少能看到已完成的内容。
           if (isRecoverableRuntimeError(errorMsg)) {
+            clearErrorRecoveryTimer();
+            clearHistoryPoll();
             set({
               streamingText: '',
               streamingMessage: null,
               streamingTools: [],
               pendingFinal: false,
               pendingToolImages: [],
+              sending: false,
+              activeRunId: null,
+              activeTool: null,
+              lastUserMessageAt: null,
             });
             if (wasSending) {
-              clearErrorRecoveryTimer();
-              const ERROR_RECOVERY_GRACE_MS = 5_000;
-              setErrorRecoveryTimer(setTimeout(() => {
-                setErrorRecoveryTimer(null);
-                const state = get();
-                if (state.sending && !state.streamingMessage) {
-                  clearHistoryPoll();
-                  set({
-                    sending: false,
-                    activeRunId: null,
-                    activeTool: null,
-                    lastUserMessageAt: null,
-                  });
-                  state.loadHistory(true);
-                }
-              }, ERROR_RECOVERY_GRACE_MS));
-            } else {
-              clearHistoryPoll();
-              set({ sending: false, activeRunId: null, lastUserMessageAt: null });
+              void get().loadHistory(true, { force: true });
             }
             break;
           }

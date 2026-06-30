@@ -17,6 +17,7 @@ export const LY_AUTO_VLLM_MODEL_OPTIONS: Record<string, unknown> = {
   },
   reasoning: true,
   input: [...LY_AUTO_DEFAULT_INPUT],
+  requestTimeoutMs: 180_000,
 };
 
 /** OAuth/provider plugins that change tool inventory when active; off for vLLM paths. */
