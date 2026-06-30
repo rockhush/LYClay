@@ -166,15 +166,69 @@ export function resolvePackageSlugForMarketplaceSkill(
   return slug || undefined;
 }
 
+/** Plaza listing id for an installed package folder (same source as single-skill update cards). */
+export function findPlazaListingIdForPackage(
+  packageSlug: string,
+  companyInstallMap: Record<string, string>,
+  searchResults?: MarketplaceSkill[],
+): string | undefined {
+  const normalizedPackage = packageSlug.trim();
+  if (!normalizedPackage || !searchResults?.length) return undefined;
+
+  for (const item of searchResults) {
+    const plazaId = item.id != null ? String(item.id).trim() : '';
+    if (!isCompanyMarketplaceId(plazaId)) continue;
+    if (companyInstallMap[plazaId] === normalizedPackage) return plazaId;
+    if (resolvePackageSlugForMarketplaceSkill(item, companyInstallMap) === normalizedPackage) {
+      return plazaId;
+    }
+  }
+  return undefined;
+}
+
+function pickAuthoritativeMarketplaceId(
+  matchingIds: string[],
+  options: {
+    packageSlug?: string;
+    companyInstallMap: Record<string, string>;
+    byPackageSlug?: CompanyInstallByPackageSlug;
+    searchResults?: MarketplaceSkill[];
+  },
+): string | undefined {
+  if (matchingIds.length === 0) return undefined;
+  if (matchingIds.length === 1) return matchingIds[0];
+
+  const { packageSlug, companyInstallMap, byPackageSlug, searchResults } = options;
+
+  if (packageSlug) {
+    const sidecarId = byPackageSlug?.[packageSlug]?.marketplaceId?.trim();
+    if (sidecarId && matchingIds.includes(sidecarId)) {
+      return sidecarId;
+    }
+    const plazaId = findPlazaListingIdForPackage(packageSlug, companyInstallMap, searchResults);
+    if (plazaId && matchingIds.includes(plazaId)) {
+      return plazaId;
+    }
+  }
+
+  return undefined;
+}
+
 /** Resolve the plaza numeric id used by single-skill update (`handleUpdate(skill.slug)`). */
 export function resolveCompanyMarketplaceUpdateSlug(
   skill: MarketplaceSkill,
   companyInstallMap: Record<string, string>,
   byPackageSlug?: CompanyInstallByPackageSlug,
+  searchResults?: MarketplaceSkill[],
 ): string | undefined {
   const packageSlug = resolvePackageSlugForMarketplaceSkill(skill, companyInstallMap);
   if (packageSlug && byPackageSlug?.[packageSlug]?.marketplaceId) {
     return byPackageSlug[packageSlug].marketplaceId;
+  }
+
+  if (packageSlug) {
+    const plazaId = findPlazaListingIdForPackage(packageSlug, companyInstallMap, searchResults);
+    if (plazaId) return plazaId;
   }
 
   if (isCompanyMarketplacePlazaSlug(skill.slug)) {
@@ -191,10 +245,19 @@ export function resolveCompanyMarketplaceUpdateSlug(
       .filter(([, slug]) => slug === packageSlug)
       .map(([id]) => id)
       .filter((id) => isCompanyMarketplaceId(id));
-    if (marketplaceId && matchingIds.includes(marketplaceId)) {
-      return marketplaceId;
+    if (matchingIds.length === 1) {
+      return matchingIds[0];
     }
-    return matchingIds[0];
+    if (matchingIds.length > 1) {
+      const authoritative = pickAuthoritativeMarketplaceId(matchingIds, {
+        packageSlug,
+        companyInstallMap,
+        byPackageSlug,
+        searchResults,
+      });
+      if (authoritative) return authoritative;
+      return undefined;
+    }
   }
 
   return isCompanyMarketplaceId(marketplaceId) ? marketplaceId : undefined;
@@ -204,8 +267,14 @@ export function normalizeMarketplaceSkillForUpdate(
   skill: MarketplaceSkill,
   companyInstallMap: Record<string, string>,
   byPackageSlug?: CompanyInstallByPackageSlug,
+  searchResults?: MarketplaceSkill[],
 ): MarketplaceSkill {
-  const updateSlug = resolveCompanyMarketplaceUpdateSlug(skill, companyInstallMap, byPackageSlug);
+  const updateSlug = resolveCompanyMarketplaceUpdateSlug(
+    skill,
+    companyInstallMap,
+    byPackageSlug,
+    searchResults,
+  );
   if (!updateSlug) return skill;
   const numericId = Number(updateSlug);
   return {
@@ -220,13 +289,23 @@ export function dedupeInstalledMarketplaceSkillsForBatchUpdate(
   skills: MarketplaceSkill[],
   companyInstallMap: Record<string, string>,
   byPackageSlug?: CompanyInstallByPackageSlug,
+  searchResults?: MarketplaceSkill[],
 ): MarketplaceSkill[] {
   const byPackage = new Map<string, MarketplaceSkill>();
   for (const skill of skills) {
-    const normalized = normalizeMarketplaceSkillForUpdate(skill, companyInstallMap, byPackageSlug);
+    const normalized = normalizeMarketplaceSkillForUpdate(
+      skill,
+      companyInstallMap,
+      byPackageSlug,
+      searchResults,
+    );
     const packageSlug = resolvePackageSlugForMarketplaceSkill(normalized, companyInstallMap)
       || getMarketplaceSkillKey(normalized);
-    byPackage.set(packageSlug, normalized);
+    const existing = byPackage.get(packageSlug);
+    const incomingIsPlazaListing = isCompanyMarketplacePlazaSlug(skill.slug);
+    if (!existing || incomingIsPlazaListing) {
+      byPackage.set(packageSlug, normalized);
+    }
   }
   return Array.from(byPackage.values());
 }

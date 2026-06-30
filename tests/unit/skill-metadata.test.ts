@@ -15,6 +15,7 @@ import {
   isMarketplaceSkillInstalledOnDisk,
   companyInstallEntriesToMarketplaceSkills,
   dedupeInstalledMarketplaceSkillsForBatchUpdate,
+  findPlazaListingIdForPackage,
   mergeSkillWithMarketplaceMetadata,
   normalizeMarketplaceSkillForUpdate,
   resolveCompanyMarketplaceUpdateSlug,
@@ -522,5 +523,50 @@ describe('skill metadata helpers', () => {
 
     expect(deduped).toHaveLength(1);
     expect(deduped[0]).toMatchObject({ id: 398, slug: '398' });
+  });
+
+  it('prefers plaza listing id over stale registry id when sidecar map is absent', () => {
+    const registrySkill = companyInstallEntriesToMarketplaceSkills({
+      '999': {
+        packageSlug: 'process-scatter',
+        name: '工序散点图生成器',
+        version: '1.0.0',
+      },
+    })[0]!;
+    const searchResults: MarketplaceSkill[] = [{
+      id: 398,
+      slug: '398',
+      name: '工序散点图生成器',
+      description: '',
+      version: '1.0.0',
+    }];
+
+    expect(resolveCompanyMarketplaceUpdateSlug(
+      registrySkill,
+      { '999': 'process-scatter', '398': 'process-scatter' },
+      undefined,
+      searchResults,
+    )).toBe('398');
+
+    expect(findPlazaListingIdForPackage(
+      'process-scatter',
+      { '398': 'process-scatter' },
+      searchResults,
+    )).toBe('398');
+  });
+
+  it('does not guess among conflicting registry ids without sidecar or plaza match', () => {
+    const registrySkill = companyInstallEntriesToMarketplaceSkills({
+      '999': {
+        packageSlug: 'process-scatter',
+        name: '工序散点图生成器',
+        version: '1.0.0',
+      },
+    })[0]!;
+
+    expect(resolveCompanyMarketplaceUpdateSlug(
+      registrySkill,
+      { '999': 'process-scatter', '888': 'process-scatter' },
+    )).toBeUndefined();
   });
 });

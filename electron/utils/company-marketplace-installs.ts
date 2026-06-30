@@ -299,6 +299,7 @@ async function reconcileRegistryFromSidecars(
   const next: CompanyMarketplaceInstallRegistry = {
     byMarketplaceId: { ...registry.byMarketplaceId },
   };
+  const authoritativePackageToId = new Map<string, string>();
 
   const entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
   for (const entry of entries) {
@@ -313,6 +314,8 @@ async function reconcileRegistryFromSidecars(
       const marketplaceId = parsed.marketplaceId != null ? String(parsed.marketplaceId).trim() : '';
       const packageSlug = parsed.packageSlug?.trim() || entry.name;
       if (!marketplaceId) continue;
+
+      authoritativePackageToId.set(packageSlug, marketplaceId);
 
       const existing = next.byMarketplaceId[marketplaceId];
       const merged: CompanyMarketplaceInstallEntry = {
@@ -333,6 +336,14 @@ async function reconcileRegistryFromSidecars(
       }
     } catch {
       // ignore invalid sidecars
+    }
+  }
+
+  for (const [marketplaceId, entry] of Object.entries(next.byMarketplaceId)) {
+    const authoritativeId = authoritativePackageToId.get(entry.packageSlug);
+    if (authoritativeId && marketplaceId !== authoritativeId) {
+      delete next.byMarketplaceId[marketplaceId];
+      changed = true;
     }
   }
 

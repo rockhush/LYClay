@@ -928,16 +928,22 @@ export function Skills() {
     updateSlug: string;
     marketplaceSkill: MarketplaceSkill;
   } | null => {
-    const { companyInstallMap, companyInstallByPackageSlug } = useSkillsStore.getState();
+    const {
+      companyInstallMap,
+      companyInstallByPackageSlug,
+      searchResults: plazaResults,
+    } = useSkillsStore.getState();
     const normalized = normalizeMarketplaceSkillForUpdate(
       skill,
       companyInstallMap,
       companyInstallByPackageSlug,
+      plazaResults,
     );
     const updateSlug = resolveCompanyMarketplaceUpdateSlug(
       normalized,
       companyInstallMap,
       companyInstallByPackageSlug,
+      plazaResults,
     );
     if (!updateSlug) return null;
 
@@ -1019,13 +1025,14 @@ export function Skills() {
 
   const installedForBatchUpdate = useMemo(() => {
     const merged = [
-      ...companyInstallEntriesToMarketplaceSkills(companyInstallEntries),
       ...searchResults,
+      ...companyInstallEntriesToMarketplaceSkills(companyInstallEntries),
     ];
     return dedupeInstalledMarketplaceSkillsForBatchUpdate(
       merged,
       companyInstallMap,
       companyInstallByPackageSlug,
+      searchResults,
     ).filter((skill) => isMarketplaceSkillInstalledOnDisk(skill, safeSkills, companyInstallMap));
   }, [searchResults, companyInstallEntries, companyInstallMap, companyInstallByPackageSlug, safeSkills]);
 
@@ -1494,6 +1501,39 @@ export function Skills() {
       latestVersion: string;
       marketplaceId: string;
     }> = [];
+
+    try {
+      await useSkillsStore.getState().searchSkills('', '', '-download_count');
+      const installMapResponse = await hostApiFetch<{
+        success: boolean;
+        installs?: Record<string, string>;
+        entries?: Record<string, {
+          packageSlug: string;
+          name: string;
+          version: string;
+          author?: string;
+          description?: string;
+        }>;
+        byPackageSlug?: Record<string, {
+          packageSlug: string;
+          name: string;
+          version: string;
+          author?: string;
+          description?: string;
+          marketplaceId: string;
+        }>;
+      }>('/api/clawhub/company-install-map');
+      if (installMapResponse.success) {
+        useSkillsStore.setState({
+          companyInstallMap: installMapResponse.installs ?? useSkillsStore.getState().companyInstallMap,
+          companyInstallEntries: installMapResponse.entries ?? useSkillsStore.getState().companyInstallEntries,
+          companyInstallByPackageSlug: installMapResponse.byPackageSlug
+            ?? useSkillsStore.getState().companyInstallByPackageSlug,
+        });
+      }
+    } catch (error) {
+      console.warn('[Skills] Pre-batch update catalog refresh failed (continuing):', error);
+    }
 
     // Resolve + dedupe by marketplace id (same skill can appear twice in the picker).
     const seenMarketplaceIds = new Set<string>();
