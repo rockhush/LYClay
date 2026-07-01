@@ -18,9 +18,10 @@
  *     startup the supervisor computes the most recent scheduled occurrence and,
  *     if the gateway has not run it, fires a single catch-up run.
  *
- * LYClaw in-app cron jobs are executed through `chat.send`, not `cron.run`, so
- * every manual, scheduled, catch-up, or retry execution gets a fresh chat
- * session and streams through the normal chat websocket path.
+ * LYClaw in-app cron jobs with local delivery do not call `cron.run`; the
+ * supervisor loads the job config and starts a WebChat-streamed agent turn.
+ * Jobs with external delivery are handed back to OpenClaw's cron executor so
+ * delivery is resolved by the same path as scheduled cron runs.
  */
 
 import { powerMonitor } from 'electron';
@@ -33,7 +34,6 @@ import {
   buildChannelMessageTargetSystemPrompt,
   mergeExtraSystemPrompt,
   type SessionDeliveryContext,
-  upsertSessionDeliveryContext,
 } from '../utils/session-delivery-context';
 import {
   inferScheduleIntervalMs,
@@ -382,9 +382,8 @@ async function maybeRunManagedInAppCronJob(job: SupervisedCronJob, now: number):
 }
 
 /**
- * Fire a cron job run via chat.send into a fresh scheduled-task session.
- * Returns { sessionKey, runId } after the run has been accepted; streaming
- * continues through the normal Gateway chat websocket path.
+ * Fire a cron job run into a fresh scheduled-task session.
+ * Returns { sessionKey, runId } after the run has been accepted.
  */
 async function fireCronJobViaChatSend(
   info: ResolvedCronJobInfo,
@@ -404,18 +403,17 @@ async function fireCronJobViaChatSend(
     ? buildChannelMessageTargetSystemPrompt(info.deliveryContext)
     : undefined;
 
-  if (info.deliveryContext) {
-    await upsertSessionDeliveryContext(sessionKey, info.deliveryContext);
-  }
-
-  const chatResult = await gateway!.rpc<{ runId?: string }>('chat.send', {
+  const requestParams = {
     sessionKey,
     sessionId,
+    agentId: info.agentId,
     message: info.message,
-    deliver: info.deliveryMode !== 'none',
+    deliver: false,
     ...(deliveryPrompt ? { extraSystemPrompt: mergeExtraSystemPrompt(undefined, deliveryPrompt) } : {}),
     idempotencyKey,
-  }, timeoutMs);
+  };
+
+  const chatResult = await gateway!.rpc<{ runId?: string }>('chat.send', requestParams, timeoutMs);
 
   const runId = chatResult?.runId;
   if (!runId) {
@@ -436,10 +434,39 @@ async function fireCronJobViaChatSend(
   return { sessionKey, runId };
 }
 
+async function fireCronJobViaCronRun(
+  jobId: string,
+  timeoutMs: number,
+): Promise<{ sessionKey: string; runId: string }> {
+  const result = await gateway!.rpc<unknown>('cron.run', { jobId, mode: 'force' }, timeoutMs);
+  const record = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+  if (record.ok === false) {
+    throw new Error(typeof record.reason === 'string' ? record.reason : 'cron.run rejected cron trigger');
+  }
+  const runId = typeof record.runId === 'string' && record.runId.trim()
+    ? record.runId.trim()
+    : undefined;
+  if (!runId) {
+    throw new Error('cron.run did not return runId for cron trigger');
+  }
+  return { sessionKey: '', runId };
+}
+
+async function fireCronJob(
+  info: ResolvedCronJobInfo,
+  jobId: string,
+  timeoutMs: number,
+  source: CronJobsUpdatedReason,
+): Promise<{ sessionKey: string; runId: string }> {
+  if (info.deliveryContext) {
+    return fireCronJobViaCronRun(jobId, timeoutMs);
+  }
+  return fireCronJobViaChatSend(info, jobId, timeoutMs, source);
+}
+
 /**
- * Streaming manual trigger: sends the cron job message via `chat.send` to a
- * fresh scheduled-task session so the renderer receives live agent notifications
- * and can show real-time streaming output in the chat UI.
+ * Streaming manual trigger: starts the cron job message in a fresh scheduled-task
+ * session after reloading the saved job configuration.
  */
 export async function triggerCronJobStreaming(
   gw: GatewayLike,
@@ -448,7 +475,7 @@ export async function triggerCronJobStreaming(
   gateway = gw;
   await waitForWarmupIfInProgress();
   const info = await resolveCronJobInfo(jobId);
-  return fireCronJobViaChatSend(info, jobId, MANUAL_RUN_TIMEOUT_MS, 'manual-trigger');
+  return fireCronJob(info, jobId, MANUAL_RUN_TIMEOUT_MS, 'manual-trigger');
 }
 
 /** If a warmup is in progress, wait (bounded) for it to settle before firing. */
@@ -468,8 +495,7 @@ async function waitForWarmupIfInProgress(): Promise<void> {
 
 /**
  * Run a cron job from the background supervisor with cold-start-tolerant backoff.
- * Background executions use the same chat.send streaming path as manual runs, so
- * every attempt gets a fresh visible chat session. Never throws.
+ * Background executions use the same fresh-session path as manual runs. Never throws.
  */
 async function runCronJobInBackground(id: string, source: CronJobsUpdatedReason): Promise<{ ok: boolean; error?: string }> {
   await waitForWarmupIfInProgress();
@@ -482,7 +508,7 @@ async function runCronJobInBackground(id: string, source: CronJobsUpdatedReason)
     }
     try {
       const info = await resolveCronJobInfo(id);
-      await fireCronJobViaChatSend(info, id, CRON_RUN_TIMEOUT_MS, source);
+      await fireCronJob(info, id, CRON_RUN_TIMEOUT_MS, source);
       return { ok: true };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);

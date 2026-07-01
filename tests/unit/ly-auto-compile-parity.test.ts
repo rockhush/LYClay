@@ -33,8 +33,8 @@ describe('ly-auto-compile-parity', () => {
     });
   });
 
-  it('keeps the request timeout as provider-level configuration', () => {
-    expect(LY_AUTO_REQUEST_TIMEOUT_SECONDS).toBe(180);
+  it('keeps the request timeout aligned with llm-gateway nginx proxy_read_timeout', () => {
+    expect(LY_AUTO_REQUEST_TIMEOUT_SECONDS).toBe(900);
   });
 
   it('falls back when nginx input is empty', () => {

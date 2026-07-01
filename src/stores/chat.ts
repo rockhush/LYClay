@@ -69,11 +69,14 @@ import {
   shouldSilentlyFinalizeRunOnAssistantFinal,
 } from './chat/run-lifecycle';
 import {
+  backendActivityForSession,
   canClearUserTurnNow,
+  canForceClearOnVisibleCommittedReply,
   shouldFinalizeUserTurn,
   shouldForceAbortStuckRun,
   buildReAdoptRunPatch,
   hasOpenDelegatedBackendWork,
+  sanitizeLeavingSessionStreamingSnapshot,
 } from './chat/user-turn-lifecycle';
 import {
   deferClearUserTurnForOpenDelegation,
@@ -1287,6 +1290,33 @@ function snapshotCurrentStreamingState(state: ChatState): SessionStreamingState 
   };
 }
 
+function applyClearedActiveRunForSession(
+  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  sessionKey: string,
+  options?: { preserveMessagesSnapshot?: boolean },
+): void {
+  set((s) => {
+    const cleared = buildClearedActiveRunPatch();
+    const prevSnapshot = s.sessionStreamingStates[sessionKey] ?? createEmptySessionStreamingState();
+    const messagesSnapshot = options?.preserveMessagesSnapshot === false
+      ? []
+      : (s.currentSessionKey === sessionKey && s.messages.length > 0
+        ? [...s.messages]
+        : (prevSnapshot.messagesSnapshot.length > 0 ? prevSnapshot.messagesSnapshot : []));
+    return {
+      ...cleared,
+      sessionStreamingStates: {
+        ...s.sessionStreamingStates,
+        [sessionKey]: {
+          ...prevSnapshot,
+          ...cleared,
+          messagesSnapshot,
+        },
+      },
+    };
+  });
+}
+
 function appendMessageIfMissing(messages: RawMessage[], message: RawMessage): RawMessage[] {
   if (message.id && messages.some((existing) => existing.id === message.id)) return messages;
   return [...messages, message];
@@ -1723,6 +1753,9 @@ function buildSendingUiPatchFromTranscript(
     if (!isMessageAfterUserTimestamp(message, userTs)) return false;
     return isRunTerminalAssistantMessage(message);
   });
+  const concludingReply = findConcludingAssistantForActiveTurn(rawMessages, userTs);
+  const hasCommittedVisibleReply = hasTerminalReply
+    || (concludingReply != null && hasVisibleAssistantContent(concludingReply));
 
   if (hasLive) {
     if (mergedTools.length !== state.streamingTools.length
@@ -1734,7 +1767,7 @@ function buildSendingUiPatchFromTranscript(
       patch.streamingMessage = longestAssistant;
       patch.streamingText = getStreamingDisplayText(longestAssistant);
     }
-    if (!hasTerminalReply && (progress.assistantCount > 0 || progress.toolResultCount > 0)) {
+    if (!hasCommittedVisibleReply && (progress.assistantCount > 0 || progress.toolResultCount > 0)) {
       patch.pendingFinal = true;
     }
     return Object.keys(patch).length > 0 ? patch : null;
@@ -1751,7 +1784,7 @@ function buildSendingUiPatchFromTranscript(
     }
   }
 
-  if (!hasTerminalReply && (progress.assistantCount > 0 || progress.toolResultCount > 0)) {
+  if (!hasCommittedVisibleReply && (progress.assistantCount > 0 || progress.toolResultCount > 0)) {
     patch.pendingFinal = true;
   }
 
@@ -2473,6 +2506,8 @@ function buildSessionSwitchPatch(
     | 'runError'
     | 'sending'
     | 'activeTool'
+    | 'sessionBackendActivity'
+    | 'gatewayBackgroundActivity'
   >,
   nextSessionKey: string,
 ): Partial<ChatState> {
@@ -2510,9 +2545,8 @@ function buildSessionSwitchPatch(
   // can restore immediately when switched back, even if no stream is active.
   const hasActiveStreaming = state.activeRunId || state.sending;
   const shouldSnapshotMessages = hasActiveStreaming || state.messages.length > 0;
-  const savedStreamingStates: Record<string, SessionStreamingState> = {
-    ...state.sessionStreamingStates,
-    [state.currentSessionKey]: {
+  const leavingSnapshot = sanitizeLeavingSessionStreamingSnapshot(
+    {
       activeRunId: state.activeRunId,
       streamingText: state.streamingText,
       streamingMessage: state.streamingMessage,
@@ -2526,6 +2560,18 @@ function buildSessionSwitchPatch(
       activeTool: state.activeTool,
       messagesSnapshot: shouldSnapshotMessages ? [...state.messages] : [],
     },
+    {
+      sessionKey: state.currentSessionKey,
+      backendActivity: backendActivityForSession(
+        state.sessionBackendActivity,
+        state.currentSessionKey,
+      ),
+      gatewayBackground: state.gatewayBackgroundActivity,
+    },
+  );
+  const savedStreamingStates: Record<string, SessionStreamingState> = {
+    ...state.sessionStreamingStates,
+    [state.currentSessionKey]: leavingSnapshot,
   };
 
   // Remove streaming state if leaving an empty session that has no active stream.
@@ -3644,7 +3690,15 @@ function classifyBackgroundTermination(
     if (
       !isToolResultRole(normalized.role)
       && !isToolOnlyMessage(normalized)
-      && hasNonToolAssistantContent(normalized)
+      && hasVisibleAssistantContent(normalized)
+      && !isUiHidden
+    ) {
+      return { completed: true, aborted: false };
+    }
+    if (
+      !isToolResultRole(normalized.role)
+      && !isToolOnlyMessage(normalized)
+      && isRunTerminalAssistantMessage(normalized)
       && !isUiHidden
     ) {
       return { completed: true, aborted: false };
@@ -4568,36 +4622,44 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       if ((isSendingNow || get().pendingFinal || get().activeRunId) && recentTerminalAssistant) {
-        if (!canClearUserTurnNow({
+        const canClearInput = {
           messages: finalMessages,
           lastUserMessageAt,
           backendActivity: backendSnapshot?.session ?? get().sessionBackendActivity,
           terminalMessage: recentTerminalAssistant,
           gatewayBackground: backendSnapshot?.background ?? get().gatewayBackgroundActivity,
           finalizeGraceStartedAt: getFinalizeGraceStartedAt(currentSessionKey),
-        })) {
-          if (isSendingNow) {
-            applySendingUiPatchFromTranscript(rawMessages, set, get);
-          }
-          // Transcript already has a terminal assistant but the backend still
-          // reports processing (async desync). Clear stale streaming buffers so
-          // the committed reply in messages[] is visible without waiting for stop.
-          if (
-            recentTerminalAssistant
-            && (isRunTerminalAssistantMessage(recentTerminalAssistant)
-              || hasVisibleAssistantContent(recentTerminalAssistant))
-          ) {
-            set({
-              streamingText: '',
-              streamingMessage: null,
-              streamingTools: [],
-              pendingToolImages: [],
-            });
+        };
+        if (!canClearUserTurnNow(canClearInput)) {
+          if (canForceClearOnVisibleCommittedReply(canClearInput)) {
+            clearHistoryPoll();
+            clearErrorRecoveryTimer();
+            applyClearedActiveRunForSession(set, currentSessionKey);
+            ensureSessionBackendPolling(currentSessionKey, set, get);
+          } else {
+            if (isSendingNow) {
+              applySendingUiPatchFromTranscript(rawMessages, set, get);
+            }
+            // Transcript already has a terminal assistant but the backend still
+            // reports processing (async desync). Clear stale streaming buffers so
+            // the committed reply in messages[] is visible without waiting for stop.
+            if (
+              recentTerminalAssistant
+              && (isRunTerminalAssistantMessage(recentTerminalAssistant)
+                || hasVisibleAssistantContent(recentTerminalAssistant))
+            ) {
+              set({
+                streamingText: '',
+                streamingMessage: null,
+                streamingTools: [],
+                pendingToolImages: [],
+              });
+            }
           }
         } else {
           clearHistoryPoll();
           clearErrorRecoveryTimer();
-          set(buildClearedActiveRunPatch());
+          applyClearedActiveRunForSession(set, currentSessionKey);
           ensureSessionBackendPolling(currentSessionKey, set, get);
         }
       } else if (isSendingNow) {
@@ -6541,7 +6603,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
           clearFinalizeGraceTimer();
           clearHistoryPoll();
           clearErrorRecoveryTimer();
-          set(buildClearedActiveRunPatch());
+          applyClearedActiveRunForSession(set, resolvedSessionKey);
+          ensureSessionBackendPolling(resolvedSessionKey, set, get);
+          return;
+        }
+
+        const forceClearInput = {
+          messages: next.messages,
+          lastUserMessageAt: next.lastUserMessageAt,
+          backendActivity: backendSnapshot?.session ?? next.sessionBackendActivity,
+          gatewayBackground: backendSnapshot?.background ?? next.gatewayBackgroundActivity,
+          finalizeGraceStartedAt: getFinalizeGraceStartedAt(resolvedSessionKey),
+        };
+        if (canForceClearOnVisibleCommittedReply(forceClearInput)) {
+          clearFinalizeGraceTimer();
+          clearHistoryPoll();
+          clearErrorRecoveryTimer();
+          applyClearedActiveRunForSession(set, resolvedSessionKey);
           ensureSessionBackendPolling(resolvedSessionKey, set, get);
           return;
         }

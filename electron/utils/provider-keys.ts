@@ -37,6 +37,18 @@ export function getOpenClawProviderKeyForType(type: string, providerId: string):
   return PROVIDER_KEY_ALIASES[type] ?? type;
 }
 
+export function extractModelIdFromStoredModel(model: string): string {
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf('/');
+  return slash >= 0 ? trimmed.slice(slash + 1).trim() : trimmed;
+}
+
+export function normalizeStoredProviderModel(model: string | undefined): string | undefined {
+  const trimmed = model?.trim();
+  if (!trimmed) return undefined;
+  return extractModelIdFromStoredModel(trimmed) || undefined;
+}
+
 /**
  * Get all vendorId values that map to the given openclaw.json key via alias.
  * e.g. getAliasSourceTypes('minimax-portal') → ['minimax-portal-cn']

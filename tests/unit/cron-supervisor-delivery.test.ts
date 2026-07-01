@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +17,7 @@ describe('cron supervisor delivery', () => {
 
   it('inherits external delivery config for manual streaming triggers', async () => {
     const { triggerCronJobStreaming } = await import('../../electron/gateway/cron-supervisor');
-    const chatSendParams: Record<string, unknown>[] = [];
+    const cronRunParams: Record<string, unknown>[] = [];
     const rpc = vi.fn(async (method: string, params: unknown) => {
       if (method === 'cron.list') {
         return {
@@ -35,9 +35,9 @@ describe('cron supervisor delivery', () => {
           }],
         };
       }
-      if (method === 'chat.send') {
-        chatSendParams.push(params as Record<string, unknown>);
-        return { runId: 'run-dingtalk' };
+      if (method === 'cron.run') {
+        cronRunParams.push(params as Record<string, unknown>);
+        return { ok: true, enqueued: true, runId: 'run-dingtalk' };
       }
       throw new Error(`unexpected rpc ${method}`);
     });
@@ -48,22 +48,52 @@ describe('cron supervisor delivery', () => {
     }, 'job-dingtalk');
 
     expect(result.runId).toBe('run-dingtalk');
-    expect(chatSendParams).toHaveLength(1);
-    expect(chatSendParams[0]).toMatchObject({
-      message: 'Summarize today',
-      deliver: true,
-      extraSystemPrompt: expect.stringContaining('target="cidDailyReport="'),
+    expect(result.sessionKey).toBe('');
+    expect(rpc).not.toHaveBeenCalledWith('chat.send', expect.anything(), expect.anything());
+    expect(rpc).not.toHaveBeenCalledWith('agent', expect.anything(), expect.anything());
+    expect(cronRunParams).toHaveLength(1);
+    expect(cronRunParams[0]).toEqual({
+      jobId: 'job-dingtalk',
+      mode: 'force',
     });
 
-    const sessionKey = chatSendParams[0].sessionKey as string;
-    const sessions = JSON.parse(readFileSync(
-      join(testOpenClawConfigDir, 'agents', 'main', 'sessions', 'sessions.json'),
-      'utf8',
-    )) as Record<string, { deliveryContext?: Record<string, unknown> }>;
-    expect(sessions[sessionKey]?.deliveryContext).toEqual({
-      channel: 'dingtalk',
-      accountId: 'dingtalk-main',
-      to: 'cidDailyReport=',
+    expect(existsSync(join(testOpenClawConfigDir, 'agents', 'main', 'sessions', 'sessions.json'))).toBe(false);
+  });
+
+  it('keeps local delivery-none runs on chat.send', async () => {
+    const { triggerCronJobStreaming } = await import('../../electron/gateway/cron-supervisor');
+    const chatSendParams: Record<string, unknown>[] = [];
+    const rpc = vi.fn(async (method: string, params: unknown) => {
+      if (method === 'cron.list') {
+        return {
+          jobs: [{
+            id: 'job-local',
+            agentId: 'main',
+            name: 'Local task',
+            payload: { kind: 'agentTurn', message: 'Run locally' },
+            delivery: { mode: 'none' },
+          }],
+        };
+      }
+      if (method === 'chat.send') {
+        chatSendParams.push(params as Record<string, unknown>);
+        return { runId: 'run-local' };
+      }
+      throw new Error(`unexpected rpc ${method}`);
+    });
+
+    const result = await triggerCronJobStreaming({
+      getStatus: () => ({ state: 'running', warmupStatus: 'idle' }),
+      rpc,
+    }, 'job-local');
+
+    expect(result.runId).toBe('run-local');
+    expect(rpc).not.toHaveBeenCalledWith('agent', expect.anything(), expect.anything());
+    expect(chatSendParams).toHaveLength(1);
+    expect(chatSendParams[0]).toMatchObject({
+      agentId: 'main',
+      message: 'Run locally',
+      deliver: false,
     });
   });
 });

@@ -828,7 +828,7 @@ interface CronJobCardProps {
   onToggle: (enabled: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
-  onTrigger: () => Promise<{ sessionKey: string; runId: string }>;
+  onTrigger: () => Promise<{ sessionKey?: string; runId: string }>;
 }
 
 function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onTrigger }: CronJobCardProps) {
@@ -844,9 +844,11 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
     try {
       const { sessionKey } = await onTrigger();
       toast.success(t('toast.triggered'));
-      // Navigate to the cron session to watch streaming execution live.
-      useChatStore.getState().switchSession(sessionKey);
-      navigate('/');
+      if (sessionKey) {
+        // Navigate to the cron session to watch streaming execution live.
+        useChatStore.getState().switchSession(sessionKey);
+        navigate('/');
+      }
     } catch (error) {
       console.error('Failed to trigger cron job:', error);
       toast.error(t('toast.failedTrigger', {
@@ -1013,7 +1015,7 @@ export function Cron() {
   const fetchConfiguredChannels = useCallback(async () => {
     try {
       const response = await hostApiFetch<{ success: boolean; channels?: DeliveryChannelGroup[]; error?: string }>(
-        '/api/channels/accounts',
+        '/api/channels/accounts?mode=config',
       );
       if (!response.success) {
         throw new Error(response.error || 'Failed to load delivery channels');

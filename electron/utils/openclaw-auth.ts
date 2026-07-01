@@ -34,8 +34,6 @@ import {
   isDeepSeekV4ModelId,
 } from '../services/providers/known-model-capabilities';
 
-const AUTH_STORE_VERSION = 1;
-const AUTH_PROFILE_FILENAME = 'auth-profiles.json';
 const EXEC_APPROVALS_FILENAME = 'exec-approvals.json';
 const LYCLAW_COMMAND_POLICY_PLUGIN_ID = 'lyclaw-command-policy';
 
@@ -95,28 +93,14 @@ async function writeJsonFile(filePath: string, data: unknown): Promise<void> {
 
 // ── Types ────────────────────────────────────────────────────────
 
-interface AuthProfileEntry {
-  type: 'api_key';
-  provider: string;
-  key: string;
-}
-
-interface OAuthProfileEntry {
-  type: 'oauth';
-  provider: string;
-  access: string;
-  refresh: string;
-  expires: number;
-  email?: string;
-  projectId?: string;
-}
-
-interface AuthProfilesStore {
-  version: number;
-  profiles: Record<string, AuthProfileEntry | OAuthProfileEntry>;
-  order?: Record<string, string[]>;
-  lastGood?: Record<string, string>;
-}
+import {
+  loadAgentAuthProfileStore,
+  migrateAllAgentAuthStoresToSqlite,
+  saveAgentAuthProfileStore,
+  type AuthProfilesStore,
+  type AuthProfileEntry,
+  type OAuthProfileEntry,
+} from './openclaw-auth-store';
 
 function removeProfilesForProvider(store: AuthProfilesStore, provider: string): boolean {
   const removedProfileIds = new Set<string>();
@@ -196,25 +180,18 @@ function removeProfileFromStore(
 
 // ── Auth Profiles I/O ────────────────────────────────────────────
 
-function getAuthProfilesPath(agentId = 'main'): string {
-  return join(homedir(), '.openclaw', 'agents', agentId, 'agent', AUTH_PROFILE_FILENAME);
-}
-
 async function readAuthProfiles(agentId = 'main'): Promise<AuthProfilesStore> {
-  const filePath = getAuthProfilesPath(agentId);
-  try {
-    const data = await readJsonFile<AuthProfilesStore>(filePath);
-    if (data?.version && data.profiles && typeof data.profiles === 'object') {
-      return data;
-    }
-  } catch (error) {
-    console.warn('Failed to read auth-profiles.json, creating fresh store:', error);
-  }
-  return { version: AUTH_STORE_VERSION, profiles: {} };
+  return loadAgentAuthProfileStore(agentId);
 }
 
 async function writeAuthProfiles(store: AuthProfilesStore, agentId = 'main'): Promise<void> {
-  await writeJsonFile(getAuthProfilesPath(agentId), store);
+  await saveAgentAuthProfileStore(agentId, store);
+}
+
+export async function migrateOpenClawAuthStoresToSqlite(): Promise<void> {
+  const agentIds = await discoverAgentIds();
+  if (agentIds.length === 0) agentIds.push('main');
+  await migrateAllAgentAuthStoresToSqlite(agentIds);
 }
 
 // ── Agent Discovery ──────────────────────────────────────────────
@@ -548,7 +525,7 @@ export async function saveProviderKeyToOpenClaw(
 
     await writeAuthProfiles(store, id);
   }
-  console.log(`Saved API key for provider "${provider}" to OpenClaw auth-profiles (agents: ${agentIds.join(', ')})`);
+  console.log(`Saved API key for provider "${provider}" to OpenClaw auth store (agents: ${agentIds.join(', ')})`);
 }
 
 /**
@@ -743,6 +720,7 @@ export async function setOpenClawDefaultModel(
     };
     agents.defaults = defaults;
     config.agents = agents;
+    ensureOpenClawModelAllowlistEntries(config, [model, ...fallbackModels]);
 
     // Configure models.providers for providers that need explicit registration.
     const providerCfg = getProviderConfig(provider);
@@ -816,6 +794,102 @@ function extractFallbackModelIds(provider: string, fallbackModels: string[]): st
   return fallbackModels
     .filter((fallback) => fallback.startsWith(`${provider}/`))
     .map((fallback) => fallback.slice(provider.length + 1));
+}
+
+function normalizeAllowlistModelRef(modelRef: string): string | null {
+  const trimmed = modelRef.trim();
+  if (!trimmed || !trimmed.includes('/')) {
+    return null;
+  }
+  return trimmed;
+}
+
+function isModelRefAllowed(existing: unknown, modelRef: string): boolean {
+  if (Array.isArray(existing)) {
+    return existing.some((entry) => typeof entry === 'string' && entry.trim() === modelRef);
+  }
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    return Object.prototype.hasOwnProperty.call(existing, modelRef);
+  }
+  return false;
+}
+
+function isOpenClawModelAllowlistActive(existing: unknown): boolean {
+  if (existing === undefined || existing === null) {
+    return false;
+  }
+  if (Array.isArray(existing)) {
+    return existing.length > 0;
+  }
+  if (typeof existing === 'object') {
+    return Object.keys(existing as Record<string, unknown>).length > 0;
+  }
+  return false;
+}
+
+/**
+ * Append model refs to agents.defaults.models when OpenClaw allowlisting is active.
+ * Missing/empty allowlist means "allow all" — leave it untouched.
+ */
+function ensureOpenClawModelAllowlistEntries(
+  config: Record<string, unknown>,
+  modelRefs: string[],
+): boolean {
+  const refs = [...new Set(
+    modelRefs
+      .map((modelRef) => normalizeAllowlistModelRef(modelRef))
+      .filter((modelRef): modelRef is string => Boolean(modelRef)),
+  )];
+  if (refs.length === 0) {
+    return false;
+  }
+
+  const agents = (
+    config.agents && typeof config.agents === 'object'
+      ? config.agents
+      : {}
+  ) as Record<string, unknown>;
+  const defaults = (
+    agents.defaults && typeof agents.defaults === 'object'
+      ? agents.defaults
+      : {}
+  ) as Record<string, unknown>;
+  const existing = defaults.models;
+
+  if (!isOpenClawModelAllowlistActive(existing)) {
+    return false;
+  }
+
+  let changed = false;
+  if (Array.isArray(existing)) {
+    const next = [...existing];
+    for (const ref of refs) {
+      if (!isModelRefAllowed(next, ref)) {
+        next.push(ref);
+        changed = true;
+      }
+    }
+    if (changed) {
+      defaults.models = next;
+    }
+  } else if (existing && typeof existing === 'object') {
+    const next = { ...(existing as Record<string, unknown>) };
+    for (const ref of refs) {
+      if (!isModelRefAllowed(next, ref)) {
+        next[ref] = next[ref] ?? {};
+        changed = true;
+      }
+    }
+    if (changed) {
+      defaults.models = next;
+    }
+  }
+
+  if (changed) {
+    agents.defaults = defaults;
+    config.agents = agents;
+  }
+  return changed;
 }
 
 /** Keys that LYClaw/registry may attach but OpenClaw models.providers schema rejects. */
@@ -1096,6 +1170,9 @@ export async function syncProviderConfigToOpenClaw(
         mergeExistingModels: true,
         timeoutSeconds: override.timeoutSeconds,
       });
+      if (modelId) {
+        ensureOpenClawModelAllowlistEntries(config, [`${provider}/${modelId}`]);
+      }
     }
 
     // Ensure extension is enabled for oauth providers to prevent gateway wiping config
@@ -1299,6 +1376,7 @@ export async function setOpenClawDefaultModelWithOverride(
     };
     agents.defaults = defaults;
     config.agents = agents;
+    ensureOpenClawModelAllowlistEntries(config, [model, ...fallbackModels]);
 
     if (override.baseUrl && override.api) {
       upsertOpenClawProviderEntry(config, provider, {

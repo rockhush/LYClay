@@ -74,6 +74,7 @@ import {
 import { logger } from '../../utils/logger';
 import { scheduleGatewayChannelSaveRefresh } from '../../utils/gateway-channel-refresh';
 import { buildGatewayHealthSummary } from '../../utils/gateway-health';
+import { getSetting } from '../../utils/store';
 import type { GatewayHealthSummary } from '../../gateway/manager';
 
 // listWhatsAppDirectory*FromConfig were removed from openclaw's public exports
@@ -1115,8 +1116,48 @@ async function listWeComTargetOptions(accountId?: string, query?: string): Promi
   return mergeTargetOptions(sessionTargets, reqIdTargets);
 }
 
+async function listCurrentDingTalkUserTargetOptions(
+  accountId?: string,
+  query?: string,
+): Promise<ChannelTargetOptionView[]> {
+  const user = await getSetting('dingtalkUser').catch(() => null);
+  const userId = typeof user?.userId === 'string' ? user.userId.trim() : '';
+  if (!userId) {
+    return [];
+  }
+
+  const bindings = await getSetting('dingtalkUserBindings').catch(() => ({}));
+  const binding = bindings?.[userId];
+  if (accountId && binding) {
+    const knownAccountIds = new Set([
+      binding.officialAccountId,
+      binding.defaultAccountId,
+      ...(Array.isArray(binding.personalAccountIds) ? binding.personalAccountIds : []),
+    ].map((value) => typeof value === 'string' ? value.trim() : '').filter(Boolean));
+    if (knownAccountIds.size > 0 && !knownAccountIds.has(accountId)) {
+      return [];
+    }
+  }
+
+  const value = `user:${userId}`;
+  const labelBase = [user.name, user.nickname, user.jobNumber, userId]
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .find(Boolean) || userId;
+  const label = buildChannelTargetLabel(labelBase, value);
+  const q = query?.trim().toLowerCase() || '';
+  if (q && !label.toLowerCase().includes(q) && !value.toLowerCase().includes(q)) {
+    return [];
+  }
+
+  return [{ value, label, kind: 'user' }];
+}
+
 async function listDingTalkTargetOptions(accountId?: string, query?: string): Promise<ChannelTargetOptionView[]> {
-  return await listSessionDerivedTargetOptions({ channelType: 'dingtalk', accountId, query });
+  const [sessionTargets, currentUserTargets] = await Promise.all([
+    listSessionDerivedTargetOptions({ channelType: 'dingtalk', accountId, query }),
+    listCurrentDingTalkUserTargetOptions(accountId, query),
+  ]);
+  return mergeTargetOptions(sessionTargets, currentUserTargets);
 }
 
 async function listWeChatTargetOptions(accountId?: string, query?: string): Promise<ChannelTargetOptionView[]> {

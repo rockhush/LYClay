@@ -1,6 +1,8 @@
+import { hasVisibleAssistantContent } from './helpers';
 import {
   findConcludingAssistantForActiveTurn,
   findTerminalAssistantForActiveTurn,
+  isRunTerminalAssistantMessage,
   isVisibleAssistantTextWithoutToolUse,
   shouldKeepRunActiveAfterAssistantFinal,
 } from './run-lifecycle';
@@ -151,6 +153,14 @@ export function deriveIsExecuting(
   })) {
     return false;
   }
+  if (hasLocalRunSignals(state) && messages.length > 0 && canForceClearOnVisibleCommittedReply({
+    messages,
+    lastUserMessageAt: options?.lastUserMessageAt ?? null,
+    backendActivity,
+    gatewayBackground: options?.gatewayBackground,
+  })) {
+    return false;
+  }
   return isUserTurnOpen(
     state,
     backendActivity,
@@ -190,12 +200,46 @@ export type DeriveSidebarSessionIsExecutingInput = {
 };
 
 /** Sidebar session row status — same finalize rules for current and background sessions. */
+function isBackgroundSidebarTurnComplete(
+  snapshot: NonNullable<DeriveSidebarSessionIsExecutingInput['snapshot']>,
+  gatewayBackground: GatewayBackgroundActivity | null | undefined,
+): boolean {
+  const messages = snapshot.messagesSnapshot ?? [];
+  if (messages.length === 0) return false;
+
+  // Still receiving partial stream content for a background session.
+  if (snapshot.sending && snapshot.streamingMessage != null) return false;
+
+  const processingKeys = gatewayBackground?.processingSessionKeys ?? [];
+  if (isParentDelegationPhaseOpen(messages, processingKeys, {
+    lastUserMessageAt: snapshot.lastUserMessageAt ?? null,
+    streamingMessage: snapshot.streamingMessage ?? null,
+  })) {
+    return false;
+  }
+
+  const terminal = findTerminalAssistantForActiveTurn(
+    messages,
+    snapshot.lastUserMessageAt ?? null,
+  );
+  if (!terminal) return false;
+
+  if (shouldKeepRunActiveAfterAssistantFinal(terminal)) {
+    return isVisibleAssistantTextWithoutToolUse(terminal);
+  }
+
+  return true;
+}
+
 export function deriveSidebarSessionIsExecuting(
   input: DeriveSidebarSessionIsExecutingInput,
 ): boolean {
   const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
 
   if (!input.isCurrent && processingKeys.includes(input.sessionKey)) {
+    if (input.snapshot && isBackgroundSidebarTurnComplete(input.snapshot, input.gatewayBackground)) {
+      return false;
+    }
     return true;
   }
 
@@ -323,6 +367,83 @@ export function hasOpenSubagentDelegation(
  * Unified push-path gate: never clear while gateway reports open work,
  * then apply terminal + strong-backend finalize rules.
  */
+/**
+ * Transcript already contains a user-visible answer but stale backend metrics
+ * (e.g. lagging hasTrackedUserRun) still block canClearUserTurnNow.
+ * Only used when the gateway is not actively processing this session or children.
+ */
+export function canForceClearOnVisibleCommittedReply(input: CanClearUserTurnInput): boolean {
+  const terminal = input.terminalMessage
+    ?? findTerminalAssistantForActiveTurn(input.messages, input.lastUserMessageAt)
+    ?? findConcludingAssistantForActiveTurn(input.messages, input.lastUserMessageAt);
+  if (!terminal) return false;
+  if (!hasVisibleAssistantContent(terminal) && !isRunTerminalAssistantMessage(terminal)) return false;
+  if (shouldKeepRunActiveAfterAssistantFinal(terminal) && !isVisibleAssistantTextWithoutToolUse(terminal)) {
+    return false;
+  }
+
+  const sessionKey = input.backendActivity?.sessionKey;
+  const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
+  if (sessionKey && processingKeys.includes(sessionKey)) return false;
+
+  if (hasTranscriptDelegationBlock(
+    input.messages,
+    input.gatewayBackground,
+    input.lastUserMessageAt,
+  )) {
+    return false;
+  }
+
+  return true;
+}
+
+/** Drop stale run UI from a leaving-session snapshot when the transcript already shows a done reply. */
+export function sanitizeLeavingSessionStreamingSnapshot(
+  snapshot: SessionStreamingState,
+  options: {
+    sessionKey: string;
+    backendActivity?: SessionBackendActivity | null;
+    gatewayBackground?: GatewayBackgroundActivity | null;
+  },
+): SessionStreamingState {
+  if (snapshot.runAborted) return snapshot;
+  if (!hasLocalRunSignals(snapshot)) return snapshot;
+
+  const messages = snapshot.messagesSnapshot ?? [];
+  if (messages.length === 0) return snapshot;
+
+  const backendActivity = options.backendActivity?.sessionKey === options.sessionKey
+    ? options.backendActivity
+    : {
+      sessionKey: options.sessionKey,
+      status: null,
+      processing: false,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+
+  if (!canForceClearOnVisibleCommittedReply({
+    messages,
+    lastUserMessageAt: snapshot.lastUserMessageAt,
+    backendActivity,
+    gatewayBackground: options.gatewayBackground ?? null,
+  })) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    sending: false,
+    pendingFinal: false,
+    activeRunId: null,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingToolImages: [],
+    activeTool: null,
+  };
+}
+
 export function canClearUserTurnNow(input: CanClearUserTurnInput): boolean {
   const nowMs = input.nowMs ?? Date.now();
 

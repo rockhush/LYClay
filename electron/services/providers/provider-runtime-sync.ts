@@ -10,6 +10,7 @@ import {
   ensureAgentContextTokensCapForLargeModels,
   ensureAgentModelsJsonValid,
   ensureModelCatalogContextTokensForLargeModels,
+  migrateOpenClawAuthStoresToSqlite,
   removeProviderFromOpenClaw,
   removeProviderKeyFromOpenClaw,
   saveOAuthTokenToOpenClaw,
@@ -21,7 +22,7 @@ import {
   updateSingleAgentModelProvider,
 } from '../../utils/openclaw-auth';
 import { logger } from '../../utils/logger';
-import { listAgentsSnapshot, resetAgentModelsForProvider } from '../../utils/agent-config';
+import { listAgentsSnapshot, resetAgentModelsForProvider, updateAgentModel } from '../../utils/agent-config';
 import { getSetting } from '../../utils/store';
 import { LY_AUTO_PROVIDER_ID } from '../../shared/providers/types';
 import { proxyAwareFetch } from '../../utils/proxy-fetch';
@@ -280,6 +281,12 @@ export async function syncProviderApiKeyToRuntime(
 }
 
 export async function syncAllProviderAuthToRuntime(): Promise<void> {
+  try {
+    await migrateOpenClawAuthStoresToSqlite();
+  } catch (err) {
+    logger.warn('[provider-runtime] Failed to migrate auth stores to SQLite:', err);
+  }
+
   const accounts = await listProviderAccounts();
 
   for (const account of accounts) {
@@ -349,8 +356,8 @@ async function syncProviderSecretToRuntime(
     const trimmedKey = apiKey.trim();
     if (trimmedKey) {
       await saveProviderKeyToOpenClaw(runtimeProviderKey, trimmedKey);
+      return;
     }
-    return;
   }
 
   if (secret?.type === 'api_key') {
@@ -594,6 +601,15 @@ async function setOpenClawDefaultModelRefOnly(modelRef: string, fallbackModels: 
   });
 }
 
+async function syncDefaultAgentModelRef(modelRef: string | undefined): Promise<void> {
+  if (!modelRef) return;
+  try {
+    await updateAgentModel('main', modelRef);
+  } catch (err) {
+    logger.warn(`[provider-runtime] Failed to sync main agent model to default "${modelRef}":`, err);
+  }
+}
+
 async function buildRuntimeProviderConfigMap(): Promise<Map<string, ProviderConfig>> {
   const configs = await getAllProviders();
   const runtimeMap = new Map<string, ProviderConfig>();
@@ -707,6 +723,9 @@ export async function syncSavedProviderToRuntime(
   }
 
   try {
+    if (config.id === await getDefaultProvider()) {
+      await syncDefaultAgentModelRef(getProviderModelRef(config));
+    }
     await syncAgentModelsToRuntime();
   } catch (err) {
     logger.warn('[provider-runtime] Failed to sync per-agent model registries after provider save:', err);
@@ -775,6 +794,9 @@ export async function syncUpdatedProviderToRuntime(
   }
 
   try {
+    if (defaultProviderId === config.id) {
+      await syncDefaultAgentModelRef(getProviderModelRef(config));
+    }
     await syncAgentModelsToRuntime();
   } catch (err) {
     logger.warn('[provider-runtime] Failed to sync per-agent model registries after provider update:', err);
@@ -863,6 +885,7 @@ export async function syncDefaultProviderToRuntime(
   const oauthTypes = ['minimax-portal', 'minimax-portal-cn'];
   const browserOAuthRuntimeProvider = await getBrowserOAuthRuntimeProvider(provider);
   const isOAuthProvider = (oauthTypes.includes(provider.type) && !providerKey) || Boolean(browserOAuthRuntimeProvider);
+  let defaultAgentModelRef: string | undefined;
 
   if (!isOAuthProvider) {
     const modelOverride = provider.model
@@ -898,6 +921,7 @@ export async function syncDefaultProviderToRuntime(
     if (providerKey) {
       await saveProviderKeyToOpenClaw(ock, providerKey);
     }
+    defaultAgentModelRef = getProviderModelRef(provider);
   } else {
     if (browserOAuthRuntimeProvider) {
       const secret = await getProviderSecret(provider.id);
@@ -921,8 +945,10 @@ export async function syncDefaultProviderToRuntime(
         : defaultModelRef;
 
       await setOpenClawDefaultModel(browserOAuthRuntimeProvider, modelOverride, fallbackModels);
+      defaultAgentModelRef = modelOverride;
       logger.info(`Configured openclaw.json for browser OAuth provider "${provider.id}"`);
       try {
+        await syncDefaultAgentModelRef(defaultAgentModelRef);
         await syncAgentModelsToRuntime();
       } catch (err) {
         logger.warn('[provider-runtime] Failed to sync per-agent model registries after browser OAuth switch:', err);
@@ -965,6 +991,7 @@ export async function syncDefaultProviderToRuntime(
       authHeader: targetProviderKey === 'minimax-portal' ? true : undefined,
       apiKeyEnv: targetProviderKey === 'minimax-portal' ? 'minimax-oauth' : 'qwen-oauth',
     }, fallbackModels);
+    defaultAgentModelRef = getProviderModelRef(provider);
 
     logger.info(`Configured openclaw.json for OAuth provider "${provider.type}"`);
 
@@ -997,6 +1024,7 @@ export async function syncDefaultProviderToRuntime(
   }
 
   try {
+    await syncDefaultAgentModelRef(defaultAgentModelRef);
     await syncAgentModelsToRuntime();
   } catch (err) {
     logger.warn('[provider-runtime] Failed to sync per-agent model registries after default provider switch:', err);

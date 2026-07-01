@@ -1,5 +1,5 @@
 export const DEFAULT_OPENCLAW_DM_SCOPE = 'per-account-channel-peer';
-export const DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT = 8;
+export const DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT = 30;
 
 export const DEFAULT_OPENCLAW_COMPACTION_CONFIG: Record<string, unknown> = {
   mode: 'default',

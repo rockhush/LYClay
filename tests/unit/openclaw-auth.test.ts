@@ -1120,6 +1120,74 @@ describe('syncProviderConfigToOpenClaw', () => {
     expect(load).toEqual(['/tmp/custom-plugin.js']);
     expect(moonshot.baseUrl).toBe('https://api.moonshot.cn/v1');
   });
+
+  it('appends synced custom provider model refs to an active array allowlist', async () => {
+    await writeOpenClawJson({
+      agents: {
+        defaults: {
+          models: ['ly-auto/auto'],
+          model: { primary: 'ly-auto/auto', fallbacks: [] },
+        },
+      },
+      models: { providers: {} },
+    });
+
+    const { syncProviderConfigToOpenClaw } = await import('@electron/utils/openclaw-auth');
+
+    await syncProviderConfigToOpenClaw('custom-custom6e', 'mimo-v2.5', {
+      baseUrl: 'http://127.0.0.1:8000/v1',
+      api: 'openai-completions',
+    });
+
+    const result = await readOpenClawJson();
+    const defaults = (result.agents as Record<string, unknown>).defaults as Record<string, unknown>;
+    expect(defaults.models).toEqual(['ly-auto/auto', 'custom-custom6e/mimo-v2.5']);
+  });
+
+  it('appends synced custom provider model refs to an active object allowlist', async () => {
+    await writeOpenClawJson({
+      agents: {
+        defaults: {
+          models: {
+            'ly-auto/auto': {},
+          },
+        },
+      },
+      models: { providers: {} },
+    });
+
+    const { syncProviderConfigToOpenClaw } = await import('@electron/utils/openclaw-auth');
+
+    await syncProviderConfigToOpenClaw('custom-custom6e', 'mimo-v2.5', {
+      baseUrl: 'http://127.0.0.1:8000/v1',
+      api: 'openai-completions',
+    });
+
+    const result = await readOpenClawJson();
+    const defaults = (result.agents as Record<string, unknown>).defaults as Record<string, unknown>;
+    expect(defaults.models).toEqual({
+      'ly-auto/auto': {},
+      'custom-custom6e/mimo-v2.5': {},
+    });
+  });
+
+  it('does not create agents.defaults.models when allowlisting is inactive', async () => {
+    await writeOpenClawJson({
+      models: { providers: {} },
+    });
+
+    const { syncProviderConfigToOpenClaw } = await import('@electron/utils/openclaw-auth');
+
+    await syncProviderConfigToOpenClaw('custom-custom6e', 'mimo-v2.5', {
+      baseUrl: 'http://127.0.0.1:8000/v1',
+      api: 'openai-completions',
+    });
+
+    const result = await readOpenClawJson();
+    const agents = result.agents as Record<string, unknown> | undefined;
+    const defaults = agents?.defaults as Record<string, unknown> | undefined;
+    expect(defaults?.models).toBeUndefined();
+  });
 });
 
 describe('auth-backed provider discovery', () => {

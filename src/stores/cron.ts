@@ -29,7 +29,7 @@ interface CronState {
   updateJob: (id: string, input: CronJobUpdateInput) => Promise<void>;
   deleteJob: (id: string) => Promise<void>;
   toggleJob: (id: string, enabled: boolean) => Promise<void>;
-  triggerJob: (id: string) => Promise<{ sessionKey: string; runId: string }>;
+  triggerJob: (id: string) => Promise<{ sessionKey?: string; runId: string }>;
   setJobs: (jobs: CronJob[]) => void;
 }
 
@@ -139,14 +139,17 @@ export const useCronStore = create<CronState>((set) => ({
 
   triggerJob: async (id) => {
     try {
-      const result = await hostApiFetch<{ success: boolean; id: string; sessionKey: string; runId: string; error?: string }>(
+      const result = await hostApiFetch<{ success: boolean; id: string; sessionKey?: string; runId: string; error?: string }>(
         '/api/cron/trigger',
         { method: 'POST', body: JSON.stringify({ id }) },
       );
       if (!result.success) {
         throw new Error(result.error || 'Failed to trigger cron job');
       }
-      return { sessionKey: result.sessionKey, runId: result.runId };
+      return {
+        ...(result.sessionKey?.trim() ? { sessionKey: result.sessionKey.trim() } : {}),
+        runId: result.runId,
+      };
     } catch (error) {
       console.error('Failed to trigger cron job:', error);
       throw error;

@@ -8,7 +8,8 @@ import { withConfigLock } from '../../utils/config-mutex';
 import { logger } from '../../utils/logger';
 
 export const LY_AUTO_DEFAULT_INPUT = ['text', 'image'] as const;
-export const LY_AUTO_REQUEST_TIMEOUT_SECONDS = 180;
+/** Match llm-gateway nginx `proxy_read_timeout` / `proxy_send_timeout` (900s). */
+export const LY_AUTO_REQUEST_TIMEOUT_SECONDS = 900;
 
 export const LY_AUTO_VLLM_MODEL_OPTIONS: Record<string, unknown> = {
   compat: {

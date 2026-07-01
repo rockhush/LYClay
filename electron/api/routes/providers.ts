@@ -96,6 +96,7 @@ export async function handleProviderRoutes(
       const body = await parseJsonBody<{ accountId: string }>(req);
       const currentDefault = await providerService.getDefaultAccountId();
       if (currentDefault === body.accountId) {
+        await syncDefaultProviderToRuntime(body.accountId, ctx.gatewayManager);
         sendJson(res, 200, { success: true, noChange: true });
         return true;
       }
@@ -188,6 +189,7 @@ export async function handleProviderRoutes(
       const body = await parseJsonBody<{ providerId: string }>(req);
       const currentDefault = await providerService.getDefaultLegacyProvider();
       if (currentDefault === body.providerId) {
+        await syncDefaultProviderToRuntime(body.providerId, ctx.gatewayManager);
         sendJson(res, 200, { success: true, noChange: true });
         return true;
       }

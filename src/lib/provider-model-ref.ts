@@ -30,16 +30,27 @@ export function resolveRuntimeProviderKey(account: ProviderAccount): string {
   return account.vendorId;
 }
 
+function extractModelIdFromStoredModel(model: string): string {
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf('/');
+  return slash >= 0 ? trimmed.slice(slash + 1).trim() : trimmed;
+}
+
 export function resolveAccountModelRef(account: ProviderAccount): string | undefined {
   const model = account.model?.trim();
   if (!model) return undefined;
 
   const runtimeKey = resolveRuntimeProviderKey(account);
-  if (model.includes('/')) {
-    return model;
-  }
+  const modelId = extractModelIdFromStoredModel(model);
+  if (!modelId) return undefined;
 
-  return `${runtimeKey}/${model}`;
+  return `${runtimeKey}/${modelId}`;
+}
+
+export function normalizeStoredProviderModel(account: ProviderAccount): string | undefined {
+  const model = account.model?.trim();
+  if (!model) return undefined;
+  return extractModelIdFromStoredModel(model) || undefined;
 }
 
 export function findProviderItemByModelRef<T extends { account: ProviderAccount }>(
@@ -51,7 +62,11 @@ export function findProviderItemByModelRef<T extends { account: ProviderAccount 
   if (!normalized) return undefined;
 
   return items.find((item) => resolveAccountModelRef(item.account) === normalized)
-    ?? items.find((item) => item.account.model?.trim() === normalized);
+    ?? items.find((item) => {
+      const stored = item.account.model?.trim();
+      if (!stored) return false;
+      return extractModelIdFromStoredModel(stored) === extractModelIdFromStoredModel(normalized);
+    });
 }
 
 export function isLyAutoModelRef(modelRef: string | undefined): boolean {

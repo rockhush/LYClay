@@ -756,7 +756,20 @@ export function Chat() {
     });
       const runStillExecutingTools = hasToolActivity && !hasFinalReply;
       const segmentChildrenIdle = !delegationTurn.anyChildActive;
-      const turnVisiblyComplete = hasFinalReply && segmentChildrenIdle && !segmentDelegationOpen;
+      const committedReplyOffset = findReplyMessageIndex(segmentMessages, false);
+      const stuckWaitingOnCommittedReply = nextUserIndex === -1
+        && !runAborted
+        && (sending || pendingFinal)
+        && !hasAnyStreamContent
+        && !runStillExecutingTools
+        && !segmentDelegationOpen
+        && !segmentHasPendingChild
+        && !segmentWaitingOnSubagent
+        && !stalledChildSessionKey
+        && committedReplyOffset !== -1;
+      const turnVisiblyComplete = (hasFinalReply || stuckWaitingOnCommittedReply)
+        && segmentChildrenIdle
+        && !segmentDelegationOpen;
       const isLatestOpenRun = !turnVisiblyComplete
         && nextUserIndex === -1
         && !runAborted

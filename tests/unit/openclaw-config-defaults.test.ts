@@ -54,11 +54,11 @@ describe('ensureOpenClawAgentDefaults', () => {
     memoryFlush: { enabled: true, softThresholdTokens: 8000 },
   };
 
-  it('sets maxConcurrent=8 and full compaction defaults when agents.defaults is missing', () => {
+  it('sets maxConcurrent=30 and full compaction defaults when agents.defaults is missing', () => {
     const config: Record<string, unknown> = {};
     expect(ensureOpenClawAgentDefaults(config)).toBe(true);
     expect(config.agents).toEqual({
-      defaults: { maxConcurrent: 8, compaction: FULL_COMPACTION_DEFAULTS },
+      defaults: { maxConcurrent: 30, compaction: FULL_COMPACTION_DEFAULTS },
     });
   });
 
@@ -66,13 +66,13 @@ describe('ensureOpenClawAgentDefaults', () => {
     const config: Record<string, unknown> = { agents: { defaults: { thinkingDefault: 'off' } } };
     expect(ensureOpenClawAgentDefaults(config)).toBe(true);
     expect(config.agents).toEqual({
-      defaults: { thinkingDefault: 'off', maxConcurrent: 8, compaction: FULL_COMPACTION_DEFAULTS },
+      defaults: { thinkingDefault: 'off', maxConcurrent: 30, compaction: FULL_COMPACTION_DEFAULTS },
     });
   });
 
-  it('returns false when maxConcurrent=8 and compaction is already fully populated with safe defaults', () => {
+  it('returns false when maxConcurrent=30 and compaction is already fully populated with safe defaults', () => {
     const config: Record<string, unknown> = {
-      agents: { defaults: { maxConcurrent: 8, compaction: { ...FULL_COMPACTION_DEFAULTS } } },
+      agents: { defaults: { maxConcurrent: 30, compaction: { ...FULL_COMPACTION_DEFAULTS } } },
     };
     expect(ensureOpenClawAgentDefaults(config)).toBe(false);
   });
@@ -81,7 +81,7 @@ describe('ensureOpenClawAgentDefaults', () => {
     const config: Record<string, unknown> = { agents: { defaults: { maxConcurrent: 4 } } };
     expect(ensureOpenClawAgentDefaults(config)).toBe(true);
     expect((config.agents as { defaults: Record<string, unknown> }).defaults).toEqual({
-      maxConcurrent: 8,
+      maxConcurrent: 30,
       compaction: FULL_COMPACTION_DEFAULTS,
     });
   });
@@ -90,7 +90,7 @@ describe('ensureOpenClawAgentDefaults', () => {
     const config: Record<string, unknown> = {
       agents: {
         defaults: {
-          maxConcurrent: 8,
+          maxConcurrent: 30,
           compaction: { ...FULL_COMPACTION_DEFAULTS, midTurnPrecheck: { enabled: true } },
         },
       },
@@ -105,7 +105,7 @@ describe('ensureOpenClawAgentDefaults', () => {
     const config: Record<string, unknown> = {
       agents: {
         defaults: {
-          maxConcurrent: 8,
+          maxConcurrent: 30,
           compaction: { ...FULL_COMPACTION_DEFAULTS, mode: 'safeguard' },
         },
       },
@@ -120,7 +120,7 @@ describe('ensureOpenClawAgentDefaults', () => {
     const config: Record<string, unknown> = {
       agents: {
         defaults: {
-          maxConcurrent: 8,
+          maxConcurrent: 30,
           compaction: { ...FULL_COMPACTION_DEFAULTS, truncateAfterCompaction: true },
         },
       },

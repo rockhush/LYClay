@@ -234,9 +234,9 @@ describe('session transcript redaction', () => {
     ]);
 
     const payload = await request('/api/sessions/history-local?sessionKey=agent%3Amain%3Amain');
-    const messages = payload.messages as Array<{ timestamp?: string }>;
-    expect(messages[0]?.timestamp).toBe('2026-06-22T03:09:01.083Z');
-    expect(messages[1]?.timestamp).toBe('2026-06-22T03:09:52.702Z');
+    const messages = payload.messages as Array<{ timestamp?: number }>;
+    expect(messages[0]?.timestamp).toBe(1782097741.083);
+    expect(messages[1]?.timestamp).toBe(1782097792.702);
   });
 
   it('strips trailing NO_REPLY from history-local assistant messages', async () => {
@@ -264,6 +264,71 @@ describe('session transcript redaction', () => {
     const messages = payload.messages as Array<{ role?: string; content?: Array<{ text?: string }> }>;
     expect(messages[0]?.content?.[0]?.text).toBe('面试题库已生成。');
     expect(JSON.stringify(payload)).not.toContain('NO_REPLY');
+  });
+
+  it('falls back to sessionKey transcript when indexed UUID file is missing', async () => {
+    const sessionKey = 'agent:main:session-1782866895788';
+    const uuidId = '06ff1d88-2ce5-4be9-a688-1182aa490c1d';
+    const sessionsDir = join(testOpenClawConfigDir, 'agents', 'main', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, 'sessions.json'),
+      JSON.stringify({
+        [sessionKey]: { id: uuidId },
+      }),
+    );
+    writeTranscript('main', 'session-1782866895788', [
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: '昨天的聊天总结' }],
+        },
+      },
+    ]);
+
+    const payload = await request(`/api/sessions/history-local?sessionKey=${encodeURIComponent(sessionKey)}`);
+    const messages = payload.messages as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content?.[0]?.text).toBe('昨天的聊天总结');
+  });
+
+  it('prefers indexed UUID transcript over sessionKey fallback when both exist', async () => {
+    const sessionKey = 'agent:main:session-prefer-uuid';
+    const uuidId = 'uuid-prefer-over-session-key';
+    const sessionsDir = join(testOpenClawConfigDir, 'agents', 'main', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, 'sessions.json'),
+      JSON.stringify({
+        [sessionKey]: { id: uuidId },
+      }),
+    );
+    writeTranscript('main', uuidId, [
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'from UUID file' }],
+        },
+      },
+    ]);
+    writeTranscript('main', 'session-prefer-uuid', [
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'from session-key file' }],
+        },
+      },
+    ]);
+
+    const payload = await request(`/api/sessions/history-local?sessionKey=${encodeURIComponent(sessionKey)}`);
+    const messages = payload.messages as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content?.[0]?.text).toBe('from UUID file');
   });
 
   it('redacts nested child-agent transcript messages before returning them', async () => {

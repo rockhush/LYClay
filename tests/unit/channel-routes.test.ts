@@ -15,6 +15,7 @@ const setChannelDefaultAccountMock = vi.fn();
 const assignChannelAccountToAgentMock = vi.fn();
 const clearChannelBindingMock = vi.fn();
 const parseJsonBodyMock = vi.fn();
+const getSettingMock = vi.fn();
 const testOpenClawConfigDir = join(tmpdir(), 'clawx-tests', 'channel-routes-openclaw');
 
 vi.mock('@electron/utils/channel-config', () => ({
@@ -68,6 +69,10 @@ vi.mock('@electron/api/route-utils', () => ({
   sendJson: (...args: unknown[]) => sendJsonMock(...args),
 }));
 
+vi.mock('@electron/utils/store', () => ({
+  getSetting: (...args: unknown[]) => getSettingMock(...args),
+}));
+
 vi.mock('@electron/utils/paths', () => ({
   getOpenClawConfigDir: () => testOpenClawConfigDir,
   getOpenClawDir: () => testOpenClawConfigDir,
@@ -99,6 +104,7 @@ describe('handleChannelRoutes', () => {
     rmSync(testOpenClawConfigDir, { recursive: true, force: true });
     proxyAwareFetchMock.mockReset();
     parseJsonBodyMock.mockResolvedValue({});
+    getSettingMock.mockResolvedValue(null);
     listConfiguredChannelAccountsMock.mockReturnValue({});
     listAgentsSnapshotMock.mockResolvedValue({
       agents: [],
@@ -197,6 +203,69 @@ describe('handleChannelRoutes', () => {
               expect.objectContaining({ accountId: 'default', status: 'connected' }),
               expect.objectContaining({ accountId: 'feishu-2412524e', status: 'connected' }),
             ]),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('returns locally configured dingtalk accounts in config mode without runtime status', async () => {
+    listConfiguredChannelsMock.mockResolvedValue(['dingtalk']);
+    listConfiguredChannelAccountsMock.mockReturnValue({
+      dingtalk: {
+        defaultAccountId: 'default',
+        accountIds: ['default'],
+      },
+    });
+    readOpenClawConfigMock.mockResolvedValue({
+      channels: {
+        dingtalk: {
+          accounts: {
+            default: {
+              clientId: 'ding-app',
+              clientSecret: 'secret',
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const rpc = vi.fn();
+
+    const { handleChannelRoutes } = await import('@electron/api/routes/channels');
+    const handled = await handleChannelRoutes(
+      { method: 'GET' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/channels/accounts?mode=config'),
+      {
+        gatewayManager: {
+          rpc,
+          getStatus: () => ({ state: 'starting' }),
+          getDiagnostics: () => ({ consecutiveHeartbeatMisses: 0, consecutiveRpcFailures: 0 }),
+          debouncedReload: vi.fn(),
+          debouncedRestart: vi.fn(),
+        },
+      } as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(sendJsonMock).toHaveBeenCalledWith(
+      expect.anything(),
+      200,
+      expect.objectContaining({
+        success: true,
+        channels: [
+          expect.objectContaining({
+            channelType: 'dingtalk',
+            defaultAccountId: 'default',
+            accounts: [
+              expect.objectContaining({
+                accountId: 'default',
+                configured: true,
+              }),
+            ],
           }),
         ],
       }),
@@ -1332,6 +1401,68 @@ describe('handleChannelRoutes', () => {
           expect.objectContaining({
             value: 'cidDeVGroup=',
             kind: 'group',
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('lists the current DingTalk user as a target when no session history exists', async () => {
+    getSettingMock.mockImplementation(async (key: string) => {
+      if (key === 'dingtalkUser') {
+        return {
+          userId: '11427192',
+          name: 'Alice Ding',
+          nickname: '',
+          jobNumber: 'EMP001',
+        };
+      }
+      if (key === 'dingtalkUserBindings') {
+        return {
+          '11427192': {
+            dingUserId: '11427192',
+            unionId: 'union-a',
+            officialAccountId: 'default',
+            personalAccountIds: [],
+            defaultAccountId: 'default',
+            agentId: 'dingtalk',
+            sessionKey: 'dingtalk:default:single:11427192',
+            createdAt: '2026-06-30T00:00:00.000Z',
+            updatedAt: '2026-06-30T00:00:00.000Z',
+          },
+        };
+      }
+      return null;
+    });
+
+    const { handleChannelRoutes } = await import('@electron/api/routes/channels');
+    const handled = await handleChannelRoutes(
+      { method: 'GET' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/channels/targets?channelType=dingtalk&accountId=default'),
+      {
+        gatewayManager: {
+          rpc: vi.fn(),
+          getStatus: () => ({ state: 'running' }),
+          debouncedReload: vi.fn(),
+          debouncedRestart: vi.fn(),
+        },
+      } as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(sendJsonMock).toHaveBeenCalledWith(
+      expect.anything(),
+      200,
+      expect.objectContaining({
+        success: true,
+        channelType: 'dingtalk',
+        accountId: 'default',
+        targets: [
+          expect.objectContaining({
+            value: 'user:11427192',
+            label: 'Alice Ding (user:11427192)',
+            kind: 'user',
           }),
         ],
       }),

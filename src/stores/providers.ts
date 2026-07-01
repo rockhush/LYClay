@@ -15,6 +15,7 @@ import {
   fetchProviderSnapshot,
 } from '@/lib/provider-accounts';
 import { waitForGatewayReady } from '@/lib/wait-for-gateway-ready';
+import { useAgentsStore } from '@/stores/agents';
 
 // Re-export types for consumers that imported from here
 export type {
@@ -307,6 +308,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       }
       
       set({ defaultAccountId: providerId });
+      await useAgentsStore.getState().fetchAgents({ force: true });
     } catch (error) {
       console.error('Failed to set default provider:', error);
       throw error;
@@ -337,6 +339,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
         await waitForGatewayReady({ timeoutMs: 90_000, settleMs: 500 });
       }
       await get().refreshProviderSnapshot();
+      await useAgentsStore.getState().fetchAgents({ force: true });
     } catch (error) {
       set({ defaultAccountId: previousAccountId });
       console.error('Failed to set default account:', error);

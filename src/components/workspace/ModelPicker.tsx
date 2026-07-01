@@ -8,7 +8,7 @@ import { useAgentsStore } from '@/stores/agents';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { buildProviderListItems, type ProviderListItem } from '@/lib/provider-accounts';
-import { findProviderItemByModelRef } from '@/lib/provider-model-ref';
+import { findProviderItemByModelRef, resolveAccountModelRef } from '@/lib/provider-model-ref';
 import { LY_AUTO_PROVIDER_ID } from '@/lib/providers';
 import {
   formatContextWindowTokens,
@@ -118,24 +118,13 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
       return;
     }
 
-    // Build the model ref: use account.model if set, otherwise construct from vendor
-    let nextModel = item.account.model?.trim();
+    const nextModel = resolveAccountModelRef(item.account);
     if (!nextModel) {
-      // If account doesn't have a model, try to use vendor's default
-      const vendorDefaultModel = item.vendor?.model || item.vendor?.defaultModelId;
-      if (vendorDefaultModel) {
-        // Construct full model ref: vendorId/modelId
-    nextModel = vendorDefaultModel.includes('/')
-        ? vendorDefaultModel
-          : `${item.account.vendorId}/${vendorDefaultModel}`;
-      } else {
-     // No default model available, cannot switch
       toast.error(t('composer.noModelConfigured', { defaultValue: '该 Provider 未配置模型' }));
-        setPickerOpen(false);
-        setHoveredAccountId(null);
+      setPickerOpen(false);
+      setHoveredAccountId(null);
       return;
-      }
-  }
+    }
 
     const currentSessionModel = sessions.find((session) => session.key === currentSessionKey)?.model;
     if (nextModel === currentSessionModel) {

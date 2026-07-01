@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   updateAgentModelProvider: vi.fn(),
   updateSingleAgentModelProvider: vi.fn(),
   listAgentsSnapshot: vi.fn(),
+  resetAgentModelsForProvider: vi.fn(),
+  updateAgentModel: vi.fn(),
 }));
 
 vi.mock('@electron/services/providers/provider-store', () => ({
@@ -63,6 +65,8 @@ vi.mock('@electron/utils/openclaw-auth', () => ({
 
 vi.mock('@electron/utils/agent-config', () => ({
   listAgentsSnapshot: mocks.listAgentsSnapshot,
+  resetAgentModelsForProvider: mocks.resetAgentModelsForProvider,
+  updateAgentModel: mocks.updateAgentModel,
 }));
 
 vi.mock('@electron/utils/logger', () => ({
@@ -130,6 +134,8 @@ describe('provider-runtime-sync refresh strategy', () => {
     mocks.removeProviderKeyFromOpenClaw.mockResolvedValue(undefined);
     mocks.updateAgentModelProvider.mockResolvedValue(undefined);
     mocks.updateSingleAgentModelProvider.mockResolvedValue(undefined);
+    mocks.resetAgentModelsForProvider.mockResolvedValue(undefined);
+    mocks.updateAgentModel.mockResolvedValue(undefined);
     mocks.listAgentsSnapshot.mockResolvedValue({ agents: [] });
   });
 
@@ -185,6 +191,7 @@ describe('provider-runtime-sync refresh strategy', () => {
     const gateway = createGateway('running');
     await syncDefaultProviderToRuntime('moonshot', gateway as GatewayManager);
 
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('main', 'moonshot/kimi-k2.6');
     expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
       agentId: 'main',
       model: 'moonshot/kimi-k2.6',
@@ -197,8 +204,71 @@ describe('provider-runtime-sync refresh strategy', () => {
     const gateway = createGateway('stopped');
     await syncDefaultProviderToRuntime('moonshot', gateway as GatewayManager);
 
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('main', 'moonshot/kimi-k2.6');
     expect(gateway.debouncedReload).not.toHaveBeenCalled();
     expect(gateway.debouncedRestart).not.toHaveBeenCalled();
+  });
+
+  it('syncs the main agent model when DeepSeek becomes the default provider', async () => {
+    mocks.getProvider.mockResolvedValue(createProvider({
+      id: 'ly-deepseek-default',
+      type: 'deepseek',
+      model: 'deepseek-v4-flash',
+    }));
+    mocks.getProviderConfig.mockImplementation((providerType: string) => {
+      if (providerType === 'deepseek') {
+        return {
+          api: 'openai-completions',
+          baseUrl: 'https://api.deepseek.com',
+          apiKeyEnv: 'DEEPSEEK_API_KEY',
+        };
+      }
+      return {
+        api: 'openai-completions',
+        baseUrl: 'https://api.moonshot.cn/v1',
+        apiKeyEnv: 'MOONSHOT_API_KEY',
+      };
+    });
+
+    const gateway = createGateway('running');
+    await syncDefaultProviderToRuntime('ly-deepseek-default', gateway as GatewayManager);
+
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('main', 'deepseek/deepseek-v4-flash');
+    expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
+      agentId: 'main',
+      model: 'deepseek/deepseek-v4-flash',
+    }, 10000);
+  });
+
+  it('syncs the main agent model to ly-auto/auto when auto is the default provider', async () => {
+    mocks.getProvider.mockResolvedValue(createProvider({
+      id: 'ly-auto',
+      type: 'ly-auto',
+      model: 'auto',
+    }));
+    mocks.getProviderConfig.mockImplementation((providerType: string) => {
+      if (providerType === 'ly-auto') {
+        return {
+          api: 'openai-completions',
+          baseUrl: 'https://ly-auto.example.com/v1',
+          apiKeyEnv: 'LY_AUTO_API_KEY',
+        };
+      }
+      return {
+        api: 'openai-completions',
+        baseUrl: 'https://api.moonshot.cn/v1',
+        apiKeyEnv: 'MOONSHOT_API_KEY',
+      };
+    });
+
+    const gateway = createGateway('running');
+    await syncDefaultProviderToRuntime('ly-auto', gateway as GatewayManager);
+
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('main', 'ly-auto/auto');
+    expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
+      agentId: 'main',
+      model: 'ly-auto/auto',
+    }, 10000);
   });
 
   it('uses gpt-5.4 as the browser OAuth default model for OpenAI', async () => {
@@ -500,6 +570,7 @@ describe('provider-runtime-sync refresh strategy', () => {
     );
     // Should NOT call the non-override path
     expect(mocks.setOpenClawDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('main', 'ollama-ollamafd/qwen3:30b');
     expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
       agentId: 'main',
       model: 'ollama-ollamafd/qwen3:30b',

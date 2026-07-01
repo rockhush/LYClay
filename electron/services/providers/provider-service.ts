@@ -29,7 +29,7 @@ import {
   storeApiKey,
 } from '../../utils/secure-storage';
 import { getActiveOpenClawProviders, getOpenClawProvidersConfig } from '../../utils/openclaw-auth';
-import { getAliasSourceTypes, getOpenClawProviderKeyForType } from '../../utils/provider-keys';
+import { extractModelIdFromStoredModel, getAliasSourceTypes, getOpenClawProviderKeyForType } from '../../utils/provider-keys';
 import type { ProviderWithKeyInfo } from '../../shared/providers/types';
 import { logger } from '../../utils/logger';
 
@@ -43,6 +43,18 @@ function isLyAutoAccountId(accountId: string): boolean {
 
 function isReadonlyProviderAccount(account: Pick<ProviderAccount, 'vendorId' | 'metadata'>): boolean {
   return account.vendorId === LY_AUTO_PROVIDER_ID || account.metadata?.readonly === true;
+}
+
+function withNormalizedStoredModel(account: ProviderAccount): ProviderAccount {
+  const model = account.model?.trim();
+  if (!model || (account.vendorId !== 'custom' && account.vendorId !== 'ollama')) {
+    return account;
+  }
+  const modelId = extractModelIdFromStoredModel(model);
+  if (!modelId || modelId === model) {
+    return account;
+  }
+  return { ...account, model: modelId };
 }
 
 function buildLyAutoAccount(existing?: ProviderAccount | null): ProviderAccount {
@@ -286,7 +298,7 @@ export class ProviderService {
     }
     // Only save to providerAccounts store — do NOT call saveProvider() which
     // writes to the legacy `providers` store and causes phantom/duplicate issues.
-    await saveProviderAccount(account);
+    await saveProviderAccount(withNormalizedStoredModel(account));
     if (apiKey !== undefined && apiKey.trim()) {
       await storeApiKey(account.id, apiKey.trim());
     }
@@ -315,7 +327,7 @@ export class ProviderService {
     };
 
     // Only save to providerAccounts store — skip legacy saveProvider().
-    await saveProviderAccount(nextAccount);
+    await saveProviderAccount(withNormalizedStoredModel(nextAccount));
     if (apiKey !== undefined) {
       const trimmedKey = apiKey.trim();
       if (trimmedKey) {

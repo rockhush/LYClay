@@ -73,4 +73,18 @@ describe('cron store fetchJobs dedupe', () => {
 
     expect(result).toEqual({ sessionKey: 'agent:main:cron:job-a:run-uuid', runId: 'run-1' });
   });
+
+  it('triggerJob omits blank sessionKey for external cron.run triggers', async () => {
+    hostApiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/cron/trigger') {
+        return { success: true, id: 'job-a', sessionKey: '', runId: 'manual-job-a-1' };
+      }
+      return [];
+    });
+
+    const { useCronStore } = await import('@/stores/cron');
+    const result = await useCronStore.getState().triggerJob('job-a');
+
+    expect(result).toEqual({ runId: 'manual-job-a-1' });
+  });
 });

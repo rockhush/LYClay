@@ -47,4 +47,32 @@ describe('useChatStore switchSession', () => {
     useChatStore.getState().switchSession(sessionA);
     expect(useChatStore.getState().messages).toEqual([{ role: 'assistant', content: '已完成的答案' }]);
   });
+
+  it('does not persist stale sending flags when leaving a visibly completed session', () => {
+    const sessionA = 'agent:foo:session-a';
+    const sessionB = 'agent:foo:main';
+
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'make ppt', timestamp: 1000 },
+        { role: 'assistant', content: 'PPT done', stopReason: 'stop', timestamp: 2000 },
+      ],
+      sending: true,
+      pendingFinal: true,
+      activeRunId: 'run-stale',
+      lastUserMessageAt: 1000,
+      gatewayBackgroundActivity: {
+        hasBackgroundProcessing: false,
+        processingSessionKeys: [],
+      },
+    } as any);
+
+    useChatStore.getState().switchSession(sessionB);
+
+    const snapshot = useChatStore.getState().sessionStreamingStates[sessionA];
+    expect(snapshot?.messagesSnapshot).toHaveLength(2);
+    expect(snapshot?.sending).toBe(false);
+    expect(snapshot?.pendingFinal).toBe(false);
+    expect(snapshot?.activeRunId).toBeNull();
+  });
 });

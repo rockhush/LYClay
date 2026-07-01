@@ -465,20 +465,22 @@ export async function handleSessionRoutes(
 
       const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
+      const sessionSegment = parts.slice(2).join(':');
+      const sessionKeyFallbackPath = sessionSegment.startsWith('session-')
+        ? join(sessionsDir, `${sessionSegment}.jsonl`)
+        : null;
       const index = await getSessionFileIndex(agentId, sessionsJsonPath);
       const fileInfo = index?.filesBySessionKey.get(sessionKey);
       let resolvedSrcPath = fileInfo?.resolvedPath;
       let uuidFileName = fileInfo?.fileName;
 
       if (!uuidFileName && !resolvedSrcPath) {
-        const sessionSegment = parts.slice(2).join(':');
-        if (sessionSegment.startsWith('session-')) {
-          const fallbackPath = join(sessionsDir, `${sessionSegment}.jsonl`);
+        if (sessionKeyFallbackPath) {
           try {
-            await fsP.access(fallbackPath);
-            resolvedSrcPath = fallbackPath;
+            await fsP.access(sessionKeyFallbackPath);
+            resolvedSrcPath = sessionKeyFallbackPath;
             uuidFileName = `${sessionSegment}.jsonl`;
-            logger.debug(`[sessions:history-local] Using sessionKey fallback path: ${fallbackPath}`);
+            logger.debug(`[sessions:history-local] Using sessionKey fallback path: ${sessionKeyFallbackPath}`);
           } catch {
             logger.warn(`[sessions:history-local] No UUID file found for ${sessionKey}`);
             sendJson(res, 200, { success: true, messages: [] });
@@ -499,8 +501,35 @@ export async function handleSessionRoutes(
       let messages: unknown[] = [];
       let promptErrors: PromptErrorRecord[] = [];
 
+      let raw: string | null = null;
       try {
-        const raw = await fsP.readFile(resolvedSrcPath, 'utf8');
+        raw = await fsP.readFile(resolvedSrcPath, 'utf8');
+      } catch (error) {
+        const canUseSessionKeyFallback = getErrorCode(error) === 'ENOENT'
+          && sessionKeyFallbackPath
+          && sessionKeyFallbackPath !== resolvedSrcPath;
+        if (canUseSessionKeyFallback) {
+          try {
+            raw = await fsP.readFile(sessionKeyFallbackPath, 'utf8');
+            resolvedSrcPath = sessionKeyFallbackPath;
+            logger.debug(
+              `[sessions:history-local] Indexed path missing, using sessionKey fallback: ${sessionKeyFallbackPath}`,
+            );
+          } catch (fallbackError) {
+            if (getErrorCode(fallbackError) === 'ENOENT') {
+              logger.warn(`[sessions:history-local] File not found: ${resolvedSrcPath}`);
+            } else {
+              logger.error(`[sessions:history-local] Error reading sessionKey fallback file:`, fallbackError);
+            }
+          }
+        } else if (getErrorCode(error) === 'ENOENT') {
+          logger.warn(`[sessions:history-local] File not found: ${resolvedSrcPath}`);
+        } else {
+          logger.error(`[sessions:history-local] Error reading file:`, error);
+        }
+      }
+
+      if (raw != null) {
         logger.info(`[sessions:history-local] File read successfully, size: ${raw.length} bytes`);
 
         const lines = raw.split(/\r?\n/).filter(Boolean);
@@ -540,12 +569,6 @@ export async function handleSessionRoutes(
           .map((entry) => entry.value as PromptErrorRecord);
 
         logger.info(`[sessions:history-local] Extracted ${messages.length} messages and ${promptErrors.length} prompt errors`);
-      } catch (error) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-          logger.warn(`[sessions:history-local] File not found: ${resolvedSrcPath}`);
-        } else {
-          logger.error(`[sessions:history-local] Error reading file:`, error);
-        }
       }
 
       const durationMs = Date.now() - requestStart;

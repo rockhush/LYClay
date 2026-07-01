@@ -3,12 +3,14 @@ import {
   backendActivityForSession,
   buildReAdoptRunPatch,
   canClearUserTurnNow,
+  canForceClearOnVisibleCommittedReply,
   DELEGATION_FINALIZE_GRACE_MS,
   deriveHasActiveRunSignal,
   deriveIsExecuting,
   deriveSidebarSessionIsExecuting,
   isBackendSessionActive,
   isTranscriptOnlyDelegationDefer,
+  sanitizeLeavingSessionStreamingSnapshot,
   shouldFinalizeUserTurn,
   shouldForceAbortStuckRun,
 } from '@/stores/chat/user-turn-lifecycle';
@@ -122,7 +124,146 @@ describe('user-turn-lifecycle', () => {
       processing: false,
       hasTrackedUserRun: false,
       activeRunIds: [],
+    }    )).toBe(false);
+  });
+
+  it('forces clear when visible concluding reply exists but stale hasTrackedUserRun blocks canClear', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'summarize', timestamp: 1000 },
+      { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: {} }], timestamp: 1500 },
+      { role: 'assistant', content: 'Here is the summary.', timestamp: 2000 },
+    ];
+    const backend = {
+      sessionKey: 'agent:main:session-1',
+      status: 'processing',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: ['stale-run'],
+    };
+    const background = {
+      hasBackgroundProcessing: false,
+      processingSessionKeys: [],
+    };
+    const input = {
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: backend,
+      gatewayBackground: background,
+    };
+    expect(canClearUserTurnNow(input)).toBe(false);
+    expect(canForceClearOnVisibleCommittedReply(input)).toBe(true);
+  });
+
+  it('does not force clear when gateway still lists the session as processing', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'question', timestamp: 1000 },
+      terminalAssistant,
+    ];
+    expect(canForceClearOnVisibleCommittedReply({
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: {
+        sessionKey: 'agent:main:session-1',
+        status: 'processing',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['run-1'],
+      },
+      gatewayBackground: {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: ['agent:main:session-1'],
+      },
     })).toBe(false);
+  });
+
+  it('sanitizeLeavingSessionStreamingSnapshot clears stale run flags when transcript is visibly complete', () => {
+    const sessionKey = 'agent:main:session-a';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'make ppt', timestamp: 1000 },
+      { role: 'assistant', content: 'PPT done', stopReason: 'stop', timestamp: 2000 },
+    ];
+    const dirty = {
+      activeRunId: 'run-stale',
+      activeTool: null,
+      streamingText: 'partial',
+      streamingMessage: { role: 'assistant', content: 'partial' },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 1000,
+      pendingToolImages: [],
+      runAborted: false,
+      runError: null,
+      sending: true,
+      messagesSnapshot: messages,
+    };
+
+    expect(sanitizeLeavingSessionStreamingSnapshot(dirty, {
+      sessionKey,
+      gatewayBackground: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+    })).toEqual({
+      ...dirty,
+      sending: false,
+      pendingFinal: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingToolImages: [],
+      activeTool: null,
+    });
+  });
+
+  it('sanitizeLeavingSessionStreamingSnapshot keeps active snapshots while gateway still processes the session', () => {
+    const sessionKey = 'agent:main:session-a';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'question', timestamp: 1000 },
+      terminalAssistant,
+    ];
+    const dirty = {
+      activeRunId: 'run-live',
+      activeTool: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: 1000,
+      pendingToolImages: [],
+      runAborted: false,
+      runError: null,
+      sending: true,
+      messagesSnapshot: messages,
+    };
+
+    expect(sanitizeLeavingSessionStreamingSnapshot(dirty, {
+      sessionKey,
+      gatewayBackground: {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: [sessionKey],
+      },
+    })).toBe(dirty);
+  });
+
+  it('sanitizeLeavingSessionStreamingSnapshot leaves idle snapshots unchanged', () => {
+    const snapshot = {
+      activeRunId: null,
+      activeTool: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: 1000,
+      pendingToolImages: [],
+      runAborted: false,
+      runError: null,
+      sending: false,
+      messagesSnapshot: [
+        { role: 'user', content: 'q', timestamp: 1000 },
+        terminalAssistant,
+      ],
+    };
+    expect(sanitizeLeavingSessionStreamingSnapshot(snapshot, {
+      sessionKey: 'agent:main:session-a',
+    })).toBe(snapshot);
   });
 
   it('re-adopts run state when UI cleared but backend still active', () => {
@@ -770,6 +911,43 @@ describe('user-turn-lifecycle', () => {
       },
       snapshot: null,
     })).toBe(true);
+  });
+
+  it('deriveSidebarSessionIsExecuting clears stale processingKeys when snapshot turn is complete', () => {
+    const sessionKey = 'agent:main:session-stale-proc';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'ten english words', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: 'word list',
+        stopReason: 'stop',
+        timestamp: 2000,
+      },
+    ];
+
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: false,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: [],
+      currentLastUserMessageAt: null,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: null,
+      gatewayBackground: {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: [sessionKey],
+      },
+      snapshot: {
+        activeRunId: 'run-stale',
+        pendingFinal: true,
+        sending: true,
+        runAborted: false,
+        lastUserMessageAt: 1000,
+        streamingMessage: null,
+        messagesSnapshot: messages,
+      },
+    })).toBe(false);
   });
 
   it('deriveSidebarSessionIsExecuting keeps actively streaming background snapshots running', () => {
