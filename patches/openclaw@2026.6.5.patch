@@ -310,7 +310,7 @@ index 97733b6..76c321a 100644
  	const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
  		surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
  		hasSessionKey: Boolean(agentSessionKey),
-@@ -5102,11 +5193,11 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
+@@ -5102,11 +5193,12 @@ async function getReplyFromConfig(ctx, opts, configOverride) {
  		config: cfg,
  		attributes: traceAttributes
  	}));
