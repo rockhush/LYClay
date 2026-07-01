@@ -16,7 +16,6 @@ import {
   PanelLeftClose,
   PanelLeft,
   Plus,
-  Terminal,
   ExternalLink,
   Trash2,
   Pencil,
@@ -58,7 +57,6 @@ import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ModalOverlay } from '@/components/ui/modal-overlay';
-import { hostApiFetch } from '@/lib/host-api';
 import { flushUiStateSync } from '@/lib/ui-state-persistence';
 import { invokeIpc, toUserMessage } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
@@ -173,7 +171,6 @@ export function Sidebar() {
   const { t } = useTranslation(['common', 'chat', 'settings', 'cron']);
   const sidebarCollapsed = useSettingsStore((state) => state.sidebarCollapsed);
   const setSidebarCollapsed = useSettingsStore((state) => state.setSidebarCollapsed);
-  const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
 
   const cronJobs = useCronStore((s) => s.jobs);
   const cronJobNamesById = useMemo(
@@ -501,6 +498,7 @@ export function Sidebar() {
     });
   }, [customSessionLabels, sessionLabels, cronJobNamesById, t]);
 
+  /* OpenClaw 控制台入口暂时隐藏
   const openDevConsole = async () => {
     try {
       const result = await hostApiFetch<{
@@ -517,6 +515,7 @@ export function Sidebar() {
       console.error('Error opening Dev Console:', err);
     }
   };
+  */
 
   const [sessionToDelete, setSessionToDelete] = useState<{ key: string; label: string } | null>(null);
   const [workspaceToDelete, setWorkspaceToDelete] = useState<{ id: string; label: string } | null>(null);
@@ -1368,6 +1367,7 @@ export function Sidebar() {
           </NavLink>
         )}
 
+        {/* OpenClaw 控制台入口暂时隐藏
         {devModeUnlocked && (
           <Button
             data-testid="sidebar-open-dev-console"
@@ -1390,6 +1390,7 @@ export function Sidebar() {
             )}
           </Button>
         )}
+        */}
       </div>
     </aside>
 

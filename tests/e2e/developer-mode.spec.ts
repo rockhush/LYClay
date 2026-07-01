@@ -30,7 +30,7 @@ test.describe('ClawX developer-mode gated UI', () => {
     await expect(page.getByTestId('settings-dev-mode-switch')).toHaveAttribute('data-state', 'checked');
     await expect(page.getByTestId('settings-developer-section')).toBeVisible();
     await expect(page.getByTestId('settings-developer-gateway-token')).toBeVisible();
-    await expect(page.getByTestId('sidebar-open-dev-console')).toBeVisible();
+    await expect(page.getByTestId('sidebar-open-dev-console')).toHaveCount(0);
     await expect(page.getByTestId('sidebar-nav-dreams')).toBeVisible();
 
     await page.getByTestId('sidebar-nav-models').click();
