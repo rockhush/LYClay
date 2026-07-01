@@ -2,7 +2,7 @@ diff --git a/dist/chat-DOMgZOP2.js b/dist/chat-DOMgZOP2.js
 index 2e65c24..d6cd269 100644
 --- a/dist/chat-DOMgZOP2.js
 +++ b/dist/chat-DOMgZOP2.js
-@@ -2683,6 +2683,9 @@ const chatHandlers = {
+@@ -2683,6 +2683,10 @@ const chatHandlers = {
  						imageOrder: imageOrder.length > 0 ? imageOrder : void 0,
  						thinkingLevelOverride: p.thinking,
  						fastModeOverride: p.fastMode,
