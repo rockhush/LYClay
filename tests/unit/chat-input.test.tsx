@@ -401,7 +401,12 @@ describe('ChatInput agent targeting', () => {
 
     fireEvent.click(screen.getByTitle('Send'));
 
-    expect(onSend).toHaveBeenCalledWith('Draft @create-skill 请使用这个技能，帮我 a new helper', undefined, null);
+    expect(onSend).toHaveBeenCalledWith(
+      'Draft @create-skill 请使用这个技能，帮我 a new helper',
+      undefined,
+      null,
+      { skillFilter: ['create-skill'] },
+    );
     expect(hostApiFetch).toHaveBeenCalledWith(
       '/api/usage-report/skill-invoke',
       expect.objectContaining({

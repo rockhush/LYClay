@@ -327,6 +327,7 @@ export interface ChatState {
       preview: string | null;
     }>,
     targetAgentId?: string | null,
+    options?: import('./send-options').SendMessageOptions,
   ) => Promise<void>;
   abortRun: () => Promise<void>;
   recoverCurrentSession: () => Promise<void>;

@@ -18,6 +18,8 @@ import { cn } from '@/lib/utils';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
 import { detectMentionedSkillIds } from '@/stores/chat/usage-report-extract';
 import { buildSkillMentionWithHint } from '@/pages/Chat/welcome-quick-actions';
+import { resolveComposerForcedSkillFilter } from '@/lib/composer-skill-binding';
+import type { SendMessageOptions } from '@/stores/chat/send-options';
 
 // 统一使用品牌橙色作为技能图标背景（与技能页一致）
 const SKILL_COLORS = [
@@ -98,7 +100,12 @@ export interface SkillAttachment {
 }
 
 interface ChatInputProps {
-  onSend: (text: string, attachments?: FileAttachment[], targetAgentId?: string | null) => void;
+  onSend: (
+    text: string,
+    attachments?: FileAttachment[],
+    targetAgentId?: string | null,
+    options?: SendMessageOptions,
+  ) => void;
   onStop?: () => void;
   disabled?: boolean;
   sending?: boolean;
@@ -203,6 +210,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   // 斜杠搜索模式状态
   const [slashSearchOpen, setSlashSearchOpen] = useState(false);
   const slashSearchRef = useRef<HTMLDivElement>(null);
+  const [composerSelectedSkillIds, setComposerSelectedSkillIds] = useState<string[]>([]);
 
   const skills = useSkillsStore((s) => s.skills);
   const skillsLoading = useSkillsStore((s) => s.loading);
@@ -538,6 +546,10 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     const skill = skills.find(s => s.id === skillId);
     if (!skill) return;
 
+    setComposerSelectedSkillIds((prev) => (
+      prev.includes(skill.id) ? prev : [...prev, skill.id]
+    ));
+
     // Insert `@<skillName> 请使用这个技能，帮我` into the textarea instead of pinning a chip
     // card above the input, so the puzzle-icon picker matches the
     // slash-search behaviour the user already knows.
@@ -573,6 +585,9 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   const handleSlashSkillSelect = useCallback((skill: Skill) => {
     // 替换 /xxx 为 @技能名 + 技能调用提示词
     const newInput = input.replace(/^\/[^\s]*/, `${buildSkillMentionWithHint(skill.name)} `);
+    setComposerSelectedSkillIds((prev) => (
+      prev.includes(skill.id) ? prev : [...prev, skill.id]
+    ));
     handleInputChange(newInput);
     setSlashSearchOpen(false);
   }, [input]);
@@ -646,16 +661,30 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
         void reportSkillInvoke(id, 1);
       }
     }
+    const skillFilter = resolveComposerForcedSkillFilter(
+      finalText,
+      skills,
+      composerSelectedSkillIds,
+    );
+    if (skillFilter?.length) {
+      console.log('[handleSend] forcing skill filter:', skillFilter);
+    }
     handleInputChange('');
     setAttachments([]);
     setSkillAttachments([]);
+    setComposerSelectedSkillIds([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    onSend(finalText, attachmentsToSend, effectiveTargetAgentId);
+    onSend(
+      finalText,
+      attachmentsToSend,
+      effectiveTargetAgentId,
+      skillFilter?.length ? { skillFilter } : undefined,
+    );
     setTargetAgentId(null);
     setPickerOpen(false);
-  }, [input, attachments, skillAttachments, canSend, onSend, targetAgentId, mentionableAgents]);
+  }, [input, attachments, skillAttachments, composerSelectedSkillIds, skills, canSend, onSend, targetAgentId, mentionableAgents]);
 
   const handleStop = useCallback(() => {
     if (!canStop) return;

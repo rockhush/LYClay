@@ -1530,6 +1530,7 @@ function registerGatewayHandlers(
     extraSystemPrompt?: string;
     executeAsAgentId?: string;
     executedByAgentName?: string;
+    skillFilter?: string[];
   }) => {
     try {
       let message = params.message;
@@ -1620,6 +1621,10 @@ function registerGatewayHandlers(
       }
       if (params.executedByAgentName) {
         rpcParams.executedByAgentName = params.executedByAgentName;
+      }
+      const skillFilter = params.skillFilter?.map((name) => name.trim()).filter(Boolean);
+      if (skillFilter?.length) {
+        rpcParams.skillFilter = skillFilter;
       }
 
       logger.info(`[chat:sendWithMedia] Sending: message="${message.substring(0, 100)}", attachments=${imageAttachments.length}, fileRefs=${fileReferences.length}`);

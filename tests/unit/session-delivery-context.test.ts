@@ -93,6 +93,17 @@ describe('session delivery context', () => {
     expect(enriched.message).toBe('send image');
   });
 
+  it('preserves one-turn skillFilter while enriching delivery context', async () => {
+    const enriched = await enrichChatSendParams({
+      sessionKey: 'agent:main:dingtalk:cid-group',
+      message: '@PPT生成 请使用这个技能，帮我',
+      skillFilter: ['PPT生成'],
+    }) as Record<string, unknown>;
+
+    expect(enriched.skillFilter).toEqual(['PPT生成']);
+    expect(enriched.extraSystemPrompt).toContain('target="cidResolvedTarget="');
+  });
+
   it('does not infer delivery context for plain main sessions', () => {
     expect(inferDeliveryContextFromSessionKey('agent:main:main')).toBeNull();
   });

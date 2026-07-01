@@ -9,6 +9,7 @@ index 2e65c24..d6cd269 100644
 +						extraSystemPrompt: p.extraSystemPrompt,
 +						executeAsAgentId: typeof p.executeAsAgentId === "string" && p.executeAsAgentId.trim() ? p.executeAsAgentId.trim() : void 0,
 +						executedByAgentName: typeof p.executedByAgentName === "string" && p.executedByAgentName.trim() ? p.executedByAgentName.trim() : void 0,
++						skillFilter: Array.isArray(p.skillFilter) ? p.skillFilter.map((entry) => typeof entry === "string" ? entry.trim() : "").filter(Boolean) : void 0,
  						userTurnTranscriptRecorder: userTurnRecorder,
  						onAgentRunStart: (runId) => {
  							agentRunStarted = true;
@@ -314,7 +315,8 @@ index 97733b6..76c321a 100644
  		attributes: traceAttributes
  	}));
 -	const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () => mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)));
-+	const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () => mergeSkillFilters(baseOpts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)));
++	const oneTurnSkillFilter = Array.isArray(baseOpts?.skillFilter) ? baseOpts.skillFilter.map((entry) => typeof entry === "string" ? entry.trim() : "").filter(Boolean) : void 0;
++	const mergedSkillFilter = oneTurnSkillFilter && oneTurnSkillFilter.length > 0 ? oneTurnSkillFilter : resolverTiming.measureSync("reply.resolve_skill_filter", () => mergeSkillFilters(baseOpts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)));
  	const resolvedOpts = mergedSkillFilter !== void 0 ? {
 -		...opts,
 +		...baseOpts,

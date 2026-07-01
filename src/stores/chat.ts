@@ -1,4 +1,4 @@
-﻿﻿/**
+﻿/**
  * Chat State Store
  * Manages chat messages, sessions, and streaming state.
  * Communicates with OpenClaw Gateway via renderer WebSocket RPC.
@@ -4893,6 +4893,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     text: string,
     attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>,
     targetAgentId?: string | null,
+    options?: import('./chat/send-options').SendMessageOptions,
   ) => {
     let _deIsDigital = false;
     let _deAgentId = targetAgentId;
@@ -5368,6 +5369,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           executedByAgentName: _deDisplayName || _resolvedTargetAgentId,
         }
         : {};
+      const skillFilter = options?.skillFilter?.map((name) => name.trim()).filter(Boolean);
 
       if (hasMedia) {
         result = await hostApiFetch<{ success: boolean; result?: { runId?: string }; error?: string }>(
@@ -5381,6 +5383,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               idempotencyKey,
               extraSystemPrompt: convergenceSystemPrompt ?? undefined,
               ...executeAsParams,
+              ...(skillFilter?.length ? { skillFilter } : {}),
               media: (attachments ?? []).map((a) => ({
                 filePath: a.stagedPath,
                 mimeType: a.mimeType,
@@ -5397,6 +5400,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           idempotencyKey,
           extraSystemPrompt: convergenceSystemPrompt ?? undefined,
           ...executeAsParams,
+          ...(skillFilter?.length ? { skillFilter } : {}),
         };
         const rpcResult = await useGatewayStore.getState().rpc<{ runId?: string }>(
           'chat.send',

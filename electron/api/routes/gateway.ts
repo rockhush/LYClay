@@ -142,6 +142,7 @@ export async function handleGatewayRoutes(
         extraSystemPrompt?: string;
         executeAsAgentId?: string;
         executedByAgentName?: string;
+        skillFilter?: string[];
       }>(req);
       const VISION_MIME_TYPES = new Set([
         'image/png', 'image/jpeg', 'image/bmp', 'image/webp',
@@ -194,6 +195,10 @@ export async function handleGatewayRoutes(
       }
       if (body.executedByAgentName) {
         rpcParams.executedByAgentName = body.executedByAgentName;
+      }
+      const skillFilter = body.skillFilter?.map((name) => name.trim()).filter(Boolean);
+      if (skillFilter?.length) {
+        rpcParams.skillFilter = skillFilter;
       }
       await assertModelSecretsAllowedBeforeSend(message, 'hostapi:chat.send-with-media');
       await assertTextNetworkAllowed(message, 'hostapi:chat.send-with-media');
