@@ -228,6 +228,7 @@ export function Sidebar() {
       messages,
       lastUserMessageAt,
       streamingMessage,
+      sessionKey: currentSessionKey,
     },
   );
 

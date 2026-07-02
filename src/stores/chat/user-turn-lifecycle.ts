@@ -16,7 +16,7 @@ import {
 import { hasDelegationSpawnForActiveTurn, isParentDelegationPhaseOpen, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
 import { isGatewayIdleForSpawnedChildren } from '@/lib/subagent-delegation';
 import { hasGatewayActiveChildDelegations } from '@/lib/subagent-delegation-watch';
-import { isUserAbortedSession } from './user-aborted-sessions';
+import { clearUserAbortedSession, isUserAbortedSession } from './user-aborted-sessions';
 
 export type SessionBackendActivity = {
   sessionKey: string;
@@ -100,6 +100,8 @@ export type UserTurnActiveRunOptions = {
   messages?: RawMessage[];
   lastUserMessageAt?: number | null;
   streamingMessage?: unknown | null;
+  /** When set, a persisted user-abort marker suppresses executing UI until backend idle. */
+  sessionKey?: string;
 };
 
 export function hasLocalRunSignals(state: UserTurnUiSignals): boolean {
@@ -120,12 +122,28 @@ export function isUserTurnOpen(
   return false;
 }
 
+/** Clear persisted user-abort marker once backend work has fully stopped. */
+export function releaseUserAbortedSessionWhenIdle(
+  sessionKey: string,
+  backendActivity: SessionBackendActivity | null | undefined,
+  gatewayBackground?: GatewayBackgroundActivity | null,
+  messages: RawMessage[] = [],
+): boolean {
+  if (!isUserAbortedSession(sessionKey)) return false;
+  if (hasOpenBackendWorkForUserTurn(gatewayBackground, backendActivity, messages)) {
+    return false;
+  }
+  clearUserAbortedSession(sessionKey);
+  return true;
+}
+
 /** Unified executing signal for Sidebar, stop button, and execution graph. */
 export function deriveIsExecuting(
   state: UserTurnUiSignals,
   backendActivity?: SessionBackendActivity | null,
   options?: UserTurnActiveRunOptions,
 ): boolean {
+  if (options?.sessionKey && isUserAbortedSession(options.sessionKey)) return false;
   if (state.runAborted) return false;
   const messages = options?.messages ?? [];
   const processingKeys = options?.gatewayBackground?.processingSessionKeys ?? [];
@@ -206,6 +224,8 @@ function isBackgroundSidebarTurnComplete(
   snapshot: NonNullable<DeriveSidebarSessionIsExecutingInput['snapshot']>,
   gatewayBackground: GatewayBackgroundActivity | null | undefined,
 ): boolean {
+  if (snapshot.runAborted) return true;
+
   const messages = snapshot.messagesSnapshot ?? [];
   if (messages.length === 0) return false;
 
@@ -239,6 +259,12 @@ export function deriveSidebarSessionIsExecuting(
 ): boolean {
   const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
 
+  if (!input.isCurrent) {
+    if (isUserAbortedSession(input.sessionKey) || input.snapshot?.runAborted) {
+      return false;
+    }
+  }
+
   if (!input.isCurrent && processingKeys.includes(input.sessionKey)) {
     if (input.snapshot && isBackgroundSidebarTurnComplete(input.snapshot, input.gatewayBackground)) {
       return false;
@@ -256,6 +282,7 @@ export function deriveSidebarSessionIsExecuting(
         messages: input.currentMessages,
         lastUserMessageAt: input.currentLastUserMessageAt,
         streamingMessage: input.currentStreamingMessage,
+        sessionKey: input.sessionKey,
       },
     );
   }
@@ -281,6 +308,7 @@ export function deriveSidebarSessionIsExecuting(
       messages,
       lastUserMessageAt: snapshot.lastUserMessageAt ?? null,
       streamingMessage: snapshot.streamingMessage ?? null,
+      sessionKey: input.sessionKey,
     },
   );
 }

@@ -1,3 +1,4 @@
+import { findSkillByLookupNames, resolveOpenClawSkillFilterName } from '@/lib/skill-runtime-aliases';
 import type { Skill } from '@/types/skill';
 
 export interface WelcomeQuickActionDefinition {
@@ -17,7 +18,7 @@ export const WELCOME_QUICK_ACTIONS: WelcomeQuickActionDefinition[] = [
   {
     key: 'groupSummary',
     labelKey: 'welcome.groupSummary',
-    skillNames: ['办公助手（日程、钉盘、表格、消息）', '办公助手'],
+    skillNames: ['dws', '办公助手（日程、钉盘、表格、消息）', '办公助手'],
     defaultPrompt: '请使用这个技能，帮我总结以下群消息要点：',
   },
   {
@@ -34,38 +35,11 @@ export const WELCOME_QUICK_ACTIONS: WelcomeQuickActionDefinition[] = [
   },
 ];
 
-function normalizeSkillLookup(value: string | undefined): string {
-  return (value || '').trim().toLowerCase();
-}
-
 export function findSkillForQuickAction(
   skills: Skill[],
   skillNames: string[],
 ): Skill | undefined {
-  for (const candidate of skillNames) {
-    const target = normalizeSkillLookup(candidate);
-    if (!target) continue;
-
-    const exact = skills.find((skill) =>
-      [skill.name, skill.slug, skill.id].some(
-        (value) => normalizeSkillLookup(value) === target,
-      ),
-    );
-    if (exact) return exact;
-  }
-
-  for (const candidate of skillNames) {
-    const target = normalizeSkillLookup(candidate);
-    if (!target) continue;
-
-    const partial = skills.find((skill) => {
-      const name = normalizeSkillLookup(skill.name);
-      return name.includes(target) || target.includes(name);
-    });
-    if (partial) return partial;
-  }
-
-  return undefined;
+  return findSkillByLookupNames(skills, skillNames);
 }
 
 export const SKILL_INVOCATION_HINT = '请使用这个技能，帮我';
@@ -80,6 +54,7 @@ export function buildQuickActionComposerText(
   fallbackSkillName: string,
   defaultPrompt: string,
 ): string {
-  const mentionName = skill?.name?.trim() || fallbackSkillName;
-  return `@${mentionName} ${defaultPrompt}`;
-}
+  const mentionName = skill
+    ? resolveOpenClawSkillFilterName(skill.id, skill) || skill.name?.trim() || fallbackSkillName
+    : fallbackSkillName;
+  return `@${mentionName} ${defaultPrompt}`;}

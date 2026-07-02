@@ -77,6 +77,7 @@ import {
   shouldForceAbortStuckRun,
   buildReAdoptRunPatch,
   hasOpenDelegatedBackendWork,
+  releaseUserAbortedSessionWhenIdle,
   sanitizeLeavingSessionStreamingSnapshot,
 } from './chat/user-turn-lifecycle';
 import {
@@ -1330,7 +1331,7 @@ function applyBackgroundChatEvent(
   resolvedState: string,
   runId: string,
 ): Record<string, SessionStreamingState> | null {
-  if (isUserAbortedSession(sessionKey) && (resolvedState === 'started' || resolvedState === 'delta')) {
+  if (isUserAbortedSession(sessionKey) && resolvedState !== 'aborted') {
     return null;
   }
 
@@ -1410,7 +1411,7 @@ function applyBackgroundChatEvent(
       next.pendingFinal = false;
       next.pendingToolImages = [];
       next.lastUserMessageAt = null;
-      next.runAborted = false;
+      next.runAborted = isUserAbortedSession(sessionKey);
       break;
     default:
       return null;
@@ -5494,7 +5495,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const normalizedError = normalizeAppError(new Error(errorMsg));
           set({ error: toUserMessage(normalizedError), sending: false });
         }
-      } else if (result.result?.runId && get().sending) {
+      } else if (
+        result.result?.runId
+        && get().sending
+        && !get().runAborted
+        && !isUserAbortedSession(currentSessionKey)
+      ) {
         const runId = result.result.runId;
         if (_deIsDigital && _resolvedTargetAgentId) {
           _digitalEmployeeRuns.set(runId, {
@@ -5558,12 +5564,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearErrorRecoveryTimer();
     clearPendingSilentRetry();
     markAbortHistoryQuietPeriod();
-    const { currentSessionKey, messages, activeRunId, gatewayBackgroundActivity } = get();
-    markUserAbort();
-    if (activeRunId) {
-      markAbortedChatRun(activeRunId);
+    const { currentSessionKey, messages, activeRunId, gatewayBackgroundActivity, sessionBackendActivity } = get();
+    let abortRunId = activeRunId?.trim() || null;
+    if (!abortRunId && currentSessionKey) {
+      const cachedActivity = backendActivityForSession(sessionBackendActivity, currentSessionKey);
+      abortRunId = cachedActivity?.activeRunIds[0]?.trim() || null;
     }
-    persistUserAbortedSession(currentSessionKey, activeRunId);
+    markUserAbort();
+    if (abortRunId) {
+      markAbortedChatRun(abortRunId);
+    }
+    persistUserAbortedSession(currentSessionKey, abortRunId);
     if (_interruptedSendSession?.sessionKey === currentSessionKey) {
       _interruptedSendSession = null;
     }
@@ -5596,12 +5607,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       const rpc = useGatewayStore.getState().rpc.bind(useGatewayStore.getState());
+      let resolvedAbortRunId = abortRunId;
+      if (!resolvedAbortRunId && currentSessionKey) {
+        const snapshot = await refreshSessionBackendActivity(currentSessionKey);
+        resolvedAbortRunId = snapshot?.session.activeRunIds[0]?.trim() || null;
+        if (resolvedAbortRunId) {
+          markAbortedChatRun(resolvedAbortRunId);
+          persistUserAbortedSession(currentSessionKey, resolvedAbortRunId);
+        }
+      }
       await Promise.all([
         rpc(
           'sessions.abort',
           {
             key: currentSessionKey,
-            ...(activeRunId ? { runId: activeRunId } : {}),
+            ...(resolvedAbortRunId ? { runId: resolvedAbortRunId } : {}),
           },
           10_000,
         ),
@@ -5611,6 +5631,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
           gatewayBackgroundActivity?.processingSessionKeys ?? [],
         ),
       ]);
+
+      if (currentSessionKey) {
+        const postAbortSnapshot = await refreshSessionBackendActivity(currentSessionKey);
+        if (postAbortSnapshot) {
+          set({
+            sessionBackendActivity: postAbortSnapshot.session,
+            gatewayBackgroundActivity: postAbortSnapshot.background,
+          });
+          if (releaseUserAbortedSessionWhenIdle(
+            currentSessionKey,
+            postAbortSnapshot.session,
+            postAbortSnapshot.background,
+            get().messages,
+          )) {
+            set({ runAborted: false });
+          } else {
+            ensureSessionBackendPolling(currentSessionKey, set, get);
+          }
+        } else {
+          ensureSessionBackendPolling(currentSessionKey, set, get);
+        }
+      }
     } catch (err) {
       // ���� abort ������Ϊ�û�������ֹ�Ựʱ RPC ���ܱ���??
       const errStr = String(err);
@@ -5664,15 +5706,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       if (eventSessionKey && isUserAbortedSession(eventSessionKey)) {
-        if (backgroundState === 'aborted' || backgroundState === 'final' || backgroundState === 'error') {
-          clearUserAbortedSession(eventSessionKey);
-        } else {
+        if (backgroundState !== 'aborted') {
           return;
         }
       }
 
       if (runId && isAbortedChatRun(runId)) {
-        if (backgroundState === 'aborted' || backgroundState === 'final' || backgroundState === 'error') {
+        if (backgroundState === 'aborted') {
           forgetAbortedChatRun(runId);
         } else {
           return;
@@ -5732,7 +5772,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const wasUserAbortedRun = Boolean(runId && isAbortedChatRun(runId));
     if (wasUserAbortedRun) {
-      if (resolvedState === 'aborted' || resolvedState === 'final' || resolvedState === 'error') {
+      if (resolvedState === 'aborted') {
         forgetAbortedChatRun(runId);
       } else {
         return;
@@ -5740,16 +5780,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     const foregroundSessionKey = eventSessionKey ?? currentSessionKey;
-    if (isUserAbortedSession(foregroundSessionKey)) {
-      if (resolvedState === 'aborted' || resolvedState === 'final' || resolvedState === 'error') {
-        clearUserAbortedSession(foregroundSessionKey);
-      } else if (resolvedState === 'started' || resolvedState === 'delta') {
-        return;
-      }
+    if (isUserAbortedSession(foregroundSessionKey) && resolvedState !== 'aborted') {
+      return;
     }
 
     const { runAborted, sending: isSending } = get();
-    if (runAborted && !isSending && (resolvedState === 'delta' || resolvedState === 'started')) {
+    if ((runAborted || isUserAbortedSession(foregroundSessionKey))
+      && !isSending
+      && (resolvedState === 'delta' || resolvedState === 'started' || resolvedState === 'final')) {
       return;
     }
 
@@ -6488,11 +6526,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (runId) forgetAbortedChatRun(runId);
           const lastUser = getLastRealUserSnapshot(get().messages);
           const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
+          const keepAbortShield = isUserAbortedSession(foregroundSessionKey) || get().runAborted;
           set((s) => ({
             ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
             sending: false,
             activeRunId: null,
-            runAborted: false,
+            runAborted: keepAbortShield,
             streamingText: '',
             streamingMessage: null,
             streamingTools: [],
@@ -6502,6 +6541,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
             error: null,
             runError: null,
           }));
+          const {
+            messages: currentMessages,
+            sessionBackendActivity,
+            gatewayBackgroundActivity,
+          } = get();
+          const activity = backendActivityForSession(sessionBackendActivity, currentSessionKey);
+          if (releaseUserAbortedSessionWhenIdle(
+            foregroundSessionKey,
+            activity,
+            gatewayBackgroundActivity,
+            currentMessages,
+          )) {
+            set({ runAborted: false });
+          } else if (isUserAbortedSession(foregroundSessionKey)) {
+            ensureSessionBackendPolling(currentSessionKey, set, get);
+          }
           break;
         }
 

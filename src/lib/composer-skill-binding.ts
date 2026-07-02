@@ -1,6 +1,14 @@
 import type { Skill } from '@/types/skill';
+import { resolveOpenClawSkillFilterName } from '@/lib/skill-runtime-aliases';
 import { detectMentionedSkillIds } from '@/stores/chat/usage-report-extract';
 import { SKILL_INVOCATION_HINT } from '@/pages/Chat/welcome-quick-actions';
+
+/** Runtime @mention token for composer pickers (matches OpenClaw SKILL.md `name`). */
+export function resolveComposerSkillMentionName(
+  skill: Pick<Skill, 'id' | 'slug' | 'name'>,
+): string {
+  return resolveOpenClawSkillFilterName(skill.id, skill) || skill.name?.trim() || skill.id;
+}
 
 /** OpenClaw runtime skill allowlist uses skill display names, not config keys. */
 export function resolveForcedSkillFilterNames(
@@ -12,8 +20,8 @@ export function resolveForcedSkillFilterNames(
   for (const rawId of skillIds) {
     const id = (rawId || '').trim();
     if (!id) continue;
-    const skill = skills.find((candidate) => candidate.id === id);
-    const name = skill?.name?.trim();
+    const skill = skills.find((candidate) => candidate.id === id || candidate.slug === id);
+    const name = resolveOpenClawSkillFilterName(id, skill);
     if (!name || seen.has(name)) continue;
     seen.add(name);
     names.push(name);

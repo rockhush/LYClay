@@ -616,6 +616,7 @@ export function Chat() {
         messages,
         lastUserMessageAt,
         streamingMessage,
+        sessionKey: currentSessionKey,
       },
     ),
     [

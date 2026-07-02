@@ -262,4 +262,243 @@ describe('chat abort run', () => {
     expect(useChatStore.getState().sending).toBe(false);
     expect(useChatStore.getState().activeRunId).toBeNull();
   });
+
+  it('resolves runId from backend activity when aborting before activeRunId is synced', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: null,
+      sessionBackendActivity: {
+        sessionKey: 'agent:main:main',
+        status: 'running',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['run-backend-only'],
+      },
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      runAborted: false,
+    });
+
+    await useChatStore.getState().abortRun();
+
+    expect(gatewayRpcMock).toHaveBeenCalledWith(
+      'sessions.abort',
+      expect.objectContaining({
+        key: 'agent:main:main',
+        runId: 'run-backend-only',
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('marks the run aborted before waiting on backend activity refresh', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const { isUserAbortedSession } = await import('@/stores/chat/user-aborted-sessions');
+
+    let resolveBackend: ((value: unknown) => void) | undefined;
+    hostApiFetchMock.mockImplementation(() => new Promise((resolve) => {
+      resolveBackend = resolve;
+    }));
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: null,
+      sessionBackendActivity: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      runAborted: false,
+    });
+
+    const abortPromise = useChatStore.getState().abortRun();
+
+    expect(useChatStore.getState().runAborted).toBe(true);
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
+
+    resolveBackend?.({
+      success: true,
+      session: {
+        sessionKey: 'agent:main:main',
+        status: 'running',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['run-late-backend'],
+      },
+      background: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+    });
+
+    await abortPromise;
+
+    expect(gatewayRpcMock).toHaveBeenCalledWith(
+      'sessions.abort',
+      expect.objectContaining({
+        key: 'agent:main:main',
+        runId: 'run-late-backend',
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('does not re-adopt after user abort when an intermediate final arrives', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const { isUserAbortedSession } = await import('@/stores/chat/user-aborted-sessions');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-tool-round',
+      streamingText: '',
+      streamingMessage: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Reading skill...' }],
+      },
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      runAborted: false,
+    });
+
+    await useChatStore.getState().abortRun();
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-tool-round',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'toolresult',
+        content: 'tool output',
+        toolCallId: 'tool-1',
+      },
+    });
+
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().pendingFinal).toBe(false);
+    expect(useChatStore.getState().runAborted).toBe(true);
+
+    useChatStore.getState().handleChatEvent({
+      state: 'started',
+      runId: 'run-tool-round',
+      sessionKey: 'agent:main:main',
+    });
+
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
+  });
+
+  it('keeps the session non-executing after aborted event while backend is still winding down', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const { deriveIsExecuting } = await import('@/stores/chat/user-turn-lifecycle');
+    const { isUserAbortedSession } = await import('@/stores/chat/user-aborted-sessions');
+
+    hostApiFetchMock.mockResolvedValue({
+      success: true,
+      session: {
+        sessionKey: 'agent:main:main',
+        status: 'running',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['run-still-active'],
+      },
+      background: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+    });
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'hello', timestamp: 1, id: 'u1' }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-still-active',
+      streamingText: '',
+      streamingMessage: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Working...' }],
+      },
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      runAborted: false,
+    });
+
+    await useChatStore.getState().abortRun();
+
+    useChatStore.getState().handleChatEvent({
+      state: 'aborted',
+      runId: 'run-still-active',
+      sessionKey: 'agent:main:main',
+    });
+
+    const state = useChatStore.getState();
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
+    expect(state.sending).toBe(false);
+    expect(state.runAborted).toBe(true);
+    expect(deriveIsExecuting(
+      { sending: state.sending, activeRunId: state.activeRunId, pendingFinal: state.pendingFinal, runAborted: state.runAborted },
+      state.sessionBackendActivity,
+      {
+        gatewayBackground: state.gatewayBackgroundActivity,
+        messages: state.messages,
+        lastUserMessageAt: state.lastUserMessageAt,
+        sessionKey: 'agent:main:main',
+      },
+    )).toBe(false);
+
+    useChatStore.getState().handleChatEvent({
+      state: 'delta',
+      runId: 'run-still-active',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Should not resume streaming.' }],
+      },
+    });
+
+    expect(useChatStore.getState().streamingMessage).toBeNull();
+    expect(useChatStore.getState().sending).toBe(false);
+  });
 });

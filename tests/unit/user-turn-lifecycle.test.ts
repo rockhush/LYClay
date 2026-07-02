@@ -8,6 +8,7 @@ import {
   deriveHasActiveRunSignal,
   deriveIsExecuting,
   deriveSidebarSessionIsExecuting,
+  releaseUserAbortedSessionWhenIdle,
   isBackendSessionActive,
   isTranscriptOnlyDelegationDefer,
   sanitizeLeavingSessionStreamingSnapshot,
@@ -1166,5 +1167,103 @@ describe('user-turn-lifecycle', () => {
         messagesSnapshot: [{ role: 'user', content: 'go', timestamp: 1000 }],
       },
     })).toBe(true);
+  });
+
+  it('deriveSidebarSessionIsExecuting treats user-aborted background sessions as idle while gateway still processes them', () => {
+    const sessionKey = 'agent:main:session-aborted';
+    persistUserAbortedSession(sessionKey, 'run-aborted');
+
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: false,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: [],
+      currentLastUserMessageAt: null,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: null,
+      gatewayBackground: {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: [sessionKey],
+      },
+      snapshot: {
+        activeRunId: null,
+        pendingFinal: false,
+        sending: false,
+        runAborted: true,
+        lastUserMessageAt: Date.now(),
+        streamingMessage: null,
+        messagesSnapshot: [{ role: 'user', content: 'make ppt', timestamp: 1000 }],
+      },
+    })).toBe(false);
+
+    _resetUserAbortedSessionsForTests();
+  });
+
+  it('deriveSidebarSessionIsExecuting treats runAborted snapshots as idle despite stale processingKeys', () => {
+    const sessionKey = 'agent:main:session-aborted-snapshot';
+
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: false,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: [],
+      currentLastUserMessageAt: null,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: null,
+      gatewayBackground: {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: [sessionKey],
+      },
+      snapshot: {
+        activeRunId: 'run-stale',
+        pendingFinal: false,
+        sending: false,
+        runAborted: true,
+        lastUserMessageAt: Date.now(),
+        streamingMessage: null,
+        messagesSnapshot: [{ role: 'user', content: 'make ppt', timestamp: 1000 }],
+      },
+    })).toBe(false);
+  });
+
+  it('deriveIsExecuting returns false for persisted user-aborted sessions even when backend is active', () => {
+    persistUserAbortedSession('agent:main:main', 'run-1');
+    const activeBackend = {
+      sessionKey: 'agent:main:main',
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: ['run-1'],
+    };
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false, runAborted: false },
+      activeBackend,
+      { sessionKey: 'agent:main:main', messages: [] },
+    )).toBe(false);
+    _resetUserAbortedSessionsForTests();
+  });
+
+  it('releaseUserAbortedSessionWhenIdle clears marker only after backend work stops', () => {
+    persistUserAbortedSession('agent:main:main', 'run-1');
+    const activeBackend = {
+      sessionKey: 'agent:main:main',
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: ['run-1'],
+    };
+    const idleBackend = {
+      sessionKey: 'agent:main:main',
+      status: 'idle',
+      processing: false,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+
+    expect(releaseUserAbortedSessionWhenIdle('agent:main:main', activeBackend)).toBe(false);
+    expect(releaseUserAbortedSessionWhenIdle('agent:main:main', idleBackend)).toBe(true);
+    _resetUserAbortedSessionsForTests();
   });
 });

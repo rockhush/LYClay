@@ -18,7 +18,11 @@ import { cn } from '@/lib/utils';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
 import { detectMentionedSkillIds } from '@/stores/chat/usage-report-extract';
 import { buildSkillMentionWithHint } from '@/pages/Chat/welcome-quick-actions';
-import { resolveComposerForcedSkillFilter } from '@/lib/composer-skill-binding';
+import {
+  resolveComposerForcedSkillFilter,
+  resolveComposerSkillMentionName,
+} from '@/lib/composer-skill-binding';
+import { rewriteBuiltinSkillMentionsInText } from '@/lib/skill-runtime-aliases';
 import type { SendMessageOptions } from '@/stores/chat/send-options';
 
 // 统一使用品牌橙色作为技能图标背景（与技能页一致）
@@ -553,7 +557,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     // Insert `@<skillName> 请使用这个技能，帮我` into the textarea instead of pinning a chip
     // card above the input, so the puzzle-icon picker matches the
     // slash-search behaviour the user already knows.
-    const mention = `${buildSkillMentionWithHint(skill.name)} `;
+    const mention = `${buildSkillMentionWithHint(resolveComposerSkillMentionName(skill))} `;
     const textarea = textareaRef.current;
     let nextInput = input;
     if (textarea) {
@@ -584,7 +588,10 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   // 斜杠搜索选择技能后插入到输入框
   const handleSlashSkillSelect = useCallback((skill: Skill) => {
     // 替换 /xxx 为 @技能名 + 技能调用提示词
-    const newInput = input.replace(/^\/[^\s]*/, `${buildSkillMentionWithHint(skill.name)} `);
+    const newInput = input.replace(
+      /^\/[^\s]*/,
+      `${buildSkillMentionWithHint(resolveComposerSkillMentionName(skill))} `,
+    );
     setComposerSelectedSkillIds((prev) => (
       prev.includes(skill.id) ? prev : [...prev, skill.id]
     ));
@@ -669,6 +676,12 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     if (skillFilter?.length) {
       console.log('[handleSend] forcing skill filter:', skillFilter);
     }
+    const gatewayText = skillFilter?.length
+      ? rewriteBuiltinSkillMentionsInText(finalText, skills)
+      : finalText;
+    if (gatewayText !== finalText) {
+      console.log('[handleSend] rewrote skill @mentions for OpenClaw runtime names');
+    }
     handleInputChange('');
     setAttachments([]);
     setSkillAttachments([]);
@@ -677,7 +690,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
       textareaRef.current.style.height = 'auto';
     }
     onSend(
-      finalText,
+      gatewayText,
       attachmentsToSend,
       effectiveTargetAgentId,
       skillFilter?.length ? { skillFilter } : undefined,

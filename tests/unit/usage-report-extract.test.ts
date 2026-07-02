@@ -169,6 +169,13 @@ describe('extractInvokedSkillIds', () => {
     expect(detectMentionedSkillIds('@market-analysis-ch please', skills)).toEqual(['market-analysis-ch']);
   });
 
+  it('mention scan matches skill id/slug when display name differs', () => {
+    expect(detectMentionedSkillIds(
+      '@dws 请使用这个技能，帮我',
+      [{ id: 'dws', slug: 'dws', name: '办公助手（日程、钉盘、表格、消息）' }],
+    )).toEqual(['dws']);
+  });
+
   it('mention scan returns empty for missing/blank inputs', () => {
     expect(detectMentionedSkillIds('', [{ id: 'a', name: 'a' }])).toEqual([]);
     expect(detectMentionedSkillIds('@a', [])).toEqual([]);

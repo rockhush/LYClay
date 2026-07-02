@@ -7,6 +7,7 @@
  * in zustand / IPC dependencies.
  */
 
+import { BUILTIN_SKILL_MENTION_ALIASES } from '@/lib/skill-runtime-aliases';
 import type { RawMessage, ContentBlock } from './types';
 
 export interface SkillMentionLike {
@@ -14,6 +15,27 @@ export interface SkillMentionLike {
   id: string;
   /** Display name as it appears in `@<name>` mentions. */
   name: string;
+  slug?: string;
+}
+
+function collectSkillMentionLabels(skill: SkillMentionLike): string[] {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const label of [skill.name, skill.slug, skill.id]) {
+    const trimmed = label?.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    labels.push(trimmed);
+  }
+  return labels;
+}
+
+function mentionMatchesSkillLabel(text: string, label: string): boolean {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`@${escaped}(?![\\w-])`, 'i');
+  return re.test(text);
 }
 
 /**
@@ -30,16 +52,30 @@ export interface SkillMentionLike {
  */
 export function detectMentionedSkillIds(text: string, skills: readonly SkillMentionLike[]): string[] {
   if (!text || skills.length === 0) return [];
-  const ordered = [...skills].sort((a, b) => b.name.length - a.name.length);
   const seen = new Set<string>();
-  for (const skill of ordered) {
+  const mentionCandidates = skills.flatMap((skill) => {
     const id = (skill?.id || '').trim();
-    const name = (skill?.name || '').trim();
-    if (!id || !name) continue;
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`@${escaped}(?![\\w-])`, 'i');
-    if (re.test(text)) seen.add(id);
+    if (!id) return [];
+    return collectSkillMentionLabels(skill).map((label) => ({ id, label }));
+  }).sort((a, b) => b.label.length - a.label.length);
+
+  for (const { id, label } of mentionCandidates) {
+    if (mentionMatchesSkillLabel(text, label)) {
+      seen.add(id);
+    }
   }
+
+  for (const { alias, skillSlug } of BUILTIN_SKILL_MENTION_ALIASES) {
+    const skill = skills.find((entry) =>
+      entry.id === skillSlug || entry.slug === skillSlug,
+    );
+    const id = (skill?.id || skillSlug).trim();
+    if (!id) continue;
+    if (mentionMatchesSkillLabel(text, alias)) {
+      seen.add(id);
+    }
+  }
+
   return [...seen];
 }
 

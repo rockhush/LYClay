@@ -9,6 +9,7 @@ import {
   hasLocalRunSignals,
   hasOpenBackendWorkForUserTurn,
   isBackendStronglyActive,
+  releaseUserAbortedSessionWhenIdle,
   type GatewayBackgroundActivity,
   type SessionBackendActivity,
 } from './user-turn-lifecycle';
@@ -50,8 +51,9 @@ function hasAnySavedStreamingActivity(state: ChatState): boolean {
 export function shouldScheduleBackendReconcile(state: ChatState, sessionKey: string): boolean {
   if (!isGatewayRunning()) return false;
   if (state.currentSessionKey !== sessionKey) return false;
+  // Keep reconciling after user abort until backend idle releases the marker.
+  if (isUserAbortedSession(sessionKey)) return true;
   if (state.runAborted) return false;
-  if (isUserAbortedSession(sessionKey)) return false;
 
   if (hasLocalRunSignals({
     sending: state.sending,
@@ -140,6 +142,23 @@ async function runBackendReconcileOnce(
     );
     if (reAdopt) {
       apply(reAdopt);
+    }
+
+    const latestState = getState();
+    if (releaseUserAbortedSessionWhenIdle(
+      sessionKey,
+      snapshot.session,
+      snapshot.background,
+      latestState.messages,
+    )) {
+      apply({ runAborted: false });
+      clearSessionActivityPoll();
+      return;
+    }
+    if (isUserAbortedSession(sessionKey)) {
+      clearSessionActivityPoll();
+      scheduleBackendReconcileOnce(sessionKey, apply, getState);
+      return;
     }
   }
 
