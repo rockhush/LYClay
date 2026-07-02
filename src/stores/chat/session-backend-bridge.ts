@@ -9,11 +9,14 @@ import {
   hasLocalRunSignals,
   hasOpenBackendWorkForUserTurn,
   isBackendStronglyActive,
-  releaseUserAbortedSessionWhenIdle,
+  isUserAbortedSessionBackendIdle,
   type GatewayBackgroundActivity,
   type SessionBackendActivity,
 } from './user-turn-lifecycle';
-import { isUserAbortedSession } from './user-aborted-sessions';
+import {
+  isUserAbortedSession,
+  reabortPersistedUserSessionIfActive,
+} from './user-aborted-sessions';
 
 const RECONCILE_DEBOUNCE_MS = 500;
 
@@ -51,8 +54,16 @@ function hasAnySavedStreamingActivity(state: ChatState): boolean {
 export function shouldScheduleBackendReconcile(state: ChatState, sessionKey: string): boolean {
   if (!isGatewayRunning()) return false;
   if (state.currentSessionKey !== sessionKey) return false;
-  // Keep reconciling after user abort until backend idle releases the marker.
-  if (isUserAbortedSession(sessionKey)) return true;
+  // Reconcile user-aborted sessions only while Gateway still reports work.
+  // Once idle, stop polling but keep the persisted marker until the user sends again.
+  if (isUserAbortedSession(sessionKey)) {
+    const sessionActivity = backendActivityForSession(state.sessionBackendActivity, sessionKey);
+    return hasOpenBackendWorkForUserTurn(
+      state.gatewayBackgroundActivity,
+      sessionActivity,
+      state.messages,
+    );
+  }
   if (state.runAborted) return false;
 
   if (hasLocalRunSignals({
@@ -144,21 +155,30 @@ async function runBackendReconcileOnce(
       apply(reAdopt);
     }
 
-    const latestState = getState();
-    if (releaseUserAbortedSessionWhenIdle(
-      sessionKey,
-      snapshot.session,
-      snapshot.background,
-      latestState.messages,
-    )) {
-      apply({ runAborted: false });
-      clearSessionActivityPoll();
-      return;
-    }
     if (isUserAbortedSession(sessionKey)) {
-      clearSessionActivityPoll();
-      scheduleBackendReconcileOnce(sessionKey, apply, getState);
-      return;
+      if (hasOpenBackendWorkForUserTurn(
+        snapshot.background,
+        snapshot.session,
+        getState().messages,
+      )) {
+        const rpc = useGatewayStore.getState().rpc.bind(useGatewayStore.getState());
+        await reabortPersistedUserSessionIfActive(
+          sessionKey,
+          snapshot.session.activeRunIds[0] ?? null,
+          rpc,
+        );
+        scheduleBackendReconcileOnce(sessionKey, apply, getState);
+        return;
+      }
+      if (isUserAbortedSessionBackendIdle(
+        sessionKey,
+        snapshot.session,
+        snapshot.background,
+        getState().messages,
+      )) {
+        clearSessionActivityPoll();
+        return;
+      }
     }
   }
 

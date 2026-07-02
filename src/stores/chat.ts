@@ -77,7 +77,7 @@ import {
   shouldForceAbortStuckRun,
   buildReAdoptRunPatch,
   hasOpenDelegatedBackendWork,
-  releaseUserAbortedSessionWhenIdle,
+  isUserAbortedSessionBackendIdle,
   sanitizeLeavingSessionStreamingSnapshot,
 } from './chat/user-turn-lifecycle';
 import {
@@ -94,6 +94,7 @@ import {
   startSessionActivityPoll,
 } from './chat/session-backend-bridge';
 import {
+  buildPersistedUserAbortUiPatch,
   clearUserAbortedSession,
   isUserAbortedSession,
   persistUserAbortedSession,
@@ -4099,6 +4100,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionBackendActivity: snapshot.session,
         gatewayBackgroundActivity: snapshot.background,
       });
+      const abortShield = buildPersistedUserAbortUiPatch(key);
+      if (abortShield) {
+        set(abortShield);
+        ensureSessionBackendPolling(key, set, get);
+        return;
+      }
       const reAdopt = buildReAdoptRunPatch(
         { ...get(), currentSessionKey: key },
         key,
@@ -5639,17 +5646,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sessionBackendActivity: postAbortSnapshot.session,
             gatewayBackgroundActivity: postAbortSnapshot.background,
           });
-          if (releaseUserAbortedSessionWhenIdle(
+          if (isUserAbortedSessionBackendIdle(
             currentSessionKey,
             postAbortSnapshot.session,
             postAbortSnapshot.background,
             get().messages,
           )) {
-            set({ runAborted: false });
-          } else {
+            clearSessionActivityPoll();
+          } else if (isUserAbortedSession(currentSessionKey)) {
             ensureSessionBackendPolling(currentSessionKey, set, get);
           }
-        } else {
+        } else if (isUserAbortedSession(currentSessionKey)) {
           ensureSessionBackendPolling(currentSessionKey, set, get);
         }
       }
@@ -6547,13 +6554,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
             gatewayBackgroundActivity,
           } = get();
           const activity = backendActivityForSession(sessionBackendActivity, currentSessionKey);
-          if (releaseUserAbortedSessionWhenIdle(
+          if (isUserAbortedSessionBackendIdle(
             foregroundSessionKey,
             activity,
             gatewayBackgroundActivity,
             currentMessages,
           )) {
-            set({ runAborted: false });
+            clearSessionActivityPoll();
           } else if (isUserAbortedSession(foregroundSessionKey)) {
             ensureSessionBackendPolling(currentSessionKey, set, get);
           }
@@ -6686,6 +6693,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return;
         }
 
+        if (isUserAbortedSession(resolvedSessionKey)) {
+          const abortShield = buildPersistedUserAbortUiPatch(resolvedSessionKey);
+          if (abortShield) {
+            set(abortShield);
+          }
+          return;
+        }
+
         // Gateway reported completed but transcript may still be in-flight (tool rounds,
         // narration-before-tools). Do not force idle UI without a terminal assistant turn.
         set({
@@ -6796,6 +6811,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 export function kickSessionBackendPolling(): void {
   const state = useChatStore.getState();
   if (!state.currentSessionKey) return;
+  const abortShield = buildPersistedUserAbortUiPatch(state.currentSessionKey);
+  if (abortShield) {
+    useChatStore.setState(abortShield);
+  }
   ensureSessionBackendPolling(state.currentSessionKey, useChatStore.setState, useChatStore.getState);
 }
 

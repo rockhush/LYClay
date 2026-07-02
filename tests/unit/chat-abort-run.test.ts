@@ -1,12 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { gatewayRpcMock, hostApiFetchMock, agentsState } = vi.hoisted(() => ({
+const { gatewayRpcMock, hostApiFetchMock, getSessionBackendActivityMock, agentsState } = vi.hoisted(() => ({
   gatewayRpcMock: vi.fn(),
   hostApiFetchMock: vi.fn(),
+  getSessionBackendActivityMock: vi.fn(),
   agentsState: {
     agents: [] as Array<Record<string, unknown>>,
   },
 }));
+
+const idleBackendActivityResponse = () => ({
+  success: true,
+  session: {
+    sessionKey: 'agent:main:main',
+    status: 'idle',
+    processing: false,
+    hasTrackedUserRun: false,
+    activeRunIds: [] as string[],
+  },
+  background: { hasBackgroundProcessing: false, processingSessionKeys: [] as string[] },
+});
 
 vi.mock('@/stores/gateway', () => ({
   useGatewayStore: {
@@ -25,6 +38,7 @@ vi.mock('@/stores/agents', () => ({
 
 vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
+  getSessionBackendActivity: (...args: unknown[]) => getSessionBackendActivityMock(...args),
 }));
 
 vi.mock('@/lib/ui-state-persistence', () => ({
@@ -38,8 +52,10 @@ describe('chat abort run', () => {
     window.localStorage.clear();
     gatewayRpcMock.mockReset();
     hostApiFetchMock.mockReset();
+    getSessionBackendActivityMock.mockReset();
     agentsState.agents = [];
     gatewayRpcMock.mockResolvedValue({ ok: true });
+    getSessionBackendActivityMock.mockResolvedValue(idleBackendActivityResponse());
   });
 
   it('ignores late delta events after the user aborts a run', async () => {
@@ -311,9 +327,11 @@ describe('chat abort run', () => {
     const { isUserAbortedSession } = await import('@/stores/chat/user-aborted-sessions');
 
     let resolveBackend: ((value: unknown) => void) | undefined;
-    hostApiFetchMock.mockImplementation(() => new Promise((resolve) => {
+    getSessionBackendActivityMock.mockReset();
+    getSessionBackendActivityMock.mockImplementationOnce(() => new Promise((resolve) => {
       resolveBackend = resolve;
     }));
+    getSessionBackendActivityMock.mockResolvedValue(idleBackendActivityResponse());
 
     useChatStore.setState({
       currentSessionKey: 'agent:main:main',
@@ -429,7 +447,7 @@ describe('chat abort run', () => {
     const { deriveIsExecuting } = await import('@/stores/chat/user-turn-lifecycle');
     const { isUserAbortedSession } = await import('@/stores/chat/user-aborted-sessions');
 
-    hostApiFetchMock.mockResolvedValue({
+    getSessionBackendActivityMock.mockResolvedValue({
       success: true,
       session: {
         sessionKey: 'agent:main:main',
@@ -500,5 +518,73 @@ describe('chat abort run', () => {
 
     expect(useChatStore.getState().streamingMessage).toBeNull();
     expect(useChatStore.getState().sending).toBe(false);
+  });
+
+  it('keeps the persisted abort marker after backend reports idle post-abort', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const { isUserAbortedSession } = await import('@/stores/chat/user-aborted-sessions');
+
+    getSessionBackendActivityMock.mockResolvedValue(idleBackendActivityResponse());
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'hello', timestamp: 1, id: 'u1' }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: true,
+      activeRunId: 'run-abort-me',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: Date.now(),
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+      runAborted: false,
+    });
+
+    await useChatStore.getState().abortRun();
+
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
+    expect(useChatStore.getState().runAborted).toBe(true);
+    expect(useChatStore.getState().sending).toBe(false);
+
+    useChatStore.getState().handleChatEvent({
+      state: 'started',
+      runId: 'run-late-restart',
+      sessionKey: 'agent:main:main',
+    });
+
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
+    expect(useChatStore.getState().runAborted).toBe(true);
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
+  });
+
+  it('kickSessionBackendPolling restores the abort shield after a simulated restart', async () => {
+    const { useChatStore, kickSessionBackendPolling } = await import('@/stores/chat');
+    const { persistUserAbortedSession } = await import('@/stores/chat/user-aborted-sessions');
+
+    persistUserAbortedSession('agent:main:main', 'run-stale');
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      sending: true,
+      activeRunId: 'run-stale',
+      runAborted: false,
+      pendingFinal: true,
+    });
+
+    kickSessionBackendPolling();
+
+    expect(useChatStore.getState().sending).toBe(false);
+    expect(useChatStore.getState().activeRunId).toBeNull();
+    expect(useChatStore.getState().runAborted).toBe(true);
   });
 });

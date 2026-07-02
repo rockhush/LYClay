@@ -16,7 +16,7 @@ import {
 import { hasDelegationSpawnForActiveTurn, isParentDelegationPhaseOpen, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
 import { isGatewayIdleForSpawnedChildren } from '@/lib/subagent-delegation';
 import { hasGatewayActiveChildDelegations } from '@/lib/subagent-delegation-watch';
-import { clearUserAbortedSession, isUserAbortedSession } from './user-aborted-sessions';
+import { isUserAbortedSession } from './user-aborted-sessions';
 
 export type SessionBackendActivity = {
   sessionKey: string;
@@ -122,19 +122,34 @@ export function isUserTurnOpen(
   return false;
 }
 
-/** Clear persisted user-abort marker once backend work has fully stopped. */
-export function releaseUserAbortedSessionWhenIdle(
+/**
+ * Whether backend work for a user-aborted session has fully stopped.
+ * The persisted abort marker is NOT cleared here — only a new user send or
+ * session delete removes it, so restart/reconcile cannot re-adopt stale runs.
+ */
+export function isUserAbortedSessionBackendIdle(
   sessionKey: string,
   backendActivity: SessionBackendActivity | null | undefined,
   gatewayBackground?: GatewayBackgroundActivity | null,
   messages: RawMessage[] = [],
 ): boolean {
   if (!isUserAbortedSession(sessionKey)) return false;
-  if (hasOpenBackendWorkForUserTurn(gatewayBackground, backendActivity, messages)) {
-    return false;
-  }
-  clearUserAbortedSession(sessionKey);
-  return true;
+  return !hasOpenBackendWorkForUserTurn(gatewayBackground, backendActivity, messages);
+}
+
+/** @deprecated Use isUserAbortedSessionBackendIdle — never clears the persisted marker. */
+export function releaseUserAbortedSessionWhenIdle(
+  sessionKey: string,
+  backendActivity: SessionBackendActivity | null | undefined,
+  gatewayBackground?: GatewayBackgroundActivity | null,
+  messages: RawMessage[] = [],
+): boolean {
+  return isUserAbortedSessionBackendIdle(
+    sessionKey,
+    backendActivity,
+    gatewayBackground,
+    messages,
+  );
 }
 
 /** Unified executing signal for Sidebar, stop button, and execution graph. */

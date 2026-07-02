@@ -9,6 +9,7 @@ import {
   deriveIsExecuting,
   deriveSidebarSessionIsExecuting,
   releaseUserAbortedSessionWhenIdle,
+  isUserAbortedSessionBackendIdle,
   isBackendSessionActive,
   isTranscriptOnlyDelegationDefer,
   sanitizeLeavingSessionStreamingSnapshot,
@@ -17,6 +18,7 @@ import {
 } from '@/stores/chat/user-turn-lifecycle';
 import {
   _resetUserAbortedSessionsForTests,
+  isUserAbortedSession,
   persistUserAbortedSession,
 } from '@/stores/chat/user-aborted-sessions';
 import { hasInFlightSubagentSignals } from '@/lib/subagent-delegation';
@@ -1245,7 +1247,7 @@ describe('user-turn-lifecycle', () => {
     _resetUserAbortedSessionsForTests();
   });
 
-  it('releaseUserAbortedSessionWhenIdle clears marker only after backend work stops', () => {
+  it('isUserAbortedSessionBackendIdle reports idle without clearing the persisted marker', () => {
     persistUserAbortedSession('agent:main:main', 'run-1');
     const activeBackend = {
       sessionKey: 'agent:main:main',
@@ -1262,8 +1264,11 @@ describe('user-turn-lifecycle', () => {
       activeRunIds: [],
     };
 
-    expect(releaseUserAbortedSessionWhenIdle('agent:main:main', activeBackend)).toBe(false);
+    expect(isUserAbortedSessionBackendIdle('agent:main:main', activeBackend)).toBe(false);
+    expect(isUserAbortedSessionBackendIdle('agent:main:main', idleBackend)).toBe(true);
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
     expect(releaseUserAbortedSessionWhenIdle('agent:main:main', idleBackend)).toBe(true);
+    expect(isUserAbortedSession('agent:main:main')).toBe(true);
     _resetUserAbortedSessionsForTests();
   });
 });

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { shouldContinueBackendPolling } from '../../src/stores/chat/session-backend-bridge';
 import type { ChatState } from '../../src/stores/chat/types';
+import {
+  _resetUserAbortedSessionsForTests,
+  persistUserAbortedSession,
+} from '../../src/stores/chat/user-aborted-sessions';
 
 vi.mock('@/stores/gateway', () => ({
   useGatewayStore: {
@@ -87,5 +91,28 @@ describe('session-backend-bridge reconcile', () => {
 
   it('stops reconcile when local and gateway signals are idle', () => {
     expect(shouldContinueBackendPolling(baseState(), 'agent:main:session-1')).toBe(false);
+  });
+
+  it('keeps reconcile for user-aborted sessions only while backend work remains', () => {
+    persistUserAbortedSession('agent:main:session-1', 'run-1');
+    expect(shouldContinueBackendPolling(baseState({
+      sessionBackendActivity: {
+        sessionKey: 'agent:main:session-1',
+        status: 'running',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['run-1'],
+      },
+    }), 'agent:main:session-1')).toBe(true);
+    expect(shouldContinueBackendPolling(baseState({
+      sessionBackendActivity: {
+        sessionKey: 'agent:main:session-1',
+        status: 'idle',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+    }), 'agent:main:session-1')).toBe(false);
+    _resetUserAbortedSessionsForTests();
   });
 });

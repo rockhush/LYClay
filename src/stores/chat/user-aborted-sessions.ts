@@ -76,6 +76,67 @@ export function listUserAbortedSessionKeys(): string[] {
   return Object.keys(readMap());
 }
 
+export function getUserAbortedSessionRecord(
+  sessionKey: string,
+): UserAbortedSessionRecord | undefined {
+  const key = sessionKey.trim();
+  if (!key) return undefined;
+  return readMap()[key];
+}
+
+/** UI patch applied whenever a persisted user-abort marker is active. */
+export function buildPersistedUserAbortUiPatch(sessionKey: string | null | undefined): {
+  sending: false;
+  activeRunId: null;
+  runAborted: true;
+  pendingFinal: false;
+  streamingText: '';
+  streamingMessage: null;
+  streamingTools: [];
+  pendingToolImages: [];
+  lastUserMessageAt: null;
+} | null {
+  if (!isUserAbortedSession(sessionKey)) return null;
+  return {
+    sending: false,
+    activeRunId: null,
+    runAborted: true,
+    pendingFinal: false,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingToolImages: [],
+    lastUserMessageAt: null,
+  };
+}
+
+async function abortPersistedSessionOnGateway(
+  rpc: (method: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<unknown>,
+  sessionKey: string,
+  runId?: string | null,
+): Promise<void> {
+  const key = sessionKey.trim();
+  if (!key) return;
+  try {
+    await rpc(
+      'sessions.abort',
+      {
+        key,
+        ...(runId?.trim() ? { runId: runId.trim() } : {}),
+      },
+      10_000,
+    );
+  } catch {
+    // Gateway may already have stopped the run; keep the persisted flag.
+  }
+  // Session-wide abort catches stale/different run ids after restart.
+  try {
+    await rpc('sessions.abort', { key }, 10_000);
+  } catch {
+    // best-effort
+  }
+}
+
 export async function reabortPersistedUserSessions(
   rpc: (method: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<unknown>,
 ): Promise<void> {
@@ -85,20 +146,21 @@ export async function reabortPersistedUserSessions(
   await Promise.allSettled(
     keys.map(async (key) => {
       const record = readMap()[key];
-      try {
-        await rpc(
-          'sessions.abort',
-          {
-            key,
-            ...(record?.runId ? { runId: record.runId } : {}),
-          },
-          10_000,
-        );
-      } catch {
-        // Gateway may already have stopped the run; keep the persisted flag.
-      }
+      await abortPersistedSessionOnGateway(rpc, key, record?.runId);
     }),
   );
+}
+
+/** Re-send abort for one session when Gateway still reports active work. */
+export async function reabortPersistedUserSessionIfActive(
+  sessionKey: string,
+  activeRunId: string | null | undefined,
+  rpc: (method: string, params: Record<string, unknown>, timeoutMs?: number) => Promise<unknown>,
+): Promise<void> {
+  if (!isUserAbortedSession(sessionKey)) return;
+  const record = getUserAbortedSessionRecord(sessionKey);
+  const runId = activeRunId?.trim() || record?.runId || null;
+  await abortPersistedSessionOnGateway(rpc, sessionKey, runId);
 }
 
 /** Test helper */
