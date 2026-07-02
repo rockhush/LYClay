@@ -19,6 +19,7 @@ import {
 import { getProviderService } from './provider-service';
 import { deleteProvider, storeApiKey } from '../../utils/secure-storage';
 import { getProviderAccount, saveProviderAccount } from './provider-store';
+import { syncDefaultProviderToRuntime } from './provider-runtime-sync';
 
 const LY_AUTO_LABEL = 'LY-Auto';
 const LY_AUTO_BASE_URL = 'http://10.64.10.48/v1';
@@ -191,9 +192,13 @@ async function syncManagedProviderToAgentModels(
 
 export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManager): Promise<void> {
   const providerService = getProviderService();
+  const initialDefaultProviderId = await providerService.getDefaultAccountId();
+  const shouldDefaultToLyAuto = !initialDefaultProviderId || OLD_LY_PROVIDER_IDS.includes(initialDefaultProviderId);
 
   // Migrate old LY providers to auto
-  await migrateOldLyProvidersToAuto();
+  if (shouldDefaultToLyAuto) {
+    await migrateOldLyProvidersToAuto();
+  }
   await removeOldLyProviders();
 
   // Create or update ly-auto account
@@ -245,7 +250,13 @@ export async function bootstrapLyManagedProviders(gatewayManager?: GatewayManage
     await providerService.setDefaultAccount(account.id);
   }
 
-  // Set default model
+  const effectiveDefaultProviderId = await providerService.getDefaultAccountId();
+  if (effectiveDefaultProviderId && effectiveDefaultProviderId !== account.id) {
+    await syncDefaultProviderToRuntime(effectiveDefaultProviderId, gatewayManager);
+    return;
+  }
+
+  // Set default model only when ly-auto is the effective default provider.
   const defaultModelRef = `${runtimeProviderKey}/${LY_AUTO_MODEL_ID}`;
   const changed = await ensureOpenClawDefaultModel(defaultModelRef);
   if (changed) {

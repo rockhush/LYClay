@@ -676,6 +676,55 @@ describe('chat event dedupe', () => {
     expect(extractText(state.messages.at(-1))).toContain('Installing it now');
   });
 
+  it('settles an ambiguous visible text final when backend is idle', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const userTimestamp = Date.now();
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [{ role: 'user', content: 'Generate the DOE report', id: 'u1', timestamp: userTimestamp }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'run-visible-no-stop',
+      streamingText: '',
+      streamingMessage: { role: 'assistant', content: [{ type: 'text', text: 'Preparing final report.' }] },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTimestamp,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-visible-no-stop',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        id: 'final-visible-no-stop',
+        timestamp: userTimestamp + 1,
+        content: [{ type: 'text', text: 'DOE report is ready. Please review the generated files.' }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sending).toBe(false);
+    });
+
+    const state = useChatStore.getState();
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(state.streamingMessage).toBeNull();
+    expect(extractText(state.messages.find((message) => message.id === 'final-visible-no-stop'))).toContain(
+      'DOE report is ready',
+    );
+  });
   it('keeps a final carrying an actual tool call active', async () => {
     const { useChatStore } = await import('@/stores/chat');
 

@@ -16,6 +16,10 @@ import { listAgentsSnapshot } from '../../utils/agent-config';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
+function reloadGatewayAfterDigitalEmployeeMutation(ctx: HostApiContext): void {
+  ctx.gatewayManager.debouncedReload();
+}
+
 export async function handleDigitalEmployeeRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -75,10 +79,9 @@ export async function handleDigitalEmployeeRoutes(
           : '',
         packageSha256: body.packageSha256?.trim() || undefined,
       });
-      ctx.gatewayManager.debouncedReload();
+      reloadGatewayAfterDigitalEmployeeMutation(ctx);
       sendJson(res, 200, { success: true, ...result });
     } catch (error) {
-      ctx.gatewayManager.debouncedReload();
       sendJson(res, 500, { success: false, error: String(error) });
     }
     return true;
@@ -97,10 +100,9 @@ export async function handleDigitalEmployeeRoutes(
         : instanceId
           ? await uninstallDigitalEmployee(instanceId)
           : (() => { throw new Error('marketEmployeeId or instanceId is required'); })();
-      ctx.gatewayManager.debouncedReload();
+      reloadGatewayAfterDigitalEmployeeMutation(ctx);
       sendJson(res, 200, { success: true, ...result });
     } catch (error) {
-      ctx.gatewayManager.debouncedReload();
       sendJson(res, 500, { success: false, error: String(error) });
     }
     return true;
@@ -114,10 +116,9 @@ export async function handleDigitalEmployeeRoutes(
       const result = await updateDigitalEmployee(instanceId, {
         packageSha256: body.packageSha256?.trim() || undefined,
       });
-      ctx.gatewayManager.debouncedReload();
+      reloadGatewayAfterDigitalEmployeeMutation(ctx);
       sendJson(res, 200, { success: true, ...result });
     } catch (error) {
-      ctx.gatewayManager.debouncedReload();
       sendJson(res, 500, { success: false, error: String(error) });
     }
     return true;

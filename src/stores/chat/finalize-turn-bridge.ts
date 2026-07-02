@@ -1,5 +1,5 @@
 import { clearErrorRecoveryTimer, clearHistoryPoll } from './helpers';
-import { buildClearedActiveRunPatch } from './run-lifecycle';
+import { buildClearedActiveRunPatch, hasVisibleAssistantReplyForActiveTurn, shouldSilentlyFinalizeRunOnAssistantFinal } from './run-lifecycle';
 import type { ChatGet, ChatSet } from './store-api';
 import {
   ensureSessionBackendPolling,
@@ -20,7 +20,9 @@ import {
   collectCompletedSubagentSessionKeys,
   isGatewayIdleForSpawnedChildren,
   isSubagentDelegationAnnounceRun,
+  parseChildSessionKeyFromAnnounceRun,
 } from '@/lib/subagent-delegation';
+import { hasDelegationSpawnForActiveTurn, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
 
 let _finalizeGraceTimer: ReturnType<typeof setTimeout> | null = null;
 let _finalizeGraceSessionKey: string | null = null;
@@ -233,16 +235,59 @@ function applyKeepUserTurnOpen(
   ensureSessionBackendPolling(context.sessionKey, set, get);
 }
 
+type AnnounceSettleInput = {
+  runId?: string;
+  lastUserMessageAt?: number | null;
+  terminalMessage?: RawMessage;
+};
+
+function announceRunMatchesSpawnedChild(
+  runId: string | undefined,
+  messages: RawMessage[],
+): boolean {
+  if (!runId) return false;
+  const childSessionKey = parseChildSessionKeyFromAnnounceRun(runId);
+  if (!childSessionKey) return false;
+  const completed = collectCompletedSubagentSessionKeys(messages);
+  const bindings = collectChildDelegationBindings(messages, completed);
+  return bindings.some((binding) => binding.childSessionKey === childSessionKey);
+}
+
+function hasSettledDelegationAnswer(
+  messages: RawMessage[],
+  processingSessionKeys: readonly string[],
+  input: AnnounceSettleInput,
+): boolean {
+  if (isDelegationWrapUpComplete(messages, processingSessionKeys, {
+    lastUserMessageAt: input.lastUserMessageAt,
+  })) {
+    return true;
+  }
+
+  if (!input.terminalMessage || !shouldSilentlyFinalizeRunOnAssistantFinal(input.terminalMessage)) {
+    return false;
+  }
+
+  if (!hasDelegationSpawnForActiveTurn(messages, { lastUserMessageAt: input.lastUserMessageAt })) {
+    return false;
+  }
+
+  return hasVisibleAssistantReplyForActiveTurn(messages, input.lastUserMessageAt ?? null);
+}
+
 /**
- * Gateway-only check for announce wrap-up: parent + spawned children must be
- * idle. Ignores stale `hasTrackedUserRun` snapshots that lag behind push finals.
+ * Announce wrap-up may settle only when it belongs to a spawned child, gateway
+ * work is idle, and the active turn already has a visible delegation answer.
  */
 export function canSyncClearAfterAnnounceWrapUp(
   sessionKey: string,
   messages: RawMessage[],
   processingSessionKeys: readonly string[],
+  input: AnnounceSettleInput = {},
 ): boolean {
-  return isGatewayIdleForSpawnedChildren(sessionKey, messages, processingSessionKeys);
+  if (!isGatewayIdleForSpawnedChildren(sessionKey, messages, processingSessionKeys)) return false;
+  if (!announceRunMatchesSpawnedChild(input.runId, messages)) return false;
+  return hasSettledDelegationAnswer(messages, processingSessionKeys, input);
 }
 
 /**
@@ -255,6 +300,7 @@ export function trySyncClearAnnounceWrapUp(
   context: {
     sessionKey: string;
     runId?: string;
+    terminalMessage?: RawMessage;
   },
 ): boolean {
   if (!context.runId || !isSubagentDelegationAnnounceRun(context.runId)) return false;
@@ -264,7 +310,11 @@ export function trySyncClearAnnounceWrapUp(
   if (state.runAborted) return false;
 
   const processingKeys = state.gatewayBackgroundActivity?.processingSessionKeys ?? [];
-  if (!canSyncClearAfterAnnounceWrapUp(context.sessionKey, state.messages, processingKeys)) {
+  if (!canSyncClearAfterAnnounceWrapUp(context.sessionKey, state.messages, processingKeys, {
+    runId: context.runId,
+    lastUserMessageAt: state.lastUserMessageAt,
+    terminalMessage: context.terminalMessage,
+  })) {
     return false;
   }
 
@@ -319,12 +369,17 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
   applyBackendSnapshot(set, snapshot);
 
   const next = get();
-  if (canClearUserTurnNow(buildCanClearInput(next, context, snapshot))
-    || (isAnnounceWrapUpRun && !hasOpenBackendWorkForUserTurn(
-      snapshot.background,
-      snapshot.session,
-      next.messages,
-    ))) {
+  const canClearAnnounceWrapUp = isAnnounceWrapUpRun && canSyncClearAfterAnnounceWrapUp(
+    context.sessionKey,
+    next.messages,
+    snapshot.background.processingSessionKeys,
+    {
+      runId: context.runId,
+      lastUserMessageAt: next.lastUserMessageAt,
+      terminalMessage: context.terminalMessage,
+    },
+  );
+  if (canClearUserTurnNow(buildCanClearInput(next, context, snapshot)) || canClearAnnounceWrapUp) {
     clearFinalizeGraceTimer();
     clearHistoryPoll();
     clearErrorRecoveryTimer();

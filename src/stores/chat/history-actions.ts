@@ -12,6 +12,7 @@ import {
   isInternalMessage,
   isAbortErrorMessage,
   isSuppressedRunError,
+  shouldSuppressPartialSuccessRunError,
   isToolResultRole,
   loadMissingPreviews,
   matchesOptimisticUserMessage,
@@ -78,7 +79,11 @@ export function createHistoryActions(
         if (!latestAssistantMessage) return null;
         const stopReason = (latestAssistantMessage as any).stopReason ?? (latestAssistantMessage as any).stop_reason;
         if (stopReason !== 'error') return null;
-        return (latestAssistantMessage as any).errorMessage ?? (latestAssistantMessage as any).error_message ?? null;
+        const errorMessage = (latestAssistantMessage as any).errorMessage
+          ?? (latestAssistantMessage as any).error_message
+          ?? null;
+        if (shouldSuppressPartialSuccessRunError(errorMessage, latestAssistantMessage)) return null;
+        return errorMessage;
       };
       const getUserDedupKey = (message: RawMessage): string | null => {
         const text = stripGatewayUserMetadata(getMessageText(message.content))

@@ -31,25 +31,25 @@ describe('stripSilentReplyToken', () => {
 
 describe('channel delivery assistant filtering', () => {
   it('treats DingTalk delivery confirmations as internal text', () => {
-    expect(isChannelDeliveryConfirmationText('已通过钉钉发送。\n\nNO_REPLY')).toBe(true);
-    expect(isChannelDeliveryConfirmationText('已向张三发送消息。')).toBe(true);
+    expect(isChannelDeliveryConfirmationText('sent message via dingtalk')).toBe(true);
+    expect(isChannelDeliveryConfirmationText('message sent through dingtalk\n\nNO_REPLY')).toBe(true);
   });
 
   it('does not treat pre-tool DingTalk planning as a delivery confirmation', () => {
-    expect(isChannelDeliveryConfirmationText('接下来我会通过钉钉发送会议通知。')).toBe(false);
-    expect(isChannelDeliveryConfirmationText('我先整理内容，再通过钉钉发送给张三。')).toBe(false);
+    expect(isChannelDeliveryConfirmationText('I will send the meeting notice through DingTalk next.')).toBe(false);
+    expect(isChannelDeliveryConfirmationText('Let me prepare the note before sending it via DingTalk.')).toBe(false);
   });
 
   it('filters assistant echoes of outbound channel payloads', () => {
     const messages: RawMessage[] = [
-      { role: 'user', content: '给李四发消息：明天开会', id: 'u1', timestamp: 1 },
+      { role: 'user', content: 'Send Alice this message: meeting tomorrow', id: 'u1', timestamp: 1 },
       {
         role: 'assistant',
-        content: [{ type: 'toolCall', id: 't1', name: 'message_send', arguments: { text: '明天开会' } }],
+        content: [{ type: 'toolCall', id: 't1', name: 'message_send', arguments: { text: 'meeting tomorrow' } }],
         id: 'a1',
         timestamp: 2,
       },
-      { role: 'assistant', content: '明天开会', id: 'a2', timestamp: 3 },
+      { role: 'assistant', content: 'meeting tomorrow', id: 'a2', timestamp: 3 },
     ];
 
     const filtered = filterChannelOutboundEchoMessages(messages);
@@ -79,7 +79,6 @@ describe('chat run lifecycle helpers', () => {
 
     expect(isSilentTerminalAssistantMessage(message)).toBe(false);
     expect(isRunTerminalAssistantMessage(message)).toBe(false);
-  });
   });
 
   it('does not treat length-truncated assistant output as terminal', () => {
@@ -157,7 +156,7 @@ describe('chat run lifecycle helpers', () => {
   it('does not treat aborted assistant turns as successful terminal replies', () => {
     const message: RawMessage = {
       role: 'assistant',
-      content: [{ type: 'text', text: '环境确认完毕，开始写生成脚本。' }],
+      content: [{ type: 'text', text: 'Preparing the generation script.' }],
       stopReason: 'aborted',
       errorMessage: 'Request was aborted',
       timestamp: 1001,
@@ -166,7 +165,7 @@ describe('chat run lifecycle helpers', () => {
     expect(isTerminalAssistantMessage(message)).toBe(false);
     expect(isRunTerminalAssistantMessage(message)).toBe(false);
     expect(findTerminalAssistantAfterLatestUser([
-      { role: 'user', content: '生成 PPT', id: 'u1', timestamp: 1000 },
+      { role: 'user', content: 'Generate PPT', id: 'u1', timestamp: 1000 },
       message,
     ])).toBeUndefined();
   });
@@ -226,7 +225,7 @@ describe('chat run lifecycle helpers', () => {
 
   it('treats post-tool text-only replies as concluding even without stopReason', () => {
     const messages: RawMessage[] = [
-      { role: 'user', content: 'build ppt', id: 'u1', timestamp: 1000 },
+      { role: 'user', content: 'Generate PPT', id: 'u1', timestamp: 1000 },
       {
         role: 'assistant',
         content: [{ type: 'toolCall', id: 't1', name: 'exec', arguments: {} }],
@@ -237,7 +236,7 @@ describe('chat run lifecycle helpers', () => {
       { role: 'toolresult', toolCallId: 't1', content: 'ok', timestamp: 3000 },
       {
         role: 'assistant',
-        content: [{ type: 'text', text: 'PPT 已生成，请查看附件。' }],
+        content: [{ type: 'text', text: 'PPT generated. Please review the attachment.' }],
         id: 'a-final-no-stop',
         timestamp: 4000,
       },
@@ -281,7 +280,7 @@ describe('silent run finalization whitelist', () => {
 
     expect(shouldSilentlyFinalizeRunOnAssistantFinal({
       role: 'assistant',
-      content: '已通过钉钉发送。\n\nNO_REPLY',
+      content: 'sent message via dingtalk\n\nNO_REPLY',
       stopReason: 'stop',
     })).toBe(true);
   });
@@ -289,19 +288,19 @@ describe('silent run finalization whitelist', () => {
   it('does not finalize approve narration or pre-tool channel planning', () => {
     expect(shouldSilentlyFinalizeRunOnAssistantFinal({
       role: 'assistant',
-      content: '请回复 /approve d0aebe53 来放行。',
+      content: 'Please reply /approve d0aebe53 to continue.',
       stopReason: 'stop',
     })).toBe(false);
 
     expect(shouldSilentlyFinalizeRunOnAssistantFinal({
       role: 'assistant',
-      content: '接下来我会通过钉钉发送会议通知。',
+      content: 'I will send the meeting notice through DingTalk next.',
       stopReason: 'toolUse',
     })).toBe(false);
 
     expect(shouldKeepRunActiveAfterAssistantFinal({
       role: 'assistant',
-      content: '请回复 /approve d0aebe53 来放行。',
+      content: 'Please reply /approve d0aebe53 to continue.',
       stopReason: 'toolUse',
     })).toBe(true);
   });
@@ -315,7 +314,7 @@ describe('silent run finalization whitelist', () => {
 
   it('suppresses streaming only for silent tokens, not approval narration', () => {
     expect(shouldSuppressAssistantStreamingText('NO_REPLY')).toBe(true);
-    expect(shouldSuppressAssistantStreamingText('请回复 /approve d0aebe53 来放行。')).toBe(false);
-    expect(shouldSuppressAssistantStreamingText('接下来我会通过钉钉发送会议通知。')).toBe(false);
+    expect(shouldSuppressAssistantStreamingText('Please reply /approve d0aebe53 to continue.')).toBe(false);
+    expect(shouldSuppressAssistantStreamingText('I will send the meeting notice through DingTalk next.')).toBe(false);
   });
 });

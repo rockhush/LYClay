@@ -100,7 +100,7 @@ describe('digital employee routes', () => {
     );
   });
 
-  it('reloads the Gateway after a rolled-back install failure', async () => {
+  it('does not reload the Gateway after a rolled-back install failure', async () => {
     parseJsonBodyMock.mockResolvedValue({
       marketEmployeeId: '7',
     });
@@ -115,7 +115,30 @@ describe('digital employee routes', () => {
       { gatewayManager: { debouncedReload } } as never,
     );
 
-    expect(debouncedReload).toHaveBeenCalledTimes(1);
+    expect(debouncedReload).not.toHaveBeenCalled();
+    expect(sendJsonMock).toHaveBeenCalledWith(
+      expect.anything(),
+      500,
+      expect.objectContaining({ success: false }),
+    );
+  });
+
+  it('does not reload the Gateway when update finds no newer package', async () => {
+    parseJsonBodyMock.mockResolvedValue({});
+    updateDigitalEmployeeMock.mockRejectedValue(
+      new Error('Update version 1.0.0 must be newer than installed version 1.0.0'),
+    );
+    const debouncedReload = vi.fn();
+    const { handleDigitalEmployeeRoutes } = await import('@electron/api/routes/digital-employees');
+
+    await handleDigitalEmployeeRoutes(
+      { method: 'POST' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/digital-employees/document-analyst--1234/update'),
+      { gatewayManager: { debouncedReload } } as never,
+    );
+
+    expect(debouncedReload).not.toHaveBeenCalled();
     expect(sendJsonMock).toHaveBeenCalledWith(
       expect.anything(),
       500,
@@ -182,6 +205,22 @@ describe('digital employee routes', () => {
       200,
       expect.objectContaining({ success: true, instanceId: 'emp-1' }),
     );
+  });
+
+  it('does not reload the Gateway after an uninstall failure', async () => {
+    parseJsonBodyMock.mockResolvedValue({ marketEmployeeId: '7' });
+    uninstallDigitalEmployeeByMarketIdMock.mockRejectedValue(new Error('uninstall failed'));
+    const debouncedReload = vi.fn();
+    const { handleDigitalEmployeeRoutes } = await import('@electron/api/routes/digital-employees');
+
+    await handleDigitalEmployeeRoutes(
+      { method: 'POST' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/digital-employees/uninstall'),
+      { gatewayManager: { debouncedReload } } as never,
+    );
+
+    expect(debouncedReload).not.toHaveBeenCalled();
   });
 
   it('updates enabled state for an installed digital employee', async () => {

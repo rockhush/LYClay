@@ -169,7 +169,7 @@ export function findTerminalAssistantForActiveTurn(
 /**
  * User-visible text-only assistant reply after the last tool activity in a slice.
  * OpenClaw transcripts often omit stopReason on the real final answer even though
- * the run is complete — use this for finalize and UI desync recovery.
+ * the run is complete �?use this for finalize and UI desync recovery.
  */
 export function findConcludingAssistantReply(
   messages: readonly RawMessage[],
@@ -217,6 +217,38 @@ export function findConcludingAssistantForActiveTurn(
   return concluding;
 }
 
+/** User-visible assistant reply committed in the active turn, ignoring silent plumbing finals. */
+export function findVisibleAssistantReplyForActiveTurn(
+  messages: RawMessage[],
+  lastUserMessageAt: number | null,
+): RawMessage | undefined {
+  const userIdx = findLatestVisibleUserIndex(messages);
+  const turnMessages = userIdx >= 0 ? messages.slice(userIdx + 1) : messages;
+  const lastToolIdx = findLastToolActivityIndex(turnMessages);
+  const startIdx = lastToolIdx >= 0 ? lastToolIdx + 1 : 0;
+  const turnStartMs = lastUserMessageAt != null ? toMs(lastUserMessageAt) : null;
+
+  for (let i = turnMessages.length - 1; i >= startIdx; i -= 1) {
+    const message = turnMessages[i];
+    if (!message || message.role !== 'assistant') continue;
+    if (isFailedAssistantMessage(message)) continue;
+    if (shouldSilentlyFinalizeRunOnAssistantFinal(message)) continue;
+    if (messageHasToolUse(message)) continue;
+    if (!hasVisibleAssistantContent(message)) continue;
+    const messageMs = message.timestamp != null ? toMs(message.timestamp) : null;
+    if (turnStartMs != null && messageMs != null && messageMs < turnStartMs) continue;
+    return message;
+  }
+
+  return undefined;
+}
+
+export function hasVisibleAssistantReplyForActiveTurn(
+  messages: RawMessage[],
+  lastUserMessageAt: number | null,
+): boolean {
+  return findVisibleAssistantReplyForActiveTurn(messages, lastUserMessageAt) != null;
+}
 /** Terminal stopReason or post-tool concluding text already committed in transcript. */
 export function hasCommittedUserReplyInMessages(messages: readonly RawMessage[]): boolean {
   if (messages.some((message) => isRunTerminalAssistantMessage(message))) return true;

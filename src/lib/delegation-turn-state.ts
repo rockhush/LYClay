@@ -17,7 +17,7 @@ import {
   isChildDelegationStillActive,
 } from '@/lib/subagent-delegation-watch';
 
-/** Per-child UI status — independent branches in a multi-spawn turn. */
+/** Per-child UI status �?independent branches in a multi-spawn turn. */
 export type ChildDelegationUiStatus = 'pending' | 'running' | 'completed' | 'stalled';
 
 export type ChildDelegationSnapshot = {
@@ -91,7 +91,7 @@ export function deriveDelegationTurnSnapshot(
   // With no tracked child bindings, the turn is settled unless a spawn is still
   // genuinely pending (its tool result hasn't committed yet). A committed but
   // unbindable spawn (fire-and-forget `mode:run` `{status:accepted}` or a
-  // timed-out child) has no transcript child to wait on — gateway processing
+  // timed-out child) has no transcript child to wait on �?gateway processing
   // keys are the source of truth for those, so it must not block finalize.
   const allChildrenSettled = bindings.length === 0
     ? !hasUnresolvedSpawnDelegation(scopeMessages)
@@ -118,7 +118,7 @@ export function hasOpenSubagentDelegations(
   return snapshot.anyChildActive;
 }
 
-/** All children that are still active — supports parallel multi-spawn turns. */
+/** All children that are still active �?supports parallel multi-spawn turns. */
 export function collectActiveChildDelegations(
   messages: readonly RawMessage[],
   processingSessionKeys: readonly string[] = [],
@@ -263,7 +263,7 @@ function isDelegationScopeOpen(
 }
 
 /**
- * Parent user turn stays open across spawn → child execution → parent wrap-up.
+ * Parent user turn stays open across spawn �?child execution �?parent wrap-up.
  * Scopes to the active user turn when `lastUserMessageAt` is provided.
  */
 export function isParentDelegationPhaseOpen(
@@ -278,6 +278,16 @@ export function isParentDelegationPhaseOpen(
   return isDelegationScopeOpen(scope, processingSessionKeys, options);
 }
 
+/** Whether the active visible user turn contains a sessions_spawn attempt. */
+export function hasDelegationSpawnForActiveTurn(
+  messages: readonly RawMessage[],
+  options?: {
+    lastUserMessageAt?: number | null;
+  },
+): boolean {
+  const scope = resolveTurnScope(messages, options?.lastUserMessageAt);
+  return hasSessionsSpawnInScope(scope) || hasUnresolvedSpawnDelegation(scope);
+}
 /** Delegation phase for a single user-turn segment (already sliced). */
 export function isSegmentDelegationPhaseOpen(
   segmentMessages: readonly RawMessage[],
@@ -291,7 +301,7 @@ export function isSegmentDelegationPhaseOpen(
 
 /**
  * Parent turn received a visible wrap-up reply after spawn and gateway children
- * are idle — stale `pendingFinal` / `sending` must not keep the UI executing.
+ * are idle �?stale `pendingFinal` / `sending` must not keep the UI executing.
  */
 export function isDelegationWrapUpComplete(
   messages: readonly RawMessage[],

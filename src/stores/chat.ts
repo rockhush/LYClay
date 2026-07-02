@@ -40,6 +40,7 @@ import {
   hasVisibleAssistantContent,
   isChannelDeliveryConfirmationText,
   isSuppressedRunError,
+  shouldSuppressPartialSuccessRunError,
   isAbortErrorMessage,
   isRecoverableRuntimeError,
   isFatalRuntimeError,
@@ -5945,7 +5946,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               set(buildSecurityDenialState(messageError));
               break;
             }
-            if (isSuppressedRunError(messageError)) {
+            if (isSuppressedRunError(messageError)
+              || shouldSuppressPartialSuccessRunError(messageError, normalizedFinalMessage)) {
               set({
                 streamingText: '',
                 streamingMessage: null,

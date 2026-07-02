@@ -601,12 +601,54 @@ async function setOpenClawDefaultModelRefOnly(modelRef: string, fallbackModels: 
   });
 }
 
-async function syncDefaultAgentModelRef(modelRef: string | undefined): Promise<void> {
-  if (!modelRef) return;
+async function listDefaultModelSyncAgentIds(): Promise<string[]> {
+  const agentIds = new Set<string>(['main']);
   try {
-    await updateAgentModel('main', modelRef);
+    const snapshot = await listAgentsSnapshot();
+    for (const agent of snapshot.agents) {
+      if (agent.id) agentIds.add(agent.id);
+    }
   } catch (err) {
-    logger.warn(`[provider-runtime] Failed to sync main agent model to default "${modelRef}":`, err);
+    logger.warn('[provider-runtime] Failed to list agents while syncing default model:', err);
+  }
+  return [...agentIds];
+}
+
+async function syncDefaultAgentModelRef(modelRef: string | undefined): Promise<string[]> {
+  if (!modelRef) return [];
+  const agentIds = await listDefaultModelSyncAgentIds();
+  const syncedAgentIds: string[] = [];
+  for (const agentId of agentIds) {
+    try {
+      await updateAgentModel(agentId, modelRef);
+      syncedAgentIds.push(agentId);
+    } catch (err) {
+      logger.warn(`[provider-runtime] Failed to sync agent "${agentId}" model to default "${modelRef}":`, err);
+    }
+  }
+  return syncedAgentIds;
+}
+
+async function hotUpdateGatewayAgentModels(
+  gatewayManager: GatewayManager | undefined,
+  agentIds: string[],
+  modelRef: string,
+  fallbackMessage: string,
+  logSuffix = '',
+): Promise<void> {
+  if (!canHotUpdateGateway(gatewayManager)) return;
+  try {
+    const targetAgentIds = agentIds.length > 0 ? agentIds : ['main'];
+    for (const agentId of targetAgentIds) {
+      await gatewayManager!.rpc('agents.update', {
+        agentId,
+        model: modelRef,
+      }, 10000);
+    }
+    logger.info(`[provider-runtime] Hot-reloaded default model to ${modelRef} for ${targetAgentIds.length} agent(s) via agents.update RPC${logSuffix}`);
+  } catch (rpcError) {
+    logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
+    scheduleGatewayRefresh(gatewayManager, fallbackMessage, { onlyIfRunning: true });
   }
 }
 
@@ -722,9 +764,10 @@ export async function syncSavedProviderToRuntime(
     return;
   }
 
+  let defaultSyncedAgentIds: string[] = [];
   try {
     if (config.id === await getDefaultProvider()) {
-      await syncDefaultAgentModelRef(getProviderModelRef(config));
+      defaultSyncedAgentIds = await syncDefaultAgentModelRef(getProviderModelRef(config));
     }
     await syncAgentModelsToRuntime();
   } catch (err) {
@@ -735,19 +778,13 @@ export async function syncSavedProviderToRuntime(
   if (canHotUpdateGateway(gatewayManager) && config.id === await getDefaultProvider()) {
     const modelRef = getProviderModelRef(config);
     if (modelRef) {
-      try {
-        await gatewayManager!.rpc('agents.update', {
-          agentId: 'main',
-          model: modelRef,
-        }, 10000);
-        logger.info(`[provider-runtime] Hot-reloaded default model to ${modelRef} via agents.update RPC after provider save`);
-      } catch (rpcError) {
-        logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
-        scheduleGatewayRefresh(
-          gatewayManager,
-          `Scheduling Gateway reload after saving provider "${context.runtimeProviderKey}" config (fallback)`,
-        );
-      }
+      await hotUpdateGatewayAgentModels(
+        gatewayManager,
+        defaultSyncedAgentIds,
+        modelRef,
+        `Scheduling Gateway reload after saving provider "${context.runtimeProviderKey}" config (fallback)`,
+        ' after provider save',
+      );
     }
   } else {
     scheduleGatewayRefresh(
@@ -793,9 +830,10 @@ export async function syncUpdatedProviderToRuntime(
     }
   }
 
+  let defaultSyncedAgentIds: string[] = [];
   try {
     if (defaultProviderId === config.id) {
-      await syncDefaultAgentModelRef(getProviderModelRef(config));
+      defaultSyncedAgentIds = await syncDefaultAgentModelRef(getProviderModelRef(config));
     }
     await syncAgentModelsToRuntime();
   } catch (err) {
@@ -806,19 +844,13 @@ export async function syncUpdatedProviderToRuntime(
   if (canHotUpdateGateway(gatewayManager) && defaultProviderId === config.id) {
     const modelRef = getProviderModelRef(config);
     if (modelRef) {
-      try {
-        await gatewayManager!.rpc('agents.update', {
-          agentId: 'main',
-          model: modelRef,
-        }, 10000);
-        logger.info(`[provider-runtime] Hot-reloaded default model to ${modelRef} via agents.update RPC after provider update`);
-      } catch (rpcError) {
-        logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
-        scheduleGatewayRefresh(
-          gatewayManager,
-          `Scheduling Gateway reload after updating provider "${ock}" config (fallback)`,
-        );
-      }
+      await hotUpdateGatewayAgentModels(
+        gatewayManager,
+        defaultSyncedAgentIds,
+        modelRef,
+        `Scheduling Gateway reload after updating provider "${ock}" config (fallback)`,
+        ' after provider update',
+      );
     }
   } else {
     scheduleGatewayRefresh(
@@ -947,8 +979,9 @@ export async function syncDefaultProviderToRuntime(
       await setOpenClawDefaultModel(browserOAuthRuntimeProvider, modelOverride, fallbackModels);
       defaultAgentModelRef = modelOverride;
       logger.info(`Configured openclaw.json for browser OAuth provider "${provider.id}"`);
+      let defaultSyncedAgentIds: string[] = [];
       try {
-        await syncDefaultAgentModelRef(defaultAgentModelRef);
+        defaultSyncedAgentIds = await syncDefaultAgentModelRef(defaultAgentModelRef);
         await syncAgentModelsToRuntime();
       } catch (err) {
         logger.warn('[provider-runtime] Failed to sync per-agent model registries after browser OAuth switch:', err);
@@ -956,19 +989,13 @@ export async function syncDefaultProviderToRuntime(
 
       // 热更新：直接通过 RPC 让 Gateway 更新模型配置
       if (canHotUpdateGateway(gatewayManager)) {
-        try {
-          await gatewayManager!.rpc('agents.update', {
-            agentId: 'main',
-            model: modelOverride,
-          }, 10000);
-          logger.info(`[provider-runtime] Hot-reloaded default model to ${modelOverride} via agents.update RPC after browser OAuth switch`);
-        } catch (rpcError) {
-          logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
-          scheduleGatewayRefresh(
-            gatewayManager,
-            `Scheduling Gateway reload after provider switch to "${browserOAuthRuntimeProvider}" (fallback)`,
-          );
-        }
+        await hotUpdateGatewayAgentModels(
+          gatewayManager,
+          defaultSyncedAgentIds,
+          modelOverride,
+          `Scheduling Gateway reload after provider switch to "${browserOAuthRuntimeProvider}" (fallback)`,
+          ' after browser OAuth switch',
+        );
       }
       return;
     }
@@ -1023,8 +1050,9 @@ export async function syncDefaultProviderToRuntime(
     });
   }
 
+  let defaultSyncedAgentIds: string[] = [];
   try {
-    await syncDefaultAgentModelRef(defaultAgentModelRef);
+    defaultSyncedAgentIds = await syncDefaultAgentModelRef(defaultAgentModelRef);
     await syncAgentModelsToRuntime();
   } catch (err) {
     logger.warn('[provider-runtime] Failed to sync per-agent model registries after default provider switch:', err);
@@ -1034,20 +1062,12 @@ export async function syncDefaultProviderToRuntime(
   if (canHotUpdateGateway(gatewayManager)) {
     const modelRef = getProviderModelRef(provider);
     if (modelRef) {
-      try {
-        await gatewayManager!.rpc('agents.update', {
-          agentId: 'main',
-          model: modelRef,
-        }, 10000);
-        logger.info(`[provider-runtime] Hot-reloaded default model to ${modelRef} via agents.update RPC`);
-      } catch (rpcError) {
-        logger.warn('[provider-runtime] agents.update RPC failed, fallback to reload', rpcError);
-        scheduleGatewayRefresh(
-          gatewayManager,
-          `Scheduling Gateway reload after provider switch to "${ock}" (fallback)`,
-          { onlyIfRunning: true },
-        );
-      }
+      await hotUpdateGatewayAgentModels(
+        gatewayManager,
+        defaultSyncedAgentIds,
+        modelRef,
+        `Scheduling Gateway reload after provider switch to "${ock}" (fallback)`,
+      );
     }
   }
 }

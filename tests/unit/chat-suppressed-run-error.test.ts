@@ -2,11 +2,54 @@ import { describe, expect, it } from 'vitest';
 import {
   isAbortErrorMessage,
   isBackendRunFailureError,
+  isOutboundMediaPathFailedRunError,
   isSuppressedRunError,
   markUserAbort,
   resolveRunFailureErrorMessage,
+  shouldSuppressPartialSuccessRunError,
   shouldTreatAbortAsUserStop,
 } from '@/stores/chat/helpers';
+
+const OUTBOUND_MEDIA_FAILED_ERROR =
+  '~\\.openclaw\\media\\outbound\\3417b918-82ab-4617-9a24-f9bca52dec4-采购宣传易拉宝-无标题.jpg\\ failed';
+
+describe('isOutboundMediaPathFailedRunError', () => {
+  it('matches outbound media path failures from OpenClaw delivery noise', () => {
+    expect(isOutboundMediaPathFailedRunError(OUTBOUND_MEDIA_FAILED_ERROR)).toBe(true);
+    expect(isOutboundMediaPathFailedRunError(
+      'C:\\Users\\demo\\.openclaw\\media\\outbound\\abc-photo.jpg failed',
+    )).toBe(true);
+  });
+
+  it('does not match unrelated runtime errors', () => {
+    expect(isOutboundMediaPathFailedRunError('Message failed')).toBe(false);
+    expect(isOutboundMediaPathFailedRunError('context overflow')).toBe(false);
+    expect(isOutboundMediaPathFailedRunError('404 Resource not found')).toBe(false);
+  });
+});
+
+describe('shouldSuppressPartialSuccessRunError', () => {
+  it('suppresses outbound media failures when the assistant already replied visibly', () => {
+    expect(shouldSuppressPartialSuccessRunError(OUTBOUND_MEDIA_FAILED_ERROR, {
+      role: 'assistant',
+      content: [{ type: 'text', text: '已发送到您的钉钉（工号：11236149）。' }],
+    })).toBe(true);
+  });
+
+  it('keeps outbound media failures when there is no visible assistant output', () => {
+    expect(shouldSuppressPartialSuccessRunError(OUTBOUND_MEDIA_FAILED_ERROR, {
+      role: 'assistant',
+      content: [],
+    })).toBe(false);
+  });
+
+  it('does not suppress unrelated terminal errors', () => {
+    expect(shouldSuppressPartialSuccessRunError('context overflow', {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'partial reply' }],
+    })).toBe(false);
+  });
+});
 
 describe('isSuppressedRunError', () => {
   it('suppresses generic abort errors during the user-stop window', () => {

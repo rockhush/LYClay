@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   deleteProvider: vi.fn(),
   removeProviderFromOpenClaw: vi.fn(),
   proxyAwareFetch: vi.fn(),
+  syncDefaultProviderToRuntime: vi.fn(),
 }));
 
 vi.mock('@electron/shared/providers/registry', () => ({
@@ -72,6 +73,10 @@ vi.mock('@electron/services/providers/provider-store', () => ({
   saveProviderAccount: mocks.saveProviderAccount,
 }));
 
+vi.mock('@electron/services/providers/provider-runtime-sync', () => ({
+  syncDefaultProviderToRuntime: mocks.syncDefaultProviderToRuntime,
+}));
+
 import { bootstrapLyManagedProviders } from '@electron/services/providers/default-provider-bootstrap';
 
 describe('bootstrapLyManagedProviders', () => {
@@ -92,6 +97,7 @@ describe('bootstrapLyManagedProviders', () => {
     mocks.removeProviderFromOpenClaw.mockResolvedValue(undefined);
     mocks.storeApiKey.mockResolvedValue(true);
     mocks.saveProviderAccount.mockResolvedValue(undefined);
+    mocks.syncDefaultProviderToRuntime.mockResolvedValue(undefined);
   });
 
   it('registers only ly-auto as the LY-managed provider', async () => {
@@ -155,5 +161,24 @@ describe('bootstrapLyManagedProviders', () => {
     expect(mocks.saveProviderAccount).not.toHaveBeenCalledWith(expect.objectContaining({ vendorId: 'ly-minimax' }));
     expect(mocks.saveProviderAccount).not.toHaveBeenCalledWith(expect.objectContaining({ vendorId: 'ly-deepseek' }));
     expect(mocks.saveProviderAccount).not.toHaveBeenCalledWith(expect.objectContaining({ vendorId: 'ly-qwen' }));
+  });
+
+  it('keeps an existing non-ly-auto default provider instead of resetting agents to auto', async () => {
+    mocks.getDefaultAccountId.mockResolvedValue('modelstudio-default');
+
+    await bootstrapLyManagedProviders();
+
+    expect(mocks.setDefaultAccount).not.toHaveBeenCalledWith('ly-auto');
+    expect(mocks.syncDefaultProviderToRuntime).toHaveBeenCalledWith('modelstudio-default', undefined);
+    const writes = mocks.writeOpenClawConfig.mock.calls.map((call) => call[0]);
+    expect(writes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            model: expect.objectContaining({ primary: 'ly-auto/auto' }),
+          }),
+        }),
+      }),
+    ]));
   });
 });

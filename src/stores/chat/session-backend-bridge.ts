@@ -12,6 +12,7 @@ import {
   type GatewayBackgroundActivity,
   type SessionBackendActivity,
 } from './user-turn-lifecycle';
+import { isUserAbortedSession } from './user-aborted-sessions';
 
 const RECONCILE_DEBOUNCE_MS = 500;
 
@@ -50,6 +51,7 @@ export function shouldScheduleBackendReconcile(state: ChatState, sessionKey: str
   if (!isGatewayRunning()) return false;
   if (state.currentSessionKey !== sessionKey) return false;
   if (state.runAborted) return false;
+  if (isUserAbortedSession(sessionKey)) return false;
 
   if (hasLocalRunSignals({
     sending: state.sending,

@@ -19,6 +19,7 @@ import {
   isUserSecurityDenialMessage,
   buildSecurityCancelNotice,
   isSuppressedRunError,
+  shouldSuppressPartialSuccessRunError,
   isRecoverableRuntimeError,
   isFatalRuntimeError,
   resolveRunFailureErrorMessage,
@@ -30,7 +31,13 @@ import {
   snapshotStreamingAssistantMessage,
   upsertToolStatuses,
 } from './helpers';
-import { buildClearedActiveRunPatch, findLatestVisibleUserIndex, shouldKeepRunActiveAfterAssistantFinal, shouldSilentlyFinalizeRunOnAssistantFinal } from './run-lifecycle';
+import {
+  buildClearedActiveRunPatch,
+  findLatestVisibleUserIndex,
+  isVisibleAssistantTextWithoutToolUse,
+  shouldKeepRunActiveAfterAssistantFinal,
+  shouldSilentlyFinalizeRunOnAssistantFinal,
+} from './run-lifecycle';
 import { isSubagentDelegationAnnounceRun, parseChildSessionKeyFromAnnounceRun } from '@/lib/subagent-delegation';
 import { deferClearUserTurnForOpenDelegation, tryFinalizeUserTurnAfterAssistantFinal, trySyncClearAnnounceWrapUp } from './finalize-turn-bridge';
 import { hasOpenDelegatedBackendWork } from './user-turn-lifecycle';
@@ -478,7 +485,8 @@ export function handleRuntimeEventState(
             const normalizedFinalMessage = normalizeStreamingMessage(finalMsg) as RawMessage;
             if (isTerminalAssistantErrorMessage(normalizedFinalMessage)) {
               const messageError = getMessageErrorMessage(normalizedFinalMessage);
-              if (isSuppressedRunError(messageError)) {
+              if (isSuppressedRunError(messageError)
+                || shouldSuppressPartialSuccessRunError(messageError, normalizedFinalMessage)) {
                 patchBackgroundSessionState({
                   streamingText: '',
                   streamingMessage: null,
@@ -594,7 +602,8 @@ export function handleRuntimeEventState(
                 clearHistoryPoll();
                 break;
               }
-              if (isSuppressedRunError(messageError)) {
+              if (isSuppressedRunError(messageError)
+                || shouldSuppressPartialSuccessRunError(messageError, normalizedFinalMessage)) {
                 set({
                   streamingText: '',
                   streamingMessage: null,
@@ -713,6 +722,8 @@ export function handleRuntimeEventState(
             const hasOutput = hasNonToolAssistantContent(normalizedFinalMessage);
             const keepRunActiveAfterFinal = shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
               && !isExecApprovalFollowupRun(runId);
+            const shouldReconcileVisibleFinal = keepRunActiveAfterFinal
+              && isVisibleAssistantTextWithoutToolUse(normalizedFinalMessage);
             const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
             set((s) => {
               const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
@@ -774,7 +785,7 @@ export function handleRuntimeEventState(
             // the normalized payload so usage / tool_use blocks are stable.
             reportUsageFromFinalAssistant(normalizedFinalMessage, runId);
 
-            if (!keepRunActiveAfterFinal || isSubagentDelegationAnnounceRun(runId)) {
+            if (!keepRunActiveAfterFinal || shouldReconcileVisibleFinal || isSubagentDelegationAnnounceRun(runId)) {
               if (isSubagentDelegationAnnounceRun(runId)) {
                 trySyncClearAnnounceWrapUp(get, set, { sessionKey: targetSessionKey, runId });
               }

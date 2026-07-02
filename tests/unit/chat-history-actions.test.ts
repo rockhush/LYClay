@@ -24,6 +24,7 @@ const isToolResultRole = vi.fn((role: unknown) => role === 'toolresult' || role 
 const isSuppressedRunError = vi.fn((message: unknown) => (
   typeof message === 'string' && /gateway restart/i.test(message)
 ));
+const shouldSuppressPartialSuccessRunError = vi.fn(() => false);
 const isInternalMessage = vi.fn((msg: { role?: unknown; content?: unknown }) => {
   if (msg.role === 'system') return true;
   if (msg.role === 'assistant') {
@@ -67,6 +68,7 @@ vi.mock('@/stores/chat/helpers', () => ({
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
   isToolResultRole: (...args: unknown[]) => isToolResultRole(...args),
   isSuppressedRunError: (...args: unknown[]) => isSuppressedRunError(...args),
+  shouldSuppressPartialSuccessRunError: (...args: unknown[]) => shouldSuppressPartialSuccessRunError(...args),
   loadMissingPreviews: (...args: unknown[]) => loadMissingPreviews(...args),
   matchesOptimisticUserMessage: (
     candidate: { role: string; timestamp?: number; content?: unknown; _attachedFiles?: Array<{ filePath?: string; fileName?: string; mimeType?: string; fileSize?: number }> },

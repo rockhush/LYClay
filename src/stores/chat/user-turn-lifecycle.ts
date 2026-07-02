@@ -3,17 +3,20 @@ import {
   findConcludingAssistantForActiveTurn,
   findTerminalAssistantForActiveTurn,
   isRunTerminalAssistantMessage,
+  hasVisibleAssistantReplyForActiveTurn,
   isVisibleAssistantTextWithoutToolUse,
   shouldKeepRunActiveAfterAssistantFinal,
+  shouldSilentlyFinalizeRunOnAssistantFinal,
 } from './run-lifecycle';
 import type { RawMessage, SessionStreamingState } from './types';
 import {
   collectChildDelegationBindings,
   collectCompletedSubagentSessionKeys,
 } from '@/lib/subagent-delegation';
-import { isParentDelegationPhaseOpen, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
+import { hasDelegationSpawnForActiveTurn, isParentDelegationPhaseOpen, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
 import { isGatewayIdleForSpawnedChildren } from '@/lib/subagent-delegation';
 import { hasGatewayActiveChildDelegations } from '@/lib/subagent-delegation-watch';
+import { isUserAbortedSession } from './user-aborted-sessions';
 
 export type SessionBackendActivity = {
   sessionKey: string;
@@ -35,7 +38,7 @@ export function isActiveSessionStatus(status: string | null | undefined): boolea
   return ACTIVE_SESSION_STATUSES.has(status.toLowerCase());
 }
 
-/** Gateway memory metrics — authoritative for finalize / re-adopt. */
+/** Gateway memory metrics 锟?authoritative for finalize / re-adopt. */
 export function isBackendStronglyActive(
   activity: SessionBackendActivity | null | undefined,
 ): boolean {
@@ -43,7 +46,7 @@ export function isBackendStronglyActive(
   return activity.hasTrackedUserRun;
 }
 
-/** Includes disk/exec weak signals — display/reconcile hint only, not finalize blocking. */
+/** Includes disk/exec weak signals 锟?display/reconcile hint only, not finalize blocking. */
 export function isBackendSessionActive(
   activity: SessionBackendActivity | null | undefined,
 ): boolean {
@@ -59,7 +62,6 @@ export function hasOpenBackendWorkForUserTurn(
 ): boolean {
   if (isBackendStronglyActive(backendActivity)) return true;
 
-  const sessionKey = backendActivity?.sessionKey;
   const processingKeys = gatewayBackground?.processingSessionKeys ?? [];
 
   if (messages.length > 0 && processingKeys.length > 0) {
@@ -231,6 +233,7 @@ function isBackgroundSidebarTurnComplete(
   return true;
 }
 
+/** Sidebar session row status 锟?same finalize rules for current and background sessions. */
 export function deriveSidebarSessionIsExecuting(
   input: DeriveSidebarSessionIsExecutingInput,
 ): boolean {
@@ -300,6 +303,15 @@ export const DELEGATION_FINALIZE_GRACE_MS = 30_000;
  * Transcript-only delegation signals (spawn bindings, waiting markers).
  * Does not include gateway strong metrics.
  */
+function silentDelegationFinalWouldHideUnansweredTurn(
+  messages: RawMessage[],
+  lastUserMessageAt: number | null,
+  terminalMessage?: RawMessage,
+): boolean {
+  if (!terminalMessage || !shouldSilentlyFinalizeRunOnAssistantFinal(terminalMessage)) return false;
+  if (!hasDelegationSpawnForActiveTurn(messages, { lastUserMessageAt })) return false;
+  return !hasVisibleAssistantReplyForActiveTurn(messages, lastUserMessageAt);
+}
 export function hasTranscriptDelegationBlock(
   messages: RawMessage[],
   gatewayBackground?: GatewayBackgroundActivity | null,
@@ -324,7 +336,7 @@ export function isTranscriptOnlyDelegationDefer(
 }
 
 /**
- * Gateway-driven open work for the parent turn. Does not infer spawn tools —
+ * Gateway-driven open work for the parent turn. Does not infer spawn tools 锟?
  * the model decides delegation; we only observe gateway + transcript bindings.
  */
 export function hasOpenDelegatedBackendWork(
@@ -472,6 +484,9 @@ export function canClearUserTurnNow(input: CanClearUserTurnInput): boolean {
     if (!terminal || shouldKeepRunActiveAfterAssistantFinal(terminal)) {
       return false;
     }
+    if (silentDelegationFinalWouldHideUnansweredTurn(input.messages, input.lastUserMessageAt, terminal)) {
+      return false;
+    }
     return true;
   }
 
@@ -510,6 +525,9 @@ export function shouldFinalizeUserTurn(
   const strictTerminal = terminalMessage
     ?? findTerminalAssistantForActiveTurn(messages, lastUserMessageAt);
   if (strictTerminal) {
+    if (silentDelegationFinalWouldHideUnansweredTurn(messages, lastUserMessageAt, strictTerminal)) {
+      return false;
+    }
     if (shouldKeepRunActiveAfterAssistantFinal(strictTerminal)) {
       return isVisibleAssistantTextWithoutToolUse(strictTerminal);
     }
@@ -540,6 +558,9 @@ export function buildReAdoptRunPatch(
   backendActivity: SessionBackendActivity | null | undefined,
   gatewayBackground?: GatewayBackgroundActivity | null,
 ): Partial<UserTurnUiSignals & { activeRunId: string | null; pendingFinal: boolean; sending: boolean }> | null {
+  if (isUserAbortedSession(sessionKey)) {
+    return null;
+  }
   if (state.runAborted) {
     return null;
   }

@@ -29,6 +29,8 @@ const isInternalMessage = vi.fn(() => false);
 const isInternalMessageText = vi.fn(() => false);
 const isUserSecurityDenialMessage = vi.fn((message: unknown) =>
   typeof message === 'string' && /NETWORK_ACCESS_DENIED_BY_USER|Network access denied:/i.test(message));
+const isSuppressedRunError = vi.fn(() => false);
+const shouldSuppressPartialSuccessRunError = vi.fn(() => false);
 const buildSecurityCancelNotice = vi.fn(() => 'Cancelled: you declined the security confirmation.');
 const isTerminalAssistantErrorMessage = vi.fn((message: { role?: string; stopReason?: string; stop_reason?: string } | undefined) => {
   const stopReason = message?.stopReason ?? message?.stop_reason;
@@ -72,6 +74,8 @@ vi.mock('@/stores/chat/helpers', () => ({
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
   isInternalMessageText: (...args: unknown[]) => isInternalMessageText(...args),
   isUserSecurityDenialMessage: (...args: unknown[]) => isUserSecurityDenialMessage(...args),
+  isSuppressedRunError: (...args: unknown[]) => isSuppressedRunError(...args),
+  shouldSuppressPartialSuccessRunError: (...args: unknown[]) => shouldSuppressPartialSuccessRunError(...args),
   buildSecurityCancelNotice: (...args: unknown[]) => buildSecurityCancelNotice(...args),
   isTerminalAssistantErrorMessage: (...args: unknown[]) => isTerminalAssistantErrorMessage(...args),
   isToolOnlyMessage: (...args: unknown[]) => isToolOnlyMessage(...args),
@@ -312,6 +316,29 @@ describe('chat runtime event handlers', () => {
     expect(next.streamingMessage).toBeNull();
     expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
     expect(setErrorRecoveryTimer).not.toHaveBeenCalled();
+  });
+
+  it('suppresses outbound media path failures when partial assistant output succeeded', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({ sending: true, activeRunId: 'run-partial', lastUserMessageAt: 123 });
+    shouldSuppressPartialSuccessRunError.mockReturnValueOnce(true);
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      message: {
+        role: 'assistant',
+        id: 'assistant-partial',
+        content: [{ type: 'text', text: '已发送到您的钉钉（工号：11236149）。' }],
+        stopReason: 'error',
+        errorMessage: '~\\.openclaw\\media\\outbound\\abc-photo.jpg\\ failed',
+      },
+    }, 'final', 'run-partial');
+
+    const next = h.read();
+    expect(next.runError).toBeNull();
+    expect(next.error).toBeNull();
+    expect(next.sending).toBe(false);
+    expect(next.activeRunId).toBeNull();
+    expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
   });
 
   it('does not show Run ended for assistant final errors caused by user denial', async () => {

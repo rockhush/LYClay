@@ -583,12 +583,13 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
               settleActiveChatForGatewayInterruption(`gateway-${payload.state}`);
             }
 
-            // Reset first message flag when gateway starts/restarts
+            // Reset first message flag when gateway starts/restarts.
+            // Run persisted aborts before backend reconcile so stopped sessions
+            // are not re-adopted while Gateway still reports a stale active run.
             if (payload.state === 'running') {
               loadChatStoreModule()
-                .then(({ resetFirstMessageFlag, kickSessionBackendPolling }) => {
+                .then(({ resetFirstMessageFlag }) => {
                   resetFirstMessageFlag();
-                  kickSessionBackendPolling();
                 })
                 .catch(() => {});
             }
@@ -602,7 +603,19 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
               lastReabortGatewayConnectedAt = payload.connectedAt;
               void reabortPersistedUserSessions((method, params, timeoutMs) => (
                 get().rpc(method, params, timeoutMs)
-              ));
+              )).finally(() => {
+                loadChatStoreModule()
+                  .then(({ kickSessionBackendPolling }) => {
+                    kickSessionBackendPolling();
+                  })
+                  .catch(() => {});
+              });
+            } else if (payload.state === 'running' && payload.gatewayReady === true) {
+              loadChatStoreModule()
+                .then(({ kickSessionBackendPolling }) => {
+                  kickSessionBackendPolling();
+                })
+                .catch(() => {});
             }
 
             // Delay cron repair after startup so first chat has priority for

@@ -19,7 +19,7 @@ export interface ContextBudgetOptions {
   maxSingleMessageRatio?: number;
 }
 
-export const DEFAULT_CONTEXT_WINDOW = 128000;
+export const DEFAULT_CONTEXT_WINDOW = 200000;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);

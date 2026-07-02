@@ -123,6 +123,27 @@ export function isBackendRunFailureError(error: string | null | undefined): bool
 }
 
 /**
+ * OpenClaw may mark a run as failed when an outbound media path step fails even
+ * though an earlier channel delivery (e.g. DingTalk) already succeeded.
+ * Example: `~\.openclaw\media\outbound\<uuid>-name.jpg\ failed`
+ */
+export function isOutboundMediaPathFailedRunError(error: string | null | undefined): boolean {
+  if (!error?.trim()) return false;
+  const normalized = error.replace(/\s+/g, ' ').trim();
+  if (!/\bfailed\.?$/i.test(normalized)) return false;
+  return /\.openclaw[\\/]+media[\\/]+outbound[\\/]/i.test(normalized);
+}
+
+/** Hide outbound media path failures when the terminal assistant already has user-visible output. */
+export function shouldSuppressPartialSuccessRunError(
+  error: string | null | undefined,
+  terminalMessage: RawMessage | undefined,
+): boolean {
+  if (!isOutboundMediaPathFailedRunError(error)) return false;
+  return hasVisibleAssistantContent(terminalMessage);
+}
+
+/**
  * Runtime errors that carry no actionable information for the user and should
  * not surface in the chat error bar or run termination notice.
  */

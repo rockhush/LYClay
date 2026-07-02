@@ -1,10 +1,16 @@
 export const DEFAULT_OPENCLAW_DM_SCOPE = 'per-account-channel-peer';
 export const DEFAULT_OPENCLAW_AGENT_MAX_CONCURRENT = 30;
+export const DEFAULT_OPENCLAW_AGENT_CONTEXT_TOKENS = 200000;
+
+const LEGACY_OPENCLAW_AGENT_CONTEXT_TOKENS = 128000;
+const LEGACY_OPENCLAW_COMPACTION_RESERVE_TOKENS_FLOOR = 8192;
+const LEGACY_OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS = 40000;
+const LEGACY_OPENCLAW_MEMORY_FLUSH_SOFT_THRESHOLD_TOKENS = 8000;
 
 export const DEFAULT_OPENCLAW_COMPACTION_CONFIG: Record<string, unknown> = {
   mode: 'default',
-  reserveTokensFloor: 8192,
-  keepRecentTokens: 40000,
+  reserveTokensFloor: 32000,
+  keepRecentTokens: 50000,
   timeoutSeconds: 900,
   notifyUser: true,
   // midTurnPrecheck 默认必须关闭：当其为 true 时，OpenClaw 会在每次工具
@@ -23,7 +29,8 @@ export const DEFAULT_OPENCLAW_COMPACTION_CONFIG: Record<string, unknown> = {
   truncateAfterCompaction: false,
   memoryFlush: {
     enabled: true,
-    softThresholdTokens: 8000,
+    softThresholdTokens: 24000,
+    forceFlushTranscriptBytes: '8mb',
   },
 };
 
@@ -42,6 +49,21 @@ const VALID_OPENCLAW_DM_SCOPES = new Set<OpenClawDmScope>([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function resolveAgentDefaultModelRef(defaults: Record<string, unknown>): string | undefined {
+  const model = defaults.model;
+  if (typeof model === 'string') {
+    return model;
+  }
+  if (isRecord(model) && typeof model.primary === 'string') {
+    return model.primary;
+  }
+  return undefined;
+}
+
+function isLyAutoDefaultModel(defaults: Record<string, unknown>): boolean {
+  return resolveAgentDefaultModelRef(defaults) === 'ly-auto/auto';
 }
 
 export function ensureOpenClawSessionDefaults(config: Record<string, unknown>): boolean {
@@ -73,6 +95,19 @@ export function ensureOpenClawAgentDefaults(config: Record<string, unknown>): bo
     changed = true;
   }
 
+  const hasLyAutoDefaultModel = isLyAutoDefaultModel(defaults);
+  if (hasLyAutoDefaultModel && (typeof defaults.contextTokens !== 'number'
+    || defaults.contextTokens <= 0
+    || defaults.contextTokens === LEGACY_OPENCLAW_AGENT_CONTEXT_TOKENS)) {
+    defaults.contextTokens = DEFAULT_OPENCLAW_AGENT_CONTEXT_TOKENS;
+    changed = true;
+  } else if (!hasLyAutoDefaultModel
+    && (defaults.contextTokens === LEGACY_OPENCLAW_AGENT_CONTEXT_TOKENS
+      || defaults.contextTokens === DEFAULT_OPENCLAW_AGENT_CONTEXT_TOKENS)) {
+    delete defaults.contextTokens;
+    changed = true;
+  }
+
   // Ensure compaction defaults are applied, fixing any broken legacy config
   const previousCompaction = defaults.compaction;
   const compaction = isRecord(previousCompaction) ? { ...previousCompaction } : {};
@@ -92,12 +127,16 @@ export function ensureOpenClawAgentDefaults(config: Record<string, unknown>): bo
     compactionChanged = true;
   }
 
-  if (typeof compaction.reserveTokensFloor !== 'number' || compaction.reserveTokensFloor <= 0) {
+  if (typeof compaction.reserveTokensFloor !== 'number'
+    || compaction.reserveTokensFloor <= 0
+    || compaction.reserveTokensFloor === LEGACY_OPENCLAW_COMPACTION_RESERVE_TOKENS_FLOOR) {
     compaction.reserveTokensFloor = DEFAULT_OPENCLAW_COMPACTION_CONFIG.reserveTokensFloor;
     compactionChanged = true;
   }
 
-  if (typeof compaction.keepRecentTokens !== 'number' || compaction.keepRecentTokens <= 0) {
+  if (typeof compaction.keepRecentTokens !== 'number'
+    || compaction.keepRecentTokens <= 0
+    || compaction.keepRecentTokens === LEGACY_OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS) {
     compaction.keepRecentTokens = DEFAULT_OPENCLAW_COMPACTION_CONFIG.keepRecentTokens;
     compactionChanged = true;
   }
@@ -107,8 +146,31 @@ export function ensureOpenClawAgentDefaults(config: Record<string, unknown>): bo
     compactionChanged = true;
   }
 
-  if (!isRecord(compaction.memoryFlush)) {
-    compaction.memoryFlush = DEFAULT_OPENCLAW_COMPACTION_CONFIG.memoryFlush;
+  const previousMemoryFlush = compaction.memoryFlush;
+  const memoryFlush = isRecord(previousMemoryFlush) ? { ...previousMemoryFlush } : {};
+  const defaultMemoryFlush = DEFAULT_OPENCLAW_COMPACTION_CONFIG.memoryFlush as Record<string, unknown>;
+  let memoryFlushChanged = !isRecord(previousMemoryFlush);
+
+  if (memoryFlush.enabled !== true) {
+    memoryFlush.enabled = true;
+    memoryFlushChanged = true;
+  }
+
+  if (typeof memoryFlush.softThresholdTokens !== 'number'
+    || memoryFlush.softThresholdTokens < 0
+    || memoryFlush.softThresholdTokens === LEGACY_OPENCLAW_MEMORY_FLUSH_SOFT_THRESHOLD_TOKENS) {
+    memoryFlush.softThresholdTokens = defaultMemoryFlush.softThresholdTokens;
+    memoryFlushChanged = true;
+  }
+
+  if (typeof memoryFlush.forceFlushTranscriptBytes !== 'string'
+    && typeof memoryFlush.forceFlushTranscriptBytes !== 'number') {
+    memoryFlush.forceFlushTranscriptBytes = defaultMemoryFlush.forceFlushTranscriptBytes;
+    memoryFlushChanged = true;
+  }
+
+  if (memoryFlushChanged) {
+    compaction.memoryFlush = memoryFlush;
     compactionChanged = true;
   }
 

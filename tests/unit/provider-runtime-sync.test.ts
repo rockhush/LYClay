@@ -209,12 +209,19 @@ describe('provider-runtime-sync refresh strategy', () => {
     expect(gateway.debouncedRestart).not.toHaveBeenCalled();
   });
 
-  it('syncs the main agent model when DeepSeek becomes the default provider', async () => {
+  it('syncs every agent model when DeepSeek becomes the default provider', async () => {
     mocks.getProvider.mockResolvedValue(createProvider({
       id: 'ly-deepseek-default',
       type: 'deepseek',
       model: 'deepseek-v4-flash',
     }));
+    mocks.listAgentsSnapshot.mockResolvedValue({
+      agents: [
+        { id: 'main', modelRef: 'moonshot/kimi-k2.6' },
+        { id: 'research', modelRef: 'openrouter/anthropic/claude-opus-4.6' },
+        { id: 'dingtalk', modelRef: 'ly-auto/auto' },
+      ],
+    });
     mocks.getProviderConfig.mockImplementation((providerType: string) => {
       if (providerType === 'deepseek') {
         return {
@@ -234,8 +241,18 @@ describe('provider-runtime-sync refresh strategy', () => {
     await syncDefaultProviderToRuntime('ly-deepseek-default', gateway as GatewayManager);
 
     expect(mocks.updateAgentModel).toHaveBeenCalledWith('main', 'deepseek/deepseek-v4-flash');
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('research', 'deepseek/deepseek-v4-flash');
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('dingtalk', 'deepseek/deepseek-v4-flash');
     expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
       agentId: 'main',
+      model: 'deepseek/deepseek-v4-flash',
+    }, 10000);
+    expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
+      agentId: 'research',
+      model: 'deepseek/deepseek-v4-flash',
+    }, 10000);
+    expect(gateway.rpc).toHaveBeenCalledWith('agents.update', {
+      agentId: 'dingtalk',
       model: 'deepseek/deepseek-v4-flash',
     }, 10000);
   });
