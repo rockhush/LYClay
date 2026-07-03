@@ -559,7 +559,7 @@ export async function handleCronRoutes(
       if (result && typeof result === 'object') {
         const job = result as GatewayCronJob;
         if (managedInApp) {
-          await setManagedCronJobEnabled(job.id, managedEnabled);
+          await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
         }
         sendJson(res, 200, transformCronJob(job, undefined, managedInApp ? managedEnabled : undefined));
       } else {

@@ -105,7 +105,7 @@ describe('handleCronRoutes', () => {
       enabled: false,
       delivery: { mode: 'none' },
     }));
-    expect(cronSupervisorMocks.setManagedCronJobEnabled).toHaveBeenCalledWith('job-in-app', true);
+    expect(cronSupervisorMocks.setManagedCronJobEnabled).toHaveBeenCalledWith('job-in-app', true, 1);
     expect(sendJsonMock).toHaveBeenCalledWith(
       expect.anything(),
       200,

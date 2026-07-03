@@ -78,12 +78,19 @@ interface GatewayLike {
   rpc: <T>(method: string, params?: unknown, timeoutMs?: number) => Promise<T>;
 }
 
+interface ManagedCronJobState {
+  enabled: boolean;
+  /** Wall-clock ms when the job was created; used to skip pre-creation occurrences. */
+  createdAtMs?: number;
+}
+
 interface SupervisedCronJob {
   id: string;
   name?: string;
   agentId?: string;
   enabled?: boolean;
   createdAtMs?: number;
+  updatedAtMs?: number;
   schedule?: GatewayCronScheduleLike;
   payload?: { kind?: string; message?: string; text?: string };
   delivery?: { mode?: string; channel?: string; to?: string; accountId?: string };
@@ -100,8 +107,8 @@ interface SupervisorState {
   handled: Record<string, number>;
   /** Occurrence (ms) LYClaw streaming scheduler already accepted, keyed by job id. */
   scheduledHandled: Record<string, number>;
-  /** LYClaw-managed in-app cron enabled state, keyed by job id. */
-  managed: Record<string, { enabled: boolean }>;
+  /** LYClaw-managed in-app cron state, keyed by job id. */
+  managed: Record<string, ManagedCronJobState>;
   /** Last time (ms) we auto-retried a failed run, keyed by job id. */
   retried: Record<string, number>;
 }
@@ -325,10 +332,40 @@ async function resolveCronJobInfo(jobId: string): Promise<ResolvedCronJobInfo> {
   return { agentId, message, name, deliveryMode, deliveryContext };
 }
 
-export async function setManagedCronJobEnabled(jobId: string, enabled: boolean): Promise<void> {
+export async function setManagedCronJobEnabled(
+  jobId: string,
+  enabled: boolean,
+  createdAtMs?: number,
+): Promise<void> {
   await loadState();
-  state.managed[jobId] = { enabled };
+  const existing = state.managed[jobId];
+  state.managed[jobId] = {
+    enabled,
+    ...(typeof createdAtMs === 'number' && createdAtMs > 0
+      ? { createdAtMs }
+      : existing?.createdAtMs ? { createdAtMs: existing.createdAtMs } : {}),
+  };
   await persistState();
+}
+
+/** Resolve creation time for in-app jobs; backfills sidecar when Gateway omits createdAtMs. */
+async function resolveManagedJobCreatedAtMs(job: SupervisedCronJob): Promise<number> {
+  await loadState();
+  const sidecarCreatedAtMs = state.managed[job.id]?.createdAtMs;
+  if (typeof sidecarCreatedAtMs === 'number' && sidecarCreatedAtMs > 0) {
+    return sidecarCreatedAtMs;
+  }
+
+  const fromGateway = typeof job.createdAtMs === 'number' && job.createdAtMs > 0
+    ? job.createdAtMs
+    : typeof job.updatedAtMs === 'number' && job.updatedAtMs > 0
+      ? job.updatedAtMs
+      : Date.now();
+
+  const managed = state.managed[job.id] ?? { enabled: job.enabled !== false };
+  state.managed[job.id] = { ...managed, createdAtMs: fromGateway };
+  await persistState();
+  return fromGateway;
 }
 
 export async function removeManagedCronJobState(jobId: string): Promise<void> {
@@ -352,7 +389,8 @@ async function shouldRunManagedInAppCronJob(job: SupervisedCronJob, now: number)
 
   const dueAtMs = previousScheduleOccurrenceMs(job.schedule, now);
   if (dueAtMs == null) return null;
-  if (dueAtMs <= (job.createdAtMs ?? 0)) return null;
+  const createdAtMs = await resolveManagedJobCreatedAtMs(job);
+  if (dueAtMs <= createdAtMs) return null;
   if (dueAtMs > now) return null;
   if (now - dueAtMs > CATCHUP_MAX_AGE_MS) return null;
 
@@ -376,6 +414,10 @@ async function maybeRunManagedInAppCronJob(job: SupervisedCronJob, now: number):
   const ok = await fireQuietly(job.id, 'supervisor-scheduled');
   if (!ok) {
     delete state.scheduledHandled[job.id];
+    await persistState();
+  } else {
+    // Keep catch-up dedupe in sync — Gateway lastRunAtMs stays stale for in-app jobs.
+    state.handled[job.id] = due.dueAtMs;
     await persistState();
   }
   return ok;
@@ -544,6 +586,10 @@ async function fireQuietly(id: string, context: CronJobsUpdatedReason): Promise<
 
 /** Returns true when a catch-up run was fired for this job. */
 async function maybeCatchUp(job: SupervisedCronJob, now: number): Promise<boolean> {
+  // In-app jobs are scheduled via maybeRunManagedInAppCronJob (run log dedupe).
+  // Catch-up uses Gateway lastRunAtMs which stays stale when Gateway scheduling is disabled.
+  if (isUiInAppCronJob(job)) return false;
+
   const prev = previousScheduleOccurrenceMs(job.schedule, now);
   if (prev == null) return false;
   if (prev <= (job.createdAtMs ?? 0)) return false; // never run before creation
@@ -636,6 +682,16 @@ async function pollCronUiState(): Promise<void> {
   for (const jobId of updatedJobIds) {
     notifyCronJobsUpdated('gateway-scheduled', jobId);
   }
+}
+
+/** Run one supervisor evaluation pass (used by periodic timer, wake hooks, and tests). */
+export async function runCronSupervisorPass(reason: string): Promise<void> {
+  return runPass(reason);
+}
+
+/** Attach a gateway for unit tests without starting timers or migration. */
+export function bindCronSupervisorGateway(gw: GatewayLike): void {
+  gateway = gw;
 }
 
 async function runPass(reason: string): Promise<void> {
@@ -844,12 +900,26 @@ async function migrateExistingInAppCronJobs(gw: GatewayLike): Promise<void> {
       if (!job?.id) continue;
       if (!isUiInAppCronJob(job as SupervisedCronJob)) continue;
       const jobId = String(job.id);
-      if (state.managed[jobId]) { skipped += 1; continue; }
+      const existingManaged = state.managed[jobId];
+      if (existingManaged) {
+        if (!existingManaged.createdAtMs) {
+          const createdAtMs = typeof job.createdAtMs === 'number' && job.createdAtMs > 0
+            ? job.createdAtMs
+            : Date.now();
+          state.managed[jobId] = { ...existingManaged, createdAtMs };
+          await persistState();
+        }
+        skipped += 1;
+        continue;
+      }
 
       // Preserve the user's original enabled preference.  `enabled` is
       // `true` when the field is absent (default for Gateway-created jobs).
       const wasEnabled = job.enabled !== false;
-      state.managed[jobId] = { enabled: wasEnabled };
+      const createdAtMs = typeof job.createdAtMs === 'number' && job.createdAtMs > 0
+        ? job.createdAtMs
+        : Date.now();
+      state.managed[jobId] = { enabled: wasEnabled, createdAtMs };
       await persistState(); // durable before we touch the Gateway
 
       if (wasEnabled) {
@@ -893,6 +963,9 @@ export function stopCronSupervisor(): void {
   uiWatchInitialized = false;
   lastKnownRunAtMs = {};
   passQueued = false;
+  passInFlight = false;
+  stateLoaded = false;
+  state = { handled: {}, scheduledHandled: {}, managed: {}, retried: {} };
   started = false;
   gateway = null;
 }

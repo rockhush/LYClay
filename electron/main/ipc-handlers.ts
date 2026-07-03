@@ -579,7 +579,7 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             if (created && typeof created === 'object') {
               const job = created as GatewayCronJob;
               if (managedInApp) {
-                await setManagedCronJobEnabled(job.id, managedEnabled);
+                await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
               }
               data = transformCronJob(job, managedInApp ? managedEnabled : undefined);
             } else {
@@ -1110,7 +1110,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
       if (result && typeof result === 'object') {
         const job = result as GatewayCronJob;
         if (managedInApp) {
-          await setManagedCronJobEnabled(job.id, managedEnabled);
+          await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
         }
         return transformCronJob(job, managedInApp ? managedEnabled : undefined);
       }

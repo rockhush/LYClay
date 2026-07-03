@@ -12,7 +12,18 @@
 - Open new tabs: `action="open"` with `targetUrl`.
 - To just open a URL for the user to view, use `shell:openExternal` instead.
 
-### Skill Marketplace (技能广场) — CLI (preferred)
+### Using installed skills
+
+Installed skills live on disk under `~/.openclaw/skills/<slug>/` (one folder per skill).
+
+When the user **@mentions**, selects, or asks to **use** a skill:
+
+1. **Do not** run `lyclaw-marketplace install` or `clawhub install` if that skill folder already exists.
+2. Use `read` on `~/.openclaw/skills/<slug>/SKILL.md` first, then follow the skill's own docs/scripts.
+3. Resolve `<slug>` from the skills directory listing when the display name differs (folder name wins over UI label).
+4. Run marketplace install **only** when the folder/`SKILL.md` is missing or the user explicitly asks to download/install/update from 技能广场.
+
+### Skill Marketplace (技能广场) — CLI (install new skills only)
 
 Use **`lyclaw-marketplace`** via `exec`. It calls the same Host API as **Skills → 技能广场**; marketplace login/session is handled inside Lyclaw Main (not in chat). **LYClaw must be running** so `~/.openclaw/.lyclaw/host-api-bridge.json` exists.
 
@@ -48,7 +59,7 @@ JSON output includes `results[]` with `id`, `name`, `description`, `version`, `a
 lyclaw-marketplace install <marketplace-id> [--version x.y.z] [--name "Display Name"]
 ```
 
-Downloads, extracts, and enables the skill. After success, briefly tell the user what was installed and that they can use the skill in the next turn (Gateway may reload skills).
+Downloads, extracts, and enables the skill. **Only use when the skill is not already under `~/.openclaw/skills/`.** After success, briefly tell the user what was installed and that they can use the skill in the next turn (Gateway may reload skills).
 
 #### Fallback — public ClawHub
 
