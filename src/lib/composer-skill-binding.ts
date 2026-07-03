@@ -3,11 +3,11 @@ import { resolveOpenClawSkillFilterName } from '@/lib/skill-runtime-aliases';
 import { detectMentionedSkillIds } from '@/stores/chat/usage-report-extract';
 import { SKILL_INVOCATION_HINT } from '@/pages/Chat/welcome-quick-actions';
 
-/** Runtime @mention token for composer pickers (matches OpenClaw SKILL.md `name`). */
+/** UI @mention token shown in the composer (marketplace / sidecar display name). */
 export function resolveComposerSkillMentionName(
   skill: Pick<Skill, 'id' | 'slug' | 'name'>,
 ): string {
-  return resolveOpenClawSkillFilterName(skill.id, skill) || skill.name?.trim() || skill.id;
+  return skill.name?.trim() || skill.slug?.trim() || skill.id.trim();
 }
 
 /** OpenClaw runtime skill allowlist uses skill display names, not config keys. */

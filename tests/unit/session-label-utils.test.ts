@@ -21,6 +21,18 @@ describe('session label utils', () => {
     })).toBe('@翻译工具 足球 篮球');
   });
 
+  it('rewrites runtime skill mentions in session previews', () => {
+    expect(resolveSessionDisplayLabel({
+      sessionKey: 'agent:main:session-1',
+      firstUserMessagePreview: '@commodity-dingtalk-pusher 请使用这个技能，帮我看看',
+      skills: [{
+        id: 'commodity-dingtalk-pusher',
+        slug: 'commodity-dingtalk-pusher',
+        name: '大宗行情钉钉群简报',
+      }],
+    })).toBe('@大宗行情钉钉群简报 请使用这个技能，帮我看看');
+  });
+
   it('collects agent ids from session keys', () => {
     expect(collectAgentIdsFromSessionKeys([
       'agent:main:session-1',

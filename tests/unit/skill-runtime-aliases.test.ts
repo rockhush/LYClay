@@ -4,6 +4,7 @@ import {
   resolveBuiltinSkillRuntimeFilterName,
   resolveBuiltinSkillSlugFromAlias,
   rewriteBuiltinSkillMentionsInText,
+  rewriteRuntimeSkillMentionsToDisplayInText,
 } from '@/lib/skill-runtime-aliases';
 import {
   resolveComposerForcedSkillFilter,
@@ -83,7 +84,56 @@ describe('skill-runtime-aliases', () => {
     );
   });
 
-  it('uses runtime mention name for bundled skills with display names', () => {
-    expect(resolveComposerSkillMentionName(dwsSkillWithDisplayName)).toBe('dws');
+  it('uses display mention name in the composer for bundled skills', () => {
+    expect(resolveComposerSkillMentionName(dwsSkillWithDisplayName)).toBe('办公助手（日程、钉盘、表格、消息）');
+  });
+
+  it('maps marketplace display names to folder slugs for skillFilter', () => {
+    const translatorSkill: Skill = {
+      id: 'manufacturing-translator',
+      slug: 'manufacturing-translator',
+      name: '商务场景翻译助手',
+      description: 'Manufacturing translator',
+      enabled: true,
+    };
+    expect(resolveComposerForcedSkillFilter(
+      '@商务场景翻译助手 请使用这个技能，帮我翻译',
+      [translatorSkill],
+      [],
+    )).toEqual(['manufacturing-translator']);
+    expect(detectMentionedSkillIds(
+      '@商务场景翻译助手 请使用这个技能，帮我翻译',
+      [translatorSkill],
+    )).toEqual(['manufacturing-translator']);
+    expect(rewriteBuiltinSkillMentionsInText(
+      '@商务场景翻译助手 请使用这个技能，帮我翻译',
+      [translatorSkill],
+    )).toBe('@manufacturing-translator 请使用这个技能，帮我翻译');
+    expect(resolveComposerSkillMentionName(translatorSkill)).toBe('商务场景翻译助手');
+    expect(findSkillByLookupNames([], ['商务场景翻译助手'])).toBeUndefined();
+    expect(findSkillByLookupNames([translatorSkill], ['商务场景翻译助手'])?.id)
+      .toBe('manufacturing-translator');
+  });
+
+  it('rewrites runtime @mentions back to display names for chat UI', () => {
+    const translatorSkill: Skill = {
+      id: 'manufacturing-translator',
+      slug: 'manufacturing-translator',
+      name: '商务场景翻译助手',
+      description: 'Manufacturing translator',
+      enabled: true,
+    };
+    const runtimeText = '@manufacturing-translator 请使用这个技能，帮我翻译';
+    expect(rewriteRuntimeSkillMentionsToDisplayInText(runtimeText, [translatorSkill])).toBe(
+      '@商务场景翻译助手 请使用这个技能，帮我翻译',
+    );
+    expect(rewriteRuntimeSkillMentionsToDisplayInText(
+      '@dws 请使用这个技能，帮我',
+      [dwsSkillWithDisplayName],
+    )).toBe('@办公助手（日程、钉盘、表格、消息） 请使用这个技能，帮我');
+    expect(rewriteBuiltinSkillMentionsInText(
+      '@商务场景翻译助手 请使用这个技能，帮我翻译',
+      [translatorSkill],
+    )).toBe('@manufacturing-translator 请使用这个技能，帮我翻译');
   });
 });

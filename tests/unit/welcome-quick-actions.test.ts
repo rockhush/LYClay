@@ -63,10 +63,10 @@ describe('welcome-quick-actions', () => {
     );
   });
 
-  it('builds composer text with runtime name for bundled dws display card', () => {
+  it('builds composer text with display name for quick-action skills', () => {
     const skill = findSkillForQuickAction(mockSkills, ['办公助手']);
     expect(buildQuickActionComposerText(skill, '办公助手', '请使用这个技能，帮我总结群消息：')).toBe(
-      '@dws 请使用这个技能，帮我总结群消息：',
+      '@办公助手（日程、钉盘、表格、消息） 请使用这个技能，帮我总结群消息：',
     );
   });
 

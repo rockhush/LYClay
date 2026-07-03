@@ -49,6 +49,7 @@ import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
 import { useTokenUsageStore } from '@/stores/token-usage';
 import { useWorkspacesStore } from '@/stores/workspaces';
+import { useSkillsStore } from '@/stores/skills';
 import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
 import { useUpdateStore, shouldShowUpdateAvailableBadge } from '@/stores/update';
 import { Button } from '@/components/ui/button';
@@ -200,6 +201,8 @@ export function Sidebar() {
   const runAborted = useChatStore((s) => s.runAborted);
   const lastUserMessageAt = useChatStore((s) => s.lastUserMessageAt);
   const messages = useChatStore((s) => s.messages);
+  const skills = useSkillsStore((s) => s.skills);
+  const fetchSkills = useSkillsStore((s) => s.fetchSkills);
   const sessionBackendActivity = useChatStore((s) => s.sessionBackendActivity);
   const gatewayBackgroundActivity = useChatStore((s) => s.gatewayBackgroundActivity);
   const streamingMessage = useChatStore((s) => s.streamingMessage);
@@ -460,6 +463,12 @@ export function Sidebar() {
   }, [fetchAgents]);
 
   useEffect(() => {
+    if (skills.length === 0) {
+      void fetchSkills();
+    }
+  }, [skills.length, fetchSkills]);
+
+  useEffect(() => {
     void fetchTokenUsageHistory();
   }, [fetchTokenUsageHistory]);
 
@@ -487,6 +496,7 @@ export function Sidebar() {
       firstUserMessagePreview: session.firstUserMessagePreview,
       label: session.label,
       displayName: session.displayName,
+      skills,
     });
     if (!isCronSessionKey(session.key)) {
       return resolved;
@@ -497,7 +507,7 @@ export function Sidebar() {
       jobName,
       fallback: t('cron:title', { defaultValue: '定时任务' }),
     });
-  }, [customSessionLabels, sessionLabels, cronJobNamesById, t]);
+  }, [customSessionLabels, sessionLabels, cronJobNamesById, skills, t]);
 
   /* OpenClaw 控制台入口暂时隐藏
   const openDevConsole = async () => {

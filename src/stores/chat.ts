@@ -10,8 +10,13 @@ import { toUserMessage, normalizeAppError } from '@/lib/api-client';
 import { useGatewayStore } from './gateway';
 import { useAgentsStore } from './agents';
 import { useWorkspacesStore } from './workspaces';
+import { useSkillsStore } from './skills';
+import {
+  rewriteRuntimeSkillMentionsToDisplayInText,
+  rewriteUserMessageTextForSkillDisplay,
+} from '@/lib/skill-runtime-aliases';
 import { buildCronSessionHistoryPath, isCronSessionKey, mergeCronSessionHistory } from './chat/cron-session-utils';
-import { collectAgentIdsFromSessionKeys, isPlaceholderSessionTitle } from '@/lib/session-label-utils';
+import { collectAgentIdsFromSessionKeys, isPlaceholderSessionTitle, normalizeSessionSummaryForDisplay } from '@/lib/session-label-utils';
 import {
   CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS,
   classifyHistoryStartupRetryError,
@@ -258,7 +263,12 @@ let _interruptedSendSession: InterruptedSendSessionState | null = null;
 // tool_calls, etc.), we retry ONCE silently without showing the error to the user.
 // The retry replays the last sendMessage call with the same params. If it fails again,
 // the user sees a friendly error message.
-type LastSendParams = { text: string; attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>; targetAgentId?: string | null };
+type LastSendParams = {
+  text: string;
+  attachments?: Array<{ fileName: string; mimeType: string; fileSize: number; stagedPath: string; preview: string | null }>;
+  targetAgentId?: string | null;
+  sendOptions?: import('./chat/send-options').SendMessageOptions;
+};
 type PendingSilentRetry = {
   failedRunId: string;
   sessionKey: string;
@@ -773,7 +783,7 @@ function scheduleSilentToolStreamRetry(
     _pendingSilentRetry = null;
     _suppressNextOptimisticUserMessage = true;
     const state = get();
-    void state.sendMessage(pending.params.text, pending.params.attachments, pending.params.targetAgentId);
+    void state.sendMessage(pending.params.text, pending.params.attachments, pending.params.targetAgentId, pending.params.sendOptions);
   }, 100);
 }
 
@@ -1240,7 +1250,10 @@ function buildSessionRegistrationPatch(
   workspaceId: string | null,
 ): Partial<Pick<ChatState, 'sessions' | 'sessionLabels' | 'sessionLastActivity' | 'sessionWorkspaceIds'>> {
   if (!userMessage) return {};
-  const rawText = stripGatewayUserMetadata(getMessageText(userMessage.content)).trim();
+  const rawText = rewriteRuntimeSkillMentionsToDisplayInText(
+    stripGatewayUserMetadata(getMessageText(userMessage.content)).trim(),
+    useSkillsStore.getState().skills,
+  ).trim();
   if (!rawText) return {};
 
   const truncated = rawText.length > 50 ? `${rawText.slice(0, 50)}…` : rawText;
@@ -3900,7 +3913,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         if (gatewayReady !== true) {
           try {
-            const sessions = await loadLocalSessionSummaries('main');
+            const sessions = (await loadLocalSessionSummaries('main'))
+              .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills));
 
             if (sessions.length > 0) {
               const mergedLocal = filterUserFacingSessions(
@@ -3963,7 +3977,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           } catch (error) {
             console.warn('[Sessions] Failed to load local session previews for Gateway list:', error);
           }
-          const sessions = mergeSessionSummariesWithLocalPreviews(gatewaySessions, localPreviewSessions);
+          const sessions = mergeSessionSummariesWithLocalPreviews(gatewaySessions, localPreviewSessions)
+            .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills));
 
           const canonicalBySuffix = new Map<string, string>();
           for (const session of sessions) {
@@ -4558,8 +4573,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const enrichedMessages = annotateDigitalEmployeeHistoryMessages(
         normalizeComplexTaskControlUserMessages(enrichWithCachedImages(filteredMessages)),
       );
+      const skillsForDisplay = useSkillsStore.getState().skills;
+      const displayNormalizedMessages = enrichedMessages.map((message) => {
+        if (message.role !== 'user') return message;
+        const nextContent = rewriteUserMessageTextForSkillDisplay(message.content, skillsForDisplay);
+        return nextContent === message.content ? message : { ...message, content: nextContent };
+      });
 
-      const interruptedOut = resolveInterruptedSendResume(currentSessionKey, enrichedMessages, quiet);
+      const interruptedOut = resolveInterruptedSendResume(currentSessionKey, displayNormalizedMessages, quiet);
       if (interruptedOut.resumePatch) {
         set(interruptedOut.resumePatch);
       }
@@ -4576,7 +4597,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       let discoveredLabel: string | undefined;
       if (firstUserMsg) {
         const rawText = getMessageText(firstUserMsg.content);
-        const labelText = stripGatewayUserMetadata(rawText).trim();
+        const labelText = rewriteRuntimeSkillMentionsToDisplayInText(
+          stripGatewayUserMetadata(rawText).trim(),
+          useSkillsStore.getState().skills,
+        ).trim();
         if (labelText) {
           discoveredLabel = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
         }
@@ -5042,6 +5066,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const _resolvedTargetAgentId = targetAgentId ?? (_deIsDigital ? get().currentAgentId : null);
     const trimmed = text.trim();
     if (!trimmed && (!attachments || attachments.length === 0)) return;
+    const gatewayTrimmed = (options?.gatewayText ?? text).trim();
     const suppressOptimisticUserMessage = _suppressNextOptimisticUserMessage;
     _suppressNextOptimisticUserMessage = false;
 
@@ -5097,7 +5122,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       workspaceContext = `\n\n[Working Directory: ${currentWorkspacePath}]`;
     }
     const attachmentCount = attachments?.length ?? 0;
-    const originalRuntimeMessage = trimmed || (attachmentCount > 0 ? 'Process the attached file(s).' : '');
+    const originalRuntimeMessage = gatewayTrimmed || (attachmentCount > 0 ? 'Process the attached file(s).' : '');
     const taskKind = detectTaskWorkflowKind(originalRuntimeMessage, attachments ?? []);
     const convergenceSystemPrompt = buildInitialConvergenceSystemPrompt(taskKind);
     const isInternalStagedExecution = trimmed.includes(COMPLEX_TASK_EXECUTION_MARKER);
@@ -5142,7 +5167,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     // Save send params for potential silent retry
     clearPendingSilentRetry();
-    _lastSendParams = { text, attachments, _resolvedTargetAgentId };
+    _lastSendParams = { text, attachments, targetAgentId: _resolvedTargetAgentId, sendOptions: options };
     _retriedRunIds = new Set();
 
     const contextGuard = await prepareContextBeforeSend({
@@ -5975,7 +6000,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
                   const params = _lastSendParams!;
                   _suppressNextOptimisticUserMessage = true;
-                  void state.sendMessage(params.text, params.attachments, params._resolvedTargetAgentId);
+                  void state.sendMessage(params.text, params.attachments, params.targetAgentId, params.sendOptions);
                 })();
 
                 // Don't snapshot the failed message, don't set error, don't loadHistory
@@ -6343,7 +6368,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
             const params = _lastSendParams!;
             _suppressNextOptimisticUserMessage = true;
-            void state.sendMessage(params.text, params.attachments, params._resolvedTargetAgentId);
+            void state.sendMessage(params.text, params.attachments, params.targetAgentId, params.sendOptions);
           })();
           break;
         }

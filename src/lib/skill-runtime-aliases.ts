@@ -44,6 +44,24 @@ export function resolveBuiltinSkillRuntimeFilterName(skillKey: string | undefine
   return undefined;
 }
 
+/** Marketplace UI display names → installed skill folder slug. */
+const MARKETPLACE_DISPLAY_ALIAS_TO_SLUG_ENTRIES: ReadonlyArray<[string, string]> = [
+  ['商务场景翻译助手', 'manufacturing-translator'],
+];
+
+const marketplaceDisplayAliasToSlug = new Map<string, string>(
+  MARKETPLACE_DISPLAY_ALIAS_TO_SLUG_ENTRIES.map(([alias, slug]) => [
+    normalizeSkillLookupKey(alias),
+    slug,
+  ]),
+);
+
+function resolveMarketplaceSkillSlugFromDisplayAlias(value: string | undefined): string | undefined {
+  const key = normalizeSkillLookupKey(value);
+  if (!key) return undefined;
+  return marketplaceDisplayAliasToSlug.get(key);
+}
+
 /** Map a composer skill id to the name OpenClaw expects in skillFilter. */
 export function resolveOpenClawSkillFilterName(
   skillId: string,
@@ -61,6 +79,21 @@ export function resolveOpenClawSkillFilterName(
   for (const key of lookupKeys) {
     const runtimeName = resolveBuiltinSkillRuntimeFilterName(key);
     if (runtimeName) return runtimeName;
+  }
+
+  const displayAliasSlug = resolveMarketplaceSkillSlugFromDisplayAlias(skill?.name)
+    || resolveMarketplaceSkillSlugFromDisplayAlias(trimmedId);
+  if (displayAliasSlug) return displayAliasSlug;
+
+  const slug = skill?.slug?.trim();
+  if (slug) {
+    const runtimeName = resolveBuiltinSkillRuntimeFilterName(slug);
+    if (runtimeName) return runtimeName;
+    if (skill?.name?.trim()
+      && normalizeSkillLookupKey(slug) !== normalizeSkillLookupKey(skill.name)) {
+      return slug;
+    }
+    return slug;
   }
 
   return skill?.name?.trim() || undefined;
@@ -115,6 +148,78 @@ export function rewriteBuiltinSkillMentionsInText(
   return next;
 }
 
+/**
+ * Replace @runtime skill tokens with UI display names for chat bubbles / session labels.
+ * Inverse of {@link rewriteBuiltinSkillMentionsInText}; safe to call with an empty skills list.
+ */
+export function rewriteRuntimeSkillMentionsToDisplayInText(
+  text: string,
+  skills: readonly Pick<Skill, 'id' | 'slug' | 'name'>[] = [],
+): string {
+  if (!text) return text;
+  let next = text;
+
+  for (const [display, slug] of MARKETPLACE_DISPLAY_ALIAS_TO_SLUG_ENTRIES) {
+    if (normalizeSkillLookupKey(display) === normalizeSkillLookupKey(slug)) continue;
+    const pattern = new RegExp(`@${escapeRegexLiteral(slug)}(?![\\w-])`, 'gi');
+    next = next.replace(pattern, `@${display}`);
+  }
+
+  const builtinDisplayBySlug = new Map<string, string>();
+  for (const { alias, skillSlug } of BUILTIN_SKILL_MENTION_ALIASES) {
+    const existing = builtinDisplayBySlug.get(skillSlug);
+    if (!existing || alias.length > existing.length) {
+      builtinDisplayBySlug.set(skillSlug, alias);
+    }
+  }
+  for (const [skillSlug, alias] of builtinDisplayBySlug) {
+    const runtimeName = resolveBuiltinSkillRuntimeFilterName(skillSlug);
+    if (!runtimeName || normalizeSkillLookupKey(alias) === normalizeSkillLookupKey(runtimeName)) {
+      continue;
+    }
+    const pattern = new RegExp(`@${escapeRegexLiteral(runtimeName)}(?![\\w-])`, 'gi');
+    next = next.replace(pattern, `@${alias}`);
+  }
+
+  const replacements: Array<{ runtime: string; display: string }> = [];
+  for (const skill of skills) {
+    const displayName = skill.name?.trim();
+    const runtimeName = resolveOpenClawSkillFilterName(skill.id, skill);
+    if (!displayName || !runtimeName) continue;
+    if (normalizeSkillLookupKey(displayName) === normalizeSkillLookupKey(runtimeName)) continue;
+    replacements.push({ runtime: runtimeName, display: displayName });
+  }
+  replacements.sort((a, b) => b.runtime.length - a.runtime.length);
+  for (const { runtime, display } of replacements) {
+    const pattern = new RegExp(`@${escapeRegexLiteral(runtime)}(?![\\w-])`, 'gi');
+    next = next.replace(pattern, `@${display}`);
+  }
+
+  return next;
+}
+
+export function rewriteUserMessageTextForSkillDisplay(
+  content: unknown,
+  skills: readonly Pick<Skill, 'id' | 'slug' | 'name'>[] = [],
+): unknown {
+  if (typeof content === 'string') {
+    return rewriteRuntimeSkillMentionsToDisplayInText(content, skills);
+  }
+  if (!Array.isArray(content)) return content;
+
+  let changed = false;
+  const nextContent = content.map((block) => {
+    if (!block || typeof block !== 'object') return block;
+    const record = block as { type?: unknown; text?: unknown };
+    if (record.type !== 'text' || typeof record.text !== 'string') return block;
+    const rewritten = rewriteRuntimeSkillMentionsToDisplayInText(record.text, skills);
+    if (rewritten === record.text) return block;
+    changed = true;
+    return { ...record, text: rewritten };
+  });
+  return changed ? nextContent : content;
+}
+
 export function findSkillByLookupNames(
   skills: readonly Skill[],
   lookupNames: readonly string[],
@@ -143,7 +248,8 @@ export function findSkillByLookupNames(
   }
 
   for (const candidate of lookupNames) {
-    const slug = resolveBuiltinSkillSlugFromAlias(candidate);
+    const slug = resolveBuiltinSkillSlugFromAlias(candidate)
+      || resolveMarketplaceSkillSlugFromDisplayAlias(candidate);
     if (!slug) continue;
     const skill = findSkillBySlug(skills, slug);
     if (skill) return skill;

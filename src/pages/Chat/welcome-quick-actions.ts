@@ -1,4 +1,4 @@
-import { findSkillByLookupNames, resolveOpenClawSkillFilterName } from '@/lib/skill-runtime-aliases';
+import { findSkillByLookupNames } from '@/lib/skill-runtime-aliases';
 import type { Skill } from '@/types/skill';
 
 export interface WelcomeQuickActionDefinition {
@@ -54,7 +54,6 @@ export function buildQuickActionComposerText(
   fallbackSkillName: string,
   defaultPrompt: string,
 ): string {
-  const mentionName = skill
-    ? resolveOpenClawSkillFilterName(skill.id, skill) || skill.name?.trim() || fallbackSkillName
-    : fallbackSkillName;
-  return `@${mentionName} ${defaultPrompt}`;}
+  const mentionName = skill?.name?.trim() || fallbackSkillName.trim();
+  return `@${mentionName} ${defaultPrompt}`;
+}

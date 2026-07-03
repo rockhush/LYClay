@@ -49,6 +49,7 @@ import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
 import { useSkillsStore } from '@/stores/skills';
 import { toast } from 'sonner';
 import { formatWelcomeDisplayName } from '@/lib/welcome-display-name';
+import { rewriteRuntimeSkillMentionsToDisplayInText } from '@/lib/skill-runtime-aliases';
 import {
   WELCOME_QUICK_ACTIONS,
   buildQuickActionComposerText,
@@ -218,6 +219,25 @@ export function Chat() {
   const runAborted = useChatStore((s) => s.runAborted);
   const defaultAccountId = useProviderStore((s) => s.defaultAccountId);
   const isMimo = defaultAccountId === 'ly-mimo';
+  const skills = useSkillsStore((s) => s.skills);
+  const fetchSkills = useSkillsStore((s) => s.fetchSkills);
+  useEffect(() => {
+    if (skills.length === 0) {
+      void fetchSkills();
+    }
+  }, [skills.length, fetchSkills]);
+  const userMessageDisplayTexts = useMemo(() => {
+    const map = new Map<number, string>();
+    messages.forEach((msg, idx) => {
+      if (msg.role !== 'user') return;
+      const raw = extractText(msg);
+      const display = rewriteRuntimeSkillMentionsToDisplayInText(raw, skills);
+      if (display !== raw) {
+        map.set(idx, display);
+      }
+    });
+    return map;
+  }, [messages, skills]);
   const subagentCompletionInfos = useMemo(
     () => messages.map((message) => parseSubagentCompletionInfo(message)),
     [messages],
@@ -1315,7 +1335,7 @@ export function Chat() {
                     >
                       <ChatMessage
                         message={msg}
-                        textOverride={replyTextOverrides.get(idx)}
+                        textOverride={replyTextOverrides.get(idx) ?? userMessageDisplayTexts.get(idx)}
                         suppressToolCards={suppressToolCards}
                         suppressProcessAttachments={suppressToolCards}
                         onEditMessage={setEditingText}

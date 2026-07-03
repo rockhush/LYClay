@@ -689,12 +689,17 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    onSend(
-      gatewayText,
-      attachmentsToSend,
-      effectiveTargetAgentId,
-      skillFilter?.length ? { skillFilter } : undefined,
-    );
+    const sendOptions: SendMessageOptions | undefined = skillFilter?.length
+      ? {
+        skillFilter,
+        ...(gatewayText !== finalText ? { gatewayText } : {}),
+      }
+      : undefined;
+    if (sendOptions) {
+      onSend(finalText, attachmentsToSend, effectiveTargetAgentId, sendOptions);
+    } else {
+      onSend(finalText, attachmentsToSend, effectiveTargetAgentId);
+    }
     setTargetAgentId(null);
     setPickerOpen(false);
   }, [input, attachments, skillAttachments, composerSelectedSkillIds, skills, canSend, onSend, targetAgentId, mentionableAgents]);

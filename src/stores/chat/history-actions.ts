@@ -1,6 +1,11 @@
 import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
 import { useGatewayStore } from '@/stores/gateway';
+import { useSkillsStore } from '@/stores/skills';
+import {
+  rewriteRuntimeSkillMentionsToDisplayInText,
+  rewriteUserMessageTextForSkillDisplay,
+} from '@/lib/skill-runtime-aliases';
 import {
   clearErrorRecoveryTimer,
   clearHistoryPoll,
@@ -131,23 +136,29 @@ export function createHistoryActions(
         const filteredMessages = messagesWithToolImages.filter((msg) => !isToolResultRole(msg.role) && !isInternalMessage(msg));
         // Restore file attachments for user/assistant messages (from cache + text patterns)
         const enrichedMessages = normalizeComplexTaskControlUserMessages(enrichWithCachedImages(filteredMessages));
+        const skillsForDisplay = useSkillsStore.getState().skills;
+        const displayNormalizedMessages = enrichedMessages.map((message) => {
+          if (message.role !== 'user') return message;
+          const nextContent = rewriteUserMessageTextForSkillDisplay(message.content, skillsForDisplay);
+          return nextContent === message.content ? message : { ...message, content: nextContent };
+        });
 
         // Preserve the optimistic user message during an active send.
         // The Gateway may not include the user's message in chat.history
         // until the run completes, causing it to flash out of the UI.
-        let finalMessages = enrichedMessages;
+        let finalMessages = displayNormalizedMessages;
         const userMsgAt = get().lastUserMessageAt;
         if (get().sending && userMsgAt) {
           const userMsMs = toMs(userMsgAt);
           const optimistic = getLatestOptimisticUserMessage(get().messages, userMsMs);
           if (optimistic) {
             // 检查历史中是否已经有匹配的用户消息
-            const hasMatchingUser = enrichedMessages.some((message) =>
+            const hasMatchingUser = displayNormalizedMessages.some((message) =>
               matchesOptimisticUserMessage(message, optimistic, userMsMs),
             );
             // 如果没有匹配的，才添加乐观消息
             if (!hasMatchingUser) {
-              finalMessages = [...enrichedMessages, optimistic];
+              finalMessages = [...displayNormalizedMessages, optimistic];
             }
           }
         }
@@ -188,7 +199,10 @@ export function createHistoryActions(
         let discoveredLabel: string | undefined;
         if (firstUserMsg) {
           const rawText = getMessageText(firstUserMsg.content);
-          const labelText = stripGatewayUserMetadata(rawText).trim();
+          const labelText = rewriteRuntimeSkillMentionsToDisplayInText(
+            stripGatewayUserMetadata(rawText).trim(),
+            useSkillsStore.getState().skills,
+          ).trim();
           if (labelText) {
             discoveredLabel = labelText.length > 50 ? `${labelText.slice(0, 50)}…` : labelText;
           }
