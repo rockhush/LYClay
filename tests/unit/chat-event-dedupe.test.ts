@@ -573,6 +573,85 @@ describe('chat event dedupe', () => {
     vi.useRealTimers();
   });
 
+  it('keeps empty finals open while a delegated child turn is still unresolved', async () => {
+    vi.useFakeTimers();
+    const { useChatStore } = await import('@/stores/chat');
+    const sessionKey = 'agent:main:delegated-empty-final';
+    const childSessionKey = 'agent:main:subagent:child-empty-final';
+    const userTimestamp = Date.now();
+
+    hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
+    gatewayRpcMock.mockResolvedValue({ messages: [] });
+
+    useChatStore.setState({
+      currentSessionKey: sessionKey,
+      currentAgentId: 'main',
+      sessions: [{ key: sessionKey }],
+      messages: [
+        { role: 'user', content: 'Generate a PPT via sub-agent', id: 'user-delegated-empty', timestamp: userTimestamp },
+        {
+          role: 'assistant',
+          id: 'spawn-delegated-empty',
+          content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: { task: 'Generate PPT' } }],
+          stopReason: 'toolUse',
+          timestamp: userTimestamp + 1,
+        },
+        {
+          role: 'toolResult',
+          id: 'spawn-result-delegated-empty',
+          toolCallId: 'spawn-1',
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ status: 'accepted', childSessionKey, runId: 'child-run-1' }),
+          }],
+          timestamp: userTimestamp + 2,
+        },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'parent-run-empty-final',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTimestamp,
+      pendingToolImages: [],
+      error: null,
+      runError: null,
+      emptyFinalRecovery: { status: 'idle' },
+      loading: false,
+      thinkingLevel: null,
+      gatewayBackgroundActivity: { hasBackgroundProcessing: false, processingSessionKeys: [childSessionKey] },
+      sessionBackendActivity: {
+        sessionKey,
+        status: 'idle',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'parent-run-empty-final',
+      sessionKey,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const state = useChatStore.getState();
+    expect(state.emptyFinalRecovery.status).toBe('idle');
+    expect(state.runError).toBeNull();
+    expect(state.sending).toBe(true);
+    expect(state.activeRunId).toBe('parent-run-empty-final');
+    expect(state.pendingFinal).toBe(true);
+    expect(hostApiFetchMock).not.toHaveBeenCalledWith('/api/sessions/empty-final-diagnostic?sessionKey=agent%3Amain%3Adelegated-empty-final');
+    vi.useRealTimers();
+  });
   it('reconciles mismatched final events without appending their message directly', async () => {
     const { useChatStore } = await import('@/stores/chat');
 
@@ -903,6 +982,142 @@ describe('chat event dedupe', () => {
     );
   });
 
+  it('settles foreground state from a bound announce final even when the run id differs', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const userTimestamp = Date.now();
+    const sessionKey = 'agent:main:session-announce';
+    const childSessionKey = 'agent:main:subagent:child-123';
+    const announceRunId = `announce:v1:${childSessionKey}:child-run-1`;
+
+    useChatStore.setState({
+      currentSessionKey: sessionKey,
+      currentAgentId: 'main',
+      sessions: [{ key: sessionKey }],
+      messages: [
+        { role: 'user', content: 'Generate DOE PPT', id: 'user-announce', timestamp: userTimestamp },
+        {
+          role: 'assistant',
+          id: 'spawn-assistant',
+          content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: { task: 'Generate DOE PPT' } }],
+          stopReason: 'toolUse',
+          timestamp: userTimestamp + 1,
+        },
+        {
+          role: 'toolResult',
+          id: 'spawn-result',
+          toolCallId: 'spawn-1',
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ status: 'accepted', childSessionKey, runId: 'child-run-1' }),
+          }],
+          timestamp: userTimestamp + 2,
+        },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'parent-run-1',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTimestamp,
+      pendingToolImages: [],
+      error: null,
+      runError: null,
+      loading: false,
+      thinkingLevel: null,
+      gatewayBackgroundActivity: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+      sessionBackendActivity: {
+        sessionKey,
+        status: 'idle',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: announceRunId,
+      sessionKey,
+      message: {
+        role: 'assistant',
+        id: 'announce-final',
+        stopReason: 'stop',
+        content: [{ type: 'text', text: 'DOE PPT generated successfully.' }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().sending).toBe(false);
+    });
+
+    const state = useChatStore.getState();
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(state.streamingMessage).toBeNull();
+    expect(extractText(state.messages.find((message) => message.id === 'announce-final'))).toContain('DOE PPT generated');
+  });
+
+  it('does not clear foreground state from an unbound announce final', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const userTimestamp = Date.now();
+    const sessionKey = 'agent:main:session-announce-unbound';
+    const announceRunId = 'announce:v1:agent:main:subagent:other-child:child-run-1';
+
+    useChatStore.setState({
+      currentSessionKey: sessionKey,
+      currentAgentId: 'main',
+      sessions: [{ key: sessionKey }],
+      messages: [
+        { role: 'user', content: 'Generate DOE PPT', id: 'user-announce-unbound', timestamp: userTimestamp },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: 'parent-run-unbound',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTimestamp,
+      pendingToolImages: [],
+      error: null,
+      runError: null,
+      loading: false,
+      thinkingLevel: null,
+      gatewayBackgroundActivity: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+      sessionBackendActivity: {
+        sessionKey,
+        status: 'idle',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: announceRunId,
+      sessionKey,
+      message: {
+        role: 'assistant',
+        id: 'unbound-announce-final',
+        stopReason: 'stop',
+        content: [{ type: 'text', text: 'Unrelated child finished.' }],
+      },
+    });
+
+    await Promise.resolve();
+
+    const state = useChatStore.getState();
+    expect(state.sending).toBe(true);
+    expect(state.activeRunId).toBe('parent-run-unbound');
+    expect(state.pendingFinal).toBe(true);
+  });
   it('clears background session execution state when its final event arrives', async () => {
     const { useChatStore } = await import('@/stores/chat');
 

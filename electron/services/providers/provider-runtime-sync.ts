@@ -108,6 +108,13 @@ function isUnregisteredProviderType(type: string): boolean {
   return type === 'custom' || type === 'ollama';
 }
 
+function resolveProviderRequestTimeoutSeconds(type: string): number | undefined {
+  if (type === LY_AUTO_PROVIDER_ID || type === 'custom') {
+    return LY_AUTO_REQUEST_TIMEOUT_SECONDS;
+  }
+  return undefined;
+}
+
 type RuntimeProviderSyncContext = {
   runtimeProviderKey: string;
   meta: ReturnType<typeof getProviderConfig>;
@@ -492,7 +499,7 @@ async function syncRuntimeProviderConfig(
     api: context.api,
     apiKeyEnv: context.meta?.apiKeyEnv,
     headers,
-    timeoutSeconds: config.type === LY_AUTO_PROVIDER_ID ? LY_AUTO_REQUEST_TIMEOUT_SECONDS : undefined,
+    timeoutSeconds: resolveProviderRequestTimeoutSeconds(config.type),
     modelOverrides,
   });
 

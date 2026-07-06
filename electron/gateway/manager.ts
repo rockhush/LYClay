@@ -42,6 +42,7 @@ import {
   type PendingGatewayRequest,
 } from './request-store';
 import { dispatchJsonRpcNotification, dispatchProtocolEvent } from './event-dispatch';
+import { transcriptFileShowsDelegationYield } from './transcript-delegation-signals';
 import { GatewayStateController } from './state';
 import { prepareGatewayLaunchContext } from './config-sync';
 import { connectGatewaySocket, waitForGatewayReady } from './ws-client';
@@ -1721,6 +1722,17 @@ export class GatewayManager extends EventEmitter {
       this.getEmptyFinalSessionSnapshot(args.sessionKey),
       this.recoverSessionTranscriptLock(args.sessionKey, 'empty-user-chat-final'),
     ]);
+
+    const sessionEntry = sessionSnapshot.sessionStoreEntry as { sessionFile?: unknown } | null | undefined;
+    const sessionFile = typeof sessionEntry?.sessionFile === 'string' ? sessionEntry.sessionFile : '';
+    if (sessionFile && await transcriptFileShowsDelegationYield(sessionFile, args.runId)) {
+      logger.info('[gateway:session-lock-recovery] skipped empty-final diagnostic for delegation yield', {
+        runId: args.runId,
+        sessionKey: args.sessionKey,
+        sessionFile,
+      });
+      return;
+    }
 
     const diagnostic: EmptyFinalDiagnostic = {
       ...args,

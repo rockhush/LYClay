@@ -1,6 +1,8 @@
 import type {
   AttachedFileMeta,
   ContentBlock,
+  GeneratedCodeFailureKind,
+  GeneratedCodeValidationFailure,
   RawMessage,
   RunawayToolObservation,
   RunawayToolRiskState,
@@ -14,13 +16,31 @@ import {
 
 type PendingAttachment = Pick<AttachedFileMeta, 'fileName' | 'mimeType' | 'fileSize'>;
 
+type ToolCallDetail = {
+  key: string;
+  name: string;
+  args: Record<string, unknown>;
+};
+
+type FailureClassification = {
+  kind: GeneratedCodeFailureKind;
+  path: string | null;
+  language: string | null;
+  message: string;
+  commandFamily: string | null;
+};
+
 const MAX_RECENT_ITEMS = 24;
 const MAX_SEEN_KEYS = 160;
+const MAX_FAILURES = 16;
+const MAX_FAILURE_MESSAGE = 360;
 
 const SPREADSHEET_EXTENSIONS = new Set(['xlsx', 'xls', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv']);
 const WORD_EXTENSIONS = new Set(['doc', 'docx', 'rtf']);
 const PRESENTATION_EXTENSIONS = new Set(['ppt', 'pptx', 'odp']);
 const DATA_EXTENSIONS = new Set(['json', 'jsonl', 'parquet', 'ndjson', 'xml', 'yaml', 'yml']);
+const GENERATED_CODE_EXTENSIONS = new Set(['py', 'js', 'ts', 'mjs', 'cjs', 'json', 'sh', 'ps1', 'bat', 'cmd']);
+const SKILL_MUTATION_TOOLS = new Set(['write', 'edit', 'delete', 'remove', 'rm', 'move', 'rename', 'apply_patch']);
 
 function lower(value: unknown): string {
   return String(value ?? '').toLowerCase();
@@ -60,17 +80,23 @@ export function detectTaskWorkflowKind(
   if (fileKinds.length === 1) return fileKinds[0];
 
   const normalized = lower(text);
+  if (/\b(create|edit|update|repair|fix|modify)\b.*\b(skill|plugin)\b/.test(normalized)) return 'general';
+  if (/\.(pdf)\b/.test(normalized)) return 'pdf';
+  if (/\.(docx?|rtf)\b/.test(normalized)) return 'word';
+  if (/\.(pptx?|odp)\b/.test(normalized)) return 'presentation';
+  if (/\.(jsonl?|parquet|ndjson|xml|ya?ml)\b/.test(normalized)) return 'data-analysis';
   if (/\.(xlsx|xls|xlsm|xlsb|ods|csv|tsv)\b/.test(normalized)
-    || hasAny(normalized, ['excel', 'spreadsheet', 'sheet', 'workbook', 'csv', '表格', '电子表格'])) {
+    || hasAny(normalized, ['excel', 'spreadsheet', 'sheet', 'workbook', 'csv', 'table'])) {
     return 'spreadsheet';
   }
-  if (/\.(pdf)\b/.test(normalized) || hasAny(normalized, ['pdf', '文档解析'])) return 'pdf';
-  if (/\.(docx?|rtf)\b/.test(normalized) || hasAny(normalized, ['word', 'docx', '合同', '文档'])) return 'word';
-  if (/\.(pptx?|odp)\b/.test(normalized) || hasAny(normalized, ['ppt', 'powerpoint', 'slides', '演示文稿'])) {
+  if (/\.(pdf)\b/.test(normalized) || hasAny(normalized, ['pdf'])) return 'pdf';
+  if (/\.(docx?|rtf)\b/.test(normalized) || hasAny(normalized, ['word', 'docx', 'document'])) return 'word';
+  if (/\.(pptx?|odp)\b/.test(normalized)
+    || hasAny(normalized, ['ppt', 'powerpoint', 'slides', 'deck', 'presentation', 'report', 'doe'])) {
     return 'presentation';
   }
   if (/\.(jsonl?|parquet|ndjson|xml|ya?ml)\b/.test(normalized)
-    || hasAny(normalized, ['数据分析', 'data analysis', 'dataset', '数据集'])) {
+    || hasAny(normalized, ['data analysis', 'dataset', 'chart', 'plot', 'generated-report', 'analysis script'])) {
     return 'data-analysis';
   }
   return 'general';
@@ -98,6 +124,11 @@ export function createRunawayToolObservation(options: {
     repeatedDebugScriptCount: 0,
     repeatedOutputPatternCount: 0,
     structuralInspectionCount: 0,
+    generatedCodeFailureCount: 0,
+    sameGeneratedFileFailureCount: 0,
+    sameCommandFamilyFailureCount: 0,
+    skillSourceMutationBlockedCount: 0,
+    pauseReason: null,
     lastToolCallAt: null,
     lastToolResultAt: null,
     lastVisibleProgressAt: null,
@@ -118,6 +149,10 @@ export function createRunawayToolObservation(options: {
     recentWriteTargets: [],
     recentDebugScriptTargets: [],
     recentOutputFingerprints: [],
+    recentGeneratedFailurePaths: [],
+    recentGeneratedFailureKinds: [],
+    recentCommandFailureFamilies: [],
+    generatedCodeValidationFailures: [],
   };
 }
 
@@ -149,12 +184,6 @@ function parseToolArgs(value: unknown): Record<string, unknown> {
     return {};
   }
 }
-
-type ToolCallDetail = {
-  key: string;
-  name: string;
-  args: Record<string, unknown>;
-};
 
 function extractToolCallDetails(message: unknown): ToolCallDetail[] {
   if (!message || typeof message !== 'object') return [];
@@ -213,10 +242,20 @@ function normalizeExecCommand(args: Record<string, unknown>): string | null {
 }
 
 function normalizeWriteTarget(args: Record<string, unknown>): string | null {
-  const raw = String(args.file_path ?? args.path ?? args.filename ?? '').trim();
+  const raw = extractPathFromArgs(args);
   if (!raw) return null;
   const base = raw.split(/[\\/]/).pop() || raw;
   return base.toLowerCase().replace(/\d+/g, '#').slice(0, 120);
+}
+
+function extractPathFromArgs(args: Record<string, unknown>): string | null {
+  const raw = String(args.file_path ?? args.filePath ?? args.path ?? args.filename ?? args.target ?? '').trim();
+  return raw || null;
+}
+
+function normalizePathFingerprint(path: string | null): string | null {
+  if (!path) return null;
+  return path.replace(/\\/g, '/').toLowerCase().replace(/\d+/g, '#').slice(-180);
 }
 
 function extractMessageText(message: unknown): string {
@@ -227,6 +266,13 @@ function extractMessageText(message: unknown): string {
   return content.map((block) => {
     if (!block || typeof block !== 'object') return '';
     const record = block as Record<string, unknown>;
+    const nested = record.content;
+    if (Array.isArray(nested)) {
+      return nested.map((item) => {
+        if (!item || typeof item !== 'object') return String(item ?? '');
+        return String((item as Record<string, unknown>).text ?? (item as Record<string, unknown>).content ?? '');
+      }).join('\n');
+    }
     return String(record.text ?? record.content ?? '');
   }).filter(Boolean).join('\n');
 }
@@ -234,8 +280,8 @@ function extractMessageText(message: unknown): string {
 function normalizeDebugScriptTarget(value: string | null | undefined): string | null {
   if (!value) return null;
   const normalized = value.toLowerCase().replace(/\\/g, '/');
-  const match = normalized.match(/(?:^|\/)((?:vmi[_-]?(?:debug|check)|tmp|debug|check|inspect)[a-z0-9_#-]*\.py)\b/)
-    ?? normalized.match(/\bpython(?:\.exe)?\s+(?:[^\s"']+[\/])?((?:vmi[_-]?(?:debug|check)|tmp|debug|check|inspect)[a-z0-9_#-]*\.py)\b/);
+  const match = normalized.match(/(?:^|\/)((?:vmi[_-]?(?:debug|check)|tmp|debug|check|inspect|runner|generate|report|doe)[a-z0-9_#-]*\.py)\b/)
+    ?? normalized.match(/\bpython(?:\.exe)?\s+(?:[^\s"']+[\/])?((?:vmi[_-]?(?:debug|check)|tmp|debug|check|inspect|runner|generate|report|doe)[a-z0-9_#-]*\.py)\b/);
   if (!match) return null;
   return match[1].replace(/\d+/g, '#');
 }
@@ -243,8 +289,8 @@ function normalizeDebugScriptTarget(value: string | null | undefined): string | 
 function extractDebugScriptTarget(name: string, args: Record<string, unknown>): string | null {
   const command = String(args.command ?? args.cmd ?? '').trim();
   const writeTarget = normalizeWriteTarget(args);
-  if (name === 'write') return normalizeDebugScriptTarget(writeTarget);
-  if (name === 'exec') return normalizeDebugScriptTarget(command);
+  if (['write', 'edit'].includes(name.toLowerCase())) return normalizeDebugScriptTarget(writeTarget);
+  if (name.toLowerCase() === 'exec') return normalizeDebugScriptTarget(command);
   return null;
 }
 
@@ -262,7 +308,7 @@ function normalizeOutputFingerprint(message: unknown): string | null {
   if (text.length < 24) return null;
   const rowLike = text.split('\n')
     .map((line) => line.trim())
-    .filter((line) => /\b(row|col|column|sheet|empty|null|none|nan)\b/.test(line))
+    .filter((line) => /\b(row|col|column|sheet|empty|null|none|nan|syntaxerror|parsererror)\b/.test(line))
     .slice(0, 8);
   const basis = rowLike.length >= 2 ? rowLike.join('\n') : text.split('\n').filter(Boolean).slice(0, 6).join('\n');
   const compact = basis
@@ -273,13 +319,192 @@ function normalizeOutputFingerprint(message: unknown): string | null {
   return compact.length >= 24 ? compact : null;
 }
 
-function calculateRisk(next: RunawayToolObservation): Pick<RunawayToolObservation, 'riskState' | 'riskReasons'> {
+function languageForPath(path: string | null): string | null {
+  if (!path) return null;
+  const ext = getExtension(path);
+  if (ext === 'py') return 'python';
+  if (['js', 'mjs', 'cjs'].includes(ext)) return 'javascript';
+  if (ext === 'ts') return 'typescript';
+  if (ext === 'json') return 'json';
+  if (['sh', 'ps1', 'bat', 'cmd'].includes(ext)) return 'shell';
+  return null;
+}
+
+function isGeneratedCodePath(path: string | null): boolean {
+  return Boolean(path && GENERATED_CODE_EXTENSIONS.has(getExtension(path)));
+}
+
+function isSkillSourcePath(path: string | null): boolean {
+  if (!path) return false;
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  return normalized.includes('/.openclaw/skills/')
+    || normalized.includes('/openclaw/skills/')
+    || (normalized.includes('/plugins/cache/') && normalized.includes('/skills/'))
+    || normalized.includes('/.codex/skills/')
+    || normalized.includes('/codex/skills/');
+}
+
+function truncateDiagnostic(value: string): string {
+  return value.replace(/\x00/g, '\\0').replace(/\s+/g, ' ').trim().slice(0, MAX_FAILURE_MESSAGE);
+}
+
+function extractPathFromText(text: string): string | null {
+  const quoted = text.match(/['"]([a-zA-Z]:[\\/][^'"]+\.(?:py|js|ts|mjs|cjs|json|sh|ps1|bat|cmd))['"]/);
+  if (quoted) return quoted[1];
+  const bare = text.match(/\b([a-zA-Z]:[\\/][^\s:]+\.(?:py|js|ts|mjs|cjs|json|sh|ps1|bat|cmd))\b/);
+  if (bare) return bare[1];
+  const relative = text.match(/\b([\w./\\-]+\.(?:py|js|ts|mjs|cjs|json|sh|ps1|bat|cmd))\b/);
+  return relative?.[1] ?? null;
+}
+
+function commandFamilyFor(command: string | null, kind: GeneratedCodeFailureKind): string | null {
+  if (!command) return null;
+  const compact = command.toLowerCase().replace(/\\/g, '/').replace(/\s+/g, ' ');
+  const file = compact.match(/([^\s"']+\.(?:py|js|ts|mjs|cjs|json|sh|ps1|bat|cmd))\b/)?.[1]?.split('/').pop() ?? '';
+  const runner = compact.match(/\b(node|python(?:\.exe)?|py|uv run python|pnpm|powershell|pwsh)\b/)?.[1] ?? 'shell';
+  return `${kind}:${runner}:${file || compact.replace(/\d+/g, '#').slice(0, 80)}`;
+}
+
+function classifyToolCallFailure(detail: ToolCallDetail): FailureClassification | null {
+  const name = detail.name.toLowerCase();
+  const path = extractPathFromArgs(detail.args);
+  if (SKILL_MUTATION_TOOLS.has(name) && isSkillSourcePath(path)) {
+    return {
+      kind: 'skill_source_readonly',
+      path,
+      language: languageForPath(path),
+      message: 'Attempted to modify installed skill source during an ordinary task.',
+      commandFamily: `skill_source:${normalizePathFingerprint(path) ?? 'unknown'}`,
+    };
+  }
+  return null;
+}
+
+function classifyToolResultFailure(update: ToolStatus, eventMessage: unknown, lastCommand: string | null): FailureClassification | null {
+  if (update.status !== 'error' && update.status !== 'completed') return null;
+  const text = `${update.summary ?? ''}\n${extractMessageText(eventMessage)}`;
+  const normalized = text.toLowerCase();
+  const command = lastCommand ?? '';
+  const path = extractPathFromText(text) ?? extractPathFromText(command);
+  const language = languageForPath(path) ?? (normalized.includes('python') || /\.py\b/i.test(command) ? 'python' : null);
+
+  if (/\.py\b/i.test(command) && /\bnode(?:\.exe)?\b/i.test(command)) {
+    return {
+      kind: 'wrong_interpreter',
+      path,
+      language: 'python',
+      message: 'Python script was executed with Node.',
+      commandFamily: commandFamilyFor(command, 'wrong_interpreter'),
+    };
+  }
+  if (command.includes('&&') && /parsererror|invalidendofline|not a valid statement separator|&&/.test(normalized)) {
+    return {
+      kind: 'shell_operator_unsupported',
+      path,
+      language,
+      message: 'Shell rejected && or an unsupported heredoc/operator form.',
+      commandFamily: commandFamilyFor(command, 'shell_operator_unsupported'),
+    };
+  }
+  if (normalized.includes('source code cannot contain null bytes') || normalized.includes('null byte')) {
+    return {
+      kind: 'generated_code_null_bytes',
+      path,
+      language,
+      message: truncateDiagnostic(text),
+      commandFamily: commandFamilyFor(command, 'generated_code_null_bytes'),
+    };
+  }
+  if (normalized.includes('syntaxerror') && (language === 'python' || /\.py\b/i.test(text) || /python/i.test(command))) {
+    return {
+      kind: 'generated_python_syntax_error',
+      path,
+      language: 'python',
+      message: truncateDiagnostic(text),
+      commandFamily: commandFamilyFor(command, 'generated_python_syntax_error'),
+    };
+  }
+  if (normalized.includes('json') && /parse|unexpected token|unexpected end/.test(normalized) && (language === 'json' || /\.json\b/i.test(text))) {
+    return {
+      kind: 'generated_json_parse_error',
+      path,
+      language: 'json',
+      message: truncateDiagnostic(text),
+      commandFamily: commandFamilyFor(command, 'generated_json_parse_error'),
+    };
+  }
+  if (/old text|no match|could not find|failed to apply|patch failed/.test(normalized) && isGeneratedCodePath(path)) {
+    return {
+      kind: 'repeated_debug_loop',
+      path,
+      language,
+      message: truncateDiagnostic(text),
+      commandFamily: commandFamilyFor(command, 'repeated_debug_loop'),
+    };
+  }
+  return null;
+}
+
+function recordGeneratedFailure(
+  next: RunawayToolObservation,
+  classification: FailureClassification,
+  now: number,
+): RunawayToolObservation {
+  const pathKey = normalizePathFingerprint(classification.path);
+  const commandFamily = classification.commandFamily;
+  const existingIndex = next.generatedCodeValidationFailures.findIndex((failure) => (
+    failure.kind === classification.kind
+    && (failure.path ?? null) === (classification.path ?? null)
+    && (failure.language ?? null) === (classification.language ?? null)
+  ));
+  const failure: GeneratedCodeValidationFailure = existingIndex >= 0
+    ? {
+      ...next.generatedCodeValidationFailures[existingIndex],
+      message: truncateDiagnostic(classification.message),
+      count: next.generatedCodeValidationFailures[existingIndex].count + 1,
+      updatedAt: now,
+    }
+    : {
+      path: classification.path,
+      language: classification.language,
+      kind: classification.kind,
+      message: truncateDiagnostic(classification.message),
+      count: 1,
+      updatedAt: now,
+    };
+  const failures = existingIndex >= 0
+    ? next.generatedCodeValidationFailures.map((item, index) => (index === existingIndex ? failure : item))
+    : [...next.generatedCodeValidationFailures, failure].slice(-MAX_FAILURES);
+
+  const repeatedPath = Boolean(pathKey && next.recentGeneratedFailurePaths.includes(pathKey));
+  const repeatedFamily = Boolean(commandFamily && next.recentCommandFailureFamilies.includes(commandFamily));
+  return {
+    ...next,
+    generatedCodeFailureCount: next.generatedCodeFailureCount + 1,
+    sameGeneratedFileFailureCount: repeatedPath ? next.sameGeneratedFileFailureCount + 1 : next.sameGeneratedFileFailureCount,
+    sameCommandFamilyFailureCount: repeatedFamily ? next.sameCommandFamilyFailureCount + 1 : next.sameCommandFamilyFailureCount,
+    skillSourceMutationBlockedCount: classification.kind === 'skill_source_readonly'
+      ? next.skillSourceMutationBlockedCount + 1
+      : next.skillSourceMutationBlockedCount,
+    recentGeneratedFailurePaths: pathKey ? boundedPush(next.recentGeneratedFailurePaths, pathKey) : next.recentGeneratedFailurePaths,
+    recentGeneratedFailureKinds: boundedPush(next.recentGeneratedFailureKinds, classification.kind),
+    recentCommandFailureFamilies: commandFamily ? boundedPush(next.recentCommandFailureFamilies, commandFamily) : next.recentCommandFailureFamilies,
+    generatedCodeValidationFailures: failures,
+  };
+}
+
+function calculateRisk(next: RunawayToolObservation): Pick<RunawayToolObservation, 'riskState' | 'riskReasons' | 'pauseReason'> {
   const reasons: string[] = [];
   let riskState: RunawayToolRiskState = 'normal';
+  let pauseReason: RunawayToolObservation['pauseReason'] = null;
 
   if (next.toolCallCount >= 15) {
     riskState = 'needs_convergence';
     reasons.push(`tool_calls>=15 (${next.toolCallCount})`);
+  }
+  if (next.taskKind !== 'general' && next.generatedCodeFailureCount > 0) {
+    riskState = riskState === 'normal' ? 'needs_convergence' : riskState;
+    reasons.push(`generated_code_failures>=1 (${next.generatedCodeFailureCount})`);
   }
   if (
     next.writeExecPairCount >= 3
@@ -287,16 +512,18 @@ function calculateRisk(next: RunawayToolObservation): Pick<RunawayToolObservatio
     || next.repeatedWriteTargetCount >= 3
     || next.repeatedDebugScriptCount >= 2
     || next.repeatedOutputPatternCount >= 2
+    || next.sameGeneratedFileFailureCount >= 1
+    || next.sameCommandFamilyFailureCount >= 1
+    || next.skillSourceMutationBlockedCount >= 1
   ) {
     riskState = 'debug_loop';
     reasons.push('repeated write/exec debug pattern');
   }
-  if (next.repeatedDebugScriptCount >= 2) {
-    reasons.push(`repeated debug scripts>=2 (${next.repeatedDebugScriptCount})`);
-  }
-  if (next.repeatedOutputPatternCount >= 2) {
-    reasons.push(`repeated output patterns>=2 (${next.repeatedOutputPatternCount})`);
-  }
+  if (next.repeatedDebugScriptCount >= 2) reasons.push(`repeated debug scripts>=2 (${next.repeatedDebugScriptCount})`);
+  if (next.repeatedOutputPatternCount >= 2) reasons.push(`repeated output patterns>=2 (${next.repeatedOutputPatternCount})`);
+  if (next.sameGeneratedFileFailureCount >= 1) reasons.push(`same generated file failures>=2 (${next.sameGeneratedFileFailureCount + 1})`);
+  if (next.sameCommandFamilyFailureCount >= 1) reasons.push(`same command family failures>=2 (${next.sameCommandFamilyFailureCount + 1})`);
+  if (next.skillSourceMutationBlockedCount >= 1) reasons.push(`skill_source_readonly (${next.skillSourceMutationBlockedCount})`);
   if (next.taskKind !== 'general' && next.structuralInspectionCount >= 4) {
     riskState = riskState === 'normal' ? 'needs_convergence' : riskState;
     reasons.push(`structural_inspections>=4 (${next.structuralInspectionCount})`);
@@ -311,14 +538,28 @@ function calculateRisk(next: RunawayToolObservation): Pick<RunawayToolObservatio
   }
   if (next.toolCallCount >= 45) {
     riskState = 'needs_pause';
+    pauseReason = 'tool_count_limit';
     reasons.push(`tool_calls>=45 (${next.toolCallCount})`);
   }
-
-  if (next.taskKind !== 'general' && next.toolCallCount >= 10) {
-    reasons.push(`document/data task: ${next.taskKind}`);
+  if (next.generatedCodeFailureCount >= 3) {
+    riskState = 'needs_pause';
+    pauseReason = next.recentGeneratedFailureKinds[next.recentGeneratedFailureKinds.length - 1] as GeneratedCodeFailureKind | undefined ?? 'debug_loop_limit';
+    reasons.push(`generated_code_failures>=3 (${next.generatedCodeFailureCount})`);
+  }
+  if (next.sameGeneratedFileFailureCount >= 2) {
+    riskState = 'needs_pause';
+    pauseReason = 'repeated_debug_loop';
+    reasons.push(`same generated file failures>=3 (${next.sameGeneratedFileFailureCount + 1})`);
+  }
+  if (next.sameCommandFamilyFailureCount >= 2) {
+    riskState = 'needs_pause';
+    pauseReason = 'repeated_debug_loop';
+    reasons.push(`same command family failures>=3 (${next.sameCommandFamilyFailureCount + 1})`);
   }
 
-  return { riskState, riskReasons: reasons };
+  if (next.taskKind !== 'general' && next.toolCallCount >= 10) reasons.push(`document/data task: ${next.taskKind}`);
+
+  return { riskState, riskReasons: reasons, pauseReason };
 }
 
 function applyConvergenceDirective(next: RunawayToolObservation, now: number): RunawayToolObservation {
@@ -352,6 +593,7 @@ function logRiskTransition(prev: RunawayToolObservation, next: RunawayToolObserv
     current: next.riskState,
     toolCallCount: next.toolCallCount,
     toolResultCount: next.toolResultCount,
+    generatedCodeFailureCount: next.generatedCodeFailureCount,
     reasons: next.riskReasons,
   });
 }
@@ -386,6 +628,7 @@ export function observeRunawayToolEvent(options: {
     updatedAt: now,
     pendingFinal: prev.pendingFinal || resolvedState === 'final',
   };
+  let lastExecCommand: string | null = null;
 
   if (hasVisibleAssistantProgress(event.message)) {
     next.lastVisibleProgressAt = now;
@@ -405,9 +648,7 @@ export function observeRunawayToolEvent(options: {
     next.lastToolCallAt = now;
     next.recentToolNames = boundedPush(next.recentToolNames, detail.name);
 
-    if (previousToolName === 'write' && detail.name === 'exec') {
-      next.writeExecPairCount += 1;
-    }
+    if (previousToolName === 'write' && detail.name === 'exec') next.writeExecPairCount += 1;
 
     if (next.taskKind !== 'general' && isStructuralInspectionTool(detail.name, detail.args)) {
       next.structuralInspectionCount += 1;
@@ -419,21 +660,25 @@ export function observeRunawayToolEvent(options: {
       next.recentDebugScriptTargets = boundedPush(next.recentDebugScriptTargets, debugScriptTarget);
     }
 
-    if (detail.name === 'exec') {
+    if (detail.name.toLowerCase() === 'exec') {
       const command = normalizeExecCommand(detail.args);
       if (command) {
+        lastExecCommand = command;
         if (next.recentExecCommands.includes(command)) next.repeatedExecCommandCount += 1;
         next.recentExecCommands = boundedPush(next.recentExecCommands, command);
       }
     }
 
-    if (detail.name === 'write') {
+    if (['write', 'edit'].includes(detail.name.toLowerCase())) {
       const target = normalizeWriteTarget(detail.args);
       if (target) {
         if (next.recentWriteTargets.includes(target)) next.repeatedWriteTargetCount += 1;
         next.recentWriteTargets = boundedPush(next.recentWriteTargets, target);
       }
     }
+
+    const toolCallFailure = classifyToolCallFailure(detail);
+    if (toolCallFailure) next = recordGeneratedFailure(next, toolCallFailure, now);
   }
 
   toolUpdates.forEach((update, index) => {
@@ -448,6 +693,8 @@ export function observeRunawayToolEvent(options: {
       if (next.recentOutputFingerprints.includes(fingerprint)) next.repeatedOutputPatternCount += 1;
       next.recentOutputFingerprints = boundedPush(next.recentOutputFingerprints, fingerprint);
     }
+    const failure = classifyToolResultFailure(update, event.message, lastExecCommand ?? next.recentExecCommands[next.recentExecCommands.length - 1] ?? null);
+    if (failure) next = recordGeneratedFailure(next, failure, now);
   });
 
   next = { ...next, ...calculateRisk(next) };

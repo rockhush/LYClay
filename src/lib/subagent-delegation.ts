@@ -1,5 +1,11 @@
 import { extractText, extractToolUse } from '@/pages/Chat/message-utils';
 import type { RawMessage } from '@/stores/chat';
+import {
+  findConcludingAssistantReply,
+  findLatestVisibleUserIndex,
+  isRunTerminalAssistantMessage,
+  shouldSilentlyFinalizeRunOnAssistantFinal,
+} from '@/stores/chat/run-lifecycle';
 import { hasActiveChildDelegations, isChildDelegationStillActive } from '@/lib/subagent-delegation-watch';
 
 export interface SubagentCompletionInfo {
@@ -148,17 +154,111 @@ export function hasUnresolvedSpawnDelegation(messages: readonly RawMessage[]): b
   return false;
 }
 
+/** Parent interim "waiting on sub-agent" reply — not the deliverable announce wrap-up. */
+export function isInterimSubagentWaitAssistantReply(message: RawMessage): boolean {
+  if (message.role !== 'assistant') return false;
+  const text = extractText(message).trim();
+  if (!text) return false;
+  if (shouldSilentlyFinalizeRunOnAssistantFinal(message)) return false;
+  if (/(?:已生成|生成完毕|✅|saved|slides?:\s*\d+|共\s*\d+\s*页)/i.test(text)) return false;
+  if (/(?:稍等|等一下|启动了一个子任务)/i.test(text)) return true;
+  return /(?:预计|等待|几分钟后|完成后.{0,12}通知|已启动|已交给|正在.{0,12}(?:构建|生成)|sub-?agent|子代理|子智能体)/i.test(text);
+}
+
+export function isVisibleWrapUpAssistantReply(
+  message: RawMessage,
+  scopeMessages?: readonly RawMessage[],
+): boolean {
+  if (message.role !== 'assistant') return false;
+  if (!extractText(message).trim()) return false;
+  if (shouldSilentlyFinalizeRunOnAssistantFinal(message)) return false;
+  if (isInterimSubagentWaitAssistantReply(message)) return false;
+  if (extractToolUse(message).some((tool) => /sessions_(spawn|yield)/i.test(tool.name))) return false;
+  if (isRunTerminalAssistantMessage(message)) return true;
+  if (scopeMessages) {
+    const concluding = findConcludingAssistantReply(scopeMessages);
+    return concluding != null && concluding === message;
+  }
+  return false;
+}
+
+/**
+ * Infer child session keys settled from transcript alone (no runtime announce event).
+ * Announce wrap-ups never write `[Internal task completion event]` to the parent.
+ */
+export function inferTranscriptSettledChildSessionKeys(messages: RawMessage[]): Set<string> {
+  const keys = new Set<string>();
+  const baseCompleted = collectCompletedSubagentSessionKeys(messages);
+  const bindings = collectChildDelegationBindings(messages, baseCompleted);
+  if (bindings.length === 0) return keys;
+
+  const userIdx = findLatestVisibleUserIndex(messages);
+  const scope = userIdx >= 0 ? messages.slice(userIdx + 1) : messages;
+  const firstSpawnIdx = scope.findIndex((message) =>
+    message.role === 'assistant'
+    && extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name)),
+  );
+  if (firstSpawnIdx < 0) return keys;
+
+  const hasWrapUp = scope.some((message, index) =>
+    index > firstSpawnIdx && isVisibleWrapUpAssistantReply(message, scope),
+  );
+  if (!hasWrapUp) return keys;
+
+  for (const binding of bindings) {
+    if (!binding.completed) keys.add(binding.childSessionKey);
+  }
+  return keys;
+}
+
+export function resolveCompletedChildSessionKeys(
+  messages: RawMessage[],
+  extraKeys?: readonly string[],
+): Set<string> {
+  return new Set([
+    ...collectCompletedSubagentSessionKeys(messages),
+    ...inferTranscriptSettledChildSessionKeys(messages),
+    ...(extraKeys ?? []),
+  ]);
+}
+
 /** Gateway-only idle check for parent session + spawned children (ignores stale backend snapshots). */
 export function isGatewayIdleForSpawnedChildren(
   sessionKey: string,
   messages: RawMessage[],
   processingSessionKeys: readonly string[],
+  extraCompletedChildSessionKeys?: ReadonlySet<string> | readonly string[],
 ): boolean {
   const processing = new Set(processingSessionKeys);
   if (processing.has(sessionKey)) return false;
-  const completed = collectCompletedSubagentSessionKeys(messages);
+  const completed = new Set([
+    ...collectCompletedSubagentSessionKeys(messages),
+    ...(extraCompletedChildSessionKeys instanceof Set
+      ? extraCompletedChildSessionKeys
+      : extraCompletedChildSessionKeys ?? []),
+  ]);
   const bindings = collectChildDelegationBindings(messages, completed);
-  return !bindings.some((binding) => processing.has(binding.childSessionKey));
+  return !bindings.some((binding) =>
+    !binding.completed && processing.has(binding.childSessionKey),
+  );
+}
+
+/** Drop stale child processing keys once transcript/announce marks them complete. */
+export function pruneSettledChildProcessingKeys(
+  messages: RawMessage[],
+  processingSessionKeys: readonly string[],
+  extraCompletedChildSessionKeys?: readonly string[],
+): string[] {
+  const completed = new Set([
+    ...collectCompletedSubagentSessionKeys(messages),
+    ...(extraCompletedChildSessionKeys ?? []),
+  ]);
+  const bindings = collectChildDelegationBindings(messages, completed);
+  const settledChildKeys = new Set(
+    bindings.filter((binding) => binding.completed).map((binding) => binding.childSessionKey),
+  );
+  if (settledChildKeys.size === 0) return [...processingSessionKeys];
+  return processingSessionKeys.filter((key) => !settledChildKeys.has(key));
 }
 
 /** True while any spawned child is still in flight on the gateway. */
@@ -304,4 +404,112 @@ export function summarizeChildRunActivity(childMessages: RawMessage[]): string |
   }
 
   return null;
+}
+
+function segmentHasSpawnSignal(
+  segmentMessages: readonly RawMessage[],
+  streamingMessage: unknown | null,
+  streamingTools: ReadonlyArray<{ name: string }>,
+): boolean {
+  if (streamingTools.some((tool) => /sessions_spawn/i.test(tool.name))) return true;
+  if (streamingMessage && typeof streamingMessage === 'object') {
+    const tools = extractToolUse(streamingMessage as RawMessage);
+    if (tools.some((tool) => /sessions_spawn/i.test(tool.name))) return true;
+  }
+  return segmentMessages.some((message) => (
+    message.role === 'assistant'
+    && extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name))
+  ));
+}
+
+function parseSpawnLabelFromToolInput(input: Record<string, unknown> | null): string | null {
+  if (!input) return null;
+  if (typeof input.taskName === 'string' && input.taskName.trim()) return input.taskName.trim();
+  if (typeof input.label === 'string' && input.label.trim()) return input.label.trim();
+  return null;
+}
+
+/**
+ * Merge transcript bindings with live stream signals so execution-graph child
+ * branches appear as soon as spawn is accepted, before history reload commits.
+ */
+export function mergeDelegationBindingsWithLiveStream(
+  transcriptBindings: ChildDelegationBinding[],
+  segmentMessages: readonly RawMessage[],
+  streamingMessage: unknown | null,
+  streamingTools: ReadonlyArray<{ name: string; status?: string; summary?: string; toolCallId?: string; id?: string }>,
+  completedChildSessionKeys: ReadonlySet<string>,
+  processingSessionKeys: readonly string[] = [],
+): ChildDelegationBinding[] {
+  const bindings = [...transcriptBindings];
+  const boundToolIds = new Set(
+    bindings.map((binding) => binding.spawnToolCallId).filter((id): id is string => Boolean(id)),
+  );
+  const boundChildKeys = new Set(bindings.map((binding) => binding.childSessionKey));
+
+  const addBinding = (binding: ChildDelegationBinding): void => {
+    if (boundChildKeys.has(binding.childSessionKey)) return;
+    bindings.push(binding);
+    if (binding.spawnToolCallId) boundToolIds.add(binding.spawnToolCallId);
+    boundChildKeys.add(binding.childSessionKey);
+  };
+
+  for (const tool of streamingTools) {
+    if (!/sessions_spawn/i.test(tool.name)) continue;
+    const toolId = tool.toolCallId || tool.id || null;
+    if (toolId && boundToolIds.has(toolId)) continue;
+    const parsed = tryParseJsonObject(tool.summary);
+    if (parsed && typeof parsed.childSessionKey === 'string') {
+      addBinding({
+        childSessionKey: parsed.childSessionKey,
+        spawnToolCallId: toolId,
+        label: typeof parsed.taskName === 'string' ? parsed.taskName : null,
+        spawnMessageIndex: segmentMessages.length,
+        completed: completedChildSessionKeys.has(parsed.childSessionKey),
+        runId: typeof parsed.runId === 'string' ? parsed.runId : null,
+      });
+    }
+  }
+
+  if (streamingMessage && typeof streamingMessage === 'object') {
+    const streamMsg = streamingMessage as RawMessage;
+    for (const tool of extractToolUse(streamMsg)) {
+      if (!/sessions_spawn/i.test(tool.name)) continue;
+      const toolId = tool.id || null;
+      if (toolId && boundToolIds.has(toolId)) continue;
+      const input = tool.input && typeof tool.input === 'object'
+        ? tool.input as Record<string, unknown>
+        : null;
+      const label = parseSpawnLabelFromToolInput(input);
+      const processingChildren = processingSessionKeys.filter((key) => /:subagent:/i.test(key));
+      for (const childSessionKey of processingChildren) {
+        if (boundChildKeys.has(childSessionKey)) continue;
+        addBinding({
+          childSessionKey,
+          spawnToolCallId: toolId,
+          label,
+          spawnMessageIndex: segmentMessages.length,
+          completed: completedChildSessionKeys.has(childSessionKey),
+          runId: null,
+        });
+        break;
+      }
+    }
+  }
+
+  if (segmentHasSpawnSignal(segmentMessages, streamingMessage, streamingTools)) {
+    for (const childSessionKey of processingSessionKeys) {
+      if (!/:subagent:/i.test(childSessionKey) || boundChildKeys.has(childSessionKey)) continue;
+      addBinding({
+        childSessionKey,
+        spawnToolCallId: null,
+        label: null,
+        spawnMessageIndex: segmentMessages.length,
+        completed: completedChildSessionKeys.has(childSessionKey),
+        runId: null,
+      });
+    }
+  }
+
+  return bindings;
 }

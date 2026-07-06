@@ -9,6 +9,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/unit/**/*.{test,spec}.{ts,tsx}'],
+    server: {
+      deps: {
+        external: ['node:sqlite'],
+      },
+    },
     coverage: {
       reporter: ['text', 'json', 'html'],
       exclude: ['node_modules/', 'tests/'],
@@ -19,5 +24,8 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
       '@electron': resolve(__dirname, 'electron'),
     },
+  },
+  ssr: {
+    external: ['node:sqlite'],
   },
 });

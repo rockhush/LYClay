@@ -32,17 +32,17 @@ function completedTool(name: string, id: string): ToolStatus {
 
 describe('runaway tool observer', () => {
   it('detects document and data workflow kinds from attachments and text', () => {
-    expect(detectTaskWorkflowKind('帮我计算 VMI 补货', [
+    expect(detectTaskWorkflowKind('Calculate replenishment from Excel', [
       { fileName: 'vmi.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', fileSize: 10 },
     ])).toBe('spreadsheet');
     expect(detectTaskWorkflowKind('summarize report.pdf')).toBe('pdf');
-    expect(detectTaskWorkflowKind('处理 sales.jsonl 数据集')).toBe('data-analysis');
-    expect(detectTaskWorkflowKind('处理附件', [
+    expect(detectTaskWorkflowKind('build a DOE PowerPoint report')).toBe('presentation');
+    expect(detectTaskWorkflowKind('process sales.jsonl dataset')).toBe('data-analysis');
+    expect(detectTaskWorkflowKind('process attached files', [
       { fileName: 'a.xlsx', mimeType: '', fileSize: 1 },
       { fileName: 'b.pdf', mimeType: '', fileSize: 1 },
     ])).toBe('batch-files');
   });
-
   it('counts unique tool calls and results without double counting repeated events', () => {
     const observation = createRunawayToolObservation({
       sessionKey: 'session-1',

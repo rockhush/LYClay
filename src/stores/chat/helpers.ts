@@ -542,6 +542,17 @@ function getComparableAttachmentSignature(message: Pick<RawMessage, '_attachedFi
   return files.join('::');
 }
 
+/** Placeholder user bubble synthesized from a truncated sidebar label — not a real send. */
+function isSyntheticSessionLabelUserMessage(message: RawMessage, sessionKey: string): boolean {
+  return message.role === 'user' && message.id === `local-${sessionKey}`;
+}
+
+function stripSyntheticSessionLabelUserMessages(messages: RawMessage[], sessionKey: string): RawMessage[] {
+  if (!sessionKey) return messages;
+  const filtered = messages.filter((message) => !isSyntheticSessionLabelUserMessage(message, sessionKey));
+  return filtered.length === messages.length ? messages : filtered;
+}
+
 function matchesOptimisticUserMessage(
   candidate: RawMessage,
   optimistic: RawMessage,
@@ -1794,6 +1805,8 @@ export {
   isToolOnlyMessage,
   normalizeStreamingMessage,
   matchesOptimisticUserMessage,
+  isSyntheticSessionLabelUserMessage,
+  stripSyntheticSessionLabelUserMessages,
   snapshotStreamingAssistantMessage,
   getLatestOptimisticUserMessage,
   setHistoryPollTimer,

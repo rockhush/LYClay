@@ -17,7 +17,10 @@ const emptyLocal: LyclawUiState = {
   chat: {
     sessionWorkspaceIds: {},
     customSessionLabels: {},
+    sessionLabels: {},
     sessionPinnedAt: {},
+    sessionLastActivity: {},
+    sessionCompressionState: {},
   },
 };
 
@@ -40,7 +43,10 @@ const diskWithWorkspace: LyclawUiState = {
   chat: {
     sessionWorkspaceIds: { 'agent:main:session-a': 'temp-1' },
     customSessionLabels: { 'agent:main:session-a': 'My chat' },
+    sessionLabels: { 'agent:main:session-a': 'First message preview' },
     sessionPinnedAt: { 'agent:main:session-a': 1000 },
+    sessionLastActivity: {},
+    sessionCompressionState: {},
   },
 };
 
@@ -65,6 +71,7 @@ describe('ui-state persistence hydrate merge', () => {
     expect(merged.chat.sessionWorkspaceIds['agent:main:session-a']).toBe('temp-1');
     expect(merged.chat.customSessionLabels['agent:main:session-a']).toBe('My chat');
     expect(merged.chat.sessionPinnedAt['agent:main:session-a']).toBe(1000);
+    expect(merged.chat.sessionLabels['agent:main:session-a']).toBe('First message preview');
   });
 
   it('prefers non-empty local workspace data during normal upgrades', () => {
@@ -99,10 +106,13 @@ describe('ui-state persistence hydrate merge', () => {
       chat: {
         sessionWorkspaceIds: {},
         customSessionLabels: {},
+        sessionLabels: {},
         sessionPinnedAt: {
           'agent:main:session-a': 2000,
           'agent:main:session-b': 3000,
         },
+        sessionLastActivity: {},
+        sessionCompressionState: {},
       },
     };
 

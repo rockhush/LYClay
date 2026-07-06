@@ -161,7 +161,7 @@ describe('user-turn-lifecycle', () => {
     expect(canForceClearOnVisibleCommittedReply(input)).toBe(true);
   });
 
-  it('does not force clear when gateway still lists the session as processing', () => {
+  it('forces clear when gateway still lists the session as processing but transcript is settled', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: 'question', timestamp: 1000 },
       terminalAssistant,
@@ -180,7 +180,67 @@ describe('user-turn-lifecycle', () => {
         hasBackgroundProcessing: true,
         processingSessionKeys: ['agent:main:session-1'],
       },
-    })).toBe(false);
+    })).toBe(true);
+  });
+
+  it('forces clear after sub-agent announce when parent session key is stale on gateway', () => {
+    const childKey = 'agent:main:subagent:child-ppt';
+    const parentKey = 'agent:main:session-ppt';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'make ppt', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'spawn-1',
+          name: 'sessions_spawn',
+          input: { taskName: 'ppt' },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ status: 'accepted', childSessionKey: childKey }),
+        }],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'PPT task delegated.' },
+          { type: 'toolCall', id: 'yield-1', name: 'sessions_yield', arguments: {} },
+        ],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'yield-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'yielded' }) }],
+      },
+      {
+        role: 'assistant',
+        content: '**数字员工建设方案.pptx** 已生成，共 15 页。',
+        stopReason: 'stop',
+        timestamp: 5000,
+      },
+    ];
+    const completedChildSessionKeys = new Set([childKey]);
+    expect(canForceClearOnVisibleCommittedReply({
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: {
+        sessionKey: parentKey,
+        status: 'processing',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['stale-run'],
+      },
+      gatewayBackground: {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: [parentKey, childKey],
+      },
+      completedChildSessionKeys,
+    })).toBe(true);
   });
 
   it('sanitizeLeavingSessionStreamingSnapshot clears stale run flags when transcript is visibly complete', () => {
@@ -220,7 +280,7 @@ describe('user-turn-lifecycle', () => {
     });
   });
 
-  it('sanitizeLeavingSessionStreamingSnapshot keeps active snapshots while gateway still processes the session', () => {
+  it('sanitizeLeavingSessionStreamingSnapshot clears stale run flags when gateway lags on processingSessionKeys', () => {
     const sessionKey = 'agent:main:session-a';
     const messages: RawMessage[] = [
       { role: 'user', content: 'question', timestamp: 1000 },
@@ -247,7 +307,17 @@ describe('user-turn-lifecycle', () => {
         hasBackgroundProcessing: true,
         processingSessionKeys: [sessionKey],
       },
-    })).toBe(dirty);
+    })).toEqual({
+      ...dirty,
+      sending: false,
+      pendingFinal: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingToolImages: [],
+      activeTool: null,
+    });
   });
 
   it('sanitizeLeavingSessionStreamingSnapshot leaves idle snapshots unchanged', () => {
@@ -305,7 +375,6 @@ describe('user-turn-lifecycle', () => {
         sending: false,
         activeRunId: null,
         pendingFinal: false,
-        runAborted: false,
       },
       'agent:main:session-1',
       {
@@ -314,6 +383,36 @@ describe('user-turn-lifecycle', () => {
         processing: true,
         hasTrackedUserRun: true,
         activeRunIds: ['run-1'],
+      },
+    )).toBeNull();
+    _resetUserAbortedSessionsForTests();
+  });
+
+  it('does not re-adopt when transcript already has a visible terminal reply', () => {
+    expect(buildReAdoptRunPatch(
+      {
+        currentSessionKey: 'agent:main:session-1',
+        sending: false,
+        activeRunId: null,
+        pendingFinal: false,
+        runAborted: false,
+        lastUserMessageAt: 1000,
+        messages: [
+          { role: 'user', content: 'question', timestamp: 1000 },
+          terminalAssistant,
+        ],
+      },
+      'agent:main:session-1',
+      {
+        sessionKey: 'agent:main:session-1',
+        status: 'processing',
+        processing: true,
+        hasTrackedUserRun: true,
+        activeRunIds: ['run-1'],
+      },
+      {
+        hasBackgroundProcessing: true,
+        processingSessionKeys: ['agent:main:session-1'],
       },
     )).toBeNull();
   });

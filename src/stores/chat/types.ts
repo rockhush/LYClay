@@ -126,6 +126,25 @@ export type RunawayToolRiskState =
 
 export type ConvergenceDirectiveLevel = 'none' | 'light' | 'medium' | 'force';
 
+export type GeneratedCodeFailureKind =
+  | 'generated_code_null_bytes'
+  | 'generated_python_syntax_error'
+  | 'generated_json_parse_error'
+  | 'shell_operator_unsupported'
+  | 'wrong_interpreter'
+  | 'skill_source_readonly'
+  | 'repeated_debug_loop'
+  | 'validation_unavailable';
+
+export interface GeneratedCodeValidationFailure {
+  path: string | null;
+  language: string | null;
+  kind: GeneratedCodeFailureKind;
+  message: string;
+  count: number;
+  updatedAt: number;
+}
+
 export interface RunawayToolObservation {
   runId: string | null;
   sessionKey: string;
@@ -140,6 +159,11 @@ export interface RunawayToolObservation {
   repeatedDebugScriptCount: number;
   repeatedOutputPatternCount: number;
   structuralInspectionCount: number;
+  generatedCodeFailureCount: number;
+  sameGeneratedFileFailureCount: number;
+  sameCommandFamilyFailureCount: number;
+  skillSourceMutationBlockedCount: number;
+  pauseReason: GeneratedCodeFailureKind | 'tool_count_limit' | 'debug_loop_limit' | null;
   lastToolCallAt: number | null;
   lastToolResultAt: number | null;
   lastVisibleProgressAt: number | null;
@@ -162,6 +186,10 @@ export interface RunawayToolObservation {
   recentWriteTargets: string[];
   recentDebugScriptTargets: string[];
   recentOutputFingerprints: string[];
+  recentGeneratedFailurePaths: string[];
+  recentGeneratedFailureKinds: string[];
+  recentCommandFailureFamilies: string[];
+  generatedCodeValidationFailures: GeneratedCodeValidationFailure[];
 }
 
 /** Streaming state per session - preserved when switching between sessions */
@@ -220,8 +248,8 @@ export interface ChatState {
   runError: string | null;
   emptyFinalRecovery: EmptyFinalRecoveryState;
   /**
-   * 用户主动拒绝安全确认（读取 workspace 外文件、网络、命令等）后的温和提示。
-   * 这不是错误，独立于 `error`/`runError`，以中性样式呈现，让用户知道操作已被取消。
+   * Notice shown after the user declines a security confirmation. This is not
+   * a chat error; it is rendered separately from `error` and `runError`.
    */
   securityCancelNotice: string | null;
 
@@ -280,7 +308,7 @@ export interface ChatState {
   /**
    * Child session keys recovered from auto-announce wrap-up run ids. The child
    * that triggers a parent's announce wrap-up never gets a transcript completion
-   * marker, so this is the only signal that it finished — used to settle its
+   * marker, so this is the only signal that it finished - used to settle its
    * execution-graph branch instead of leaving it stuck "running".
    */
   announcedChildSessionKeys: string[];

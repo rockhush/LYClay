@@ -375,19 +375,29 @@ describe('provider-runtime-sync refresh strategy', () => {
     const gateway = createGateway('running');
     await syncSavedProviderToRuntime(customProvider, undefined, gateway as GatewayManager);
 
+    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
+      'custom-customa6',
+      'MiniMax-M2.7',
+      expect.objectContaining({
+        timeoutSeconds: 900,
+      }),
+    );
+
     expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
       'custom-customa6',
       expect.objectContaining({
         baseUrl: 'http://10.64.22.11:8000/v1',
         api: 'openai-completions',
-        models: [{
-          id: 'MiniMax-M2.7',
-          name: 'MiniMax-M2.7',
-          compat: {
-            supportsUsageInStreaming: true,
-            supportsPromptCacheKey: false,
-          },
-        }],
+        models: [
+          expect.objectContaining({
+            id: 'MiniMax-M2.7',
+            name: 'MiniMax-M2.7',
+            compat: expect.objectContaining({
+              supportsUsageInStreaming: true,
+              supportsPromptCacheKey: false,
+            }),
+          }),
+        ],
       }),
     );
   });
@@ -413,14 +423,15 @@ describe('provider-runtime-sync refresh strategy', () => {
       expect.objectContaining({
         modelOverrides: {
           'deepseek-v4-pro': expect.objectContaining({
-            maxTokens: 65_536,
+            maxTokens: 384_000,
             contextWindow: 1_048_576,
-            compat: {
+            compat: expect.objectContaining({
               supportsUsageInStreaming: true,
               supportsPromptCacheKey: false,
-            },
+            }),
           }),
         },
+        timeoutSeconds: 900,
       }),
     );
 
@@ -429,7 +440,7 @@ describe('provider-runtime-sync refresh strategy', () => {
       expect.objectContaining({
         models: [expect.objectContaining({
           id: 'deepseek-v4-pro',
-          maxTokens: 65_536,
+          maxTokens: 384_000,
           contextWindow: 1_048_576,
         })],
       }),
@@ -459,10 +470,11 @@ describe('provider-runtime-sync refresh strategy', () => {
       expect.objectContaining({
         modelOverrides: {
           'deepseek-v4-pro': expect.objectContaining({
-            maxTokens: 65_536,
+            maxTokens: 384_000,
             contextWindow: 1_048_576,
           }),
         },
+        timeoutSeconds: 900,
       }),
     );
   });
@@ -494,14 +506,16 @@ describe('provider-runtime-sync refresh strategy', () => {
       'main',
       'custom-customa6',
       expect.objectContaining({
-        models: [{
-          id: 'MiniMax-M2.7',
-          name: 'MiniMax-M2.7',
-          compat: {
-            supportsUsageInStreaming: true,
-            supportsPromptCacheKey: false,
-          },
-        }],
+        models: [
+          expect.objectContaining({
+            id: 'MiniMax-M2.7',
+            name: 'MiniMax-M2.7',
+            compat: expect.objectContaining({
+              supportsUsageInStreaming: true,
+              supportsPromptCacheKey: false,
+            }),
+          }),
+        ],
       }),
     );
   });

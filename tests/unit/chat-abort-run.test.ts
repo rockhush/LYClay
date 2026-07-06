@@ -53,6 +53,21 @@ describe('chat abort run', () => {
     gatewayRpcMock.mockReset();
     hostApiFetchMock.mockReset();
     getSessionBackendActivityMock.mockReset();
+    hostApiFetchMock.mockResolvedValue({ success: false, messages: [], error: 'local miss' });
+    getSessionBackendActivityMock.mockResolvedValue({
+      success: true,
+      session: {
+        sessionKey: 'agent:main:main',
+        status: 'completed',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+      background: {
+        hasBackgroundProcessing: false,
+        processingSessionKeys: [],
+      },
+    });
     agentsState.agents = [];
     gatewayRpcMock.mockResolvedValue({ ok: true });
     getSessionBackendActivityMock.mockResolvedValue(idleBackendActivityResponse());

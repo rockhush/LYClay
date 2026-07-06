@@ -8,8 +8,13 @@ import type {
 const BASE_RULES = [
   'Use a convergent workflow for this document/data task.',
   'Do at most 2-3 structural inspection steps before moving into the main processing plan.',
-  'After inspection, write or execute one complete processing flow that includes read, transform, write/save, validation, and error reporting.',
+  'After inspection, choose one bounded implementation path that includes read, transform, write/save, validation, and error reporting.',
+  'Validate generated .py, .js, .ts, .mjs, .cjs, .json, and shell-script files before building on them; check for null bytes first.',
+  'For Python, validate syntax with py_compile or an equivalent parser check before execution; do not use execution as syntax validation.',
+  'For JSON, parse the file as JSON before using it.',
   'Do at most 1-2 validation passes after the main processing step.',
+  'Windows shell guidance: do not use heredoc syntax, do not rely on && in PowerShell, do not run Python files with Node, and keep generated script content UTF-8 text without null bytes.',
+  'Installed skill source is read-only for ordinary tasks. Read or import it if needed, but create a workspace runner/wrapper or report a skill defect instead of patching installed skills.',
   'If validation cannot resolve an ambiguity, report the blocker and confirmed facts instead of creating more temporary debug scripts.',
   'Avoid repeated write -> exec debug loops. Merge needed checks into one reproducible script or plan.',
 ];
@@ -41,6 +46,15 @@ const KIND_RULES: Record<Exclude<TaskWorkflowKind, 'general'>, string[]> = {
   ],
 };
 
+function formatFailures(observation: RunawayToolObservation): string {
+  if (observation.generatedCodeValidationFailures.length === 0) return 'No structured generated-code failures recorded yet.';
+  return observation.generatedCodeValidationFailures.slice(-4).map((failure) => {
+    const path = failure.path ? ` path=${failure.path}` : '';
+    const language = failure.language ? ` language=${failure.language}` : '';
+    return `${failure.kind}${path}${language} count=${failure.count}`;
+  }).join('; ');
+}
+
 export function buildInitialConvergenceSystemPrompt(taskKind: TaskWorkflowKind): string | null {
   if (taskKind === 'general') return null;
   return [
@@ -60,9 +74,10 @@ function directiveLevelForRisk(riskState: RunawayToolRiskState): ConvergenceDire
 
 function buildLightDirective(observation: RunawayToolObservation): string {
   return [
-    'The current task has used many tools. Start converging now.',
-    'Reuse existing evidence, reduce repeated inspection, and produce a complete processing plan or script.',
-    `Observed tool calls: ${observation.toolCallCount}. Structural inspections: ${observation.structuralInspectionCount}. Task kind: ${observation.taskKind}.`,
+    'The current task has used many tools or hit generated-code validation trouble. Start converging now.',
+    'Reuse existing evidence, reduce repeated inspection, and produce one bounded processing plan or script.',
+    'Validate generated code before execution and avoid repeating the same shell/file path.',
+    `Observed tool calls: ${observation.toolCallCount}. Structural inspections: ${observation.structuralInspectionCount}. Generated-code failures: ${observation.generatedCodeFailureCount}. Task kind: ${observation.taskKind}.`,
   ].join(' ');
 }
 
@@ -70,17 +85,18 @@ function buildMediumDirective(observation: RunawayToolObservation): string {
   return [
     'You have entered a repeated debug/tool pattern.',
     'Stop fragmentary probing. Write one complete processing script or plan that includes reading, processing, writing, validation, and error reporting.',
-    'Use at most 1-2 additional validation passes.',
-    `Observed write->exec pairs: ${observation.writeExecPairCount}; repeated exec commands: ${observation.repeatedExecCommandCount}; repeated write targets: ${observation.repeatedWriteTargetCount}; repeated debug scripts: ${observation.repeatedDebugScriptCount}; repeated output patterns: ${observation.repeatedOutputPatternCount}.`,
+    'Use at most 1 additional validation pass, and do not repeat the same command or rewrite the same file with the same strategy.',
+    'Do not patch installed skill source; create a workspace wrapper or report the skill defect instead.',
+    `Observed write->exec pairs: ${observation.writeExecPairCount}; repeated exec commands: ${observation.repeatedExecCommandCount}; repeated write targets: ${observation.repeatedWriteTargetCount}; repeated debug scripts: ${observation.repeatedDebugScriptCount}; generated-code failures: ${observation.generatedCodeFailureCount}; skill-source blocks: ${observation.skillSourceMutationBlockedCount}. Failures: ${formatFailures(observation)}.`,
   ].join(' ');
 }
 
 function buildForceDirective(observation: RunawayToolObservation): string {
   return [
-    'This run is at high risk of a runaway tool loop.',
-    'Do not create more temporary debug scripts.',
-    'Based on existing results, provide a staged conclusion, the current blocker, or one complete executable solution.',
-    `Observed tool calls: ${observation.toolCallCount}. Structural inspections: ${observation.structuralInspectionCount}. Risk: ${observation.riskState}.`,
+    'This run has reached the pause threshold for a generated-script or runaway tool loop.',
+    'Do not repeat the same command. Do not rewrite the same generated file with the same strategy. Do not patch installed skill source during this task.',
+    'Stop automatic self-repair for this path. Summarize what failed, what evidence is confirmed, and ask the user whether to simplify the task, repair/update the skill separately, or continue with a smaller bounded step.',
+    `Observed tool calls: ${observation.toolCallCount}. Structural inspections: ${observation.structuralInspectionCount}. Generated-code failures: ${observation.generatedCodeFailureCount}. Same-file failures: ${observation.sameGeneratedFileFailureCount}. Same-command-family failures: ${observation.sameCommandFamilyFailureCount}. Pause reason: ${observation.pauseReason ?? observation.riskState}. Failures: ${formatFailures(observation)}.`,
   ].join(' ');
 }
 

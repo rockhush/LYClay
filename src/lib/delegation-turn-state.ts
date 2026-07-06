@@ -10,6 +10,8 @@ import {
   collectChildDelegationBindings,
   collectCompletedSubagentSessionKeys,
   hasUnresolvedSpawnDelegation,
+  isInterimSubagentWaitAssistantReply,
+  isVisibleWrapUpAssistantReply,
   type ChildDelegationBinding,
 } from '@/lib/subagent-delegation';
 import {
@@ -77,7 +79,11 @@ export function deriveDelegationTurnSnapshot(
     // gateway gaps. `active` is GATEWAY-ONLY so it never blocks the parent turn
     // from finalizing once the gateway reports the child idle.
     const status = resolveChildStatus(binding, processing, options?.stalledChildSessionKey);
-    const active = isChildDelegationGatewayActive(binding, processing);
+    // Completed children (transcript marker or announce wrap-up) must never keep
+    // the parent turn active on stale gateway processingSessionKeys lag.
+    const active = binding.completed
+      ? false
+      : isChildDelegationGatewayActive(binding, processing);
     return {
       binding,
       childSessionKey: binding.childSessionKey,
@@ -182,20 +188,9 @@ function hasSessionsSpawnInScope(scopeMessages: readonly RawMessage[]): boolean 
 function hasPostDelegationParentConclusion(
   scopeMessages: readonly RawMessage[],
   processingSessionKeys: readonly string[],
+  completedChildSessionKeys?: ReadonlySet<string>,
 ): boolean {
   if (!hasSessionsSpawnInScope(scopeMessages)) return false;
-
-  const completed = collectCompletedSubagentSessionKeys([...scopeMessages]);
-  const bindings = collectChildDelegationBindings([...scopeMessages], completed);
-  const gatewayChildActive = bindings.some((binding) =>
-    processingSessionKeys.includes(binding.childSessionKey),
-  );
-  if (gatewayChildActive) return false;
-
-  const snapshot = deriveDelegationTurnSnapshot(scopeMessages, processingSessionKeys, {
-    hasSpawnedChildren: true,
-  });
-  if (!snapshot.allChildrenSettled) return false;
 
   const firstSpawnIdx = scopeMessages.findIndex((message) =>
     message.role === 'assistant'
@@ -204,18 +199,57 @@ function hasPostDelegationParentConclusion(
   if (firstSpawnIdx < 0) return false;
 
   const afterSpawn = scopeMessages.slice(firstSpawnIdx + 1);
-  if (afterSpawn.some((message) =>
-    message.role === 'assistant'
-    && isTerminalAssistantMessage(message)
-    && !shouldSilentlyFinalizeRunOnAssistantFinal(message))) {
-    return true;
+  const hasDeliverableTerminalWrapUp = afterSpawn.some((message) =>
+    isVisibleWrapUpAssistantReply(message, scopeMessages),
+  );
+  const concluding = findConcludingAssistantReply(scopeMessages);
+  const hasConcludingWrapUp = Boolean(
+    concluding
+    && !shouldSilentlyFinalizeRunOnAssistantFinal(concluding)
+    && !isInterimSubagentWaitAssistantReply(concluding)
+    && scopeMessages.indexOf(concluding) > firstSpawnIdx,
+  );
+
+  if (hasDeliverableTerminalWrapUp || hasConcludingWrapUp) {
+    const completed = new Set([
+      ...collectCompletedSubagentSessionKeys([...scopeMessages]),
+      ...(completedChildSessionKeys ?? []),
+    ]);
+    let bindings = collectChildDelegationBindings([...scopeMessages], completed);
+    const pendingBindings = bindings.filter((binding) => !binding.completed);
+    const deliverableWrapUp = afterSpawn.some((message) =>
+      isVisibleWrapUpAssistantReply(message, scopeMessages),
+    );
+
+    // Single-spawn announce/yield wrap-ups settle even when gateway child keys lag.
+    // Multi-spawn turns still require every child to finish before concluding.
+    if (deliverableWrapUp && pendingBindings.length <= 1) {
+      if (pendingBindings.length === 1) {
+        completed.add(pendingBindings[0].childSessionKey);
+        bindings = collectChildDelegationBindings([...scopeMessages], completed);
+      }
+      const stillActiveChild = bindings.some((binding) =>
+        !binding.completed && processingSessionKeys.includes(binding.childSessionKey),
+      );
+      if (!stillActiveChild) return true;
+    }
   }
 
-  const concluding = findConcludingAssistantReply(scopeMessages);
-  if (concluding && !shouldSilentlyFinalizeRunOnAssistantFinal(concluding)) {
-    const concludingIdx = scopeMessages.indexOf(concluding);
-    if (concludingIdx > firstSpawnIdx) return true;
-  }
+  const completed = new Set([
+    ...collectCompletedSubagentSessionKeys([...scopeMessages]),
+    ...(completedChildSessionKeys ?? []),
+  ]);
+  const bindings = collectChildDelegationBindings([...scopeMessages], completed);
+  const gatewayChildActive = bindings.some((binding) =>
+    !binding.completed && processingSessionKeys.includes(binding.childSessionKey),
+  );
+  if (gatewayChildActive) return false;
+
+  const snapshot = deriveDelegationTurnSnapshot(scopeMessages, processingSessionKeys, {
+    hasSpawnedChildren: true,
+    completedChildSessionKeys: completed,
+  });
+  if (!snapshot.allChildrenSettled) return false;
 
   return false;
 }
@@ -225,29 +259,34 @@ function isDelegationScopeOpen(
   processingSessionKeys: readonly string[],
   options?: {
     streamingMessage?: unknown | null;
+    completedChildSessionKeys?: ReadonlySet<string>;
   },
 ): boolean {
+  if (scope.length === 0) return false;
+
+  const hasSpawn = hasSessionsSpawnInScope(scope) || hasUnresolvedSpawnDelegation(scope);
+  const completed = new Set([
+    ...collectCompletedSubagentSessionKeys([...scope]),
+    ...(options?.completedChildSessionKeys ?? []),
+  ]);
+  const bindings = collectChildDelegationBindings([...scope], completed);
+  if (!hasSpawn && bindings.length === 0) return false;
+
+  if (hasPostDelegationParentConclusion(scope, processingSessionKeys, completed)) return false;
+
   if (options?.streamingMessage && typeof options.streamingMessage === 'object') {
     const tools = extractToolUse(options.streamingMessage as RawMessage);
     if (tools.some((tool) => /sessions_spawn/i.test(tool.name))) return true;
   }
 
-  if (scope.length === 0) return false;
-
-  const hasSpawn = hasSessionsSpawnInScope(scope) || hasUnresolvedSpawnDelegation(scope);
-  const completed = collectCompletedSubagentSessionKeys([...scope]);
-  const bindings = collectChildDelegationBindings([...scope], completed);
-  if (!hasSpawn && bindings.length === 0) return false;
-
   const snapshot = deriveDelegationTurnSnapshot(scope, processingSessionKeys, {
     hasSpawnedChildren: hasSpawn || bindings.length > 0,
+    completedChildSessionKeys: completed,
   });
-
-  if (hasPostDelegationParentConclusion(scope, processingSessionKeys)) return false;
 
   // Parent announce wrap-up streams on the main session after children go idle.
   const gatewayChildActive = bindings.some((binding) =>
-    processingSessionKeys.includes(binding.childSessionKey),
+    !binding.completed && processingSessionKeys.includes(binding.childSessionKey),
   );
   if (!gatewayChildActive && hasSessionsSpawnInScope(scope)) {
     if (options?.streamingMessage && typeof options.streamingMessage === 'object') {
@@ -258,6 +297,19 @@ function isDelegationScopeOpen(
 
   if (snapshot.anyChildActive || hasUnresolvedSpawnDelegation(scope)) return true;
   if (!snapshot.allChildrenSettled) return true;
+
+  // Spawn accepted but no completion marker / deliverable wrap-up yet. Keep open
+  // while the parent already posted an interim wait message or gateway still
+  // tracks the child — not for a bare spawn+result with gateway fully idle.
+  if (bindings.some((binding) => !binding.completed)) {
+    const awaitingParentInterim = scope.some((message) =>
+      message.role === 'assistant' && isInterimSubagentWaitAssistantReply(message),
+    );
+    const childOnGateway = bindings.some((binding) =>
+      !binding.completed && processingSessionKeys.includes(binding.childSessionKey),
+    );
+    if (awaitingParentInterim || childOnGateway) return true;
+  }
 
   return false;
 }
@@ -272,6 +324,7 @@ export function isParentDelegationPhaseOpen(
   options?: {
     lastUserMessageAt?: number | null;
     streamingMessage?: unknown | null;
+    completedChildSessionKeys?: ReadonlySet<string>;
   },
 ): boolean {
   const scope = resolveTurnScope(messages, options?.lastUserMessageAt);
@@ -294,6 +347,7 @@ export function isSegmentDelegationPhaseOpen(
   processingSessionKeys: readonly string[],
   options?: {
     streamingMessage?: unknown | null;
+    completedChildSessionKeys?: ReadonlySet<string>;
   },
 ): boolean {
   return isDelegationScopeOpen(segmentMessages, processingSessionKeys, options);
@@ -308,10 +362,17 @@ export function isDelegationWrapUpComplete(
   processingSessionKeys: readonly string[],
   options?: {
     lastUserMessageAt?: number | null;
+    completedChildSessionKeys?: ReadonlySet<string>;
   },
 ): boolean {
   const scope = resolveTurnScope(messages, options?.lastUserMessageAt);
   if (!hasSessionsSpawnInScope(scope)) return false;
-  if (isDelegationScopeOpen(scope, processingSessionKeys)) return false;
-  return hasPostDelegationParentConclusion(scope, processingSessionKeys);
+  if (isDelegationScopeOpen(scope, processingSessionKeys, {
+    completedChildSessionKeys: options?.completedChildSessionKeys,
+  })) return false;
+  return hasPostDelegationParentConclusion(
+    scope,
+    processingSessionKeys,
+    options?.completedChildSessionKeys,
+  );
 }

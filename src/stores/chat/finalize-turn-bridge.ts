@@ -1,5 +1,10 @@
-import { clearErrorRecoveryTimer, clearHistoryPoll } from './helpers';
-import { buildClearedActiveRunPatch, hasVisibleAssistantReplyForActiveTurn, shouldSilentlyFinalizeRunOnAssistantFinal } from './run-lifecycle';
+import { clearErrorRecoveryTimer, clearHistoryPoll, hasVisibleAssistantContent } from './helpers';
+import {
+  buildClearedActiveRunPatch,
+  hasVisibleAssistantReplyForActiveTurn,
+  shouldKeepRunActiveAfterAssistantFinal,
+  shouldSilentlyFinalizeRunOnAssistantFinal,
+} from './run-lifecycle';
 import type { ChatGet, ChatSet } from './store-api';
 import {
   ensureSessionBackendPolling,
@@ -8,19 +13,26 @@ import {
 import {
   buildKeepUserTurnOpenPatch,
   canClearUserTurnNow,
+  canForceClearOnVisibleCommittedReply,
   DELEGATION_FINALIZE_GRACE_MS,
   hasOpenBackendWorkForUserTurn,
   hasOpenDelegatedBackendWork,
   isBackendStronglyActive,
   isTranscriptOnlyDelegationDefer,
 } from './user-turn-lifecycle';
-import type { RawMessage } from './types';
+import type { RawMessage, SessionStreamingState } from './types';
+import {
+  findConcludingAssistantForActiveTurn,
+  findTerminalAssistantForActiveTurn,
+} from './run-lifecycle';
 import {
   collectChildDelegationBindings,
   collectCompletedSubagentSessionKeys,
   isGatewayIdleForSpawnedChildren,
   isSubagentDelegationAnnounceRun,
   parseChildSessionKeyFromAnnounceRun,
+  pruneSettledChildProcessingKeys,
+  resolveCompletedChildSessionKeys,
 } from '@/lib/subagent-delegation';
 import { hasDelegationSpawnForActiveTurn, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
 
@@ -52,6 +64,10 @@ function buildCanClearInput(
     background: import('./user-turn-lifecycle').GatewayBackgroundActivity;
   },
 ) {
+  const completedChildSessionKeys = resolveCompletedChildSessionKeys(
+    state.messages,
+    state.announcedChildSessionKeys,
+  );
   return {
     messages: state.messages,
     lastUserMessageAt: state.lastUserMessageAt,
@@ -59,6 +75,7 @@ function buildCanClearInput(
     terminalMessage: context.terminalMessage,
     gatewayBackground: snapshot?.background ?? state.gatewayBackgroundActivity,
     finalizeGraceStartedAt: getFinalizeGraceStartedAt(context.sessionKey),
+    completedChildSessionKeys,
   };
 }
 
@@ -139,6 +156,27 @@ async function runGraceFinalize(
   }
 
   const next = get();
+  const processingKeysForWrapUp = snapshot?.background?.processingSessionKeys
+    ?? next.gatewayBackgroundActivity?.processingSessionKeys
+    ?? [];
+  if (isDelegationWrapUpComplete(next.messages, processingKeysForWrapUp, {
+    lastUserMessageAt: next.lastUserMessageAt,
+    completedChildSessionKeys: new Set([
+      ...collectCompletedSubagentSessionKeys(next.messages),
+      ...next.announcedChildSessionKeys,
+    ]),
+  })) {
+    console.warn('[chat.finalize-grace] forcing idle after delegation wrap-up complete', {
+      sessionKey,
+    });
+    clearFinalizeGraceTimer();
+    clearHistoryPoll();
+    clearErrorRecoveryTimer();
+    applySettledActiveRunPatch(set, get);
+    ensureSessionBackendPolling(sessionKey, set, get);
+    return;
+  }
+
   if (hasOpenBackendWorkForUserTurn(
     snapshot?.background ?? next.gatewayBackgroundActivity,
     snapshot?.session ?? next.sessionBackendActivity,
@@ -162,7 +200,7 @@ async function runGraceFinalize(
     clearFinalizeGraceTimer();
     clearHistoryPoll();
     clearErrorRecoveryTimer();
-    set(buildClearedActiveRunPatch());
+    applySettledActiveRunPatch(set, get);
     ensureSessionBackendPolling(sessionKey, set, get);
     return;
   }
@@ -175,6 +213,75 @@ async function runGraceFinalize(
   )) {
     scheduleFinalizeGraceTimer(sessionKey, set, get, { sessionKey, ...context });
   }
+}
+
+export function buildSettledActiveRunPatch(state: {
+  messages: RawMessage[];
+  gatewayBackgroundActivity: import('./types').ChatState['gatewayBackgroundActivity'];
+  announcedChildSessionKeys: readonly string[];
+}): Partial<import('./types').ChatState> {
+  const completedChildSessionKeys = resolveCompletedChildSessionKeys(
+    state.messages,
+    state.announcedChildSessionKeys,
+  );
+  const prunedProcessingKeys = pruneSettledChildProcessingKeys(
+    state.messages,
+    state.gatewayBackgroundActivity?.processingSessionKeys ?? [],
+    [...completedChildSessionKeys],
+  );
+  const gatewayBackground = state.gatewayBackgroundActivity
+    ? {
+      ...state.gatewayBackgroundActivity,
+      processingSessionKeys: prunedProcessingKeys,
+      hasBackgroundProcessing: prunedProcessingKeys.length > 0,
+    }
+    : state.gatewayBackgroundActivity;
+
+  return {
+    ...buildClearedActiveRunPatch(),
+    gatewayBackgroundActivity: gatewayBackground,
+  };
+}
+
+function emptySessionStreamingSnapshot(lastUserMessageAt: number | null): SessionStreamingState {
+  return {
+    activeRunId: null,
+    activeTool: null,
+    streamingText: '',
+    streamingMessage: null,
+    streamingTools: [],
+    pendingFinal: false,
+    lastUserMessageAt,
+    pendingToolImages: [],
+    runAborted: false,
+    runError: null,
+    sending: false,
+    messagesSnapshot: [],
+  };
+}
+
+function applySettledActiveRunPatch(set: ChatSet, get: ChatGet): void {
+  const state = get();
+  const sessionKey = state.currentSessionKey;
+  const settled = buildSettledActiveRunPatch(state);
+  const cleared = buildClearedActiveRunPatch();
+  const prevSnapshot = state.sessionStreamingStates[sessionKey]
+    ?? emptySessionStreamingSnapshot(state.lastUserMessageAt);
+  const messagesSnapshot = state.messages.length > 0
+    ? [...state.messages]
+    : (prevSnapshot.messagesSnapshot.length > 0 ? prevSnapshot.messagesSnapshot : []);
+
+  set({
+    ...settled,
+    sessionStreamingStates: {
+      ...state.sessionStreamingStates,
+      [sessionKey]: {
+        ...prevSnapshot,
+        ...cleared,
+        messagesSnapshot,
+      },
+    },
+  });
 }
 
 function applyBackendSnapshot(
@@ -202,10 +309,25 @@ function applyKeepUserTurnOpen(
   }
 
   const next = get();
-  const backendActive = isBackendStronglyActive(snapshot?.session ?? next.sessionBackendActivity);
   const processingKeys = snapshot?.background.processingSessionKeys
     ?? next.gatewayBackgroundActivity?.processingSessionKeys
     ?? [];
+  if (isDelegationWrapUpComplete(next.messages, processingKeys, {
+    lastUserMessageAt: next.lastUserMessageAt,
+    completedChildSessionKeys: new Set([
+      ...collectCompletedSubagentSessionKeys(next.messages),
+      ...next.announcedChildSessionKeys,
+    ]),
+  })) {
+    clearFinalizeGraceTimer();
+    clearHistoryPoll();
+    clearErrorRecoveryTimer();
+    applySettledActiveRunPatch(set, get);
+    ensureSessionBackendPolling(context.sessionKey, set, get);
+    return;
+  }
+
+  const backendActive = isBackendStronglyActive(snapshot?.session ?? next.sessionBackendActivity);
   const sessionStillTracked = processingKeys.includes(context.sessionKey);
 
   set({
@@ -253,14 +375,34 @@ function announceRunMatchesSpawnedChild(
   return bindings.some((binding) => binding.childSessionKey === childSessionKey);
 }
 
+function isVisibleAnnounceDelegationAnswer(
+  messages: RawMessage[],
+  input: AnnounceSettleInput,
+): boolean {
+  if (!input.runId || !isSubagentDelegationAnnounceRun(input.runId)) return false;
+  if (!announceRunMatchesSpawnedChild(input.runId, messages)) return false;
+  if (!hasDelegationSpawnForActiveTurn(messages, { lastUserMessageAt: input.lastUserMessageAt })) {
+    return false;
+  }
+  const terminal = input.terminalMessage;
+  if (!terminal || !hasVisibleAssistantContent(terminal)) return false;
+  return !shouldKeepRunActiveAfterAssistantFinal(terminal);
+}
+
 function hasSettledDelegationAnswer(
   messages: RawMessage[],
   processingSessionKeys: readonly string[],
   input: AnnounceSettleInput,
+  completedChildSessionKeys?: ReadonlySet<string>,
 ): boolean {
   if (isDelegationWrapUpComplete(messages, processingSessionKeys, {
     lastUserMessageAt: input.lastUserMessageAt,
+    completedChildSessionKeys,
   })) {
+    return true;
+  }
+
+  if (isVisibleAnnounceDelegationAnswer(messages, input)) {
     return true;
   }
 
@@ -268,7 +410,11 @@ function hasSettledDelegationAnswer(
     return false;
   }
 
-  if (!hasDelegationSpawnForActiveTurn(messages, { lastUserMessageAt: input.lastUserMessageAt })) {
+  if (input.terminalMessage && isVisibleAssistantTextWithoutToolUse(input.terminalMessage)) {
+    return true;
+  }
+
+  if (!input.terminalMessage || !shouldSilentlyFinalizeRunOnAssistantFinal(input.terminalMessage)) {
     return false;
   }
 
@@ -285,9 +431,33 @@ export function canSyncClearAfterAnnounceWrapUp(
   processingSessionKeys: readonly string[],
   input: AnnounceSettleInput = {},
 ): boolean {
-  if (!isGatewayIdleForSpawnedChildren(sessionKey, messages, processingSessionKeys)) return false;
   if (!announceRunMatchesSpawnedChild(input.runId, messages)) return false;
-  return hasSettledDelegationAnswer(messages, processingSessionKeys, input);
+
+  // Visible announce wrap-up is authoritative even when the parent session key is
+  // still listed in stale gateway processingSessionKeys lag.
+  if (isVisibleAnnounceDelegationAnswer(messages, input)) {
+    return true;
+  }
+
+  const announceChildKey = input.runId ? parseChildSessionKeyFromAnnounceRun(input.runId) : null;
+  const completedChildSessionKeys = new Set([
+    ...collectCompletedSubagentSessionKeys(messages),
+    ...(announceChildKey ? [announceChildKey] : []),
+  ]);
+
+  if (isDelegationWrapUpComplete(messages, processingSessionKeys, {
+    lastUserMessageAt: input.lastUserMessageAt,
+    completedChildSessionKeys,
+  })) {
+    return true;
+  }
+
+  if (processingSessionKeys.includes(sessionKey)) return false;
+
+  if (!isGatewayIdleForSpawnedChildren(sessionKey, messages, processingSessionKeys, completedChildSessionKeys)) {
+    return false;
+  }
+  return hasSettledDelegationAnswer(messages, processingSessionKeys, input, completedChildSessionKeys);
 }
 
 /**
@@ -321,7 +491,73 @@ export function trySyncClearAnnounceWrapUp(
   clearFinalizeGraceTimer();
   clearHistoryPoll();
   clearErrorRecoveryTimer();
-  set(buildClearedActiveRunPatch());
+  applySettledActiveRunPatch(set, get);
+  return true;
+}
+
+/**
+ * When the transcript already shows a delegation wrap-up but stale run UI
+ * (sending/pendingFinal/activeRunId) persisted, settle synchronously.
+ */
+export function reconcileUserTurnAfterDelegationWrapUp(
+  get: ChatGet,
+  set: ChatSet,
+  sessionKey: string,
+): boolean {
+  const state = get();
+  if (state.currentSessionKey !== sessionKey) return false;
+  if (state.runAborted) return false;
+
+  const completedChildSessionKeys = resolveCompletedChildSessionKeys(
+    state.messages,
+    state.announcedChildSessionKeys,
+  );
+  const processingKeys = state.gatewayBackgroundActivity?.processingSessionKeys ?? [];
+  if (!isDelegationWrapUpComplete(state.messages, processingKeys, {
+    lastUserMessageAt: state.lastUserMessageAt,
+    completedChildSessionKeys,
+  })) {
+    return false;
+  }
+
+  const terminal = state.messages.length > 0
+    ? (findTerminalAssistantForActiveTurn(state.messages, state.lastUserMessageAt)
+      ?? findConcludingAssistantForActiveTurn(state.messages, state.lastUserMessageAt))
+    : undefined;
+  if (!terminal) return false;
+
+  const snapshot = state.sessionStreamingStates[sessionKey];
+  const hasStaleRunUi = state.sending || state.pendingFinal || state.activeRunId;
+  const hasStaleSnapshot = Boolean(
+    snapshot?.sending || snapshot?.pendingFinal || snapshot?.activeRunId,
+  );
+  const settledPatch = buildSettledActiveRunPatch({
+    messages: state.messages,
+    gatewayBackgroundActivity: state.gatewayBackgroundActivity,
+    announcedChildSessionKeys: state.announcedChildSessionKeys,
+  });
+  const currentProcessing = state.gatewayBackgroundActivity?.processingSessionKeys ?? [];
+  const prunedProcessing = settledPatch.gatewayBackgroundActivity?.processingSessionKeys ?? [];
+  const hasStaleGatewayKeys = prunedProcessing.length !== currentProcessing.length
+    || prunedProcessing.some((key, index) => key !== currentProcessing[index]);
+
+  if (!hasStaleRunUi && !hasStaleSnapshot && !hasStaleGatewayKeys) return false;
+
+  if (!canForceClearOnVisibleCommittedReply({
+    messages: state.messages,
+    lastUserMessageAt: state.lastUserMessageAt,
+    backendActivity: state.sessionBackendActivity,
+    gatewayBackground: state.gatewayBackgroundActivity,
+    terminalMessage: terminal,
+    completedChildSessionKeys,
+  })) {
+    return false;
+  }
+
+  clearFinalizeGraceTimer();
+  clearHistoryPoll();
+  clearErrorRecoveryTimer();
+  applySettledActiveRunPatch(set, get);
   return true;
 }
 
@@ -349,6 +585,10 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
     const next = get();
     if (next.currentSessionKey !== context.sessionKey) return;
     if (next.runAborted) return;
+    if (isAnnounceWrapUpRun) {
+      ensureSessionBackendPolling(context.sessionKey, set, get);
+      return;
+    }
     if (hasOpenDelegatedBackendWork(
       next.messages,
       next.gatewayBackgroundActivity,
@@ -379,11 +619,32 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
       terminalMessage: context.terminalMessage,
     },
   );
-  if (canClearUserTurnNow(buildCanClearInput(next, context, snapshot)) || canClearAnnounceWrapUp) {
+  if (canClearAnnounceWrapUp || (!isAnnounceWrapUpRun && canClearUserTurnNow(buildCanClearInput(next, context, snapshot)))) {
     clearFinalizeGraceTimer();
     clearHistoryPoll();
     clearErrorRecoveryTimer();
-    set(buildClearedActiveRunPatch());
+    applySettledActiveRunPatch(set, get);
+    ensureSessionBackendPolling(context.sessionKey, set, get);
+    return;
+  }
+
+  if (
+    isAnnounceWrapUpRun
+    && isVisibleAnnounceDelegationAnswer(next.messages, {
+      runId: context.runId,
+      lastUserMessageAt: next.lastUserMessageAt,
+      terminalMessage: context.terminalMessage,
+    })
+  ) {
+    clearFinalizeGraceTimer();
+    clearHistoryPoll();
+    clearErrorRecoveryTimer();
+    applySettledActiveRunPatch(set, get);
+    ensureSessionBackendPolling(context.sessionKey, set, get);
+    return;
+  }
+
+  if (isAnnounceWrapUpRun) {
     ensureSessionBackendPolling(context.sessionKey, set, get);
     return;
   }

@@ -17,6 +17,7 @@ import {
 } from '@/lib/skill-runtime-aliases';
 import { buildCronSessionHistoryPath, isCronSessionKey, mergeCronSessionHistory } from './chat/cron-session-utils';
 import { collectAgentIdsFromSessionKeys, isPlaceholderSessionTitle, normalizeSessionSummaryForDisplay } from '@/lib/session-label-utils';
+import { unionGatewaySessionsWithLocalRegistry } from '@/lib/session-list-registry-merge';
 import {
   CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS,
   classifyHistoryStartupRetryError,
@@ -61,6 +62,8 @@ import {
   normalizeComparableUserText,
   areEquivalentAttachmentOnlyUserTexts,
   stripGatewayUserMetadata,
+  isSyntheticSessionLabelUserMessage,
+  stripSyntheticSessionLabelUserMessages,
 } from './chat/helpers';
 import {
   buildClearedActiveRunPatch,
@@ -88,10 +91,14 @@ import {
 import {
   deferClearUserTurnForOpenDelegation,
   tryFinalizeUserTurnAfterAssistantFinal,
+  trySyncClearAnnounceWrapUp,
+  reconcileUserTurnAfterDelegationWrapUp,
   clearFinalizeGraceTimer,
   getFinalizeGraceStartedAt,
   scheduleDelegationFinalizeGraceIfNeeded,
+  buildSettledActiveRunPatch,
 } from './chat/finalize-turn-bridge';
+import { confirmEmptyFinalWithHistory } from './chat/empty-final-recovery';
 import {
   clearSessionActivityPoll,
   ensureSessionBackendPolling,
@@ -106,9 +113,13 @@ import {
 } from './chat/user-aborted-sessions';
 import { abortPendingChildDelegations } from './chat/abort-child-delegations';
 import {
+  hasInFlightSubagentSignals,
   isSubagentDelegationAnnounceRun,
+  inferTranscriptSettledChildSessionKeys,
   parseChildSessionKeyFromAnnounceRun,
+  resolveCompletedChildSessionKeys,
 } from '@/lib/subagent-delegation';
+import { isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
 import { prepareContextBeforeSend } from './chat/context-send-guard';
 import { applyTimeDecayStrategy, filterLargeToolResults } from './chat/history-time-decay';
 import {
@@ -874,6 +885,8 @@ function getSessionModel(sessions: ChatSession[], sessionKey: string): string | 
 }
 
 const HISTORY_LOAD_MIN_INTERVAL_MS = 800;
+/** Defer post-announce history reload so jsonl can flush before history-local reads. */
+const ANNOUNCE_HISTORY_RELOAD_DEFER_MS = 750;
 const ACTIVE_SEND_HISTORY_FALLBACK_INITIAL_DELAY_MS = 2_000;
 const ACTIVE_SEND_HISTORY_FALLBACK_DELAYS_MS = [3_000, 5_000];
 const ACTIVE_SEND_HISTORY_FALLBACK_REPEAT_MS = 6_000;
@@ -1222,10 +1235,12 @@ function snapshotStreamingAssistantMessage(
 function mergeMissingLocalUserMessages(
   pipelineMessages: RawMessage[],
   localMessages: RawMessage[],
+  sessionKey: string,
 ): RawMessage[] {
   let merged = [...pipelineMessages];
   for (const localMsg of localMessages) {
     if (localMsg.role !== 'user') continue;
+    if (isSyntheticSessionLabelUserMessage(localMsg, sessionKey)) continue;
     const localTimestampMs = localMsg.timestamp != null ? toMs(localMsg.timestamp as number) : 0;
     const exists = merged.some((message) =>
       matchesOptimisticUserMessage(message, localMsg, localTimestampMs || Date.now()),
@@ -1234,6 +1249,47 @@ function mergeMissingLocalUserMessages(
       merged.push(localMsg);
     }
   }
+  if (merged.length === pipelineMessages.length) return pipelineMessages;
+  merged.sort((a, b) => {
+    const ta = a.timestamp != null ? toMs(a.timestamp as number) : 0;
+    const tb = b.timestamp != null ? toMs(b.timestamp as number) : 0;
+    return ta - tb;
+  });
+  return merged;
+}
+
+/**
+ * Keep visible assistant replies that are already in renderer memory but not yet
+ * present in a lagging history-local/jsonl snapshot (common right after announce final).
+ */
+function mergeMissingLocalAssistantReplies(
+  pipelineMessages: RawMessage[],
+  localMessages: RawMessage[],
+  sessionKey: string,
+): RawMessage[] {
+  let merged = mergeMissingLocalUserMessages(pipelineMessages, localMessages, sessionKey);
+  const localUserIdx = findLatestVisibleUserIndex(localMessages);
+  if (localUserIdx < 0) return merged;
+
+  const localTailAssistants = localMessages
+    .slice(localUserIdx + 1)
+    .filter((message) => message.role === 'assistant');
+
+  for (const localAssistant of localTailAssistants) {
+    if (isInternalMessage(localAssistant)) continue;
+    const text = getMessageText(localAssistant.content).trim();
+    if (!text) continue;
+    if (
+      shouldSilentlyFinalizeRunOnAssistantFinal(localAssistant)
+      && !hasVisibleAssistantContent(localAssistant)
+    ) {
+      continue;
+    }
+    const msgId = localAssistant.id ?? '';
+    if (isDuplicateAssistantFinal(merged, msgId, localAssistant)) continue;
+    merged.push(localAssistant);
+  }
+
   if (merged.length === pipelineMessages.length) return pipelineMessages;
   merged.sort((a, b) => {
     const ta = a.timestamp != null ? toMs(a.timestamp as number) : 0;
@@ -1289,6 +1345,24 @@ function createEmptySessionStreamingState(): SessionStreamingState {
   };
 }
 
+function withClearedSessionStreamingState(
+  s: ChatState,
+  sessionKey: string,
+  messagesSnapshot: RawMessage[],
+): Pick<ChatState, 'sessionStreamingStates'> {
+  const prev = s.sessionStreamingStates[sessionKey] ?? createEmptySessionStreamingState();
+  return {
+    sessionStreamingStates: {
+      ...s.sessionStreamingStates,
+      [sessionKey]: {
+        ...prev,
+        ...buildClearedActiveRunPatch(),
+        messagesSnapshot: messagesSnapshot.length > 0 ? messagesSnapshot : prev.messagesSnapshot,
+      },
+    },
+  };
+}
+
 function snapshotCurrentStreamingState(state: ChatState): SessionStreamingState {
   return {
     activeRunId: state.activeRunId,
@@ -1312,20 +1386,25 @@ function applyClearedActiveRunForSession(
   options?: { preserveMessagesSnapshot?: boolean },
 ): void {
   set((s) => {
-    const cleared = buildClearedActiveRunPatch();
+    const cleared = buildSettledActiveRunPatch({
+      messages: s.messages,
+      gatewayBackgroundActivity: s.gatewayBackgroundActivity,
+      announcedChildSessionKeys: s.announcedChildSessionKeys,
+    });
     const prevSnapshot = s.sessionStreamingStates[sessionKey] ?? createEmptySessionStreamingState();
     const messagesSnapshot = options?.preserveMessagesSnapshot === false
       ? []
       : (s.currentSessionKey === sessionKey && s.messages.length > 0
         ? [...s.messages]
         : (prevSnapshot.messagesSnapshot.length > 0 ? prevSnapshot.messagesSnapshot : []));
+    const snapshotCleared = buildClearedActiveRunPatch();
     return {
       ...cleared,
       sessionStreamingStates: {
         ...s.sessionStreamingStates,
         [sessionKey]: {
           ...prevSnapshot,
-          ...cleared,
+          ...snapshotCleared,
           messagesSnapshot,
         },
       },
@@ -1475,7 +1554,7 @@ function resolveFinalMessagesWithLocalPreservation(
   get: () => ChatState,
 ): RawMessage[] {
   const state = get();
-  let finalMessages = mergeMissingLocalUserMessages(pipelineMessages, state.messages);
+  let finalMessages = mergeMissingLocalAssistantReplies(pipelineMessages, state.messages, sessionKey);
 
   const userMsgAt = state.lastUserMessageAt;
   if (state.sending && userMsgAt) {
@@ -1502,22 +1581,20 @@ function resolveFinalMessagesWithLocalPreservation(
   // This safety net catches those remaining duplicates by comparing normalized
   // text content — the same message with the same text should only appear once.
   finalMessages = dedupeUserMessagesByContent(finalMessages);
+  finalMessages = stripSyntheticSessionLabelUserMessages(finalMessages, sessionKey);
 
   if (finalMessages.length > 0) return finalMessages;
-  if (state.messages.length > 0) return dedupeEquivalentAttachmentUserMessages(state.messages);
+
+  const preservedLocalMessages = stripSyntheticSessionLabelUserMessages(state.messages, sessionKey);
+  if (preservedLocalMessages.length > 0) {
+    return dedupeEquivalentAttachmentUserMessages(preservedLocalMessages);
+  }
 
   const snapshot = state.sessionStreamingStates[sessionKey]?.messagesSnapshot;
-  if (snapshot && snapshot.length > 0) return dedupeEquivalentAttachmentUserMessages(snapshot);
-
-  const label = state.sessionLabels[sessionKey];
-  if (label) {
-    const activity = state.sessionLastActivity[sessionKey] ?? Date.now();
-    return [{
-      role: 'user',
-      content: label.endsWith('…') ? label.slice(0, -1) : label,
-      timestamp: activity / 1000,
-      id: `local-${sessionKey}`,
-    }];
+  if (snapshot && snapshot.length > 0) {
+    return dedupeEquivalentAttachmentUserMessages(
+      stripSyntheticSessionLabelUserMessages(snapshot, sessionKey),
+    );
   }
 
   return finalMessages;
@@ -2574,7 +2651,9 @@ function buildSessionSwitchPatch(
       runError: state.runError,
       sending: state.sending,
       activeTool: state.activeTool,
-      messagesSnapshot: shouldSnapshotMessages ? [...state.messages] : [],
+      messagesSnapshot: shouldSnapshotMessages
+        ? stripSyntheticSessionLabelUserMessages([...state.messages], state.currentSessionKey)
+        : [],
     },
     {
       sessionKey: state.currentSessionKey,
@@ -2583,6 +2662,7 @@ function buildSessionSwitchPatch(
         state.currentSessionKey,
       ),
       gatewayBackground: state.gatewayBackgroundActivity,
+      announcedChildSessionKeys: state.announcedChildSessionKeys,
     },
   );
   const savedStreamingStates: Record<string, SessionStreamingState> = {
@@ -2596,8 +2676,9 @@ function buildSessionSwitchPatch(
     ? clearSessionEntryFromMap(savedStreamingStates, state.currentSessionKey)
     : savedStreamingStates;
 
-  // Restore the next session's streaming state (if exists)
-  const nextSessionState = finalStreamingStates[nextSessionKey] || {
+  // Restore the target session's streaming state (if exists), dropping stale run UI
+  // when the transcript snapshot already contains a delegation wrap-up answer.
+  const rawNextSessionState = finalStreamingStates[nextSessionKey] || {
     activeRunId: null,
     streamingText: '',
     streamingMessage: null,
@@ -2609,6 +2690,14 @@ function buildSessionSwitchPatch(
     sending: false,
     messagesSnapshot: [],
   };
+  const nextSessionState = sanitizeLeavingSessionStreamingSnapshot(
+    rawNextSessionState,
+    {
+      sessionKey: nextSessionKey,
+      gatewayBackground: state.gatewayBackgroundActivity,
+      announcedChildSessionKeys: state.announcedChildSessionKeys,
+    },
+  );
 
   const persistedAborted = isUserAbortedSession(nextSessionKey);
   const effectiveNextSessionState = persistedAborted
@@ -2625,12 +2714,10 @@ function buildSessionSwitchPatch(
         lastUserMessageAt: null,
       }
     : nextSessionState;
-  const effectiveStreamingStates = persistedAborted
-    ? {
-        ...finalStreamingStates,
-        [nextSessionKey]: effectiveNextSessionState,
-      }
-    : finalStreamingStates;
+  const effectiveStreamingStates = {
+    ...finalStreamingStates,
+    [nextSessionKey]: effectiveNextSessionState,
+  };
 
   return {
     currentSessionKey: nextSessionKey,
@@ -2652,7 +2739,9 @@ function buildSessionSwitchPatch(
     // across switches and only pruned in `deleteSession`/`renameSession`.
     sessionStreamingStates: effectiveStreamingStates,
     // Restore messages snapshot if there's an active stream, otherwise clear for loadHistory
-    messages: effectiveNextSessionState.messagesSnapshot.length > 0 ? effectiveNextSessionState.messagesSnapshot : [],
+    messages: effectiveNextSessionState.messagesSnapshot.length > 0
+      ? stripSyntheticSessionLabelUserMessages(effectiveNextSessionState.messagesSnapshot, nextSessionKey)
+      : [],
     error: null,
     // Restore streaming state from the next session
     activeRunId: effectiveNextSessionState.activeRunId,
@@ -2695,57 +2784,8 @@ function isExecApprovalFollowupRun(runId: string): boolean {
 
 function shouldProcessCurrentSessionRunEvent(activeRunId: string | null, runId: string): boolean {
   if (!activeRunId || !runId || runId === activeRunId) return true;
-  return isExecApprovalFollowupRun(runId);
-}
-
-const EMPTY_FINAL_HISTORY_RETRY_MS = 2_000;
-const EMPTY_FINAL_NO_RESPONSE_ERROR =
-  'Run ended without a response. The current session may have a stale active run or transcript lock. Stop the run, retry, or start a new session.';
-
-function countAssistantOutputs(messages: RawMessage[]): number {
-  return messages.filter((message) => message.role === 'assistant' && hasNonToolAssistantContent(message)).length;
-}
-
-function hasNewAssistantOutput(beforeMessages: RawMessage[], afterMessages: RawMessage[]): boolean {
-  if (countAssistantOutputs(afterMessages) > countAssistantOutputs(beforeMessages)) {
-    return true;
-  }
-  const beforeLastRole = beforeMessages.at(-1)?.role;
-  const afterLast = afterMessages.at(-1);
-  return beforeLastRole === 'user'
-    && afterLast?.role === 'assistant'
-    && hasNonToolAssistantContent(afterLast);
-}
-
-function waitForEmptyFinalRetry(): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, EMPTY_FINAL_HISTORY_RETRY_MS);
-  });
-}
-
-function getRecoverySkipReason(diagnostic: Record<string, unknown> | null | undefined): string {
-  const recoveryResult = diagnostic?.recoveryResult;
-  if (recoveryResult && typeof recoveryResult === 'object') {
-    const reason = (recoveryResult as Record<string, unknown>).reason;
-    if (typeof reason === 'string' && reason.trim()) return reason;
-  }
-  return 'empty-final-no-output';
-}
-
-function isDiagnosticRecoverable(diagnostic: Record<string, unknown> | null | undefined): boolean {
-  const recoveryResult = diagnostic?.recoveryResult;
-  if (recoveryResult && typeof recoveryResult === 'object') {
-    const reason = (recoveryResult as Record<string, unknown>).reason;
-    if (reason === 'lock-too-new' || reason === 'session-active') return false;
-  }
-
-  const lockOwner = diagnostic?.transcriptLockOwner;
-  if (lockOwner && typeof lockOwner === 'object') {
-    const pidAlive = (lockOwner as Record<string, unknown>).pidAlive;
-    if (pidAlive === true) return false;
-  }
-
-  return true;
+  if (isExecApprovalFollowupRun(runId)) return true;
+  return isSubagentDelegationAnnounceRun(runId);
 }
 
 function isDuplicateAssistantFinal(messages: RawMessage[], messageId: string, message: RawMessage): boolean {
@@ -2760,150 +2800,6 @@ function isDuplicateAssistantFinal(messages: RawMessage[], messageId: string, me
     existing.role === 'assistant'
     && getMessageText(existing.content).trim() === text
   ));
-}
-
-function isStillConfirmingEmptyFinal(get: () => ChatState, sessionKey: string, runId: string): boolean {
-  const state = get();
-  return state.currentSessionKey === sessionKey
-    && (!runId || !state.activeRunId || state.activeRunId === runId);
-}
-
-function hasActiveRunningTool(get: () => ChatState, sessionKey: string, runId: string): boolean {
-  const state = get();
-  const activeTool = state.currentSessionKey === sessionKey
-    ? state.activeTool
-    : state.sessionStreamingStates[sessionKey]?.activeTool;
-  return Boolean(
-    activeTool
-      && activeTool.status === 'running'
-      && (!runId || !activeTool.runId || activeTool.runId === runId),
-  );
-}
-
-function completeEmptyFinalFromHistory(
-  set: (partial: Partial<ChatState>) => void,
-  get: () => ChatState,
-  sessionKey: string,
-  runId: string,
-): void {
-  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
-  clearHistoryPoll();
-  set({
-    sending: false,
-    activeRunId: null,
-    streamingText: '',
-    streamingMessage: null,
-    streamingTools: [],
-    pendingFinal: false,
-    pendingToolImages: [],
-    lastUserMessageAt: null,
-    runError: null,
-  });
-}
-
-async function confirmEmptyFinalWithHistory(
-  set: (partial: Partial<ChatState>) => void,
-  get: () => ChatState,
-  runId: string,
-): Promise<void> {
-  const sessionKey = get().currentSessionKey;
-  const beforeMessages = [...get().messages];
-
-  set({
-    streamingText: '',
-    streamingMessage: null,
-    pendingFinal: true,
-    runError: null,
-  });
-
-  await get().loadHistory(true, { force: true });
-  if (isStillConfirmingEmptyFinal(get, sessionKey, runId) && hasNewAssistantOutput(beforeMessages, get().messages)) {
-    completeEmptyFinalFromHistory(set, get, sessionKey, runId);
-    return;
-  }
-
-  await waitForEmptyFinalRetry();
-  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
-
-  await get().loadHistory(true, { force: true });
-  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
-  if (hasNewAssistantOutput(beforeMessages, get().messages)) {
-    completeEmptyFinalFromHistory(set, get, sessionKey, runId);
-    return;
-  }
-
-  if (hasActiveRunningTool(get, sessionKey, runId)) {
-    set({
-      emptyFinalRecovery: {
-        status: 'waiting',
-        sessionKey,
-        runId,
-        reason: 'tracked-active-tool',
-        diagnostic: { activeTool: get().activeTool ?? get().sessionStreamingStates[sessionKey]?.activeTool ?? null },
-      },
-      runError: null,
-      pendingFinal: true,
-      sending: false,
-      activeRunId: null,
-    });
-    return;
-  }
-
-  set({
-    emptyFinalRecovery: {
-      status: 'checking',
-      sessionKey,
-      runId,
-    },
-  });
-  let diagnostic: Record<string, unknown> | null = null;
-  let hasTrackedActiveRun = false;
-  try {
-    const response = await getEmptyFinalDiagnostic(sessionKey);
-    diagnostic = response.diagnostic ?? null;
-    hasTrackedActiveRun = Boolean(response.hasTrackedActiveRun);
-  } catch (error) {
-    diagnostic = { error: String(error) };
-  }
-  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
-
-  if (hasTrackedActiveRun || !diagnostic || !isDiagnosticRecoverable(diagnostic)) {
-    set({
-      emptyFinalRecovery: {
-        status: 'waiting',
-        sessionKey,
-        runId,
-        reason: hasTrackedActiveRun ? 'tracked-active-run' : diagnostic ? getRecoverySkipReason(diagnostic) : 'missing-diagnostic',
-        diagnostic,
-      },
-      runError: null,
-      pendingFinal: true,
-      sending: hasTrackedActiveRun ? true : get().sending,
-      activeRunId: hasTrackedActiveRun ? (runId || get().activeRunId) : get().activeRunId,
-    });
-    return;
-  }
-
-  clearHistoryPoll();
-  set({
-    error: null,
-    runError: EMPTY_FINAL_NO_RESPONSE_ERROR,
-    emptyFinalRecovery: {
-      status: 'stale',
-      sessionKey,
-      runId,
-      reason: getRecoverySkipReason(diagnostic),
-      diagnostic,
-    },
-    sending: false,
-    activeRunId: null,
-    streamingText: '',
-    streamingMessage: null,
-    streamingTools: [],
-    pendingFinal: false,
-    pendingToolImages: [],
-    lastUserMessageAt: null,
-  });
 }
 
 function getCanonicalPrefixFromSessionKey(sessionKey: string): string | null {
@@ -3234,6 +3130,11 @@ function buildConvergenceDirectiveFeedback(observation: RunawayToolObservation):
     `Structural inspections: ${observation.structuralInspectionCount}.`,
     `Repeated debug scripts: ${observation.repeatedDebugScriptCount}.`,
     `Repeated output patterns: ${observation.repeatedOutputPatternCount}.`,
+    `Generated-code failures: ${observation.generatedCodeFailureCount}.`,
+    `Same generated file failures: ${observation.sameGeneratedFileFailureCount}.`,
+    `Same command-family failures: ${observation.sameCommandFamilyFailureCount}.`,
+    `Skill source mutation blocks: ${observation.skillSourceMutationBlockedCount}.`,
+    `Pause reason: ${observation.pauseReason ?? 'none'}.`,
     '',
     'This is internal runtime guidance. Continue the user task if possible, but do not reveal this control message verbatim.',
   ].join('\n');
@@ -3909,6 +3810,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     _loadSessionsInFlight = (async () => {
       try {
+        const { hydrateUiStateFromDisk } = await import('@/lib/ui-state-persistence');
+        await hydrateUiStateFromDisk();
+
         const { gatewayReady } = useGatewayStore.getState().status;
 
         if (gatewayReady !== true) {
@@ -3968,16 +3872,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const gatewaySessions = rawSessions
             .map((s: Record<string, unknown>) => parseSessionRecord(s))
             .filter((session): session is ChatSession => session != null);
-          let localPreviewSessions: ChatSession[] = [];
+          const registrySnapshot = get();
+          let localRegistrySessions: ChatSession[] = [];
           try {
-            const previewAgentIds = collectAgentIdsFromSessionKeys(
-              gatewaySessions.map((session) => session.key),
+            const registryAgentIds = collectAgentIdsFromSessionKeys([
+              ...gatewaySessions.map((session) => session.key),
+              ...Object.keys(registrySnapshot.sessionLastActivity),
+              ...Object.keys(registrySnapshot.sessionLabels),
+              ...Object.keys(registrySnapshot.sessionWorkspaceIds),
+            ]);
+            localRegistrySessions = await loadLocalSessionSummariesForAgentIds(
+              [...new Set(['main', ...registryAgentIds])],
             );
-            localPreviewSessions = await loadLocalSessionSummariesForAgentIds(previewAgentIds);
           } catch (error) {
-            console.warn('[Sessions] Failed to load local session previews for Gateway list:', error);
+            console.warn('[Sessions] Failed to load local session registry for Gateway list:', error);
           }
-          const sessions = mergeSessionSummariesWithLocalPreviews(gatewaySessions, localPreviewSessions)
+          const gatewayWithLocalRegistry = unionGatewaySessionsWithLocalRegistry(
+            gatewaySessions,
+            localRegistrySessions,
+            {
+              sessionLabels: registrySnapshot.sessionLabels,
+              customSessionLabels: registrySnapshot.customSessionLabels,
+              sessionLastActivity: registrySnapshot.sessionLastActivity,
+              sessionWorkspaceIds: registrySnapshot.sessionWorkspaceIds,
+              sessionPinnedAt: registrySnapshot.sessionPinnedAt,
+            },
+          );
+          const sessions = mergeSessionSummariesWithLocalPreviews(
+            gatewayWithLocalRegistry,
+            localRegistrySessions,
+          )
             .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills));
 
           const canonicalBySuffix = new Map<string, string>();
@@ -4129,6 +4053,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       );
       if (reAdopt) {
         set(reAdopt);
+      } else {
+        const settled = get();
+        if (
+          (settled.sending || settled.pendingFinal || settled.activeRunId)
+          && settled.messages.length > 0
+          && canForceClearOnVisibleCommittedReply({
+            messages: settled.messages,
+            lastUserMessageAt: settled.lastUserMessageAt,
+            backendActivity: snapshot.session,
+            gatewayBackground: snapshot.background,
+          })
+        ) {
+          applyClearedActiveRunForSession(set, key);
+        }
       }
       ensureSessionBackendPolling(key, set, get);
     });
@@ -4475,7 +4413,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return;
       }
       const discarded = _historyApplyDiscardedForKey.delete(currentSessionKey);
-      if (!discarded) return;
+      if (!discarded && !force) return;
       if (get().currentSessionKey !== currentSessionKey) return;
       if (_historyLoadInFlight.has(currentSessionKey)) return;
       if (get().messages.length > 0) return;
@@ -4592,6 +4530,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
         thinkingLevel,
       }));
 
+      const inferredSettledChildren = inferTranscriptSettledChildSessionKeys(finalMessages);
+      if (inferredSettledChildren.size > 0) {
+        set((s) => {
+          const merged = [...s.announcedChildSessionKeys];
+          let changed = false;
+          for (const key of inferredSettledChildren) {
+            if (!merged.includes(key)) {
+              merged.push(key);
+              changed = true;
+            }
+          }
+          return changed ? { announcedChildSessionKeys: merged } : {};
+        });
+      }
+      reconcileUserTurnAfterDelegationWrapUp(get, set, currentSessionKey);
+
       const firstUserMsg = finalMessages.find((m) => m.role === 'user');
       const lastMsg = finalMessages[finalMessages.length - 1];
       let discoveredLabel: string | undefined;
@@ -4655,6 +4609,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       if ((isSendingNow || get().pendingFinal || get().activeRunId) && recentTerminalAssistant) {
+        const completedChildSessionKeys = resolveCompletedChildSessionKeys(
+          finalMessages,
+          get().announcedChildSessionKeys,
+        );
         const canClearInput = {
           messages: finalMessages,
           lastUserMessageAt,
@@ -4662,6 +4620,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           terminalMessage: recentTerminalAssistant,
           gatewayBackground: backendSnapshot?.background ?? get().gatewayBackgroundActivity,
           finalizeGraceStartedAt: getFinalizeGraceStartedAt(currentSessionKey),
+          completedChildSessionKeys,
         };
         if (!canClearUserTurnNow(canClearInput)) {
           if (canForceClearOnVisibleCommittedReply(canClearInput)) {
@@ -4709,6 +4668,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
             pendingToolImages: [],
           });
         }
+      }
+
+      const completedAfterLoad = resolveCompletedChildSessionKeys(
+        finalMessages,
+        get().announcedChildSessionKeys,
+      );
+      const processingAfterLoad = backendSnapshot?.background?.processingSessionKeys
+        ?? get().gatewayBackgroundActivity?.processingSessionKeys
+        ?? [];
+      if (
+        recentTerminalAssistant
+        && isDelegationWrapUpComplete(finalMessages, processingAfterLoad, {
+          lastUserMessageAt,
+          completedChildSessionKeys: completedAfterLoad,
+        })
+      ) {
+        reconcileUserTurnAfterDelegationWrapUp(get, set, currentSessionKey);
       }
 
       const latestPromptError = getLatestPromptErrorAfterUser(promptErrors, lastUserMessageAt ? toMs(lastUserMessageAt) : 0);
@@ -5695,7 +5671,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     // Sync transcript after stop so any reply that landed on disk while the UI
     // was desynced becomes visible without requiring another interaction.
-    void get().loadHistory(true, { force: true });
+    // Defer past the abort quiet window — an immediate force reload is skipped
+    // by isAbortHistoryQuietPeriod() and would leave the panel stale.
+    setTimeout(() => {
+      void get().loadHistory(true, { force: true });
+    }, ABORT_HISTORY_QUIET_MS + 50);
   },
 
   // ���� Handle incoming chat events from Gateway ����
@@ -5709,9 +5689,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     // The child that triggers a parent's auto-announce wrap-up never gets an
     // `[Internal task completion event]` written to the parent transcript — its
-    // completion is encoded only in this run id. Record it so its execution-graph
-    // branch settles instead of being stranded "running".
-    if (runId && isSubagentDelegationAnnounceRun(runId)) {
+    // completion is encoded only in this run id. Record it on announce final so
+    // the nested branch does not flip to "completed" while the wrap-up is still streaming.
+    if (
+      runId
+      && isSubagentDelegationAnnounceRun(runId)
+      && (eventState === 'final' || eventState === 'error' || eventState === 'aborted')
+    ) {
       const announcedChildKey = parseChildSessionKeyFromAnnounceRun(runId);
       if (announcedChildKey && !get().announcedChildSessionKeys.includes(announcedChildKey)) {
         set((s) => (
@@ -5844,7 +5828,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Adopt run started from another client (e.g. console at 127.0.0.1:18789):
       // show loading/streaming in the app when this session has an active run.
       const { sending, activeRunId: storedRunId, runAborted } = get();
-      if (
+      if (isSubagentDelegationAnnounceRun(runId)) {
+        set({
+          sending: true,
+          activeRunId: runId,
+          pendingFinal: true,
+          runAborted: false,
+          error: null,
+          streamingText: '',
+          streamingMessage: null,
+          streamingTools: [],
+          pendingToolImages: [],
+        });
+      } else if (
         !sending
         && !runAborted
         && runId
@@ -5907,7 +5903,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
       case 'final': {
-        if (!matchesCurrentRun) {
+        const isAnnounceWrapUpFinal = isSubagentDelegationAnnounceRun(runId);
+        if (!matchesCurrentRun && !isAnnounceWrapUpFinal) {
           clearHistoryPoll();
           void get().loadHistory(true, { force: true }).finally(() => {
             ensureSessionBackendPolling(currentSessionKey, set, get);
@@ -6061,13 +6058,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
 
           if (shouldSilentlyFinalizeRunOnAssistantFinal(normalizedFinalMessage)) {
-            if (deferClearUserTurnForOpenDelegation(get, set, {
-              sessionKey: get().currentSessionKey,
-              runId,
-            })) {
+            if (!isSubagentDelegationAnnounceRun(runId)
+              && deferClearUserTurnForOpenDelegation(get, set, {
+                sessionKey: get().currentSessionKey,
+                runId,
+              })) {
               clearHistoryPoll();
+              startActiveSendHistoryFallback(currentSessionKey);
               void get().loadHistory(true, { force: true });
               break;
+            }
+            if (isSubagentDelegationAnnounceRun(runId)) {
+              trySyncClearAnnounceWrapUp(get, set, {
+                sessionKey: get().currentSessionKey,
+                runId,
+                terminalMessage: normalizedFinalMessage,
+              });
             }
             void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
               sessionKey: get().currentSessionKey,
@@ -6076,6 +6082,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             });
             clearHistoryPoll();
             void get().loadHistory(true, { force: true });
+            if (isSubagentDelegationAnnounceRun(runId) && get().sending) {
+              startActiveSendHistoryFallback(currentSessionKey);
+            }
             break;
           }
           const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
@@ -6146,7 +6155,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
           const currentHasToolActivity = toolOnly || updates.length > 0;
           const isSimpleTextResponse = !hasToolActivityInTurn && !currentHasToolActivity && hasOutput;
-          const keepRunActiveAfterFinal = !isExecApprovalFollowupRun(runId)
+          const keepRunActiveAfterFinal = isSubagentDelegationAnnounceRun(runId)
+            ? false
+            : !isExecApprovalFollowupRun(runId)
             && !isRunTerminalAssistantMessage(normalizedFinalMessage)
             && !isConcluding
             && (
@@ -6155,6 +6166,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               || shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
             );
           const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
+          const shouldClearOnFinalMessage = !keepRunActiveAfterFinal && !isAnnounceWrapUpFinal;
           let skippedDuplicateFinal = false;
           set((s) => {
             const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
@@ -6185,15 +6197,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
               } : {
                 streamingText: '',
                 streamingMessage: null,
-                sending: keepRunActiveAfterFinal ? s.sending : false,
-                activeRunId: keepRunActiveAfterFinal ? s.activeRunId : null,
-                pendingFinal: keepRunActiveAfterFinal ? true : false,
+                sending: shouldClearOnFinalMessage ? false : s.sending,
+                activeRunId: shouldClearOnFinalMessage ? null : s.activeRunId,
+                pendingFinal: shouldClearOnFinalMessage ? false : true,
                 streamingTools,
                 ...clearPendingImages,
+                ...withClearedSessionStreamingState(s, currentSessionKey, s.messages),
               };
             }
+            const nextMessages = [...s.messages, msgWithImages];
             return keepRunActiveAfterFinal ? {
-              messages: [...s.messages, msgWithImages],
+              messages: nextMessages,
               streamingText: '',
               streamingMessage: null,
               pendingFinal: true,
@@ -6201,31 +6215,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
               runError: null,
               ...clearPendingImages,
             } : {
-              messages: [...s.messages, msgWithImages],
+              messages: nextMessages,
               streamingText: '',
               streamingMessage: null,
-              sending: keepRunActiveAfterFinal ? s.sending : false,
-              activeRunId: keepRunActiveAfterFinal ? s.activeRunId : null,
-              pendingFinal: keepRunActiveAfterFinal ? true : false,
+              sending: shouldClearOnFinalMessage ? false : s.sending,
+              activeRunId: shouldClearOnFinalMessage ? null : s.activeRunId,
+              pendingFinal: shouldClearOnFinalMessage ? false : true,
               streamingTools,
               runError: null,
               ...clearPendingImages,
+              ...withClearedSessionStreamingState(s, currentSessionKey, nextMessages),
             };
           });
-          if (!skippedDuplicateFinal) {
-            // After the final response, always reload history to surface all intermediate
-            // tool-use turns (thinking + tool blocks) from the Gateway's authoritative
-            // record and to let applyLoadedMessages detect terminal/concluding replies.
-            clearHistoryPoll();
-            void get().loadHistory(true, { force: true });
-          }
-
-          if (!keepRunActiveAfterFinal || isSimpleTextResponse) {
+          const isAnnounceFinal = isSubagentDelegationAnnounceRun(runId);
+          if (!keepRunActiveAfterFinal || isSimpleTextResponse || isAnnounceFinal) {
+            if (isAnnounceFinal) {
+              trySyncClearAnnounceWrapUp(get, set, {
+                sessionKey: get().currentSessionKey,
+                runId,
+                terminalMessage: normalizedFinalMessage,
+              });
+            }
+            reconcileUserTurnAfterDelegationWrapUp(get, set, currentSessionKey);
             void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
               sessionKey: get().currentSessionKey,
               runId,
               terminalMessage: normalizedFinalMessage,
             });
+            if (isAnnounceFinal && get().sending) {
+              startActiveSendHistoryFallback(currentSessionKey);
+            }
             const pendingPlan = _pendingComplexTaskPlans.get(currentSessionKey);
             const finalText = getMessageText(normalizedFinalMessage.content);
             const isPlanningRun = pendingPlan
@@ -6251,6 +6270,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
               runId,
               terminalMessage: normalizedFinalMessage,
             });
+          }
+
+          if (!skippedDuplicateFinal) {
+            // After the final response, reload history to surface intermediate tool-use
+            // turns from the authoritative record. For announce wrap-up, settle first and
+            // defer the reload so lagging history-local cannot clobber the just-committed answer.
+            clearHistoryPoll();
+            if (isAnnounceFinal) {
+              window.setTimeout(() => {
+                void get().loadHistory(true, { force: true });
+              }, ANNOUNCE_HISTORY_RELOAD_DEFER_MS);
+            } else {
+              void get().loadHistory(true, { force: true });
+            }
           }
         } else {
           const { activeRunId: currentActiveRunId } = get();
@@ -6402,6 +6435,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
             runError: null,
           });
           void get().loadHistory(true);
+          break;
+        }
+
+        if (isSubagentDelegationAnnounceRun(runId)) {
+          // Child work may already be complete; a failed announce summary should
+          // not surface as a user-visible task failure on the parent session.
+          clearErrorRecoveryTimer();
+          clearHistoryPoll();
+          console.warn('[chat.error-suppressed] announce wrap-up failed; finalizing from transcript', {
+            error: rawErrorMsg,
+            runId,
+          });
+          set({
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            sending: false,
+            activeRunId: null,
+            lastUserMessageAt: null,
+            error: null,
+            runError: null,
+          });
+          void get().loadHistory(true, { force: true });
+          void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
+            sessionKey: get().currentSessionKey,
+            runId,
+          });
           break;
         }
 

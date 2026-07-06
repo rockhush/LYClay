@@ -38,15 +38,16 @@ import {
   shouldKeepRunActiveAfterAssistantFinal,
   shouldSilentlyFinalizeRunOnAssistantFinal,
 } from './run-lifecycle';
-import { isSubagentDelegationAnnounceRun, parseChildSessionKeyFromAnnounceRun } from '@/lib/subagent-delegation';
+import { hasInFlightSubagentSignals, isSubagentDelegationAnnounceRun, parseChildSessionKeyFromAnnounceRun } from '@/lib/subagent-delegation';
 import { deferClearUserTurnForOpenDelegation, tryFinalizeUserTurnAfterAssistantFinal, trySyncClearAnnounceWrapUp } from './finalize-turn-bridge';
 import { hasOpenDelegatedBackendWork } from './user-turn-lifecycle';
+import { ensureSessionBackendPolling } from './session-backend-bridge';
 import { extractInvokedSkillIds } from './usage-report-extract';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
 
 import type { AttachedFileMeta, RawMessage } from './types';
-import { getEmptyFinalDiagnostic } from '@/lib/host-api';
 import type { ChatGet, ChatSet } from './store-api';
+import { confirmEmptyFinalWithHistory } from './empty-final-recovery';
 import {
   buildComplexTaskExecutionRequest,
   clearPendingComplexTaskPlan,
@@ -133,190 +134,6 @@ function reportUsageFromFinalAssistant(message: RawMessage | undefined, runId: s
       void reportSkillInvoke(skillId, 1);
     }
   }
-}
-const EMPTY_FINAL_HISTORY_RETRY_MS = 2_000;
-const EMPTY_FINAL_NO_RESPONSE_ERROR =
-  'Run ended without a response. The current session may have a stale active run or transcript lock. Stop the run, retry, or start a new session.';
-
-function countAssistantOutputs(messages: RawMessage[]): number {
-  return messages.filter((message) => message.role === 'assistant' && hasNonToolAssistantContent(message)).length;
-}
-
-function hasNewAssistantOutput(beforeMessages: RawMessage[], afterMessages: RawMessage[]): boolean {
-  if (countAssistantOutputs(afterMessages) > countAssistantOutputs(beforeMessages)) {
-    return true;
-  }
-  const beforeLastRole = beforeMessages.at(-1)?.role;
-  const afterLast = afterMessages.at(-1);
-  return beforeLastRole === 'user'
-    && afterLast?.role === 'assistant'
-    && hasNonToolAssistantContent(afterLast);
-}
-
-function waitForEmptyFinalRetry(): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, EMPTY_FINAL_HISTORY_RETRY_MS);
-  });
-}
-
-function getRecoverySkipReason(diagnostic: Record<string, unknown> | null | undefined): string {
-  const recoveryResult = diagnostic?.recoveryResult;
-  if (recoveryResult && typeof recoveryResult === 'object') {
-    const reason = (recoveryResult as Record<string, unknown>).reason;
-    if (typeof reason === 'string' && reason.trim()) return reason;
-  }
-  return 'empty-final-no-output';
-}
-
-function isDiagnosticRecoverable(diagnostic: Record<string, unknown> | null | undefined): boolean {
-  const recoveryResult = diagnostic?.recoveryResult;
-  if (recoveryResult && typeof recoveryResult === 'object') {
-    const reason = (recoveryResult as Record<string, unknown>).reason;
-    if (reason === 'lock-too-new' || reason === 'session-active') return false;
-  }
-
-  const lockOwner = diagnostic?.transcriptLockOwner;
-  if (lockOwner && typeof lockOwner === 'object') {
-    const pidAlive = (lockOwner as Record<string, unknown>).pidAlive;
-    if (pidAlive === true) return false;
-  }
-
-  return true;
-}
-
-function isStillConfirmingEmptyFinal(get: ChatGet, sessionKey: string, runId: string): boolean {
-  const state = get();
-  return state.currentSessionKey === sessionKey
-    && (!runId || !state.activeRunId || state.activeRunId === runId);
-}
-
-function hasActiveRunningTool(get: ChatGet, sessionKey: string, runId: string): boolean {
-  const state = get();
-  const activeTool = state.currentSessionKey === sessionKey
-    ? state.activeTool
-    : state.sessionStreamingStates[sessionKey]?.activeTool;
-  return Boolean(
-    activeTool
-      && activeTool.status === 'running'
-      && (!runId || !activeTool.runId || activeTool.runId === runId),
-  );
-}
-
-function completeEmptyFinalFromHistory(set: ChatSet, get: ChatGet, sessionKey: string, runId: string): void {
-  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
-  clearHistoryPoll();
-  set({
-    sending: false,
-    activeRunId: null,
-    streamingText: '',
-    streamingMessage: null,
-    streamingTools: [],
-    pendingFinal: false,
-    pendingToolImages: [],
-    lastUserMessageAt: null,
-    runError: null,
-  });
-}
-
-async function confirmEmptyFinalWithHistory(set: ChatSet, get: ChatGet, runId: string): Promise<void> {
-  const sessionKey = get().currentSessionKey;
-  const beforeMessages = [...get().messages];
-
-  set({
-    streamingText: '',
-    streamingMessage: null,
-    pendingFinal: true,
-    runError: null,
-  });
-
-  await get().loadHistory(true);
-  if (isStillConfirmingEmptyFinal(get, sessionKey, runId) && hasNewAssistantOutput(beforeMessages, get().messages)) {
-    completeEmptyFinalFromHistory(set, get, sessionKey, runId);
-    return;
-  }
-
-  await waitForEmptyFinalRetry();
-  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
-
-  await get().loadHistory(true);
-  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
-  if (hasNewAssistantOutput(beforeMessages, get().messages)) {
-    completeEmptyFinalFromHistory(set, get, sessionKey, runId);
-    return;
-  }
-
-  if (hasActiveRunningTool(get, sessionKey, runId)) {
-    set({
-      emptyFinalRecovery: {
-        status: 'waiting',
-        sessionKey,
-        runId,
-        reason: 'tracked-active-tool',
-        diagnostic: { activeTool: get().activeTool ?? get().sessionStreamingStates[sessionKey]?.activeTool ?? null },
-      },
-      runError: null,
-      pendingFinal: true,
-      sending: false,
-      activeRunId: null,
-    });
-    return;
-  }
-
-  set({
-    emptyFinalRecovery: {
-      status: 'checking',
-      sessionKey,
-      runId,
-    },
-  });
-  let diagnostic: Record<string, unknown> | null = null;
-  let hasTrackedActiveRun = false;
-  try {
-    const response = await getEmptyFinalDiagnostic(sessionKey);
-    diagnostic = response.diagnostic ?? null;
-    hasTrackedActiveRun = Boolean(response.hasTrackedActiveRun);
-  } catch (error) {
-    diagnostic = { error: String(error) };
-  }
-  if (!isStillConfirmingEmptyFinal(get, sessionKey, runId)) return;
-
-  if (hasTrackedActiveRun || !diagnostic || !isDiagnosticRecoverable(diagnostic)) {
-    set({
-      emptyFinalRecovery: {
-        status: 'waiting',
-        sessionKey,
-        runId,
-        reason: hasTrackedActiveRun ? 'tracked-active-run' : diagnostic ? getRecoverySkipReason(diagnostic) : 'missing-diagnostic',
-        diagnostic,
-      },
-      runError: null,
-      pendingFinal: true,
-      sending: hasTrackedActiveRun ? true : get().sending,
-      activeRunId: hasTrackedActiveRun ? (runId || get().activeRunId) : get().activeRunId,
-    });
-    return;
-  }
-
-  clearHistoryPoll();
-  set({
-    error: null,
-    runError: EMPTY_FINAL_NO_RESPONSE_ERROR,
-    emptyFinalRecovery: {
-      status: 'stale',
-      sessionKey,
-      runId,
-      reason: getRecoverySkipReason(diagnostic),
-      diagnostic,
-    },
-    sending: false,
-    activeRunId: null,
-    streamingText: '',
-    streamingMessage: null,
-    streamingTools: [],
-    pendingFinal: false,
-    pendingToolImages: [],
-    lastUserMessageAt: null,
-  });
 }
 
 function isExecApprovalFollowupRun(runId: string): boolean {
@@ -720,7 +537,9 @@ export function handleRuntimeEventState(
               break;
             }
             const hasOutput = hasNonToolAssistantContent(normalizedFinalMessage);
-            const keepRunActiveAfterFinal = shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
+            const keepRunActiveAfterFinal = isSubagentDelegationAnnounceRun(runId)
+              ? false
+              : shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
               && !isExecApprovalFollowupRun(runId);
             const shouldReconcileVisibleFinal = keepRunActiveAfterFinal
               && isVisibleAssistantTextWithoutToolUse(normalizedFinalMessage);

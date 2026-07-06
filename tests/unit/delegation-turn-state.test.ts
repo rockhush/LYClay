@@ -186,6 +186,54 @@ describe('delegation-turn-state', () => {
     expect(isDelegationWrapUpComplete(messages, [], { lastUserMessageAt: 1000 })).toBe(true);
   });
 
+  it('closes delegation when wrap-up is committed despite stale streaming spawn snapshot', () => {
+    const childKey = 'agent:main:subagent:child-1';
+    const messages = spawnMessages([childKey]);
+    messages.push({
+      role: 'assistant',
+      content: 'PPT is ready.',
+      stopReason: 'stop',
+      timestamp: 4000,
+    });
+
+    expect(isSegmentDelegationPhaseOpen(messages, [], {
+      streamingMessage: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Now let me spawn a sub-agent.' },
+          {
+            type: 'tool_use',
+            id: 'spawn-1',
+            name: 'sessions_spawn',
+            input: { taskName: 'ppt' },
+          },
+        ],
+      },
+      completedChildSessionKeys: new Set([childKey]),
+    })).toBe(false);
+  });
+
+  it('does not keep children active on stale gateway keys after announce completion', () => {
+    const childKey = 'agent:main:subagent:child-1';
+    const messages = spawnMessages([childKey]);
+    messages.push({
+      role: 'assistant',
+      content: 'PPT is ready.',
+      stopReason: 'stop',
+      timestamp: 4000,
+    });
+
+    const snapshot = deriveDelegationTurnSnapshot(
+      messages,
+      [childKey],
+      { completedChildSessionKeys: new Set([childKey]) },
+    );
+    expect(snapshot.anyChildActive).toBe(false);
+    expect(isSegmentDelegationPhaseOpen(messages, [childKey], {
+      completedChildSessionKeys: new Set([childKey]),
+    })).toBe(false);
+  });
+
   it('does not strand the parent turn on a fire-and-forget mode:run spawn that never binds', () => {
     // `sessions_spawn` with mode:"run" returns `{status:'accepted'}` with NO
     // childSessionKey, so it never produces a binding. After the child times out
@@ -224,5 +272,150 @@ describe('delegation-turn-state', () => {
     expect(snapshot.anyChildActive).toBe(false);
     expect(snapshot.allChildrenSettled).toBe(true);
     expect(isParentDelegationPhaseOpen(messages, [], { lastUserMessageAt: 1000 })).toBe(false);
+  });
+
+  it('closes wrap-up after sessions_yield + announce exec round with stale gateway keys', () => {
+    const childKey = 'agent:main:subagent:097d1c17-1a9e-455d-aec6-31d14fa468fb';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'make ppt', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'spawn-1',
+          name: 'sessions_spawn',
+          input: { taskName: 'ppt-generation', mode: 'run' },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ status: 'accepted', childSessionKey: childKey }),
+        }],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'PPT delegated to sub-agent.' },
+          { type: 'toolCall', id: 'yield-1', name: 'sessions_yield', arguments: {} },
+        ],
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'yield-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'yielded' }) }],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'PPT 已生成完毕！' },
+          { type: 'toolCall', id: 'exec-1', name: 'exec', arguments: {} },
+        ],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'exec-1', content: [{ type: 'text', text: '69059 bytes' }] },
+      {
+        role: 'assistant',
+        content: '**数字员工建设方案.pptx** 已生成，共 15 页。',
+        stopReason: 'stop',
+        timestamp: 5000,
+      },
+    ];
+    const completed = new Set([childKey]);
+    const staleProcessing = ['agent:main:session-1782986240411', childKey];
+
+    expect(isDelegationWrapUpComplete(messages, staleProcessing, {
+      lastUserMessageAt: 1000,
+      completedChildSessionKeys: completed,
+    })).toBe(true);
+    expect(isSegmentDelegationPhaseOpen(messages.slice(1), staleProcessing, {
+      completedChildSessionKeys: completed,
+    })).toBe(false);
+  });
+
+  it('closes wrap-up with stale gateway keys before completedChildSessionKeys is inferred', () => {
+    const childKey = 'agent:main:subagent:49424d13-c3a3-4a4c-b9d5-5b1182bcd972';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'make ppt', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'spawn-1',
+          name: 'sessions_spawn',
+          input: { taskName: 'lyclaw-pptx-build' },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ status: 'accepted', childSessionKey: childKey }),
+        }],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'PPT 正在由子代理生成中，完成后我会通知你。' },
+          { type: 'toolCall', id: 'yield-1', name: 'sessions_yield', arguments: {} },
+        ],
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'yield-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'yielded' }) }],
+      },
+      {
+        role: 'assistant',
+        content: '✅ **PPT 已生成完毕！**',
+        stopReason: 'stop',
+        timestamp: 5000,
+      },
+    ];
+    const staleProcessing = ['agent:main:session-1782991299226', childKey];
+
+    expect(isDelegationWrapUpComplete(messages, staleProcessing, {
+      lastUserMessageAt: 1000,
+    })).toBe(true);
+    expect(isSegmentDelegationPhaseOpen(messages.slice(1), staleProcessing)).toBe(false);
+  });
+
+  it('keeps delegation open during interim wait before gateway lists the child', () => {
+    const childKey = 'agent:main:subagent:digital-employee-pptx';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'make ppt', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'spawn-1',
+          name: 'sessions_spawn',
+          input: { taskName: 'digital-employee-pptx' },
+        }],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ status: 'accepted', childSessionKey: childKey }),
+        }],
+      },
+      {
+        role: 'assistant',
+        content: 'PPT 正在生成中，我启动了一个子任务专门来制作这份 15 页的演示文稿。生成完成后我会通知你，稍等一下～',
+        stopReason: 'stop',
+        timestamp: 3000,
+      },
+    ];
+
+    expect(isParentDelegationPhaseOpen(messages, [], { lastUserMessageAt: 1000 })).toBe(true);
+    expect(isSegmentDelegationPhaseOpen(messages.slice(1), [])).toBe(true);
+    expect(isDelegationWrapUpComplete(messages, [], { lastUserMessageAt: 1000 })).toBe(false);
   });
 });

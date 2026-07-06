@@ -25,6 +25,13 @@ vi.mock('@electron/utils/uv-env', () => ({
   warmupNetworkOptimization: vi.fn(async () => undefined),
 }));
 
+vi.mock('@electron/utils/openclaw-auth-store', () => ({
+  loadAgentAuthProfileStore: vi.fn(async () => ({ version: 1, profiles: {} })),
+  saveAgentAuthProfileStore: vi.fn(async () => undefined),
+  migrateAllAgentAuthStoresToSqlite: vi.fn(async () => undefined),
+  migrateAgentAuthStoreToSqlite: vi.fn(async () => false),
+}));
+
 describe('GatewayManager empty final diagnostics', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -93,6 +100,55 @@ describe('GatewayManager empty final diagnostics', () => {
       recoveryResult: expect.objectContaining({ recovered: false, reason: 'lock-owned-by-other-process' }),
       transcriptLockOwner: expect.objectContaining({ pid: 999999, pidAlive: false }),
     });
+  }, 30_000);
+
+  it('skips empty-final diagnostic when transcript shows delegation yield', async () => {
+    vi.resetModules();
+    vi.doMock('@electron/gateway/transcript-delegation-signals', () => ({
+      transcriptFileShowsDelegationYield: vi.fn(async () => true),
+    }));
+    const { GatewayManager } = await import('@electron/gateway/manager');
+    const { logger } = await import('@electron/utils/logger');
+    const manager = new GatewayManager();
+    const sessionKey = 'agent:main:session-yield';
+
+    (manager as unknown as {
+      getEmptyFinalSessionSnapshot: (sessionKey?: string) => Promise<Record<string, unknown>>;
+    }).getEmptyFinalSessionSnapshot = vi.fn(async () => ({
+      sessionStoreEntry: {
+        status: 'running',
+        sessionFile: 'C:\\tmp\\yield-session.jsonl',
+      },
+    }));
+    (manager as unknown as {
+      recoverSessionTranscriptLock: (sessionKey?: string, reason?: string) => Promise<Record<string, unknown>>;
+    }).recoverSessionTranscriptLock = vi.fn(async () => ({
+      recovered: false,
+      reason: 'lock-missing',
+    }));
+
+    await (manager as unknown as {
+      recordEmptyUserChatFinalDiagnostic: (args: Record<string, unknown>) => Promise<void>;
+    }).recordEmptyUserChatFinalDiagnostic({
+      runId: 'run-yield',
+      sessionKey,
+      totalSinceAcceptedMs: 25,
+      totalSinceRequestedMs: 40,
+      timeToFirstEventMs: 2,
+      timeToFirstDeltaMs: null,
+      timeToFirstVisibleProgressMs: null,
+      rpcDurationMs: 15,
+      trackedChatRunsBeforeCompletion: [],
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      '[gateway:session-lock-recovery] skipped empty-final diagnostic for delegation yield',
+      expect.objectContaining({
+        runId: 'run-yield',
+        sessionKey,
+      }),
+    );
+    expect(manager.getLatestEmptyFinalDiagnostic(sessionKey)).toBeNull();
   }, 30_000);
 
   it('audits a user session transcript lock shortly after a terminal run', async () => {

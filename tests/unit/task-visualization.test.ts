@@ -38,6 +38,35 @@ describe('findReplyMessageIndex', () => {
     ];
     expect(findReplyMessageIndex(messages, true)).toBe(-1);
   });
+
+  it('skips interim wait and spawn narration when picking the reply', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'build ppt' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: "I'll spawn a sub-agent to handle this PPTX creation task." },
+          { type: 'toolCall', id: 'spawn-1', name: 'sessions_spawn', input: { taskName: 'digital-employee-pptx' } },
+        ],
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'accepted' }) }],
+      },
+      {
+        role: 'assistant',
+        content: 'PPT 正在生成中，我启动了一个子任务。生成完成后我会通知你，稍等一下～',
+        stopReason: 'stop',
+      },
+      {
+        role: 'assistant',
+        content: '✅ PPT 已生成完毕！',
+        stopReason: 'stop',
+      },
+    ];
+    expect(findReplyMessageIndex(messages, false)).toBe(4);
+  });
 });
 
 describe('deriveTaskSteps', () => {

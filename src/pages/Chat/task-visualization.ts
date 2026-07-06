@@ -1,6 +1,6 @@
 import { extractText, extractTextSegments, extractThinkingSegments, extractToolUse } from './message-utils';
 import type { ContentBlock, RawMessage, ToolStatus } from '@/stores/chat';
-import { parseSubagentCompletionInfo, summarizeChildRunActivity } from '@/lib/subagent-delegation';
+import { parseSubagentCompletionInfo, summarizeChildRunActivity, isInterimSubagentWaitAssistantReply } from '@/lib/subagent-delegation';
 
 export type {
   ChildDelegationBinding,
@@ -60,6 +60,10 @@ export function findReplyMessageIndex(messages: RawMessage[], hasStreamingReply:
     // parent wrap-up reply would be folded into the graph and the completion
     // marker itself is not rendered — leaving only "subagent run 完成".
     if (parseSubagentCompletionInfo(message)) continue;
+    if (isInterimSubagentWaitAssistantReply(message)) continue;
+    const replyText = extractText(message).trim();
+    if (isSubagentOrchestrationNarration(replyText)) continue;
+    if (extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name))) continue;
     return idx;
   }
   return -1;
@@ -121,13 +125,17 @@ function isSubagentOrchestrationStep(step: TaskStep): boolean {
   return false;
 }
 
-function isSubagentOrchestrationNarration(text: string): boolean {
+export function isSubagentOrchestrationNarration(text: string): boolean {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
   if (/sessions_(spawn|yield)/i.test(normalized)) return true;
   if (/调度子\s*agent/i.test(normalized)) return true;
   if (/(?:spawn|派发|启动|调度).{0,24}sub\s*agent/i.test(normalized)) return true;
-  if (/(?:子\s*agent|子\s*任务).{0,30}(?:执行|派发|调度|spawn|yield)/i.test(normalized)) return true;
+  if (/(?:子\s*agent|子\s*任务|子智能体).{0,30}(?:执行|派发|调度|spawn|yield|生成)/i.test(normalized)) return true;
+  if (/(?:I'll|let me).{0,24}spawn.{0,24}sub-?agent/i.test(normalized)) return true;
+  if (/PPT 正在由子智能体生成中/i.test(normalized)) return true;
+  if (/PPT 正在生成中/i.test(normalized)) return true;
+  if (/生成完成后我会通知你/i.test(normalized)) return true;
   return false;
 }
 

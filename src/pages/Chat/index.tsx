@@ -20,7 +20,9 @@ import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard, buildTurnRunAnchorId } from './ExecutionGraphCard';
 import { ChatToolbar } from './ChatToolbar';
 import { extractImages, extractText, extractThinking, extractToolUse, stripProcessMessagePrefix } from './message-utils';
-import { attachSubagentChildSteps, collectChildDelegationBindings, deriveTaskSteps, filterHiddenExecutionGraphSteps, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
+import { attachSubagentChildSteps, collectChildDelegationBindings, deriveTaskSteps, filterHiddenExecutionGraphSteps, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationNarration, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
+import { resolveCompletedChildSessionKeys } from '@/lib/subagent-delegation';
+import { mergeDelegationBindingsWithLiveStream } from '@/lib/subagent-delegation';
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
 import { cn } from '@/lib/utils';
@@ -35,7 +37,7 @@ import {
   isParentDelegationPhaseOpen,
   isSegmentDelegationPhaseOpen,
 } from '@/lib/delegation-turn-state';
-import { summarizeChildRunActivity, collectPendingChildDelegationBindings } from '@/lib/subagent-delegation';
+import { isInterimSubagentWaitAssistantReply, summarizeChildRunActivity, collectPendingChildDelegationBindings } from '@/lib/subagent-delegation';
 import {
   detectStalledChildDelegation,
   isChildDelegationStillActive,
@@ -330,28 +332,9 @@ export function Chat() {
   useEffect(() => {
     if (messages.length === 0 && !loading) {
       const state = useChatStore.getState();
-      const hasLocalSession = Boolean(
-        state.sessionLabels[state.currentSessionKey]
-        || state.sessionLastActivity[state.currentSessionKey],
-      );
-      if (hasLocalSession) {
-        const snapshot = state.sessionStreamingStates[state.currentSessionKey]?.messagesSnapshot;
-        if (snapshot && snapshot.length > 0) {
-          useChatStore.setState({ messages: snapshot });
-        } else {
-          const label = state.sessionLabels[state.currentSessionKey];
-          if (label) {
-            const activity = state.sessionLastActivity[state.currentSessionKey] ?? Date.now();
-            useChatStore.setState({
-              messages: [{
-                role: 'user',
-                content: label.endsWith('…') ? label.slice(0, -1) : label,
-                timestamp: activity / 1000,
-                id: `local-${state.currentSessionKey}`,
-              }],
-            });
-          }
-        }
+      const snapshot = state.sessionStreamingStates[state.currentSessionKey]?.messagesSnapshot;
+      if (snapshot && snapshot.length > 0) {
+        useChatStore.setState({ messages: snapshot });
         return;
       }
       void loadHistory();
@@ -410,15 +393,8 @@ export function Chat() {
   }, [subagentCompletionInfos, childTranscripts]);
 
   const completedChildSessionKeys = useMemo(
-    () => new Set([
-      ...subagentCompletionInfos
-        .filter((info): info is NonNullable<typeof info> => info != null)
-        .map((info) => info.sessionKey),
-      // A child that triggered a parent announce wrap-up has no transcript
-      // completion marker — fold in its run-id-derived key so its branch settles.
-      ...announcedChildSessionKeys,
-    ]),
-    [subagentCompletionInfos, announcedChildSessionKeys],
+    () => resolveCompletedChildSessionKeys(messages, announcedChildSessionKeys),
+    [messages, announcedChildSessionKeys],
   );
 
   const processingSubagentKeys = useMemo(
@@ -622,8 +598,9 @@ export function Chat() {
     () => !runAborted && isParentDelegationPhaseOpen(messages, processingSubagentKeys, {
       lastUserMessageAt,
       streamingMessage,
+      completedChildSessionKeys,
     }),
-    [messages, processingSubagentKeys, runAborted, lastUserMessageAt, streamingMessage],
+    [messages, processingSubagentKeys, runAborted, lastUserMessageAt, streamingMessage, completedChildSessionKeys],
   );
 
   const isUserTurnExecuting = useMemo(
@@ -637,6 +614,7 @@ export function Chat() {
         lastUserMessageAt,
         streamingMessage,
         sessionKey: currentSessionKey,
+        completedChildSessionKeys,
       },
     ),
     [
@@ -651,6 +629,7 @@ export function Chat() {
       messages,
       lastUserMessageAt,
       streamingMessage,
+      completedChildSessionKeys,
     ],
   );
 
@@ -714,9 +693,16 @@ export function Chat() {
     const nextUserIndex = nextUserMessageIndexes[idx];
     const segmentEnd = nextUserIndex === -1 ? messages.length : nextUserIndex;
     const segmentMessages = messages.slice(idx + 1, segmentEnd);
-    const segmentBindings = collectChildDelegationBindings(
+    const segmentBindings = mergeDelegationBindingsWithLiveStream(
+      collectChildDelegationBindings(
+        segmentMessages,
+        completedChildSessionKeys,
+      ),
       segmentMessages,
+      nextUserIndex === -1 ? streamingMessage : null,
+      nextUserIndex === -1 ? streamingTools : [],
       completedChildSessionKeys,
+      processingSubagentKeys,
     );
     const processingKeySet = new Set(processingSubagentKeys);
     const delegationTurn = deriveDelegationTurnSnapshot(
@@ -738,6 +724,7 @@ export function Chat() {
       processingSubagentKeys,
       {
         streamingMessage: nextUserIndex === -1 ? streamingMessage : null,
+        completedChildSessionKeys,
       },
     );
     const waitingOnSubagentReturn = hasSpawnedSubagent && segmentHasPendingChild;
@@ -768,7 +755,10 @@ export function Chat() {
     const hasFinalReply = segmentMessages.some((m, i) => {
       if (i <= lastToolUseOffset) return false;
       if (m.role !== 'assistant') return false;
-      if (extractText(m).trim().length === 0) return false;
+      if (isInterimSubagentWaitAssistantReply(m)) return false;
+      const replyText = extractText(m).trim();
+      if (replyText.length === 0) return false;
+      if (isSubagentOrchestrationNarration(replyText)) return false;
       const content = m.content;
       if (!Array.isArray(content)) return true;
       return !(content as Array<{ type?: string }>).some(
@@ -799,8 +789,7 @@ export function Chat() {
           || segmentHasPendingChild
           || segmentWaitingOnSubagent
           || Boolean(stalledChildSessionKey)
-          || sending
-          || pendingFinal
+          || isUserTurnExecuting
           || hasAnyStreamContent
           || (runStillExecutingTools && !error && !hasFinalReply)
         );
@@ -1052,6 +1041,7 @@ export function Chat() {
     hasStreamThinking,
     hasStreamTools,
     isMimo,
+    isUserTurnExecuting,
     messages,
     pendingFinal,
     lastUserMessageAt,

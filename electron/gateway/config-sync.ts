@@ -98,6 +98,86 @@ function block(reason) {
   return { block: true, blockReason: reason };
 }
 
+const GENERATED_TEXT_EXTENSIONS = new Set(['py', 'js', 'ts', 'mjs', 'cjs', 'json', 'sh', 'ps1', 'bat', 'cmd']);
+const MUTATING_TOOLS = new Set(['write', 'edit', 'delete', 'remove', 'rm', 'move', 'rename', 'apply_patch']);
+
+function readPath(params) {
+  return readString(params.file_path)
+    || readString(params.filePath)
+    || readString(params.path)
+    || readString(params.filename)
+    || readString(params.target);
+}
+
+function normalizePath(filePath) {
+  return String(filePath || '').replace(/\\\\/g, '/').toLowerCase();
+}
+
+function getExt(filePath) {
+  const name = normalizePath(filePath).split('/').pop() || '';
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 ? name.slice(dot + 1) : '';
+}
+
+function isGeneratedTextPath(filePath) {
+  return !!filePath && GENERATED_TEXT_EXTENSIONS.has(getExt(filePath));
+}
+
+function isSkillSourcePath(filePath) {
+  const path = normalizePath(filePath);
+  return path.includes('/.openclaw/skills/')
+    || path.includes('/openclaw/skills/')
+    || path.includes('/.codex/skills/')
+    || path.includes('/codex/skills/')
+    || (path.includes('/plugins/cache/') && path.includes('/skills/'));
+}
+
+function containsNullByte(value) {
+  if (typeof value === 'string') return value.includes('\\u0000');
+  if (Array.isArray(value)) return value.some(containsNullByte);
+  if (value && typeof value === 'object') return Object.values(value).some(containsNullByte);
+  return false;
+}
+
+function readWriteContent(params) {
+  return [params.content, params.new_string, params.old_string, params.command, params.script]
+    .filter((value) => typeof value === 'string')
+    .join('\\n');
+}
+
+function preflightGeneratedToolCall(toolName, params) {
+  const lowerName = String(toolName || '').toLowerCase();
+  const filePath = readPath(params);
+  const command = readString(params.command) || readString(params.cmd) || '';
+
+  if (MUTATING_TOOLS.has(lowerName) && isSkillSourcePath(filePath)) {
+    return block('skill_source_readonly: installed skill source is read-only during ordinary tasks. Create a workspace runner/wrapper or report a skill defect.');
+  }
+
+  if (command && command.includes('\\u0000')) {
+    return block('generated_code_null_bytes: command contains null bytes. Rewrite the command without embedded null bytes and avoid inline binary/script payloads.');
+  }
+
+  if (command && /\\bnode(?:\\.exe)?\\b/i.test(command) && /\\.py\\b/i.test(command)) {
+    return block('wrong_interpreter: Python files must be run with python or uv run python, not node.');
+  }
+
+  if (command && command.includes('&&')) {
+    return block('shell_operator_unsupported: PowerShell command chaining with && is not supported here. Run commands separately or use a PowerShell-safe command.');
+  }
+
+  if ((lowerName === 'write' || lowerName === 'edit' || lowerName === 'apply_patch')
+    && isGeneratedTextPath(filePath)
+    && containsNullByte(readWriteContent(params))) {
+    return block('generated_code_null_bytes: generated text/code content contains null bytes. Regenerate UTF-8 text without null bytes before writing.');
+  }
+
+  if (containsNullByte(params)) {
+    return block('generated_code_null_bytes: tool parameters contain null bytes. Regenerate the tool call without embedded null bytes.');
+  }
+
+  return undefined;
+}
 async function preflightExecCommand(input) {
   const port = process.env.CLAWX_HOST_API_PORT || '13210';
   const token = process.env.CLAWX_COMMAND_POLICY_TOKEN || '';
@@ -130,11 +210,13 @@ async function preflightExecCommand(input) {
 export default {
   id: PLUGIN_ID,
   name: 'LYClaw Command Policy',
-  description: 'Preflights OpenClaw exec tool calls through the LYClaw command policy before execution.',
+  description: 'Preflights OpenClaw exec and generated-file tool calls before execution.',
   register(api) {
     api.on('before_tool_call', async (event, ctx) => {
-      if (event.toolName !== 'exec') return undefined;
       const params = event.params && typeof event.params === 'object' ? event.params : {};
+      const generatedBlock = preflightGeneratedToolCall(event.toolName, params);
+      if (generatedBlock) return generatedBlock;
+      if (event.toolName !== 'exec') return undefined;
       const command = readString(params.command);
       if (!command) return block('Command blocked by LYClaw policy: missing command');
       const cwd = readString(params.workdir) || readString(params.cwd);
@@ -163,7 +245,7 @@ function ensureLyclawCommandPolicyPluginInstalled(): void {
       },
       enabledByDefault: true,
       name: 'LYClaw Command Policy',
-      description: 'Preflights OpenClaw exec tool calls through the LYClaw command policy.',
+      description: 'Preflights OpenClaw exec and generated-file tool calls before execution.',
       configSchema: {
         type: 'object',
         additionalProperties: false,

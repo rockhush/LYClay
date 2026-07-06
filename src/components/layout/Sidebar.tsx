@@ -304,6 +304,7 @@ export function Sidebar() {
     const key = session.key;
     if (customSessionLabels[key]?.trim()) return true;
     if (sessionLabels[key]?.trim()) return true;
+    if (typeof sessionLastActivity[key] === 'number' && sessionLastActivity[key] > 0) return true;
     if (session.firstUserMessagePreview?.trim()) return true;
     if (session.label?.trim() && !isPlaceholderSessionTitle(session.label)) return true;
     if (session.displayName?.trim() && session.displayName !== key && !isPlaceholderSessionTitle(session.displayName)) {

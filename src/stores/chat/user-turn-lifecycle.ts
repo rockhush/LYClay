@@ -12,6 +12,7 @@ import type { RawMessage, SessionStreamingState } from './types';
 import {
   collectChildDelegationBindings,
   collectCompletedSubagentSessionKeys,
+  resolveCompletedChildSessionKeys,
 } from '@/lib/subagent-delegation';
 import { hasDelegationSpawnForActiveTurn, isParentDelegationPhaseOpen, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
 import { isGatewayIdleForSpawnedChildren } from '@/lib/subagent-delegation';
@@ -102,6 +103,7 @@ export type UserTurnActiveRunOptions = {
   streamingMessage?: unknown | null;
   /** When set, a persisted user-abort marker suppresses executing UI until backend idle. */
   sessionKey?: string;
+  completedChildSessionKeys?: ReadonlySet<string>;
 };
 
 export function hasLocalRunSignals(state: UserTurnUiSignals): boolean {
@@ -162,21 +164,19 @@ export function deriveIsExecuting(
   if (state.runAborted) return false;
   const messages = options?.messages ?? [];
   const processingKeys = options?.gatewayBackground?.processingSessionKeys ?? [];
+  const completedChildSessionKeys = options?.completedChildSessionKeys;
   if (messages.length > 0
     && isDelegationWrapUpComplete(messages, processingKeys, {
       lastUserMessageAt: options?.lastUserMessageAt,
-    })
-    && isGatewayIdleForSpawnedChildren(
-      backendActivity?.sessionKey ?? '',
-      messages,
-      processingKeys,
-    )) {
+      completedChildSessionKeys,
+    })) {
     return false;
   }
   if (options?.waitingOnSubagentDelegation) return true;
   if (messages.length > 0 && isParentDelegationPhaseOpen(messages, processingKeys, {
     lastUserMessageAt: options?.lastUserMessageAt,
     streamingMessage: options?.streamingMessage,
+    completedChildSessionKeys: options?.completedChildSessionKeys,
   })) {
     return true;
   }
@@ -193,6 +193,7 @@ export function deriveIsExecuting(
     lastUserMessageAt: options?.lastUserMessageAt ?? null,
     backendActivity,
     gatewayBackground: options?.gatewayBackground,
+    completedChildSessionKeys,
   })) {
     return false;
   }
@@ -337,6 +338,7 @@ export type CanClearUserTurnInput = {
   /** Wall-clock start while gateway is idle but transcript still blocks finalize. */
   finalizeGraceStartedAt?: number | null;
   nowMs?: number;
+  completedChildSessionKeys?: ReadonlySet<string>;
 };
 
 /** After parent terminal + gateway idle, release UI if transcript delegation never clears. */
@@ -359,11 +361,13 @@ export function hasTranscriptDelegationBlock(
   messages: RawMessage[],
   gatewayBackground?: GatewayBackgroundActivity | null,
   lastUserMessageAt?: number | null,
+  completedChildSessionKeys?: ReadonlySet<string>,
 ): boolean {
+  const completed = completedChildSessionKeys ?? resolveCompletedChildSessionKeys(messages);
   return isParentDelegationPhaseOpen(
     messages,
     gatewayBackground?.processingSessionKeys ?? [],
-    { lastUserMessageAt },
+    { lastUserMessageAt, completedChildSessionKeys: completed },
   );
 }
 
@@ -389,15 +393,19 @@ export function hasOpenDelegatedBackendWork(
   options?: {
     lastUserMessageAt?: number | null;
     streamingMessage?: unknown | null;
+    completedChildSessionKeys?: ReadonlySet<string>;
   },
 ): boolean {
   if (hasOpenBackendWorkForUserTurn(gatewayBackground, backendActivity, messages)) return true;
+  const completedChildSessionKeys = options?.completedChildSessionKeys
+    ?? resolveCompletedChildSessionKeys(messages);
   return isParentDelegationPhaseOpen(
     messages,
     gatewayBackground?.processingSessionKeys ?? [],
     {
       lastUserMessageAt: options?.lastUserMessageAt,
       streamingMessage: options?.streamingMessage,
+      completedChildSessionKeys,
     },
   );
 }
@@ -439,12 +447,36 @@ export function canForceClearOnVisibleCommittedReply(input: CanClearUserTurnInpu
 
   const sessionKey = input.backendActivity?.sessionKey;
   const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
-  if (sessionKey && processingKeys.includes(sessionKey)) return false;
+  const completedChildSessionKeys = input.completedChildSessionKeys
+    ?? resolveCompletedChildSessionKeys(input.messages);
+  const wrapUpComplete = isDelegationWrapUpComplete(
+    input.messages,
+    processingKeys,
+    { lastUserMessageAt: input.lastUserMessageAt, completedChildSessionKeys },
+  );
+  if (wrapUpComplete) {
+    return true;
+  }
+
+  if (sessionKey && processingKeys.includes(sessionKey)) {
+    // Lagging processingSessionKeys after a visible terminal reply is common when
+    // hopping between sessions. Trust the transcript unless delegation is still open.
+    if (hasTranscriptDelegationBlock(
+      input.messages,
+      input.gatewayBackground,
+      input.lastUserMessageAt,
+      completedChildSessionKeys,
+    )) {
+      return false;
+    }
+    return true;
+  }
 
   if (hasTranscriptDelegationBlock(
     input.messages,
     input.gatewayBackground,
     input.lastUserMessageAt,
+    completedChildSessionKeys,
   )) {
     return false;
   }
@@ -459,6 +491,7 @@ export function sanitizeLeavingSessionStreamingSnapshot(
     sessionKey: string;
     backendActivity?: SessionBackendActivity | null;
     gatewayBackground?: GatewayBackgroundActivity | null;
+    announcedChildSessionKeys?: readonly string[];
   },
 ): SessionStreamingState {
   if (snapshot.runAborted) return snapshot;
@@ -477,11 +510,17 @@ export function sanitizeLeavingSessionStreamingSnapshot(
       activeRunIds: [],
     };
 
+  const completedChildSessionKeys = resolveCompletedChildSessionKeys(
+    messages,
+    options.announcedChildSessionKeys,
+  );
+
   if (!canForceClearOnVisibleCommittedReply({
     messages,
     lastUserMessageAt: snapshot.lastUserMessageAt,
     backendActivity,
     gatewayBackground: options.gatewayBackground ?? null,
+    completedChildSessionKeys,
   })) {
     return snapshot;
   }
@@ -510,10 +549,13 @@ export function canClearUserTurnNow(input: CanClearUserTurnInput): boolean {
     return false;
   }
 
+  const completedChildSessionKeys = input.completedChildSessionKeys
+    ?? resolveCompletedChildSessionKeys(input.messages);
   const transcriptBlocked = hasTranscriptDelegationBlock(
     input.messages,
     input.gatewayBackground,
     input.lastUserMessageAt,
+    completedChildSessionKeys,
   );
   if (transcriptBlocked) {
     const graceStartedAt = input.finalizeGraceStartedAt;
@@ -614,6 +656,22 @@ export function buildReAdoptRunPatch(
   const processingKeys = gatewayBackground?.processingSessionKeys ?? [];
   if (isDelegationWrapUpComplete(messages, processingKeys, {
     lastUserMessageAt: state.lastUserMessageAt,
+  })) {
+    return null;
+  }
+  if (messages.length > 0 && canForceClearOnVisibleCommittedReply({
+    messages,
+    lastUserMessageAt: state.lastUserMessageAt ?? null,
+    backendActivity: backendActivity?.sessionKey === sessionKey
+      ? backendActivity
+      : {
+        sessionKey,
+        status: null,
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+    gatewayBackground,
   })) {
     return null;
   }
