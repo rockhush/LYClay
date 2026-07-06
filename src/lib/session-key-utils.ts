@@ -1,4 +1,5 @@
 import type { ChatSession } from '@/stores/chat';
+import { isCronSessionKey } from '@/stores/chat/cron-session-utils';
 
 /** OpenClaw heartbeat / cron lane uses agent:<agentId>:main. */
 export function isHeartbeatSessionKey(sessionKey: string | undefined | null): boolean {
@@ -57,7 +58,9 @@ export function isChannelMirrorSessionKey(sessionKey: string | undefined | null)
     && lowerParts[3] === 'group';
 }
 export function isUserFacingSessionKey(sessionKey: string | undefined | null): boolean {
-  return !isSubagentSessionKey(sessionKey) && !isChannelMirrorSessionKey(sessionKey);
+  return !isSubagentSessionKey(sessionKey)
+    && !isChannelMirrorSessionKey(sessionKey)
+    && !isCronSessionKey(sessionKey ?? '');
 }
 
 export function filterUserFacingSessions(sessions: ChatSession[]): ChatSession[] {

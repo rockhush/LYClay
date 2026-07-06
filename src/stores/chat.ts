@@ -138,6 +138,7 @@ import {
   isSubagentSessionKey,
   filterUserFacingSessions,
   pickUserFacingSession,
+  isUserFacingSessionKey,
 } from '@/lib/session-key-utils';
 import { isEmptyChatScratchpad } from '@/lib/chat-scratchpad';
 import {
@@ -2503,7 +2504,7 @@ async function loadLocalSessionSummariesForAgentIds(agentIds: string[]): Promise
       mergedByKey.set(session.key, session);
     }
   }
-  return [...mergedByKey.values()];
+  return filterUserFacingSessions([...mergedByKey.values()]);
 }
 
 function mergeSessionSummariesWithLocalPreviews(
@@ -3513,7 +3514,7 @@ function mergePreservedSessionsIntoGatewayList(
   const out: ChatSession[] = [...dedupedSessions];
 
   const addIfMissing = (key: string, displayName?: string) => {
-    if (!key || keys.has(key)) return;
+    if (!key || keys.has(key) || !isUserFacingSessionKey(key)) return;
     keys.add(key);
     out.push({
       key,
@@ -3526,7 +3527,7 @@ function mergePreservedSessionsIntoGatewayList(
   }
 
   for (const s of prevSessions) {
-    if (keys.has(s.key)) continue;
+    if (keys.has(s.key) || !isUserFacingSessionKey(s.key)) continue;
     if (sessionLabels[s.key] || sessionLastActivity[s.key] || sessionWorkspaceIds[s.key]) {
       addIfMissing(s.key, s.displayName);
     }

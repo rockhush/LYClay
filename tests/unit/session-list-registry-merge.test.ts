@@ -52,4 +52,13 @@ describe('session-list-registry-merge', () => {
     });
     expect(merged.map((session) => session.key)).toEqual(['agent:main:session-c']);
   });
+
+  it('does not union internal scheduled-task registry rows', () => {
+    const gateway: ChatSession[] = [{ key: 'agent:main:session-a', label: 'A' }];
+    const local: ChatSession[] = [
+      { key: 'agent:main:scheduled-task:job-1:run-abc', firstUserMessagePreview: 'cron run' },
+    ];
+    const merged = unionGatewaySessionsWithLocalRegistry(gateway, local, emptyCtx);
+    expect(merged.map((session) => session.key)).toEqual(['agent:main:session-a']);
+  });
 });
