@@ -48,6 +48,8 @@ interface ChatMessageProps {
   }>;
   onEditMessage?: (text: string) => void;
   showEditButton?: boolean;
+  /** Render assistant text with DingTalk card styling (streaming or tagged messages). */
+  dingtalkCard?: boolean;
 }
 
 interface ExtractedImage { url?: string; data?: string; mimeType: string; }
@@ -119,6 +121,7 @@ export const ChatMessage = memo(function ChatMessage({
   streamingTools = [],
   onEditMessage,
   showEditButton = true,
+  dingtalkCard = false,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const role = typeof message.role === 'string' ? message.role.toLowerCase() : '';
@@ -130,6 +133,7 @@ export const ChatMessage = memo(function ChatMessage({
   // original content without surfacing the bubble.
   const hideAssistantText = suppressAssistantText && !isUser;
   const hasText = !hideAssistantText && text.trim().length > 0;
+  const renderAssistantAsDingtalkCard = !isUser && (dingtalkCard || Boolean(message._dingtalkCard));
   const images = extractImages(message);
   const tools = extractToolUse(message);
   const visibleTools = suppressToolCards
@@ -260,6 +264,7 @@ export const ChatMessage = memo(function ChatMessage({
             text={text}
             isUser={isUser}
             isStreaming={isStreaming}
+            dingtalkCard={renderAssistantAsDingtalkCard}
           />
         )}
 
@@ -474,11 +479,29 @@ function MessageBubble({
   text,
   isUser,
   isStreaming,
+  dingtalkCard = false,
 }: {
   text: string;
   isUser: boolean;
   isStreaming: boolean;
+  dingtalkCard?: boolean;
 }) {
+  if (!isUser && dingtalkCard) {
+    return (
+      <div
+        className="w-full max-w-full overflow-hidden rounded-xl border border-[#0089FF]/20 bg-white shadow-sm dark:border-white/10 dark:bg-card"
+        data-testid="dingtalk-card-bubble"
+      >
+        <div className="flex min-w-0">
+          <div className="w-1 shrink-0 rounded-l-xl bg-[#0089FF]" aria-hidden="true" />
+          <div className="min-w-0 flex-1 px-4 py-3 text-[#0B0B0B] dark:text-foreground">
+            <AssistantMarkdownContent text={text} isStreaming={isStreaming} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -493,50 +516,62 @@ function MessageBubble({
       {isUser ? (
         <p className="whitespace-pre-wrap break-words overflow-wrap-anywhere text-sm max-w-full">{text}</p>
       ) : (
-        <div className="prose prose-sm dark:prose-invert max-w-none overflow-wrap-anywhere text-sm [&_strong]:font-semibold [&_b]:font-semibold">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, output: 'html' }]]}
-            components={{
-              strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-              b: ({ children }) => <b className="font-semibold">{children}</b>,
-              code({ className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || '');
-                const isInline = !match && !className;
-                if (isInline) {
-                  return (
-                    <code className="bg-background/50 px-1.5 py-0.5 rounded text-sm font-mono overflow-wrap-anywhere max-w-full" {...props}>
-                      {children}
-                    </code>
-                  );
-                }
-                return (
-                  <pre className="bg-background/50 rounded-lg p-4 whitespace-pre-wrap overflow-x-auto overflow-wrap-anywhere max-w-full">
-                    <code className={cn('text-sm font-mono', className)} {...props}>
-                      {children}
-                    </code>
-                  </pre>
-                );
-              },
-              a({ href, children }) {
-                return (
-                  <MessageLink href={href}>{children}</MessageLink>
-                );
-              },
-              p: ({ children }) => (
-                <p className="max-w-full">{children}</p>
-              ),
-            }}
-            urlTransform={transformMessageUrl}
-          >
-            {linkifyDingTalkDeepLinks(normalizeLatexDelimiters(text))}
-          </ReactMarkdown>
-          {isStreaming && (
-            <span className="inline-block w-2 h-4 bg-foreground/50 animate-pulse ml-0.5" />
-          )}
-        </div>
+        <AssistantMarkdownContent text={text} isStreaming={isStreaming} />
       )}
 
+    </div>
+  );
+}
+
+function AssistantMarkdownContent({
+  text,
+  isStreaming,
+}: {
+  text: string;
+  isStreaming: boolean;
+}) {
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none overflow-wrap-anywhere text-sm [&_strong]:font-semibold [&_b]:font-semibold">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, output: 'html' }]]}
+        components={{
+          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+          b: ({ children }) => <b className="font-semibold">{children}</b>,
+          code({ className, children, ...props }) {
+            const match = /language-(\w+)/.exec(className || '');
+            const isInline = !match && !className;
+            if (isInline) {
+              return (
+                <code className="bg-background/50 px-1.5 py-0.5 rounded text-sm font-mono overflow-wrap-anywhere max-w-full" {...props}>
+                  {children}
+                </code>
+              );
+            }
+            return (
+              <pre className="bg-background/50 rounded-lg p-4 whitespace-pre-wrap overflow-x-auto overflow-wrap-anywhere max-w-full">
+                <code className={cn('text-sm font-mono', className)} {...props}>
+                  {children}
+                </code>
+              </pre>
+            );
+          },
+          a({ href, children }) {
+            return (
+              <MessageLink href={href}>{children}</MessageLink>
+            );
+          },
+          p: ({ children }) => (
+            <p className="max-w-full">{children}</p>
+          ),
+        }}
+        urlTransform={transformMessageUrl}
+      >
+        {linkifyDingTalkDeepLinks(normalizeLatexDelimiters(text))}
+      </ReactMarkdown>
+      {isStreaming && (
+        <span className="inline-block w-2 h-4 bg-foreground/50 animate-pulse ml-0.5" />
+      )}
     </div>
   );
 }

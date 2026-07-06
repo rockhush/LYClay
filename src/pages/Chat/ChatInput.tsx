@@ -8,6 +8,7 @@
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { SendHorizontal, Square, X, Paperclip, FileText, Film, Music, FileArchive, File, Loader2, AtSign, Zap, Brain, Sparkles, Check, Puzzle, Upload, ChevronDown, Search, ShieldAlert } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { WorkspacePicker } from '@/components/workspace/WorkspacePicker';
@@ -243,6 +244,8 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   const newSession = useChatStore((s) => s.newSession);
   const reasoningMode = useChatStore((s) => s.reasoningMode);
   const setReasoningMode = useChatStore((s) => s.setReasoningMode);
+  const dingtalkCardEnabled = useChatStore((s) => s.dingtalkCardEnabled);
+  const setDingtalkCardEnabled = useChatStore((s) => s.setDingtalkCardEnabled);
   const reasoningOptions = useMemo(
     () => [
       {
@@ -1118,6 +1121,22 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
             )}
 
             <ModelPicker disabled={disabled || sending} />
+
+            <div
+              className="flex shrink-0 items-center gap-1.5"
+              data-testid="chat-composer-dingtalk-card"
+            >
+              <Switch
+                checked={dingtalkCardEnabled}
+                onCheckedChange={setDingtalkCardEnabled}
+                disabled={disabled || sending}
+                size="sm"
+                aria-label={t('composer.dingtalkCard')}
+              />
+              <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">
+                {t('composer.dingtalkCard')}
+              </span>
+            </div>
 
             {/* Right cluster: send */}
             <div className="ml-auto flex items-center gap-1">

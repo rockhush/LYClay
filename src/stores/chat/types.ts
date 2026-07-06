@@ -28,6 +28,8 @@ export interface RawMessage {
   executedByAgentId?: string;
   /** Local-only: display name for the executing digital employee. */
   executedByAgentName?: string;
+  /** Local-only: render assistant reply with DingTalk card styling. */
+  _dingtalkCard?: boolean;
 }
 
 /** Content block inside a message */
@@ -318,6 +320,10 @@ export interface ChatState {
   reasoningMode: ReasoningMode;
   /** Per-session reasoning mode. When switching sessions, reasoningMode is restored from this map. */
   sessionReasoningModes: Record<string, ReasoningMode>;
+  /** When true, the next assistant reply in this session renders as a DingTalk card. */
+  dingtalkCardEnabled: boolean;
+  /** Run ids awaiting DingTalk card tagging, keyed by session. */
+  dingtalkCardPendingRunIds: Record<string, string>;
 
   // Actions
   loadSessions: (force?: boolean) => Promise<void>;
@@ -360,6 +366,7 @@ export interface ChatState {
   abortRun: () => Promise<void>;
   recoverCurrentSession: () => Promise<void>;
   setReasoningMode: (mode: ReasoningMode) => Promise<void>;
+  setDingtalkCardEnabled: (enabled: boolean) => void;
   setCurrentSessionModel: (model: string | null) => Promise<void>;
   handleChatEvent: (event: Record<string, unknown>) => void;
   handleGatewayRunCompleted: (runId?: string | null, sessionKey?: string | null) => void;

@@ -196,6 +196,7 @@ export function Chat() {
   const loading = useChatStore((s) => s.loading);
   const sending = useChatStore((s) => s.sending);
   const activeRunId = useChatStore((s) => s.activeRunId);
+  const dingtalkCardPendingRunIds = useChatStore((s) => s.dingtalkCardPendingRunIds);
   const announcedChildSessionKeys = useChatStore((s) => s.announcedChildSessionKeys);
   const error = useChatStore((s) => s.error);
   const runError = useChatStore((s) => s.runError);
@@ -561,6 +562,9 @@ export function Chat() {
   const hasStreamToolStatus = streamingTools.length > 0;
   const hasRunningStreamToolStatus = streamingTools.some((tool) => tool.status === 'running');
   const shouldRenderStreaming = sending && (hasStreamText || hasStreamTools || hasStreamImages || hasStreamToolStatus);
+  const dingtalkCardStreaming = Boolean(
+    activeRunId && dingtalkCardPendingRunIds[currentSessionKey] === activeRunId,
+  );
   const hasAnyStreamContent = hasStreamText || hasStreamThinking || hasStreamTools || hasStreamImages || hasStreamToolStatus;
 
   const showFirstResponseProgress = isFirstResponsePreparing({
@@ -1414,6 +1418,7 @@ export function Chat() {
                       })()}
                       textOverride={streamingReplyText ?? undefined}
                       isStreaming
+                      dingtalkCard={dingtalkCardStreaming}
                       streamingTools={streamingReplyText != null ? [] : streamingTools}
                     />
                   )}
