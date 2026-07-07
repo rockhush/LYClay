@@ -20,6 +20,7 @@ import {
     toOpenClawChannelType,
 } from './channel-alias';
 import { ensureOpenClawAgentDefaults, ensureOpenClawSessionDefaults, type OpenClawDmScope } from './openclaw-config-defaults';
+import { applyDingTalkCardTemplateDefaults, HIDDEN_DINGTALK_CARD_STATUS_LINE, resolveConfiguredDingTalkCardTemplateId } from './dingtalk-card-template';
 
 const OPENCLAW_DIR = join(homedir(), '.openclaw');
 const CONFIG_FILE = join(OPENCLAW_DIR, 'openclaw.json');
@@ -407,7 +408,7 @@ export async function writeOpenClawConfig(config: OpenClawConfig): Promise<void>
     await ensureConfigDir();
 
     try {
-        applyDingTalkMarkdownTableDefault(config);
+        applyDingTalkChannelDefaults(config);
 
         // Enable graceful in-process reload authorization for SIGUSR1 flows.
         const commands =
@@ -430,7 +431,7 @@ export async function writeOpenClawConfig(config: OpenClawConfig): Promise<void>
 
 // ── Channel operations ───────────────────────────────────────────
 
-function applyDingTalkMarkdownTableDefault(config: OpenClawConfig): void {
+function applyDingTalkChannelDefaults(config: OpenClawConfig): void {
     const dingtalk = config.channels?.dingtalk;
     if (!dingtalk || typeof dingtalk !== 'object') return;
 
@@ -438,10 +439,13 @@ function applyDingTalkMarkdownTableDefault(config: OpenClawConfig): void {
         dingtalk.convertMarkdownTables = false;
     }
 
+    applyDingTalkCardTemplateDefaults(dingtalk as Record<string, unknown>);
+
     const accounts = getChannelAccountsMap(dingtalk);
     if (!accounts) return;
     for (const account of Object.values(accounts)) {
-        if (account && typeof account === 'object' && account.convertMarkdownTables === undefined) {
+        if (!account || typeof account !== 'object') continue;
+        if (account.convertMarkdownTables === undefined) {
             account.convertMarkdownTables = false;
         }
     }
@@ -665,6 +669,7 @@ function transformChannelConfig(
         delete transformedConfig.robotCode;
         delete transformedConfig.corpId;
         delete transformedConfig.agentId;
+        delete transformedConfig.enableCard;
     }
 
     return transformedConfig;
@@ -769,13 +774,41 @@ function assertNoDuplicateCredential(
 }
 
 function applyChannelPersistenceDefaults(channelType: string, config: ChannelConfigData): ChannelConfigData {
-    if (channelType !== 'dingtalk' || config.convertMarkdownTables !== undefined) {
+    if (channelType !== 'dingtalk') {
         return config;
     }
-    return {
-        ...config,
-        convertMarkdownTables: false,
-    };
+    const next: ChannelConfigData = { ...config };
+    if (next.convertMarkdownTables === undefined) {
+        next.convertMarkdownTables = false;
+    }
+
+    const messageType = resolveDingTalkMessageTypeFromForm(next);
+    next.messageType = messageType;
+    delete next.enableCard;
+
+    if (messageType === 'card') {
+        if (next.cardTemplateId === undefined) {
+            next.cardTemplateId = resolveConfiguredDingTalkCardTemplateId();
+        }
+        if (next.cardStatusLine === undefined) {
+            next.cardStatusLine = { ...HIDDEN_DINGTALK_CARD_STATUS_LINE };
+        }
+    }
+    return next;
+}
+
+function resolveDingTalkMessageTypeFromForm(config: ChannelConfigData): 'card' | 'markdown' {
+    const enableCard = config.enableCard;
+    if (enableCard === 'false' || enableCard === '0') {
+        return 'markdown';
+    }
+    if (enableCard === 'true' || enableCard === '1') {
+        return 'card';
+    }
+    if (config.messageType === 'markdown') {
+        return 'markdown';
+    }
+    return 'card';
 }
 
 export async function saveChannelConfig(
@@ -934,6 +967,13 @@ function extractFormValues(channelType: string, saved: ChannelConfigData): Recor
                 values[key] = value;
             }
         }
+    } else if (channelType === 'dingtalk') {
+        for (const [key, value] of Object.entries(saved)) {
+            if (typeof value === 'string' && key !== 'enabled' && key !== 'messageType' && key !== 'cardTemplateId') {
+                values[key] = value;
+            }
+        }
+        values.enableCard = saved.messageType === 'markdown' ? 'false' : 'true';
     } else {
         for (const [key, value] of Object.entries(saved)) {
             if (typeof value === 'string' && key !== 'enabled') {

@@ -6,10 +6,22 @@ export type SkillCapability = string;
 export type PromptScanSource = 'skill' | 'memory' | 'mcp' | 'knowledge' | 'transcript' | 'attachment' | 'unknown';
 
 export type SecurityRisk = 'low' | 'medium' | 'high' | 'critical';
+export type SecurityMode = 'standard' | 'trusted' | 'off';
+
+export interface SecurityModeOverride {
+  mode: SecurityMode;
+  originalAction: 'allow' | 'prompt' | 'deny';
+  effectiveAction: 'allow' | 'prompt' | 'deny';
+  originalRisk: SecurityRisk;
+  originalCode?: string;
+  hardDeny: boolean;
+}
 
 export interface SecurityDecisionBase {
   risk: SecurityRisk;
   reasons: string[];
+  hardDeny?: boolean;
+  modeOverride?: SecurityModeOverride;
 }
 
 export interface SecurityAllowDecision extends SecurityDecisionBase {
@@ -155,6 +167,7 @@ export interface CommandSegmentDecision {
   reasons: string[];
   matchedRules: string[];
   code?: string;
+  hardDeny?: boolean;
 }
 
 export interface CommandPolicyResult {

@@ -4,6 +4,7 @@ import { evaluateOpenTargetPolicy } from './open-target-policy';
 import { evaluatePathPolicy } from './path-policy';
 import { evaluatePromptInjectionPolicy } from './prompt-injection-policy';
 import { auditPolicyDecision } from './audit-log';
+import { applyCurrentSecurityModeToDecision } from './security-mode';
 import type { SecurityDecision, SecurityPolicyRequest, SecurityPolicyResult } from './types';
 
 function errorCodeForDecision(kind: SecurityPolicyRequest['kind'], decision: SecurityDecision): string {
@@ -73,6 +74,19 @@ export async function evaluateSecurityPolicy(request: SecurityPolicyRequest): Pr
       const exhaustive: never = request;
       throw new Error(`Unsupported security policy request: ${JSON.stringify(exhaustive)}`);
     }
+  }
+  policyResult = {
+    ...policyResult,
+    decision: await applyCurrentSecurityModeToDecision(policyResult.decision),
+  } as SecurityPolicyResult;
+  if ('result' in policyResult && policyResult.result && typeof policyResult.result === 'object' && 'decision' in policyResult.result) {
+    policyResult = {
+      ...policyResult,
+      result: {
+        ...policyResult.result,
+        decision: policyResult.decision,
+      },
+    } as SecurityPolicyResult;
   }
   auditPolicyDecision(request, policyResult);
   return policyResult;

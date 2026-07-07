@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { evaluatePathPolicy } from './path-policy';
+import { applyCurrentSecurityModeToDecision } from './security-mode';
 import type {
   CommandPolicyRequest,
   CommandPolicyResult,
@@ -17,8 +18,8 @@ function prompt(reasons: string[], risk: SecurityRisk = 'medium', promptLevel: '
   return { action: 'prompt', risk, reasons, promptLevel, allowRememberChoice: true };
 }
 
-function deny(code: string, reasons: string[], risk: SecurityRisk = 'high'): SecurityDecision {
-  return { action: 'deny', risk, reasons, code };
+function deny(code: string, reasons: string[], risk: SecurityRisk = 'high', hardDeny = false): SecurityDecision {
+  return { action: 'deny', risk, reasons, code, ...(hardDeny ? { hardDeny: true } : {}) };
 }
 
 function shellQuote(value: string): string {
@@ -253,10 +254,13 @@ function classifySegment(segment: string): CommandSegmentDecision {
   let risk: SecurityRisk = 'low';
   let code: string | undefined;
 
-  const setDeny = (nextCode: string, reason: string, nextRisk: SecurityRisk = 'critical', rule = nextCode) => {
+  const setDeny = (nextCode: string, reason: string, nextRisk: SecurityRisk = 'critical', rule = nextCode, hardDeny = nextRisk === 'critical') => {
     action = 'deny';
     risk = nextRisk;
     code = nextCode;
+    if (hardDeny) {
+      matchedRules.push('hard-deny');
+    }
     reasons.push(reason);
     matchedRules.push(rule);
   };
@@ -278,18 +282,18 @@ function classifySegment(segment: string): CommandSegmentDecision {
   }
 
   if (/\bexecutionpolicy\s+bypass\b/i.test(segment) || /\b(encodedcommand|enc)\b/i.test(segment)) {
-    setDeny('POWERSHELL_POLICY_BYPASS', 'PowerShell policy bypass or encoded command is blocked', 'critical', 'powershell-policy-bypass');
+    setDeny('POWERSHELL_POLICY_BYPASS', 'PowerShell policy bypass or encoded command is blocked', 'critical', 'powershell-policy-bypass', true);
   }
 
   if (/\b(rm|remove-item)\b[\s\S]*\b(-rf|-fr|-recurse)\b[\s\S]*(?:^|\s|["'])(\/|[a-z]:\\?)(?:\s|["']|$)/i.test(segment)
     || ((exe === 'rm' || exe === 'remove-item')
       && tokens.some((token) => /^-(?:[a-z]*r[a-z]*f?|recurse)$/i.test(token))
       && tokens.some((token) => token === '/' || /^[A-Za-z]:\\?$/.test(token)))) {
-    setDeny('DESTRUCTIVE_ROOT_DELETE', 'Deleting a filesystem root is blocked', 'critical', 'destructive-root-delete');
+    setDeny('DESTRUCTIVE_ROOT_DELETE', 'Deleting a filesystem root is blocked', 'critical', 'destructive-root-delete', true);
   }
 
   if (/\bchmod\b[\s\S]*\b-r\b[\s\S]*\b777\b[\s\S]*(?:^|\s|["'])\/(?:\s|["']|$)/i.test(segment)) {
-    setDeny('DANGEROUS_ROOT_CHMOD', 'Recursive chmod 777 on the filesystem root is blocked', 'critical', 'dangerous-root-chmod');
+    setDeny('DANGEROUS_ROOT_CHMOD', 'Recursive chmod 777 on the filesystem root is blocked', 'critical', 'dangerous-root-chmod', true);
   }
 
   if (action !== 'deny') {
@@ -340,6 +344,7 @@ function classifyWholeCommand(command: string): CommandSegmentDecision[] {
       reasons: ['Downloading a remote script and executing it is blocked'],
       matchedRules: ['remote-script-pipe'],
       code: 'REMOTE_SCRIPT_PIPE',
+      hardDeny: true,
     });
   }
   if (/\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[\s\S]*\|[\s\S]*\b(iex|invoke-expression)\b/i.test(command)) {
@@ -350,6 +355,7 @@ function classifyWholeCommand(command: string): CommandSegmentDecision[] {
       reasons: ['PowerShell download-and-execute is blocked'],
       matchedRules: ['powershell-remote-execution'],
       code: 'POWERSHELL_REMOTE_EXECUTION',
+      hardDeny: true,
     });
   }
   return segments;
@@ -374,6 +380,7 @@ type CommandPathAccess = {
   path: string;
   capability: FileCapability;
   matchedRule: string;
+  promptOnOutside?: boolean;
   promptOnAllow?: boolean;
   promptReason?: string;
   promptRisk?: SecurityRisk;
@@ -408,6 +415,26 @@ function firstCommandArgumentPath(tokens: string[]): string | undefined {
   return commandArgumentPaths(tokens)[0];
 }
 
+function isRiskyDeleteTarget(token: string): boolean {
+  const normalized = stripQuotes(token).trim().replace(/\\/g, '/');
+  if (!normalized) return false;
+  if (normalized === '/' || /^[A-Za-z]:\/?$/.test(normalized)) return true;
+  if (/[*?]/.test(normalized)) return true;
+
+  const cleaned = normalized.replace(/\/+$/, '');
+  const lowerBase = cleaned.slice(cleaned.lastIndexOf('/') + 1).toLowerCase();
+  return new Set([
+    '.git',
+    '.ssh',
+    '.env',
+    'package.json',
+    'pnpm-lock.yaml',
+    'yarn.lock',
+    'package-lock.json',
+    'skill.md',
+  ]).has(lowerBase);
+}
+
 function uniqueAccesses(accesses: CommandPathAccess[]): CommandPathAccess[] {
   const seen = new Set<string>();
   return accesses.filter((access) => {
@@ -440,8 +467,11 @@ function segmentPathAccesses(segment: string): CommandPathAccess[] {
       path: token,
       capability: 'delete' as const,
       matchedRule: 'command-path-delete',
-      promptOnAllow: true,
-      promptReason: 'Deleting local files requires confirmation',
+      promptOnOutside: true,
+      promptOnAllow: isRiskyDeleteTarget(token),
+      promptReason: isRiskyDeleteTarget(token)
+        ? 'Deleting important, root, or wildcard paths requires confirmation'
+        : 'Deleting files outside the workspace requires confirmation',
       promptRisk: 'high' as const,
     })));
   }
@@ -454,8 +484,8 @@ function segmentPathAccesses(segment: string): CommandPathAccess[] {
       path: token,
       capability: 'write' as const,
       matchedRule: 'command-path-write',
-      promptOnAllow: true,
-      promptReason: 'Writing local files from a command requires confirmation',
+      promptOnOutside: true,
+      promptReason: 'Writing files outside the workspace requires confirmation',
       promptRisk: 'medium' as const,
     })));
   }
@@ -493,8 +523,8 @@ function redirectionPathAccesses(command: string): CommandPathAccess[] {
       path: target,
       capability: redirect.capability,
       matchedRule: redirect.capability === 'write' ? 'command-path-write' : 'command-path-read',
-      promptOnAllow: redirect.capability === 'write',
-      promptReason: redirect.capability === 'write' ? 'Writing local files from command redirection requires confirmation' : undefined,
+      promptOnOutside: redirect.capability === 'write',
+      promptReason: redirect.capability === 'write' ? 'Writing files outside the workspace from command redirection requires confirmation' : undefined,
       promptRisk: redirect.capability === 'write' ? 'medium' : undefined,
     });
   }
@@ -536,7 +566,7 @@ async function applySinglePathAccess(
   if (result.decision.action === 'deny') {
     // For delete/write operations on paths outside workspace that aren't sensitive,
     // promote to prompt so the user can confirm before proceeding.
-    if (access.promptOnAllow && result.decision.code === 'PATH_OUTSIDE_AUTHORIZED_ROOTS') {
+    if ((access.promptOnAllow || access.promptOnOutside) && result.decision.code === 'PATH_OUTSIDE_AUTHORIZED_ROOTS') {
       return promoteToPrompt(
         decision,
         access.promptReason ?? 'File operation outside the workspace requires confirmation',
@@ -554,12 +584,25 @@ async function applySinglePathAccess(
       );
     }
 
+    if (access.capability === 'delete' && access.promptOnAllow && result.decision.code === 'CAPABILITY_NOT_ALLOWED') {
+      return promoteToPrompt(
+        decision,
+        access.promptReason ?? 'Deleting important, root, or wildcard paths requires confirmation',
+        access.promptRisk ?? 'high',
+        access.matchedRule,
+      );
+    }
+
     return {
       ...decision,
       action: 'deny',
       risk: mergeRisk(decision.risk, result.decision.risk),
       reasons: [...decision.reasons, ...result.decision.reasons],
-      matchedRules: [...decision.matchedRules, access.matchedRule],
+      matchedRules: [
+        ...decision.matchedRules,
+        access.matchedRule,
+        ...(result.decision.hardDeny ? ['hard-deny'] : []),
+      ],
       code: result.decision.code,
     };
   }
@@ -634,7 +677,7 @@ export async function evaluateCommandPolicy(request: CommandPolicyRequest): Prom
         action: 'deny',
         risk: cwdResult.decision.risk,
         reasons: cwdResult.decision.reasons,
-        matchedRules: ['cwd-path-policy'],
+        matchedRules: ['cwd-path-policy', ...(cwdResult.decision.hardDeny ? ['hard-deny'] : [])],
         code: cwdResult.decision.code,
       });
     }
@@ -646,7 +689,12 @@ export async function evaluateCommandPolicy(request: CommandPolicyRequest): Prom
       command,
       cwd: request.cwd,
       segments,
-      decision: deny(denySegment.code ?? 'COMMAND_DENIED', denySegment.reasons, denySegment.risk),
+      decision: deny(
+        denySegment.code ?? 'COMMAND_DENIED',
+        denySegment.reasons,
+        denySegment.risk,
+        denySegment.matchedRules.includes('hard-deny') || denySegment.risk === 'critical',
+      ),
     };
   }
 
@@ -679,7 +727,11 @@ export async function evaluateCommandPolicy(request: CommandPolicyRequest): Prom
 }
 
 export async function assertCommandAllowed(request: CommandPolicyRequest): Promise<CommandPolicyResult> {
-  const result = await evaluateCommandPolicy(request);
+  const rawResult = await evaluateCommandPolicy(request);
+  const result = {
+    ...rawResult,
+    decision: await applyCurrentSecurityModeToDecision(rawResult.decision),
+  };
   if (result.decision.action !== 'allow') {
     const error = new Error(result.decision.reasons.join('; '));
     (error as Error & { code?: string; decision?: SecurityDecision }).code =

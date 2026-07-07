@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 
 type FileCapability = 'metadata' | 'read' | 'write' | 'delete' | 'execute' | 'stage' | 'open';
 type NetworkCapability = 'connect';
+type SecurityMode = 'standard' | 'trusted' | 'off';
 
 type PathGrant = {
   id: string;
@@ -87,6 +88,11 @@ type SecurityAuditEvent = {
   metadata?: Record<string, unknown>;
 };
 
+type SecurityModeResponse = {
+  success: boolean;
+  mode: SecurityMode;
+};
+
 type SecurityAuditResponse = {
   success: boolean;
   events: SecurityAuditEvent[];
@@ -95,6 +101,22 @@ type SecurityAuditResponse = {
   pageSize: number;
   totalPages: number;
 };
+
+
+const SECURITY_MODE_COPY = {
+  title: '\u5b89\u5168\u6a21\u5f0f',
+  summary: '\u5168\u5c40\u63a7\u5236\u5b89\u5168\u786e\u8ba4\u3002\u4e0d\u53ef\u6062\u590d\u98ce\u9669\u7684\u786c\u62e6\u622a\u59cb\u7ec8\u4fdd\u7559\u3002',
+  loadError: '\u52a0\u8f7d\u5b89\u5168\u6a21\u5f0f\u5931\u8d25\uff1a',
+  updateSuccess: '\u5b89\u5168\u6a21\u5f0f\u5df2\u66f4\u65b0',
+  updateError: '\u66f4\u65b0\u5b89\u5168\u6a21\u5f0f\u5931\u8d25\uff1a',
+  offConfirm: '\u5173\u95ed\u666e\u901a\u5b89\u5168\u786e\u8ba4\u540e\uff0cLYClaw \u4f1a\u81ea\u52a8\u5141\u8bb8\u5927\u90e8\u5206\u6587\u4ef6\u3001\u547d\u4ee4\u3001\u7f51\u7edc\u548c\u6253\u5f00\u76ee\u6807\u8bf7\u6c42\u3002\u4e0d\u53ef\u6062\u590d\u7834\u574f\u3001\u51ed\u636e\u6cc4\u9732\u548c\u8fdc\u7a0b\u4ee3\u7801\u6267\u884c\u7b49\u786c\u62e6\u622a\u4ecd\u4f1a\u751f\u6548\u3002',
+} as const;
+
+const securityModeOptions: Array<{ value: SecurityMode; label: string; description: string }> = [
+  { value: 'standard', label: '\u6807\u51c6\u6a21\u5f0f', description: '\u542f\u7528\u5b89\u5168\u7b56\u7565\u548c\u5f39\u7a97\u786e\u8ba4\u3002' },
+  { value: 'trusted', label: '\u4fe1\u4efb\u6a21\u5f0f', description: '\u81ea\u52a8\u5141\u8bb8\u9700\u8981\u786e\u8ba4\u7684\u64cd\u4f5c\uff0c\u62d2\u7edd\u9879\u4ecd\u4fdd\u6301\u62e6\u622a\u3002' },
+  { value: 'off', label: '\u5173\u95ed\u786e\u8ba4', description: '\u81ea\u52a8\u5141\u8bb8\u5927\u90e8\u5206\u68c0\u67e5\uff0c\u4ec5\u4fdd\u7559\u9ad8\u5371\u786c\u62e6\u622a\u3002' },
+];
 
 const capabilityOptions: Array<{ value: 'all' | SecurityAuditCapability; label: string }> = [
   { value: 'all', label: '全部能力' },
@@ -189,6 +211,8 @@ export function SecuritySettings() {
   const [auditTotalPages, setAuditTotalPages] = useState(1);
   const [auditCapability, setAuditCapability] = useState<'all' | SecurityAuditCapability>('all');
   const [auditDecision, setAuditDecision] = useState<'all' | SecurityAuditDecision>('all');
+  const [securityMode, setSecurityMode] = useState<SecurityMode>('standard');
+  const [savingSecurityMode, setSavingSecurityMode] = useState(false);
 
   const sortedPathGrants = useMemo(
     () => [...pathGrants].sort((a, b) => b.createdAt - a.createdAt),
@@ -198,6 +222,41 @@ export function SecuritySettings() {
     () => [...domainGrants].sort((a, b) => b.createdAt - a.createdAt),
     [domainGrants],
   );
+
+
+  const loadSecurityMode = async () => {
+    try {
+      const result = await hostApiFetch<SecurityModeResponse>('/api/security/settings');
+      if (result.mode === 'standard' || result.mode === 'trusted' || result.mode === 'off') {
+        setSecurityMode(result.mode);
+      }
+    } catch (error) {
+      toast.error(`${SECURITY_MODE_COPY.loadError}${String(error)}`);
+    }
+  };
+
+  const saveSecurityMode = async (mode: SecurityMode) => {
+    if (mode === securityMode || savingSecurityMode) return;
+    if (mode === 'off') {
+      const confirmed = window.confirm(SECURITY_MODE_COPY.offConfirm);
+      if (!confirmed) return;
+    }
+    const previous = securityMode;
+    setSecurityMode(mode);
+    setSavingSecurityMode(true);
+    try {
+      await hostApiFetch<SecurityModeResponse>('/api/security/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ mode }),
+      });
+      toast.success(SECURITY_MODE_COPY.updateSuccess);
+    } catch (error) {
+      setSecurityMode(previous);
+      toast.error(`${SECURITY_MODE_COPY.updateError}${String(error)}`);
+    } finally {
+      setSavingSecurityMode(false);
+    }
+  };
 
   const loadGrants = async () => {
     setLoading(true);
@@ -236,6 +295,7 @@ export function SecuritySettings() {
   };
 
   useEffect(() => {
+    void loadSecurityMode();
     void loadGrants();
   }, []);
 
@@ -306,6 +366,36 @@ export function SecuritySettings() {
           刷新
         </Button>
       </div>
+
+
+      <section className="space-y-3 rounded-lg border bg-background p-4" data-testid="security-mode-section">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-base font-semibold">{SECURITY_MODE_COPY.title}</h2>
+          <p className="text-sm text-muted-foreground">{SECURITY_MODE_COPY.summary}</p>
+        </div>
+        <div className="grid gap-2 md:grid-cols-3" role="group" aria-label={SECURITY_MODE_COPY.title}>
+          {securityModeOptions.map((option) => {
+            const selected = securityMode === option.value;
+            return (
+              <Button
+                key={option.value}
+                type="button"
+                variant={selected ? 'default' : 'outline'}
+                className="h-auto justify-start px-3 py-3 text-left"
+                data-testid={`security-mode-${option.value}`}
+                aria-pressed={selected}
+                disabled={savingSecurityMode}
+                onClick={() => void saveSecurityMode(option.value)}
+              >
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="text-sm font-medium">{option.label}</span>
+                  <span className={`text-xs ${selected ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{option.description}</span>
+                </span>
+              </Button>
+            );
+          })}
+        </div>
+      </section>
 
       <Tabs defaultValue="grants" className="space-y-4">
         <TabsList>

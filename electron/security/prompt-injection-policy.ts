@@ -168,6 +168,7 @@ function denyDecision(matches: PromptScanRuleMatch[], risk: SecurityRisk): Secur
     risk,
     reasons: [...new Set(matches.map((match) => match.reason))],
     code: 'PROMPT_INJECTION_DETECTED',
+    ...(risk === 'critical' ? { hardDeny: true } : {}),
   };
 }
 

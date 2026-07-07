@@ -206,6 +206,10 @@
                 "clientSecret": {
                     "label": "客户端密码",
                     "placeholder": "您的应用密钥"
+                },
+                "enableCard": {
+                    "label": "开启卡片",
+                    "description": "开启后使用 AI 卡片回复；关闭后使用系统默认 Markdown 模式"
                 }
             },
             "instructions": [

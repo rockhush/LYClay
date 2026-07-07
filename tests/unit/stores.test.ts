@@ -42,7 +42,7 @@ describe('Settings Store', () => {
     expect(useSettingsStore.getState().sidebarCollapsed).toBe(true);
   });
   
-  it('should unlock dev mode', () => {
+  it('should keep developer mode disabled even when toggled on', () => {
     const invoke = vi.mocked(window.electron.ipcRenderer.invoke);
     invoke.mockResolvedValueOnce({
       ok: true,
@@ -56,7 +56,7 @@ describe('Settings Store', () => {
     const { setDevModeUnlocked } = useSettingsStore.getState();
     setDevModeUnlocked(true);
 
-    expect(useSettingsStore.getState().devModeUnlocked).toBe(true);
+    expect(useSettingsStore.getState().devModeUnlocked).toBe(false);
     expect(invoke).toHaveBeenCalledWith(
       'hostapi:fetch',
       expect.objectContaining({

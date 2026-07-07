@@ -14,9 +14,10 @@ expectedUserBehavior:
   - Shell output redirected to the platform null device is discarded without a file-write confirmation.
   - 读取命令访问 workspace 内普通文件时可继续放行。
   - 读取命令访问 workspace 外文件时会被拒绝。
-  - 命令写入 workspace 内普通文件时需要用户确认。
+  - 命令写入 workspace 内普通文件时可直接放行，不需要用户确认。
   - 命令写入 .env、.ssh 等敏感路径时直接拒绝。
-  - 删除 workspace 内普通文件时需要用户确认。
+  - 删除 workspace 内普通文件时可直接放行，不需要用户确认。
+  - 递归删除、通配符删除、根目录删除或关键文件删除仍需要确认或直接拦截。
   - 删除敏感路径时直接拒绝。
   - sanitizeOpenClawConfig 不写入当前 Gateway schema 不支持的 exec approval 字段，避免启动失败。
 requiredProfiles:

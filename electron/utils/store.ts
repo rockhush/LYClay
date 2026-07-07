@@ -6,6 +6,7 @@
 import { randomBytes } from 'crypto';
 import { app } from 'electron';
 import { resolveSupportedLanguage } from '../../shared/language';
+import type { SecurityMode } from '../security/types';
 
 // Lazy-load electron-store (ESM module)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -54,6 +55,7 @@ export interface AppSettings {
   startMinimized: boolean;
   launchAtStartup: boolean;
   telemetryEnabled: boolean;
+  securityMode: SecurityMode;
   machineId: string;
   hasReportedInstall: boolean;
 
@@ -193,6 +195,7 @@ function createDefaultSettings(): AppSettings {
     startMinimized: false,
     launchAtStartup: false,
     telemetryEnabled: false,
+    securityMode: 'standard',
     machineId: '',
     hasReportedInstall: false,
 
@@ -261,6 +264,9 @@ async function getSettingsStore() {
  */
 export async function getSetting<K extends keyof AppSettings>(key: K): Promise<AppSettings[K]> {
   const store = await getSettingsStore();
+  if (key === 'devModeUnlocked') {
+    return false as AppSettings[K];
+  }
   return store.get(key);
 }
 
@@ -272,6 +278,10 @@ export async function setSetting<K extends keyof AppSettings>(
   value: AppSettings[K]
 ): Promise<void> {
   const store = await getSettingsStore();
+  if (key === 'devModeUnlocked') {
+    store.set(key, false as AppSettings[K]);
+    return;
+  }
   store.set(key, value);
 }
 
@@ -280,7 +290,7 @@ export async function setSetting<K extends keyof AppSettings>(
  */
 export async function getAllSettings(): Promise<AppSettings> {
   const store = await getSettingsStore();
-  return store.store;
+  return { ...store.store, devModeUnlocked: false };
 }
 
 /**

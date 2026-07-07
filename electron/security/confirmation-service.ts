@@ -14,6 +14,7 @@ import {
   grantPathAccess,
 } from './permission-store';
 import { auditConfirmationDecision } from './audit-log';
+import { applyCurrentSecurityModeToDecision, getSecurityMode } from './security-mode';
 import {
   describeMcpServer,
   getMcpServerConfirmationReasons,
@@ -135,7 +136,11 @@ function openTargetFingerprint(request: OpenTargetRequest, result: OpenTargetPol
 }
 
 export async function assertNetworkAllowedWithConfirmation(request: NetworkPolicyRequest): Promise<NetworkPolicyResult> {
-  const result = await evaluateNetworkPolicy(request);
+  const rawResult = await evaluateNetworkPolicy(request);
+  const result = {
+    ...rawResult,
+    decision: await applyCurrentSecurityModeToDecision(rawResult.decision),
+  };
   if (result.decision.action === 'allow') return result;
   if (result.decision.action === 'deny') throw networkToError(result);
 
@@ -180,7 +185,11 @@ export async function assertNetworkAllowedWithConfirmation(request: NetworkPolic
 }
 
 export async function assertCommandAllowedWithConfirmation(request: CommandPolicyRequest): Promise<CommandPolicyResult> {
-  const result = await evaluateCommandPolicy(request);
+  const rawResult = await evaluateCommandPolicy(request);
+  const result = {
+    ...rawResult,
+    decision: await applyCurrentSecurityModeToDecision(rawResult.decision),
+  };
   if (result.decision.action === 'allow') return result;
   if (result.decision.action === 'deny') throw commandToError(result);
 
@@ -192,7 +201,11 @@ export async function assertCommandAllowedWithConfirmation(request: CommandPolic
     source,
   });
   if (existingGrant) {
-    return await evaluateCommandPolicy({ ...request, confirmed: true });
+    const confirmedResult = await evaluateCommandPolicy({ ...request, confirmed: true });
+    return {
+      ...confirmedResult,
+      decision: await applyCurrentSecurityModeToDecision(confirmedResult.decision),
+    };
   }
 
   const response = await requestSecurityConfirmation({
@@ -225,11 +238,19 @@ export async function assertCommandAllowedWithConfirmation(request: CommandPolic
     });
   }
 
-  return await evaluateCommandPolicy({ ...request, confirmed: true });
+  const confirmedResult = await evaluateCommandPolicy({ ...request, confirmed: true });
+  return {
+    ...confirmedResult,
+    decision: await applyCurrentSecurityModeToDecision(confirmedResult.decision),
+  };
 }
 
 export async function assertOpenTargetAllowedWithConfirmation(request: OpenTargetRequest): Promise<OpenTargetPolicyResult> {
-  const result = await evaluateOpenTargetPolicy(request);
+  const rawResult = await evaluateOpenTargetPolicy(request);
+  const result = {
+    ...rawResult,
+    decision: await applyCurrentSecurityModeToDecision(rawResult.decision),
+  };
   if (result.decision.action === 'allow') return result;
   if (result.decision.action === 'deny') throw openTargetToError(result);
 
@@ -301,6 +322,9 @@ export async function assertMcpServerAllowedWithConfirmation(input: {
   const source = input.source ?? 'unknown';
   if (await findMcpServerGrant(input.serverName, input.server)) return;
 
+  const mode = await getSecurityMode();
+  if (mode === 'trusted' || mode === 'off') return;
+
   const risk = getMcpServerConfirmationRisk(input.server);
   const reasons = getMcpServerConfirmationReasons(input.server);
   const response = await requestSecurityConfirmation({
@@ -342,17 +366,30 @@ function pathPolicyToError(result: PathPolicyResult): Error & { code?: string; d
 export async function assertFileOperationAllowedWithConfirmation(
   request: PathPolicyRequest,
 ): Promise<PathPolicyResult> {
-  const result = await evaluatePathPolicy(request);
+  const rawResult = await evaluatePathPolicy(request);
+  const promptLikeDecision = rawResult.decision.action === 'deny' && rawResult.decision.code === 'DELETE_REQUIRES_CONFIRMATION'
+    ? {
+      action: 'prompt' as const,
+      risk: rawResult.decision.risk,
+      reasons: rawResult.decision.reasons,
+      promptLevel: 'high' as const,
+      allowRememberChoice: true,
+    }
+    : rawResult.decision;
+  const result = {
+    ...rawResult,
+    decision: await applyCurrentSecurityModeToDecision(promptLikeDecision),
+  };
   if (result.decision.action === 'allow') return result;
 
   // For delete/write operations that need confirmation
-  if (result.decision.action === 'deny' && result.decision.code === 'DELETE_REQUIRES_CONFIRMATION') {
+  if (rawResult.decision.action === 'deny' && rawResult.decision.code === 'DELETE_REQUIRES_CONFIRMATION') {
     // Check if there's already a path grant
-    if (result.pathInfo) {
-      const existingGrant = await findPathGrant(result.pathInfo.realPath, request.capability);
+    if (rawResult.pathInfo) {
+      const existingGrant = await findPathGrant(rawResult.pathInfo.realPath, request.capability);
       if (existingGrant) {
         return {
-          ...result,
+          ...rawResult,
           decision: {
             action: 'allow',
             risk: result.decision.risk,
@@ -386,8 +423,8 @@ export async function assertFileOperationAllowedWithConfirmation(
     }
 
     if (response.choice === 'allow-session' || response.choice === 'allow-persistent') {
-      if (result.pathInfo) {
-        await grantPathAccess(result.pathInfo.realPath, {
+      if (rawResult.pathInfo) {
+        await grantPathAccess(rawResult.pathInfo.realPath, {
           capabilities: [request.capability],
           persistent: response.choice === 'allow-persistent',
           source: 'security-confirmation',
@@ -396,7 +433,7 @@ export async function assertFileOperationAllowedWithConfirmation(
     }
 
     return {
-      ...result,
+      ...rawResult,
       decision: {
         action: 'allow',
         risk: result.decision.risk,

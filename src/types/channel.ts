@@ -54,7 +54,7 @@ export interface Channel {
 export interface ChannelConfigField {
   key: string;
   label: string;
-  type: 'text' | 'password' | 'select';
+  type: 'text' | 'password' | 'select' | 'switch';
   placeholder?: string;
   required?: boolean;
   envVar?: string;
@@ -173,6 +173,13 @@ export const CHANNEL_META: Record<ChannelType, ChannelMeta> = {
         type: 'password',
         placeholder: 'channels:meta.dingtalk.fields.clientSecret.placeholder',
         required: true,
+      },
+      {
+        key: 'enableCard',
+        label: 'channels:meta.dingtalk.fields.enableCard.label',
+        type: 'switch',
+        description: 'channels:meta.dingtalk.fields.enableCard.description',
+        required: false,
       },
     ],
     instructions: [

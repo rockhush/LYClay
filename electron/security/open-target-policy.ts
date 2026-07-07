@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { evaluateNetworkPolicy } from './network-policy';
+import { applyCurrentSecurityModeToDecision } from './security-mode';
 import { evaluatePathPolicy } from './path-policy';
 import type { FileCapability, OpenTargetPolicyResult, OpenTargetRequest, SecurityDecision, SecurityRisk } from './types';
 
@@ -11,8 +12,8 @@ function prompt(reasons: string[], risk: SecurityRisk = 'medium'): SecurityDecis
   return { action: 'prompt', risk, reasons, promptLevel: risk === 'high' ? 'high' : 'normal', allowRememberChoice: false };
 }
 
-function deny(code: string, reasons: string[], risk: SecurityRisk = 'high'): SecurityDecision {
-  return { action: 'deny', risk, reasons, code };
+function deny(code: string, reasons: string[], risk: SecurityRisk = 'high', hardDeny = false): SecurityDecision {
+  return { action: 'deny', risk, reasons, code, ...(hardDeny ? { hardDeny: true } : {}) };
 }
 
 function parseUrl(input: string): URL | null {
@@ -78,7 +79,7 @@ export async function evaluateOpenTargetPolicy(request: OpenTargetRequest): Prom
       url: parsed.toString(),
       protocol: parsed.protocol,
       matchedRule: 'dangerous-protocol',
-      decision: deny('OPEN_TARGET_PROTOCOL_BLOCKED', [`Protocol ${parsed.protocol} is blocked`], 'critical'),
+      decision: deny('OPEN_TARGET_PROTOCOL_BLOCKED', [`Protocol ${parsed.protocol} is blocked`], 'critical', true),
     };
   }
 
@@ -132,7 +133,11 @@ export async function evaluateOpenTargetPolicy(request: OpenTargetRequest): Prom
 }
 
 export async function assertOpenTargetAllowed(request: OpenTargetRequest): Promise<OpenTargetPolicyResult> {
-  const result = await evaluateOpenTargetPolicy(request);
+  const rawResult = await evaluateOpenTargetPolicy(request);
+  const result = {
+    ...rawResult,
+    decision: await applyCurrentSecurityModeToDecision(rawResult.decision),
+  };
   if (result.decision.action !== 'allow') {
     const error = new Error(result.decision.reasons.join('; '));
     (error as Error & { code?: string; decision?: SecurityDecision }).code =

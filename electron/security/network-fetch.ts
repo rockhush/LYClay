@@ -1,6 +1,7 @@
 import { proxyAwareFetch } from '../utils/proxy-fetch';
 import { auditSecurityEvent } from './audit-log';
 import { evaluateNetworkPolicy } from './network-policy';
+import { applyCurrentSecurityModeToDecision } from './security-mode';
 import type { NetworkPolicyRequest, NetworkPolicyResult, SecurityDecision } from './types';
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -111,7 +112,11 @@ export async function secureProxyAwareFetch(
     headers: init?.headers,
     body,
   };
-  const initialResult = await evaluateNetworkPolicy(initialRequest);
+  const rawInitialResult = await evaluateNetworkPolicy(initialRequest);
+  const initialResult = {
+    ...rawInitialResult,
+    decision: await applyCurrentSecurityModeToDecision(rawInitialResult.decision),
+  };
   auditFetchDecision(initialRequest, initialResult);
   if (initialResult.decision.action !== 'allow') throw toError(initialResult);
 
@@ -140,7 +145,11 @@ export async function secureProxyAwareFetch(
       headers: init?.headers,
       body: nextRedirectBody(body, method, response.status),
     };
-    const redirectResult = await evaluateNetworkPolicy(redirectRequest);
+    const rawRedirectResult = await evaluateNetworkPolicy(redirectRequest);
+    const redirectResult = {
+      ...rawRedirectResult,
+      decision: await applyCurrentSecurityModeToDecision(rawRedirectResult.decision),
+    };
     auditRedirectDecision(redirectRequest, redirectResult, currentUrl);
     if (redirectResult.decision.action !== 'allow') throw toError(redirectResult);
 

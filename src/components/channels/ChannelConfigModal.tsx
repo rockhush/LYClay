@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
@@ -138,7 +139,7 @@ export function ChannelConfigModal({
     }
 
     if (!shouldLoadExistingConfig) {
-      setConfigValues({});
+      setConfigValues(selectedType === 'dingtalk' ? { enableCard: 'true' } : {});
       setIsExistingConfig(false);
       setLoadingConfig(false);
       setChannelName(showChannelName ? CHANNEL_NAMES[selectedType] : '');
@@ -169,7 +170,7 @@ export function ChannelConfigModal({
           setConfigValues(result.values);
           setIsExistingConfig(true);
         } else {
-          setConfigValues({});
+          setConfigValues(selectedType === 'dingtalk' ? { enableCard: 'true' } : {});
           setIsExistingConfig(false);
         }
       } catch {
@@ -480,7 +481,7 @@ export function ChannelConfigModal({
   const isFormValid = () => {
     if (!meta) return false;
     return meta.configFields
-      .filter((field) => field.required)
+      .filter((field) => field.required && field.type !== 'switch')
       .every((field) => configValues[field.key]?.trim());
   };
 
@@ -679,7 +680,9 @@ export function ChannelConfigModal({
                   <ConfigField
                     key={field.key}
                     field={field}
-                    value={configValues[field.key] || ''}
+                    value={field.type === 'switch'
+                      ? (configValues[field.key] ?? 'true')
+                      : (configValues[field.key] || '')}
                     onChange={(value) => updateConfigValue(field.key, value)}
                     showSecret={showSecrets[field.key] || false}
                     onToggleSecret={() => toggleSecretVisibility(field.key)}
@@ -813,6 +816,32 @@ function ChannelLogo({ type }: { type: ChannelType }) {
 function ConfigField({ field, value, onChange, showSecret, onToggleSecret }: ConfigFieldProps) {
   const { t } = useTranslation('channels');
   const isPassword = field.type === 'password';
+  const isSwitch = field.type === 'switch';
+  const switchChecked = value !== 'false';
+
+  if (isSwitch) {
+    return (
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor={field.key} className={labelClasses}>
+            {t(field.label)}
+          </Label>
+          {field.description && (
+            <p className="text-[12px] text-muted-foreground leading-relaxed">
+              {t(field.description)}
+            </p>
+          )}
+        </div>
+        <Switch
+          id={field.key}
+          size="sm"
+          checked={switchChecked}
+          onCheckedChange={(checked) => onChange(checked ? 'true' : 'false')}
+          className="mt-0.5 shrink-0"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">

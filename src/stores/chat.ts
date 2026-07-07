@@ -17,7 +17,6 @@ import {
 } from '@/lib/skill-runtime-aliases';
 import { buildCronSessionHistoryPath, isCronSessionKey, mergeCronSessionHistory } from './chat/cron-session-utils';
 import { collectAgentIdsFromSessionKeys, isPlaceholderSessionTitle, normalizeSessionSummaryForDisplay } from '@/lib/session-label-utils';
-import { unionGatewaySessionsWithLocalRegistry } from '@/lib/session-list-registry-merge';
 import {
   CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS,
   classifyHistoryStartupRetryError,
@@ -138,26 +137,8 @@ import {
   isSubagentSessionKey,
   filterUserFacingSessions,
   pickUserFacingSession,
-  isUserFacingSessionKey,
 } from '@/lib/session-key-utils';
 import { isEmptyChatScratchpad } from '@/lib/chat-scratchpad';
-import {
-  applyDingtalkCardDisplayFlags,
-  clearDingtalkCardPendingRun,
-  getDingtalkCardMessageIdsForSession,
-  getDingtalkCardRunIdsForSession,
-  getDingtalkCardFingerprintsForSession,
-  loadDingtalkCardEnabled,
-  persistDingtalkCardEnabled,
-  persistDingtalkCardMessageId,
-  persistDingtalkCardRunId,
-  persistDingtalkCardFingerprint,
-  computeDingtalkCardFingerprint,
-  propagateDingtalkCardFlagsFromLocal,
-  reconcileDingtalkCardPersistence,
-  tagDingtalkCardMessageIfPending,
-  collectLocalMessagesForDingtalkMerge,
-} from '@/lib/dingtalk-card-display';
 
 export type {
   AttachedFileMeta,
@@ -1304,18 +1285,7 @@ function mergeMissingLocalAssistantReplies(
       continue;
     }
     const msgId = localAssistant.id ?? '';
-    if (isDuplicateAssistantFinal(merged, msgId, localAssistant)) {
-      if (localAssistant._dingtalkCard) {
-        merged = merged.map((message) => {
-          if (message.role !== 'assistant' || message._dingtalkCard) return message;
-          if (getMessageText(message.content).trim() === text) {
-            return { ...message, _dingtalkCard: true };
-          }
-          return message;
-        });
-      }
-      continue;
-    }
+    if (isDuplicateAssistantFinal(merged, msgId, localAssistant)) continue;
     merged.push(localAssistant);
   }
 
@@ -1452,7 +1422,7 @@ function applyBackgroundChatEvent(
   event: Record<string, unknown>,
   resolvedState: string,
   runId: string,
-): Partial<Pick<ChatState, 'sessionStreamingStates' | 'dingtalkCardPendingRunIds'>> | null {
+): Record<string, SessionStreamingState> | null {
   if (isUserAbortedSession(sessionKey) && resolvedState !== 'aborted') {
     return null;
   }
@@ -1490,7 +1460,6 @@ function applyBackgroundChatEvent(
     }
     case 'final': {
       const finalMsg = event.message as RawMessage | undefined;
-      let dingtalkPendingPatch: Record<string, string> | undefined;
       if (finalMsg) {
         const normalized = normalizeStreamingMessage(finalMsg) as RawMessage;
         const content = getMessageText(normalized.content);
@@ -1499,25 +1468,11 @@ function applyBackgroundChatEvent(
         const hasOutput = hasNonToolAssistantContent(normalized);
         if (!isInternal && !isToolResultRole(normalized.role) && !toolOnly && hasOutput) {
           const msgId = normalized.id || `run-${runId || Date.now()}`;
-          const baseMessage: RawMessage = {
+          next.messagesSnapshot = appendMessageIfMissing(next.messagesSnapshot, {
             ...normalized,
             role: (normalized.role || 'assistant') as RawMessage['role'],
             id: msgId,
-          };
-          const taggedMessage = tagDingtalkCardMessageIfPending(
-            baseMessage,
-            sessionKey,
-            runId,
-            state.dingtalkCardPendingRunIds,
-            getMessageText,
-          );
-          next.messagesSnapshot = appendMessageIfMissing(next.messagesSnapshot, taggedMessage);
-          if (taggedMessage._dingtalkCard) {
-            dingtalkPendingPatch = clearDingtalkCardPendingRun(
-              state.dingtalkCardPendingRunIds,
-              sessionKey,
-            );
-          }
+          });
         }
         if (isToolResultRole(normalized.role) || toolOnly) {
           const updates = collectToolUpdates(normalized, resolvedState);
@@ -1536,13 +1491,7 @@ function applyBackgroundChatEvent(
       next.pendingToolImages = [];
       next.lastUserMessageAt = null;
       next.runAborted = false;
-      return {
-        sessionStreamingStates: {
-          ...state.sessionStreamingStates,
-          [sessionKey]: next,
-        },
-        ...(dingtalkPendingPatch ? { dingtalkCardPendingRunIds: dingtalkPendingPatch } : {}),
-      };
+      break;
     }
     case 'error':
     case 'aborted':
@@ -1561,10 +1510,8 @@ function applyBackgroundChatEvent(
   }
 
   return {
-    sessionStreamingStates: {
-      ...state.sessionStreamingStates,
-      [sessionKey]: next,
-    },
+    ...state.sessionStreamingStates,
+    [sessionKey]: next,
   };
 }
 
@@ -1606,9 +1553,7 @@ function resolveFinalMessagesWithLocalPreservation(
   get: () => ChatState,
 ): RawMessage[] {
   const state = get();
-  const snapshotMessages = state.sessionStreamingStates[sessionKey]?.messagesSnapshot ?? [];
-  const localMessages = collectLocalMessagesForDingtalkMerge(state.messages, snapshotMessages);
-  let finalMessages = mergeMissingLocalAssistantReplies(pipelineMessages, localMessages, sessionKey);
+  let finalMessages = mergeMissingLocalAssistantReplies(pipelineMessages, state.messages, sessionKey);
 
   const userMsgAt = state.lastUserMessageAt;
   if (state.sending && userMsgAt) {
@@ -2504,7 +2449,7 @@ async function loadLocalSessionSummariesForAgentIds(agentIds: string[]): Promise
       mergedByKey.set(session.key, session);
     }
   }
-  return filterUserFacingSessions([...mergedByKey.values()]);
+  return [...mergedByKey.values()];
 }
 
 function mergeSessionSummariesWithLocalPreviews(
@@ -3514,7 +3459,7 @@ function mergePreservedSessionsIntoGatewayList(
   const out: ChatSession[] = [...dedupedSessions];
 
   const addIfMissing = (key: string, displayName?: string) => {
-    if (!key || keys.has(key) || !isUserFacingSessionKey(key)) return;
+    if (!key || keys.has(key)) return;
     keys.add(key);
     out.push({
       key,
@@ -3527,7 +3472,7 @@ function mergePreservedSessionsIntoGatewayList(
   }
 
   for (const s of prevSessions) {
-    if (keys.has(s.key) || !isUserFacingSessionKey(s.key)) continue;
+    if (keys.has(s.key)) continue;
     if (sessionLabels[s.key] || sessionLastActivity[s.key] || sessionWorkspaceIds[s.key]) {
       addIfMissing(s.key, s.displayName);
     }
@@ -3763,8 +3708,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   thinkingLevel: null,
   sessionReasoningModes: loadSessionReasoningModesFromStorage(),
   reasoningMode: loadSessionReasoningModesFromStorage()[DEFAULT_SESSION_KEY] ?? loadStoredReasoningMode(),
-  dingtalkCardEnabled: loadDingtalkCardEnabled(),
-  dingtalkCardPendingRunIds: {},
 
   setReasoningMode: async (mode: ReasoningMode) => {
     const sessionKey = get().currentSessionKey;
@@ -3782,11 +3725,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!isEmptyChatScratchpad(sessionKey, snapshot)) {
       deferSessionThinkingLevelPatch(sessionKey, mode);
     }
-  },
-
-  setDingtalkCardEnabled: (enabled: boolean) => {
-    persistDingtalkCardEnabled(enabled);
-    set({ dingtalkCardEnabled: enabled });
   },
 
   setCurrentSessionModel: async (model: string | null) => {
@@ -3871,9 +3809,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     _loadSessionsInFlight = (async () => {
       try {
-        const { hydrateUiStateFromDisk } = await import('@/lib/ui-state-persistence');
-        await hydrateUiStateFromDisk();
-
         const { gatewayReady } = useGatewayStore.getState().status;
 
         if (gatewayReady !== true) {
@@ -3933,36 +3868,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const gatewaySessions = rawSessions
             .map((s: Record<string, unknown>) => parseSessionRecord(s))
             .filter((session): session is ChatSession => session != null);
-          const registrySnapshot = get();
-          let localRegistrySessions: ChatSession[] = [];
+          let localPreviewSessions: ChatSession[] = [];
           try {
-            const registryAgentIds = collectAgentIdsFromSessionKeys([
-              ...gatewaySessions.map((session) => session.key),
-              ...Object.keys(registrySnapshot.sessionLastActivity),
-              ...Object.keys(registrySnapshot.sessionLabels),
-              ...Object.keys(registrySnapshot.sessionWorkspaceIds),
-            ]);
-            localRegistrySessions = await loadLocalSessionSummariesForAgentIds(
-              [...new Set(['main', ...registryAgentIds])],
+            const previewAgentIds = collectAgentIdsFromSessionKeys(
+              gatewaySessions.map((session) => session.key),
             );
+            localPreviewSessions = await loadLocalSessionSummariesForAgentIds(previewAgentIds);
           } catch (error) {
-            console.warn('[Sessions] Failed to load local session registry for Gateway list:', error);
+            console.warn('[Sessions] Failed to load local session previews for Gateway list:', error);
           }
-          const gatewayWithLocalRegistry = unionGatewaySessionsWithLocalRegistry(
-            gatewaySessions,
-            localRegistrySessions,
-            {
-              sessionLabels: registrySnapshot.sessionLabels,
-              customSessionLabels: registrySnapshot.customSessionLabels,
-              sessionLastActivity: registrySnapshot.sessionLastActivity,
-              sessionWorkspaceIds: registrySnapshot.sessionWorkspaceIds,
-              sessionPinnedAt: registrySnapshot.sessionPinnedAt,
-            },
-          );
-          const sessions = mergeSessionSummariesWithLocalPreviews(
-            gatewayWithLocalRegistry,
-            localRegistrySessions,
-          )
+          const sessions = mergeSessionSummariesWithLocalPreviews(gatewaySessions, localPreviewSessions)
             .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills));
 
           const canonicalBySuffix = new Map<string, string>();
@@ -4584,23 +4499,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(interruptedOut.resumePatch);
       }
       const pipelineMessages = interruptedOut.messages;
-      let finalMessages = resolveFinalMessagesWithLocalPreservation(currentSessionKey, pipelineMessages, get);
-      finalMessages = applyDingtalkCardDisplayFlags(
-        finalMessages,
-        getDingtalkCardMessageIdsForSession(currentSessionKey),
-        getDingtalkCardRunIdsForSession(currentSessionKey),
-        getDingtalkCardFingerprintsForSession(currentSessionKey),
-        getMessageText,
-      );
-      finalMessages = propagateDingtalkCardFlagsFromLocal(
-        finalMessages,
-        collectLocalMessagesForDingtalkMerge(
-          get().messages,
-          get().sessionStreamingStates[currentSessionKey]?.messagesSnapshot ?? [],
-        ),
-        getMessageText,
-      );
-      reconcileDingtalkCardPersistence(currentSessionKey, finalMessages, getMessageText);
+      const finalMessages = resolveFinalMessagesWithLocalPreservation(currentSessionKey, pipelineMessages, get);
 
       set((state) => ({
         messages: finalMessages,
@@ -5611,14 +5510,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...s.sessionRunawayToolObservations,
             [currentSessionKey]: boundObservation,
           },
-          ...(get().dingtalkCardEnabled
-            ? {
-              dingtalkCardPendingRunIds: {
-                ...s.dingtalkCardPendingRunIds,
-                [currentSessionKey]: runId,
-              },
-            }
-            : {}),
           sessionStreamingStates: {
             ...s.sessionStreamingStates,
             [currentSessionKey]: {
@@ -5686,10 +5577,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       pendingToolImages: [],
       runAborted: true,
       streamingTools: [],
-      dingtalkCardPendingRunIds: clearDingtalkCardPendingRun(
-        s.dingtalkCardPendingRunIds,
-        currentSessionKey,
-      ),
       sessionStreamingStates: {
         ...s.sessionStreamingStates,
         [currentSessionKey]: {
@@ -5835,9 +5722,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(backgroundObservationPatch);
       }
 
-      const backgroundPatch = applyBackgroundChatEvent(get(), eventSessionKey, event, backgroundState, runId);
-      if (backgroundPatch) {
-        set(backgroundPatch);
+      const nextSessionStreamingStates = applyBackgroundChatEvent(get(), eventSessionKey, event, backgroundState, runId);
+      if (nextSessionStreamingStates) {
+        set({ sessionStreamingStates: nextSessionStreamingStates });
       }
       return;
     }
@@ -6255,16 +6142,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
               || shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
             );
           const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
-          const sessionKeyForCard = eventSessionKey ?? currentSessionKey;
-          const pendingDingtalkRunId = get().dingtalkCardPendingRunIds[sessionKeyForCard];
-          const shouldTagDingtalkCard = Boolean(
-            pendingDingtalkRunId
-            && pendingDingtalkRunId === runId
-            && normalizedFinalMessage.role === 'assistant'
-            && hasOutput
-            && !toolOnly
-            && (!keepRunActiveAfterFinal || isSimpleTextResponse),
-          );
           const shouldClearOnFinalMessage = !keepRunActiveAfterFinal && !isAnnounceWrapUpFinal;
           let skippedDuplicateFinal = false;
           set((s) => {
@@ -6273,7 +6150,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
             // Attach any images collected from preceding tool results
             const pendingImgs = s.pendingToolImages;
-            const baseAssistantMessage: RawMessage = pendingImgs.length > 0
+            const msgWithImages: RawMessage = pendingImgs.length > 0
               ? {
                 ...normalizedFinalMessage,
                 role: (normalizedFinalMessage.role || 'assistant') as RawMessage['role'],
@@ -6281,9 +6158,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 _attachedFiles: [...(normalizedFinalMessage._attachedFiles || []), ...pendingImgs],
               }
               : { ...normalizedFinalMessage, role: (normalizedFinalMessage.role || 'assistant') as RawMessage['role'], id: msgId };
-            const msgWithImages: RawMessage = shouldTagDingtalkCard
-              ? { ...baseAssistantMessage, _dingtalkCard: true }
-              : baseAssistantMessage;
             const clearPendingImages = { pendingToolImages: [] as AttachedFileMeta[] };
 
             // Check if message already exists (prevent duplicates)
@@ -6308,14 +6182,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
               };
             }
             const nextMessages = [...s.messages, msgWithImages];
-            const dingtalkCardPendingPatch = shouldTagDingtalkCard
-              ? {
-                dingtalkCardPendingRunIds: clearDingtalkCardPendingRun(
-                  s.dingtalkCardPendingRunIds,
-                  sessionKeyForCard,
-                ),
-              }
-              : {};
             return keepRunActiveAfterFinal ? {
               messages: nextMessages,
               streamingText: '',
@@ -6324,7 +6190,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
               streamingTools,
               runError: null,
               ...clearPendingImages,
-              ...dingtalkCardPendingPatch,
             } : {
               messages: nextMessages,
               streamingText: '',
@@ -6336,16 +6201,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               runError: null,
               ...clearPendingImages,
               ...withClearedSessionStreamingState(s, currentSessionKey, nextMessages),
-              ...dingtalkCardPendingPatch,
             };
           });
-          if (shouldTagDingtalkCard && !skippedDuplicateFinal) {
-            persistDingtalkCardMessageId(sessionKeyForCard, msgId);
-            persistDingtalkCardRunId(sessionKeyForCard, runId);
-            const cardText = getMessageText(normalizedFinalMessage.content);
-            const fingerprint = computeDingtalkCardFingerprint(cardText);
-            if (fingerprint) persistDingtalkCardFingerprint(sessionKeyForCard, fingerprint);
-          }
           const isAnnounceFinal = isSubagentDelegationAnnounceRun(runId);
           if (!keepRunActiveAfterFinal || isSimpleTextResponse || isAnnounceFinal) {
             if (isAnnounceFinal) {

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { auditSecurityEvent } from './audit-log';
 import { requestSecurityConfirmation } from './confirmation-service';
+import { applyCurrentSecurityModeToDecision } from './security-mode';
 import { scanSecrets } from './secret-scanner';
 import type { SecretFinding } from './secret-scanner';
 import type { SecurityRisk } from './types';
@@ -67,20 +68,37 @@ export async function assertModelSecretsAllowedBeforeSend(
     };
   }
 
+  const decision = await applyCurrentSecurityModeToDecision({
+    action: 'prompt',
+    risk,
+    reasons: ['Message content contains secret-like values before model send'],
+    promptLevel: risk === 'high' || risk === 'critical' ? 'high' : 'normal',
+    allowRememberChoice: true,
+  });
+
   auditSecurityEvent({
     source,
     capability: 'model-secret',
     operation: 'preflight',
     target: `${findings.length} secret-like value(s): ${matchedTypes.join(', ')}`,
-    decision: 'prompt',
-    risk,
-    reasons: ['Message content contains secret-like values before model send'],
+    decision: decision.action,
+    risk: decision.risk,
+    reasons: decision.reasons,
     metadata: {
       count: findings.length,
       types: matchedTypes,
       excerpts: findings.slice(0, 5).map((finding) => finding.excerpt),
     },
   });
+
+  if (decision.action === 'allow') {
+    return {
+      allowed: true,
+      matchedTypes,
+      count: findings.length,
+      risk,
+    };
+  }
 
   const response = await requestSecurityConfirmation({
     kind: 'model-secret',

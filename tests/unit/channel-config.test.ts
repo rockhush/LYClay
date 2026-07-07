@@ -379,6 +379,92 @@ describe('DingTalk channel defaults', () => {
     expect(channels.dingtalk.convertMarkdownTables).toBe(true);
     expect(channels.dingtalk.accounts?.default?.convertMarkdownTables).toBe(true);
   });
+
+  it('defaults messageType and cardTemplateId when saving dingtalk config', async () => {
+    const { saveChannelConfig } = await import('@electron/utils/channel-config');
+    const { DEFAULT_DINGTALK_CARD_TEMPLATE_ID } = await import('@electron/utils/dingtalk-card-template');
+
+    await saveChannelConfig('dingtalk', { clientId: 'ding-app', clientSecret: 'secret' }, 'default');
+
+    const config = await readOpenClawJson();
+    const channels = config.channels as Record<string, {
+      messageType?: string;
+      cardTemplateId?: string;
+      accounts?: Record<string, { messageType?: string; cardTemplateId?: string }>;
+    }>;
+
+    expect(channels.dingtalk.messageType).toBe('card');
+    expect(channels.dingtalk.accounts?.default?.messageType).toBe('card');
+    expect(channels.dingtalk.cardTemplateId).toBe(DEFAULT_DINGTALK_CARD_TEMPLATE_ID);
+    expect(channels.dingtalk.accounts?.default?.cardTemplateId).toBe(DEFAULT_DINGTALK_CARD_TEMPLATE_ID);
+  });
+
+  it('preserves explicit dingtalk reply mode overrides', async () => {
+    const { saveChannelConfig } = await import('@electron/utils/channel-config');
+
+    await saveChannelConfig('dingtalk', {
+      clientId: 'ding-app',
+      clientSecret: 'secret',
+      messageType: 'markdown',
+      cardTemplateId: 'custom-template.schema',
+    }, 'default');
+
+    const config = await readOpenClawJson();
+    const channels = config.channels as Record<string, {
+      messageType?: string;
+      cardTemplateId?: string;
+      accounts?: Record<string, { messageType?: string; cardTemplateId?: string }>;
+    }>;
+
+    expect(channels.dingtalk.messageType).toBe('markdown');
+    expect(channels.dingtalk.accounts?.default?.messageType).toBe('markdown');
+    expect(channels.dingtalk.cardTemplateId).toBe('custom-template.schema');
+    expect(channels.dingtalk.accounts?.default?.cardTemplateId).toBe('custom-template.schema');
+  });
+
+  it('maps enableCard switch to dingtalk messageType on save', async () => {
+    const { saveChannelConfig, getChannelFormValues } = await import('@electron/utils/channel-config');
+    const { DEFAULT_DINGTALK_CARD_TEMPLATE_ID } = await import('@electron/utils/dingtalk-card-template');
+
+    await saveChannelConfig('dingtalk', {
+      clientId: 'ding-app',
+      clientSecret: 'secret',
+      enableCard: 'false',
+    }, 'default');
+
+    const config = await readOpenClawJson();
+    const channels = config.channels as Record<string, {
+      messageType?: string;
+      enableCard?: string;
+      accounts?: Record<string, { messageType?: string; enableCard?: string }>;
+    }>;
+
+    expect(channels.dingtalk.messageType).toBe('markdown');
+    expect(channels.dingtalk.accounts?.default?.messageType).toBe('markdown');
+    expect(channels.dingtalk.enableCard).toBeUndefined();
+    expect(channels.dingtalk.accounts?.default?.enableCard).toBeUndefined();
+
+    const formValues = await getChannelFormValues('dingtalk', 'default');
+    expect(formValues?.enableCard).toBe('false');
+    expect(formValues?.cardTemplateId).toBeUndefined();
+
+    await saveChannelConfig('dingtalk', {
+      clientId: 'ding-app',
+      clientSecret: 'secret',
+      enableCard: 'true',
+    }, 'default');
+
+    const updated = await readOpenClawJson();
+    const updatedChannels = updated.channels as Record<string, {
+      messageType?: string;
+      cardTemplateId?: string;
+      accounts?: Record<string, { messageType?: string; cardTemplateId?: string }>;
+    }>;
+
+    expect(updatedChannels.dingtalk.messageType).toBe('card');
+    expect(updatedChannels.dingtalk.accounts?.default?.messageType).toBe('card');
+    expect(updatedChannels.dingtalk.cardTemplateId).toBe(DEFAULT_DINGTALK_CARD_TEMPLATE_ID);
+  });
 });
 
 describe('WeChat dangling plugin cleanup', () => {

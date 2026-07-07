@@ -6,6 +6,7 @@ import { commandToString, evaluateCommandPolicy } from './command-policy';
 import { evaluateNetworkPolicy } from './network-policy';
 import { evaluatePathPolicy } from './path-policy';
 import { findSkillGrant } from './permission-store';
+import { applyCurrentSecurityModeToDecision } from './security-mode';
 import { getOpenClawSkillsDir } from '../utils/paths';
 import type {
   CommandPolicyRequest,
@@ -362,8 +363,12 @@ function allowDeclaredSkillRoutineCommandPrompts(
 }
 
 async function assertRuntimeAllowed<T extends SkillRuntimePolicyResult>(result: T): Promise<T> {
-  if (result.decision.action !== 'allow') throw runtimeError(result);
-  return result;
+  const effective = {
+    ...result,
+    decision: await applyCurrentSecurityModeToDecision(result.decision),
+  };
+  if (effective.decision.action !== 'allow') throw runtimeError(effective);
+  return effective;
 }
 
 export async function assertSkillRuntimeFileAllowed(

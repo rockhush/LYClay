@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import type { NetworkPolicyRequest, NetworkPolicyResult, SecurityDecision, SecurityRisk } from './types';
+import { applyCurrentSecurityModeToDecision } from './security-mode';
 import { findDomainGrant } from './permission-store';
 import { scanSecrets } from './secret-scanner';
 
@@ -63,8 +64,8 @@ function prompt(reasons: string[], risk: SecurityRisk = 'medium'): SecurityDecis
   return { action: 'prompt', risk, reasons, promptLevel: risk === 'high' ? 'high' : 'normal', allowRememberChoice: true };
 }
 
-function deny(code: string, reasons: string[], risk: SecurityRisk = 'high'): SecurityDecision {
-  return { action: 'deny', risk, reasons, code };
+function deny(code: string, reasons: string[], risk: SecurityRisk = 'high', hardDeny = false): SecurityDecision {
+  return { action: 'deny', risk, reasons, code, ...(hardDeny ? { hardDeny: true } : {}) };
 }
 
 function isAllowedProtocol(protocol: string): boolean {
@@ -285,7 +286,7 @@ export async function evaluateNetworkPolicy(request: NetworkPolicyRequest): Prom
     return {
       ...base,
       matchedRule: 'url-credentials',
-      decision: deny('NETWORK_URL_CREDENTIALS', ['URLs with embedded credentials are blocked'], 'critical'),
+      decision: deny('NETWORK_URL_CREDENTIALS', ['URLs with embedded credentials are blocked'], 'critical', true),
     };
   }
 
@@ -293,7 +294,7 @@ export async function evaluateNetworkPolicy(request: NetworkPolicyRequest): Prom
     return {
       ...base,
       matchedRule: 'protocol',
-      decision: deny('NETWORK_PROTOCOL_BLOCKED', [`Protocol ${parsed.protocol} is not allowed`], 'critical'),
+      decision: deny('NETWORK_PROTOCOL_BLOCKED', [`Protocol ${parsed.protocol} is not allowed`], 'critical', true),
     };
   }
 
@@ -308,7 +309,7 @@ export async function evaluateNetworkPolicy(request: NetworkPolicyRequest): Prom
     return {
       ...base,
       matchedRule: 'localhost-port-deny',
-      decision: deny('NETWORK_LOCALHOST_PORT_BLOCKED', ['Localhost access is restricted to explicitly allowed ports'], 'high'),
+      decision: deny('NETWORK_LOCALHOST_PORT_BLOCKED', ['Localhost access is restricted to explicitly allowed ports'], 'high', true),
     };
   }
 
@@ -318,7 +319,7 @@ export async function evaluateNetworkPolicy(request: NetworkPolicyRequest): Prom
     return {
       ...base,
       matchedRule: 'private-address-hard-deny',
-      decision: deny('NETWORK_PRIVATE_ADDRESS_BLOCKED', [privateHardDenyReason], 'high'),
+      decision: deny('NETWORK_PRIVATE_ADDRESS_BLOCKED', [privateHardDenyReason], 'high', true),
     };
   }
 
@@ -331,6 +332,7 @@ export async function evaluateNetworkPolicy(request: NetworkPolicyRequest): Prom
         'NETWORK_SECRET_EXFILTRATION_BLOCKED',
         [`Outbound network request contains sensitive data: ${secretTypes.join(', ')}`],
         'critical',
+        true,
       ),
     };
   }
@@ -435,7 +437,7 @@ export async function evaluateNetworkPolicy(request: NetworkPolicyRequest): Prom
     return {
       ...base,
       matchedRule: 'private-address',
-      decision: deny('NETWORK_PRIVATE_ADDRESS_BLOCKED', [privateReason], 'high'),
+      decision: deny('NETWORK_PRIVATE_ADDRESS_BLOCKED', [privateReason], 'high', true),
     };
   }
 
@@ -455,7 +457,11 @@ export async function evaluateNetworkPolicy(request: NetworkPolicyRequest): Prom
 }
 
 export async function assertNetworkAllowed(request: NetworkPolicyRequest): Promise<NetworkPolicyResult> {
-  const result = await evaluateNetworkPolicy(request);
+  const rawResult = await evaluateNetworkPolicy(request);
+  const result = {
+    ...rawResult,
+    decision: await applyCurrentSecurityModeToDecision(rawResult.decision),
+  };
   if (result.decision.action !== 'allow') {
     const error = new Error(result.decision.reasons.join('; '));
     (error as Error & { code?: string; decision?: SecurityDecision }).code =

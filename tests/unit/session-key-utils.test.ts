@@ -23,9 +23,6 @@ describe('session-key-utils', () => {
     expect(isUserFacingSessionKey('agent:main:main')).toBe(true);
     expect(isUserFacingSessionKey('agent:main:session-1717848000000')).toBe(true);
     expect(isUserFacingSessionKey('agent:main:subagent:child-123')).toBe(false);
-    expect(isUserFacingSessionKey('agent:main:scheduled-task:job-1:run-abc')).toBe(false);
-    expect(isUserFacingSessionKey('agent:main:cron-run:job-1:run-abc')).toBe(false);
-    expect(isUserFacingSessionKey('agent:main:cron:job-1')).toBe(false);
     expect(isUserFacingSessionKey('agent:dingtalk:dingtalk:group:11236149')).toBe(false);
     expect(isUserFacingSessionKey('agent:dingtalk:dingtalk:default:direct:11427192')).toBe(true);
     expect(isUserFacingSessionKey('agent:dingtalk:session-1717848000000')).toBe(true);

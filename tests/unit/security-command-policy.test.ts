@@ -339,7 +339,7 @@ describe('command security policy', () => {
     expect(result.decision.action === 'deny' ? result.decision.code : '').toBe('PATH_OUTSIDE_AUTHORIZED_ROOTS');
   });
 
-  it('requires confirmation when shell redirection writes inside the workspace', async () => {
+  it('allows shell redirection writes inside the workspace', async () => {
     const result = await evaluateCommandPolicy({
       command: 'echo hello > output.txt',
       cwd: workspace,
@@ -347,8 +347,7 @@ describe('command security policy', () => {
       source: 'agent',
     });
 
-    expect(result.decision.action).toBe('prompt');
-    expect(result.segments.some((segment) => segment.matchedRules.includes('command-path-write'))).toBe(true);
+    expect(result.decision.action).toBe('allow');
   });
 
   it('allows output redirection to null devices without confirmation', async () => {
@@ -382,7 +381,7 @@ describe('command security policy', () => {
     }
   });
 
-  it('still requires confirmation for files whose names merely start with nul', async () => {
+  it('allows workspace redirection writes to files whose names merely start with nul', async () => {
     const commands = [
       'echo hello 2>nul.txt',
       'echo hello 2>$null.txt',
@@ -397,11 +396,7 @@ describe('command security policy', () => {
         source: 'agent',
       });
 
-      expect(result.decision.action, command).toBe('prompt');
-      expect(
-        result.segments.some((segment) => segment.matchedRules.includes('command-path-write')),
-        command,
-      ).toBe(true);
+      expect(result.decision.action, command).toBe('allow');
     }
   });
 
@@ -429,7 +424,7 @@ describe('command security policy', () => {
     expect(result.decision.action === 'deny' ? result.decision.code : '').toBe('SENSITIVE_PATH');
   });
 
-  it('requires confirmation for delete commands inside the workspace', async () => {
+  it('allows simple delete commands inside the workspace', async () => {
     const filePath = path.join(workspace, 'old.txt');
     await writeFile(filePath, 'old');
 
@@ -440,12 +435,10 @@ describe('command security policy', () => {
       source: 'agent',
     });
 
-    expect(result.decision.action).toBe('prompt');
-    expect(result.decision.risk).toBe('high');
-    expect(result.segments.some((segment) => segment.matchedRules.includes('command-path-delete'))).toBe(true);
+    expect(result.decision.action).toBe('allow');
   });
 
-  it('requires confirmation for PowerShell Remove-Item delete commands inside the workspace', async () => {
+  it('allows simple PowerShell Remove-Item delete commands inside the workspace', async () => {
     const filePath = path.join(workspace, 'hello.txt');
     await writeFile(filePath, 'hello');
 
@@ -456,9 +449,44 @@ describe('command security policy', () => {
       source: 'agent',
     });
 
+    expect(result.decision.action).toBe('allow');
+  });
+
+  it('requires confirmation for wildcard or important-file deletes inside the workspace', async () => {
+    const commands = [
+      'rm *.tmp',
+      'del package.json',
+      'Remove-Item -Path SKILL.md',
+    ];
+
+    for (const command of commands) {
+      const result = await evaluateCommandPolicy({
+        command,
+        cwd: workspace,
+        allowedRoots: [workspace],
+        source: 'agent',
+      });
+
+      expect(result.decision.action, command).toBe('prompt');
+      expect(result.decision.risk, command).toBe('high');
+      expect(result.segments.some((segment) => segment.matchedRules.includes('command-path-delete')), command).toBe(true);
+    }
+  });
+
+  it('requires confirmation for command writes outside authorized workspaces', async () => {
+    const outside = await makeTempWorkspace();
+    const outsidePath = path.join(outside, 'output.txt');
+
+    const result = await evaluateCommandPolicy({
+      command: `Set-Content -Path ${JSON.stringify(outsidePath)} -Value hello`,
+      cwd: workspace,
+      allowedRoots: [workspace],
+      source: 'agent',
+    });
+
     expect(result.decision.action).toBe('prompt');
-    expect(result.decision.risk).toBe('high');
-    expect(result.segments.some((segment) => segment.matchedRules.includes('command-path-delete'))).toBe(true);
+    expect(result.decision.risk).toBe('medium');
+    expect(result.segments.some((segment) => segment.matchedRules.includes('command-path-write'))).toBe(true);
   });
 
   it('denies delete commands targeting sensitive paths', async () => {

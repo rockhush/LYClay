@@ -174,6 +174,15 @@ export function auditPolicyDecision(request: SecurityPolicyRequest, result: Secu
     risk: result.decision.risk,
     reasons: result.decision.reasons,
     code: result.decision.action === 'deny' ? result.decision.code : undefined,
+    metadata: result.decision.modeOverride ? {
+      securityMode: result.decision.modeOverride.mode,
+      originalAction: result.decision.modeOverride.originalAction,
+      effectiveAction: result.decision.modeOverride.effectiveAction,
+      originalRisk: result.decision.modeOverride.originalRisk,
+      originalCode: result.decision.modeOverride.originalCode,
+      hardDeny: result.decision.modeOverride.hardDeny,
+      modeOverride: result.decision.modeOverride.originalAction !== result.decision.modeOverride.effectiveAction,
+    } : undefined,
   });
 }
 
@@ -188,6 +197,15 @@ export function auditPathDecision(request: PathPolicyRequest, result: PathPolicy
     risk: result.decision.risk,
     reasons: result.decision.reasons,
     code: result.decision.action === 'deny' ? result.decision.code : undefined,
+    metadata: result.decision.modeOverride ? {
+      securityMode: result.decision.modeOverride.mode,
+      originalAction: result.decision.modeOverride.originalAction,
+      effectiveAction: result.decision.modeOverride.effectiveAction,
+      originalRisk: result.decision.modeOverride.originalRisk,
+      originalCode: result.decision.modeOverride.originalCode,
+      hardDeny: result.decision.modeOverride.hardDeny,
+      modeOverride: result.decision.modeOverride.originalAction !== result.decision.modeOverride.effectiveAction,
+    } : undefined,
   });
 }
 

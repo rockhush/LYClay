@@ -281,6 +281,7 @@ ClawX 采用 **双进程 + Host API 统一接入架构**。渲染进程只调用
 - **安全存储**：API 密钥和敏感数据利用操作系统原生的安全存储机制
 - **CORS 安全**：本地 HTTP 请求由主进程代理，避免渲染进程跨域问题
 - **Memory 出口保护**：Main 可控的 Memory RPC 返回值会在到达 Renderer 前递归脱敏并扫描；OpenClaw Runtime 内部直接持久化 Memory 的链路仍是后续治理边界
+- **Global Security Mode**: Settings > Security supports Standard, Trusted, and Confirmations Off modes. Trusted auto-allows prompts while keeping denials; Confirmations Off auto-allows prompts and normal denials but keeps critical/hard denials such as destructive root deletes, credential exfiltration, remote script execution, and boundary escapes.
 - **Skill / 插件权限声明**：Skill 默认继承已授权 Workspace 内的 metadata、read 和 write 基础能力；manifest 只需声明额外文件、网络、命令和 Secrets 能力。敏感路径与 Workspace 外路径仍受保护，插件不会获得隐式权限，运行时强制拦截仍是后续治理边界
 - **Skill 上传权限确认**：本地 ZIP 支持在压缩包根目录或唯一顶层文件夹中放置 `SKILL.md`；仅使用 Workspace 基础权限的 Skill 可直接安装，新增额外权限时会在写入文件前展示权限差异，并使用 Main 签发的短期确认令牌避免 Renderer 跳过确认
 - **Skill 授权记录**：本地 ZIP Skill 确认安装后会按 manifest 摘要持久化授权；manifest 变化会使旧授权失效，卸载会撤销有效授权，Settings 可查看和主动撤销 Skill 授权。运行时身份绑定仍属于后续治理边界

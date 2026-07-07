@@ -75,7 +75,7 @@ export function Settings() {
     autoDownloadUpdate,
     setAutoDownloadUpdate,
     devModeUnlocked,
-    setDevModeUnlocked,
+    // setDevModeUnlocked — 开发者模式入口已隐藏
   } = useSettingsStore();
 
   const { status: gatewayStatus, restart: restartGateway } = useGatewayStore();
@@ -632,7 +632,7 @@ export function Settings() {
             </div>
           </div>
 
-          {/* Advanced */}
+          {/* Advanced — 开发者模式入口暂时隐藏，始终关闭
           <div data-testid="settings-advanced-section">
             <h2 className="text-base font-semibold text-foreground mb-2">
               {t('advanced.title')}
@@ -654,6 +654,7 @@ export function Settings() {
               />
             </div>
           </div>
+          */}
 
           {/* Developer */}
           {devModeUnlocked && (

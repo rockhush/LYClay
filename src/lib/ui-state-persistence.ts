@@ -9,25 +9,10 @@ import {
   loadDigitalEmployeeDisplayCache,
 } from '@/lib/digital-employee-display-cache';
 import type { CachedDigitalEmployeeDisplayMetadata } from '@/lib/digital-employee-display-cache';
+import { useChatStore } from '@/stores/chat';
 import type { CompressionStateEntry } from '@/stores/chat/types';
+import { useWorkspacesStore } from '@/stores/workspaces';
 import type { WorkspaceEntry } from '@/types/workspace';
-
-type StoreModule = typeof import('@/stores/workspaces');
-type ChatStoreModule = typeof import('@/stores/chat');
-
-async function loadStoreModules(): Promise<{
-  useWorkspacesStore: StoreModule['useWorkspacesStore'];
-  useChatStore: ChatStoreModule['useChatStore'];
-}> {
-  const [workspaces, chat] = await Promise.all([
-    import('@/stores/workspaces'),
-    import('@/stores/chat'),
-  ]);
-  return {
-    useWorkspacesStore: workspaces.useWorkspacesStore,
-    useChatStore: chat.useChatStore,
-  };
-}
 
 export interface LyclawUiState {
   version: 1;
@@ -40,7 +25,6 @@ export interface LyclawUiState {
   chat: {
     sessionWorkspaceIds: Record<string, string>;
     customSessionLabels: Record<string, string>;
-    sessionLabels: Record<string, string>;
     sessionPinnedAt: Record<string, number>;
     sessionLastActivity: Record<string, number>;
     sessionCompressionState: Record<string, unknown>;
@@ -163,7 +147,7 @@ function readLocalChatState(): LyclawUiState['chat'] {
   for (const key of SESSION_LAST_ACTIVITY_KEYS) {
     sessionLastActivity = { ...sessionLastActivity, ...readJsonNumberRecord(window.localStorage.getItem(key)) };
   }
-  return { sessionWorkspaceIds, customSessionLabels, sessionPinnedAt, sessionLastActivity, sessionLabels: {}, sessionCompressionState: {} };
+  return { sessionWorkspaceIds, customSessionLabels, sessionPinnedAt, sessionLastActivity, sessionCompressionState: {} };
 }
 
 function readLocalDigitalEmployeesState(): LyclawUiState['digitalEmployees'] {
@@ -213,7 +197,6 @@ export function isNonEmptyWorkspaceState(workspaces: LyclawUiState['workspaces']
 export function isNonEmptyChatState(chat: LyclawUiState['chat']): boolean {
   return Object.keys(chat.sessionWorkspaceIds).length > 0
     || Object.keys(chat.customSessionLabels).length > 0
-    || Object.keys(chat.sessionLabels).length > 0
     || Object.keys(chat.sessionPinnedAt).length > 0
     || Object.keys(chat.sessionLastActivity).length > 0
     || Object.keys(chat.sessionCompressionState).length > 0;
@@ -229,38 +212,6 @@ export function isNonEmptyDigitalEmployeesState(
   return Object.keys(digitalEmployees.cachedDisplayMetadata).length > 0;
 }
 
-function mergeChatFields(
-  diskChat: LyclawUiState['chat'] | undefined,
-  localChat: LyclawUiState['chat'],
-): LyclawUiState['chat'] {
-  return {
-    sessionWorkspaceIds: {
-      ...diskChat?.sessionWorkspaceIds,
-      ...localChat.sessionWorkspaceIds,
-    },
-    customSessionLabels: {
-      ...diskChat?.customSessionLabels,
-      ...localChat.customSessionLabels,
-    },
-    sessionLabels: {
-      ...diskChat?.sessionLabels,
-      ...localChat.sessionLabels,
-    },
-    sessionPinnedAt: {
-      ...diskChat?.sessionPinnedAt,
-      ...localChat.sessionPinnedAt,
-    },
-    sessionLastActivity: {
-      ...diskChat?.sessionLastActivity,
-      ...localChat.sessionLastActivity,
-    },
-    sessionCompressionState: {
-      ...diskChat?.sessionCompressionState,
-      ...localChat.sessionCompressionState,
-    },
-  };
-}
-
 /** Pure merge used on startup; exported for unit tests. */
 export function mergeHydratedUiState(
   disk: LyclawUiState | null,
@@ -272,6 +223,8 @@ export function mergeHydratedUiState(
 ): LyclawUiState {
   const preferLocalWorkspaces = options?.preferLocalWorkspaces
     ?? isNonEmptyWorkspaceState(local.workspaces);
+  const preferLocalChat = options?.preferLocalChat
+    ?? isNonEmptyChatState(local.chat);
 
   const workspaces = preferLocalWorkspaces
     ? local.workspaces
@@ -279,9 +232,32 @@ export function mergeHydratedUiState(
         ? disk.workspaces
         : local.workspaces);
 
-  const chat = disk
-    ? mergeChatFields(disk.chat, local.chat)
-    : local.chat;
+  const chat = preferLocalChat
+    ? local.chat
+    : disk
+      ? {
+          sessionWorkspaceIds: {
+            ...disk.chat.sessionWorkspaceIds,
+            ...local.chat.sessionWorkspaceIds,
+          },
+          customSessionLabels: {
+            ...disk.chat.customSessionLabels,
+            ...local.chat.customSessionLabels,
+          },
+          sessionPinnedAt: {
+            ...disk.chat.sessionPinnedAt,
+            ...local.chat.sessionPinnedAt,
+          },
+          sessionLastActivity: {
+            ...disk.chat.sessionLastActivity,
+            ...local.chat.sessionLastActivity,
+          },
+          sessionCompressionState: {
+            ...disk.chat.sessionCompressionState,
+            ...local.chat.sessionCompressionState,
+          },
+        }
+      : local.chat;
 
   return {
     version: 1,
@@ -306,11 +282,7 @@ function mergeUiState(disk: LyclawUiState | null, local: LyclawUiState): LyclawU
   return mergeHydratedUiState(disk, local, { preferLocalWorkspaces, preferLocalChat });
 }
 
-function applyUiStateToStores(
-  state: LyclawUiState,
-  stores: Pick<Awaited<ReturnType<typeof loadStoreModules>>, 'useWorkspacesStore' | 'useChatStore'>,
-): void {
-  const { useWorkspacesStore, useChatStore } = stores;
+function applyUiStateToStores(state: LyclawUiState): void {
   useWorkspacesStore.setState((prev) => ({
     ...prev,
     currentWorkspaceId: state.workspaces.currentWorkspaceId,
@@ -322,18 +294,13 @@ function applyUiStateToStores(
     ...prev,
     sessionWorkspaceIds: state.chat.sessionWorkspaceIds,
     customSessionLabels: state.chat.customSessionLabels,
-    sessionLabels: {
-      ...prev.sessionLabels,
-      ...state.chat.sessionLabels,
-    },
     sessionPinnedAt: state.chat.sessionPinnedAt,
     sessionLastActivity: state.chat.sessionLastActivity as Record<string, number>,
     sessionCompressionState: state.chat.sessionCompressionState as Record<string, CompressionStateEntry | null>,
   }));
 }
 
-async function buildUiStateFromStores(): Promise<LyclawUiState> {
-  const { useWorkspacesStore, useChatStore } = await loadStoreModules();
+function buildUiStateFromStores(): LyclawUiState {
   const workspaces = useWorkspacesStore.getState();
   const chat = useChatStore.getState();
   return {
@@ -347,7 +314,6 @@ async function buildUiStateFromStores(): Promise<LyclawUiState> {
     chat: {
       sessionWorkspaceIds: chat.sessionWorkspaceIds,
       customSessionLabels: chat.customSessionLabels,
-      sessionLabels: chat.sessionLabels,
       sessionPinnedAt: chat.sessionPinnedAt,
       sessionLastActivity: chat.sessionLastActivity,
       sessionCompressionState: chat.sessionCompressionState as unknown as Record<string, unknown>,
@@ -357,6 +323,7 @@ async function buildUiStateFromStores(): Promise<LyclawUiState> {
   };
 }
 
+let hydratePromise: Promise<void> | null = null;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncSubscribed = false;
 let lastSyncedPayload = '';
@@ -386,50 +353,40 @@ export async function flushUiStateSync(): Promise<void> {
     clearTimeout(syncTimer);
     syncTimer = null;
   }
-  await persistUiStateToDisk(await buildUiStateFromStores());
+  await persistUiStateToDisk(buildUiStateFromStores());
 }
 
 export function startUiStateSync(): void {
   if (syncSubscribed) return;
   syncSubscribed = true;
 
-  void loadStoreModules().then(({ useWorkspacesStore, useChatStore }) => {
-    useWorkspacesStore.subscribe((state, prev) => {
-      if (
-        state.currentWorkspaceId !== prev.currentWorkspaceId
-        || state.currentWorkspacePath !== prev.currentWorkspacePath
-        || state.temporaryWorkspaces !== prev.temporaryWorkspaces
-      ) {
-        scheduleUiStateSync();
-      }
-    });
+  useWorkspacesStore.subscribe((state, prev) => {
+    if (
+      state.currentWorkspaceId !== prev.currentWorkspaceId
+      || state.currentWorkspacePath !== prev.currentWorkspacePath
+      || state.temporaryWorkspaces !== prev.temporaryWorkspaces
+    ) {
+      scheduleUiStateSync();
+    }
+  });
 
-    useChatStore.subscribe((state, prev) => {
-      if (
-        state.sessionWorkspaceIds !== prev.sessionWorkspaceIds
-        || state.customSessionLabels !== prev.customSessionLabels
-        || state.sessionLabels !== prev.sessionLabels
-        || state.sessionPinnedAt !== prev.sessionPinnedAt
-        || state.sessionLastActivity !== prev.sessionLastActivity
-        || state.sessionCompressionState !== prev.sessionCompressionState
-      ) {
-        scheduleUiStateSync();
-      }
-    });
-  }).catch((error) => {
-    console.warn('[ui-state] Failed to subscribe store sync listeners:', error);
+  useChatStore.subscribe((state, prev) => {
+    if (
+      state.sessionWorkspaceIds !== prev.sessionWorkspaceIds
+      || state.customSessionLabels !== prev.customSessionLabels
+      || state.sessionPinnedAt !== prev.sessionPinnedAt
+      || state.sessionLastActivity !== prev.sessionLastActivity
+      || state.sessionCompressionState !== prev.sessionCompressionState
+    ) {
+      scheduleUiStateSync();
+    }
   });
 }
 
-type HydrateUiStateFn = typeof hydrateUiStateFromDisk & {
-  __hydratePromise?: Promise<void> | null;
-};
-
 export async function hydrateUiStateFromDisk(): Promise<void> {
-  const hydrateFn = hydrateUiStateFromDisk as HydrateUiStateFn;
-  if (hydrateFn.__hydratePromise) return hydrateFn.__hydratePromise;
+  if (hydratePromise) return hydratePromise;
 
-  hydrateFn.__hydratePromise = (async () => {
+  hydratePromise = (async () => {
     const local = readLocalUiState();
     let disk: LyclawUiState | null = null;
     try {
@@ -444,8 +401,7 @@ export async function hydrateUiStateFromDisk(): Promise<void> {
     const merged = mergeUiState(disk, local);
     loadSkillDisplayCacheLegacy(merged.skills.cachedDisplayMetadata, merged.skills.cachedDisplayVersions);
     loadDigitalEmployeeDisplayCache(merged.digitalEmployees);
-    const stores = await loadStoreModules();
-    applyUiStateToStores(merged, stores);
+    applyUiStateToStores(merged);
 
     startUiStateSync();
 
@@ -456,8 +412,5 @@ export async function hydrateUiStateFromDisk(): Promise<void> {
     }
   })();
 
-  return hydrateFn.__hydratePromise;
+  return hydratePromise;
 }
-
-/** Await durable UI metadata before rebuilding the session sidebar on cold start. */
-export const ensureUiStateHydrated = hydrateUiStateFromDisk;

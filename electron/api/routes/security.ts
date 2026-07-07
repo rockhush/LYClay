@@ -16,6 +16,7 @@ import {
   revokeSkillGrant,
 } from '../../security/permission-store';
 import { assertSkillRuntimeCommandAllowed } from '../../security/skill-runtime-policy';
+import { getSecurityMode, isSecurityMode, setSecurityMode } from '../../security/security-mode';
 import { querySecurityAuditEventPage, querySecurityAuditEvents } from '../../security/audit-log';
 import type { NetworkCapability, SecurityAuditCapability, SecurityAuditDecision } from '../../security/types';
 import { inferSkillContextFromCommand } from '../../gateway/exec-approval-bridge';
@@ -35,6 +36,26 @@ export async function handleSecurityRoutes(
   _ctx: HostApiContext,
 ): Promise<boolean> {
   const path = url.pathname;
+
+  if (path === '/api/security/settings' && req.method === 'GET') {
+    sendJson(res, 200, { success: true, mode: await getSecurityMode() });
+    return true;
+  }
+
+  if (path === '/api/security/settings' && req.method === 'PUT') {
+    try {
+      const body = await parseJsonBody<{ mode?: unknown }>(req);
+      if (!isSecurityMode(body.mode)) {
+        sendJson(res, 400, { success: false, error: 'Unsupported security mode' });
+        return true;
+      }
+      await setSecurityMode(body.mode);
+      sendJson(res, 200, { success: true, mode: body.mode });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
 
   if (path === '/api/security/command-policy/preflight' && req.method === 'POST') {
     try {

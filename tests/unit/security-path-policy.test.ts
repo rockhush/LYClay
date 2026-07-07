@@ -360,7 +360,7 @@ describe('path security policy', () => {
     expect(siblingResult.decision.action === 'deny' ? siblingResult.decision.code : '').toBe('PATH_OUTSIDE_AUTHORIZED_ROOTS');
   });
 
-  it('does not allow delete or execute in the first-stage path policy', async () => {
+  it('allows delete inside authorized roots but keeps execute delegated to command policy', async () => {
     const root = await makeTempRoot();
     const filePath = join(root, 'script.js');
     await writeFile(filePath, 'console.log(1)', 'utf8');
@@ -378,8 +378,24 @@ describe('path security policy', () => {
       source: 'test',
     });
 
-    expect(deleteDecision.decision.action).toBe('deny');
+    expect(deleteDecision.decision.action).toBe('allow');
     expect(executeDecision.decision.action).toBe('deny');
+  });
+
+  it('requires confirmation before deleting important workspace files', async () => {
+    const root = await makeTempRoot();
+    const filePath = join(root, 'package.json');
+    await writeFile(filePath, '{}', 'utf8');
+
+    const result = await evaluatePathPolicy({
+      path: filePath,
+      capability: 'delete',
+      allowedRoots: [root],
+      source: 'test',
+    });
+
+    expect(result.decision.action).toBe('deny');
+    expect(result.decision.action === 'deny' ? result.decision.code : '').toBe('DELETE_REQUIRES_CONFIRMATION');
   });
 
   it('denies symlink escape when the platform permits symlink creation', async () => {

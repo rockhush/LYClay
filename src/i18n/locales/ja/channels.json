@@ -206,6 +206,10 @@
                 "clientSecret": {
                     "label": "Client Secret (AppSecret)",
                     "placeholder": "アプリのシークレット"
+                },
+                "enableCard": {
+                    "label": "カードを有効化",
+                    "description": "有効時は AI カードで返信します。無効時はデフォルトの Markdown モードを使用します"
                 }
             },
             "instructions": [

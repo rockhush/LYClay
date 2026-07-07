@@ -72,7 +72,6 @@
         "modelSwitchFailed": "Failed to switch model: {{error}}",
         "defaultModel": "Default Model",
         "modelSwitchNote": "Only affects this chat and persists when reopened",
-        "dingtalkCard": "DingTalk Card",
         "modelCatalog": {
             "featuresTitle": "Available features",
             "featureImageInput": "Image input",

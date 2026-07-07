@@ -38,6 +38,7 @@ import {
 import { copyPluginFromNodeModules, fixupPluginManifest, cpSyncSafe } from '../utils/plugin-install';
 import { assignChannelAccountToAgent, getChannelAccountBindingOwner } from '../utils/agent-config';
 import { ensureDingTalkDedicatedAgent, DINGTALK_DEDICATED_AGENT_ID } from '../utils/dingtalk-auto-provision';
+import { resolveDingTalkCardTemplateGatewayEnv } from '../utils/dingtalk-card-template';
 import { stripSystemdSupervisorEnv } from './config-sync-env';
 import { getCommandPolicyPreflightToken } from '../api/auth-token';
 import { getPort } from '../utils/config';
@@ -699,12 +700,17 @@ export async function prepareGatewayLaunchContext(port: number): Promise<Gateway
   // like `dws ...` can resolve the same external ~/.dws binary.
   const baseEnvPatched = prependPathEntry(baseEnvWithBundledBin, getDwsDir()).env;
   const managedPythonEnv = await getManagedPythonEnv(stripSystemdSupervisorEnv(baseEnvPatched));
+  const openClawConfig = await readOpenClawConfig();
+  // Always inject from openclaw.json so Gateway uses LYClaw's unified template ID
+  // even when the parent Electron process inherits a stale DINGTALK_CARD_TEMPLATE_ID.
+  const dingTalkCardEnv = resolveDingTalkCardTemplateGatewayEnv(openClawConfig);
 
   const forkEnv: Record<string, string | undefined> = buildBundledNpmEnv({
     ...managedPythonEnv,
     ...providerEnv,
     ...uvEnv,
     ...proxyEnv,
+    ...dingTalkCardEnv,
     OPENCLAW_GATEWAY_TOKEN: appSettings.gatewayToken,
     CLAWX_HOST_API_PORT: String(getPort('CLAWX_HOST_API')),
     CLAWX_COMMAND_POLICY_TOKEN: getCommandPolicyPreflightToken(),

@@ -13,6 +13,11 @@ import { constants, readdirSync, readFileSync, existsSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { listConfiguredAgentIds } from './agent-config';
+import {
+  applyDingTalkCardTemplateDefaults,
+  normalizeStoredDingTalkCardTemplateId,
+  resolveConfiguredDingTalkCardTemplateId,
+} from './dingtalk-card-template';
 import { getOpenClawResolvedDir } from './paths';
 import {
   getProviderEnvVar,
@@ -380,7 +385,25 @@ function ensureThinkingDefaultOff(config: Record<string, unknown>): void {
   defaults.thinkingDefault = 'off';
 }
 
-function applyDingTalkMarkdownTableDefault(config: Record<string, unknown>): void {
+function migrateDingTalkCardTemplateFields(target: Record<string, unknown>): boolean {
+  let changed = false;
+  if (target.messageType === undefined) {
+    target.messageType = 'card';
+    changed = true;
+  }
+  if (target.cardTemplateId === undefined) {
+    target.cardTemplateId = resolveConfiguredDingTalkCardTemplateId();
+    return true;
+  }
+  const migrated = normalizeStoredDingTalkCardTemplateId(target.cardTemplateId);
+  if (migrated && migrated !== target.cardTemplateId) {
+    target.cardTemplateId = migrated;
+    changed = true;
+  }
+  return changed;
+}
+
+function applyDingTalkChannelDefaults(config: Record<string, unknown>): void {
   const channels = (config.channels && typeof config.channels === 'object'
     ? config.channels as Record<string, unknown>
     : null);
@@ -392,6 +415,8 @@ function applyDingTalkMarkdownTableDefault(config: Record<string, unknown>): voi
   if (dingtalk.convertMarkdownTables === undefined) {
     dingtalk.convertMarkdownTables = false;
   }
+
+  applyDingTalkCardTemplateDefaults(dingtalk);
 
   const accounts = (dingtalk.accounts && typeof dingtalk.accounts === 'object'
     ? dingtalk.accounts as Record<string, unknown>
@@ -412,7 +437,7 @@ async function writeOpenClawJson(config: Record<string, unknown>): Promise<void>
   ensureThinkingDefaultOff(config);
   ensureOpenClawSessionDefaults(config);
   ensureOpenClawAgentDefaults(config);
-  applyDingTalkMarkdownTableDefault(config);
+  applyDingTalkChannelDefaults(config);
 
   // Ensure SIGUSR1 graceful reload is authorized by OpenClaw config.
   const commands = (
@@ -2476,6 +2501,10 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
             modified = true;
             console.log('[sanitize] Set channels.dingtalk.convertMarkdownTables=false');
           }
+          if (migrateDingTalkCardTemplateFields(section)) {
+            modified = true;
+            console.log('[sanitize] Updated channels.dingtalk card reply settings');
+          }
 
           for (const key of ['managedBy', 'scope']) {
             if (key in section) {
@@ -2493,6 +2522,10 @@ export async function sanitizeOpenClawConfig(): Promise<void> {
                 account.convertMarkdownTables = false;
                 modified = true;
                 console.log(`[sanitize] Set channels.dingtalk.accounts.${accountId}.convertMarkdownTables=false`);
+              }
+              if (migrateDingTalkCardTemplateFields(account)) {
+                modified = true;
+                console.log(`[sanitize] Updated channels.dingtalk.accounts.${accountId} card reply settings`);
               }
               for (const key of ['managedBy', 'scope']) {
                 if (key in account) {

@@ -6,6 +6,7 @@ import { getDataDir, getOpenClawConfigDir, getOpenClawSkillsDir } from '../utils
 import { readOpenClawConfig } from '../utils/channel-config';
 import { readUiState } from '../utils/ui-state';
 import { matchSensitivePath } from './sensitive-paths';
+import { applyCurrentSecurityModeToDecision } from './security-mode';
 import type { FileCapability, PathPolicyRequest, PathPolicyResult, ResolvedPathInfo, SecurityDecision } from './types';
 import { auditPathDecision } from './audit-log';
 import { findPathGrant, isPathInside, samePath } from './permission-store';
@@ -14,8 +15,13 @@ function allow(reasons: string[], risk: SecurityDecision['risk'] = 'low'): Secur
   return { action: 'allow', risk, reasons };
 }
 
-function deny(code: string, reasons: string[], risk: SecurityDecision['risk'] = 'high'): SecurityDecision {
-  return { action: 'deny', risk, reasons, code };
+function deny(
+  code: string,
+  reasons: string[],
+  risk: SecurityDecision['risk'] = 'high',
+  hardDeny = false,
+): SecurityDecision {
+  return { action: 'deny', risk, reasons, code, ...(hardDeny ? { hardDeny: true } : {}) };
 }
 
 function expandHome(inputPath: string): string {
@@ -171,6 +177,20 @@ function isDirectoryCapabilityAllowed(pathInfo: ResolvedPathInfo, capability: Fi
   return false;
 }
 
+function isImportantDeletePath(filePath: string): boolean {
+  const base = path.basename(filePath).toLowerCase();
+  return new Set([
+    '.git',
+    '.ssh',
+    '.env',
+    'package.json',
+    'pnpm-lock.yaml',
+    'yarn.lock',
+    'package-lock.json',
+    'skill.md',
+  ]).has(base);
+}
+
 export async function evaluatePathPolicy(request: PathPolicyRequest): Promise<PathPolicyResult> {
   let pathInfo: ResolvedPathInfo;
   try {
@@ -187,7 +207,7 @@ export async function evaluatePathPolicy(request: PathPolicyRequest): Promise<Pa
   if (sensitive) {
     const result: PathPolicyResult = {
       pathInfo,
-      decision: deny('SENSITIVE_PATH', [`Sensitive path blocked: ${sensitive.reason}`], 'critical'),
+      decision: deny('SENSITIVE_PATH', [`Sensitive path blocked: ${sensitive.reason}`], 'critical', true),
     };
     auditPathDecision(request, result);
     return result;
@@ -219,17 +239,17 @@ export async function evaluatePathPolicy(request: PathPolicyRequest): Promise<Pa
     const result: PathPolicyResult = {
       pathInfo,
       matchedRoot,
-      decision: deny('SYMLINK_ESCAPE', ['Path resolves outside its authorized root']),
+      decision: deny('SYMLINK_ESCAPE', ['Path resolves outside its authorized root'], 'high', true),
     };
     auditPathDecision(request, result);
     return result;
   }
 
-  if (request.capability === 'delete') {
+  if (request.capability === 'delete' && isImportantDeletePath(pathInfo.realPath)) {
     const result: PathPolicyResult = {
       pathInfo,
       matchedRoot,
-      decision: deny('DELETE_REQUIRES_CONFIRMATION', ['Delete operations require a confirmation flow'], 'high'),
+      decision: deny('DELETE_REQUIRES_CONFIRMATION', ['Deleting important workspace files requires a confirmation flow'], 'high'),
     };
     auditPathDecision(request, result);
     return result;
@@ -265,7 +285,11 @@ export async function evaluatePathPolicy(request: PathPolicyRequest): Promise<Pa
 }
 
 export async function assertPathAllowed(request: PathPolicyRequest): Promise<ResolvedPathInfo> {
-  const result = await evaluatePathPolicy(request);
+  const rawResult = await evaluatePathPolicy(request);
+  const result = {
+    ...rawResult,
+    decision: await applyCurrentSecurityModeToDecision(rawResult.decision),
+  };
   if (result.decision.action !== 'allow' || !result.pathInfo) {
     throw new Error(result.decision.reasons.join('; ') || 'Path access denied');
   }

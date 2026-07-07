@@ -45,7 +45,6 @@ export interface LyclawUiState {
   chat: {
     sessionWorkspaceIds: Record<string, string>;
     customSessionLabels: Record<string, string>;
-    sessionLabels: Record<string, string>;
     sessionPinnedAt: Record<string, number>;
     sessionLastActivity: Record<string, number>;
     sessionCompressionState: Record<string, unknown>;
@@ -76,7 +75,6 @@ export function createEmptyUiState(): LyclawUiState {
     chat: {
       sessionWorkspaceIds: {},
       customSessionLabels: {},
-      sessionLabels: {},
       sessionPinnedAt: {},
       sessionLastActivity: {},
       sessionCompressionState: {},
@@ -258,7 +256,6 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
     chat: {
       sessionWorkspaceIds: sanitizeStringRecord(chatObj.sessionWorkspaceIds),
       customSessionLabels: sanitizeStringRecord(chatObj.customSessionLabels),
-      sessionLabels: sanitizeStringRecord(chatObj.sessionLabels),
       sessionPinnedAt: sanitizeNumberRecord(chatObj.sessionPinnedAt),
       sessionLastActivity: sanitizeNumberRecord(chatObj.sessionLastActivity),
       sessionCompressionState: sanitizeCompressionStateRecord(chatObj.sessionCompressionState),
@@ -342,9 +339,6 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
       customSessionLabels: replaceChat
         ? normalizedPatch.chat.customSessionLabels
         : { ...base.chat.customSessionLabels, ...normalizedPatch.chat.customSessionLabels },
-      sessionLabels: replaceChat
-        ? normalizedPatch.chat.sessionLabels
-        : { ...base.chat.sessionLabels, ...normalizedPatch.chat.sessionLabels },
       sessionPinnedAt: replaceChat
         ? normalizedPatch.chat.sessionPinnedAt
         : { ...base.chat.sessionPinnedAt, ...normalizedPatch.chat.sessionPinnedAt },

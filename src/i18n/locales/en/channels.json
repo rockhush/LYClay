@@ -206,6 +206,10 @@
                 "clientSecret": {
                     "label": "Client Secret (AppSecret)",
                     "placeholder": "Your app secret"
+                },
+                "enableCard": {
+                    "label": "Enable Card",
+                    "description": "Use AI card replies when enabled; use the default Markdown mode when disabled"
                 }
             },
             "instructions": [

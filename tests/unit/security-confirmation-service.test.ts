@@ -325,56 +325,39 @@ describe('security confirmation service', () => {
     expect(harness.sent).toHaveLength(1);
   });
 
-  it('confirms file deletion and allows once without storing a grant', async () => {
+  it('allows file deletion inside authorized roots without confirmation or grants', async () => {
     const harness = setupConfirmationHarness();
     const root = await mkdtemp(join(tmpdir(), 'clawx-confirmation-file-'));
     const filePath = join(root, 'test.txt');
     await writeFile(filePath, 'hello', 'utf8');
 
-    const pending = assertFileOperationAllowedWithConfirmation({
+    await expect(assertFileOperationAllowedWithConfirmation({
       path: filePath,
       capability: 'delete',
       allowedRoots: [root],
       source: 'agent',
-    });
-
-    await expect.poll(() => harness.sent.length).toBe(1);
-    expect(harness.sent[0]).toMatchObject({
-      kind: 'file',
-      target: { path: filePath, capability: 'delete' },
-    });
-    await harness.respond('allow-once');
-
-    await expect(pending).resolves.toMatchObject({
+    })).resolves.toMatchObject({
       decision: { action: 'allow' },
     });
+    expect(harness.sent).toHaveLength(0);
     expect(await listAllPathGrants()).toHaveLength(0);
   });
 
-  it('stores session path grant after allow-session for file deletion', async () => {
+  it('does not create a session grant for already-authorized file deletion', async () => {
     const harness = setupConfirmationHarness();
     const root = await mkdtemp(join(tmpdir(), 'clawx-confirmation-file-'));
     const filePath = join(root, 'delete-me.txt');
     await writeFile(filePath, 'temp', 'utf8');
 
-    const pending = assertFileOperationAllowedWithConfirmation({
+    await assertFileOperationAllowedWithConfirmation({
       path: filePath,
       capability: 'delete',
       allowedRoots: [root],
       source: 'agent',
     });
 
-    await expect.poll(() => harness.sent.length).toBe(1);
-    await harness.respond('allow-session');
-    await pending;
-
-    const grants = await listAllPathGrants();
-    expect(grants).toHaveLength(1);
-    expect(grants[0]).toMatchObject({
-      capabilities: ['delete'],
-      scope: 'session',
-      source: 'security-confirmation',
-    });
+    expect(harness.sent).toHaveLength(0);
+    expect(await listAllPathGrants()).toHaveLength(0);
   });
 
   it('skips confirmation when a path grant already exists', async () => {
@@ -402,51 +385,41 @@ describe('security confirmation service', () => {
     });
   });
 
-  it('blocks file deletion when the user rejects the confirmation', async () => {
+  it('blocks file deletion outside authorized roots without asking for confirmation', async () => {
     const harness = setupConfirmationHarness();
     const root = await mkdtemp(join(tmpdir(), 'clawx-confirmation-file-'));
+    const allowedRoot = await mkdtemp(join(tmpdir(), 'clawx-confirmation-allowed-'));
     const filePath = join(root, 'reject-me.txt');
     await writeFile(filePath, 'data', 'utf8');
 
     const pending = assertFileOperationAllowedWithConfirmation({
       path: filePath,
       capability: 'delete',
-      allowedRoots: [root],
+      allowedRoots: [allowedRoot],
       source: 'agent',
     });
 
-    await expect.poll(() => harness.sent.length).toBe(1);
-    await harness.respond('deny');
-
     await expect(pending).rejects.toMatchObject({
-      code: 'FILE_OPERATION_DENIED_BY_USER',
+      code: 'PATH_OUTSIDE_AUTHORIZED_ROOTS',
     });
+    expect(harness.sent).toHaveLength(0);
   });
 
-  it('persists path grant after allow-persistent for file deletion', async () => {
+  it('does not persist a grant for already-authorized file deletion', async () => {
     const harness = setupConfirmationHarness();
     const root = await mkdtemp(join(tmpdir(), 'clawx-confirmation-file-'));
     const filePath = join(root, 'persist-delete.txt');
     await writeFile(filePath, 'data', 'utf8');
 
-    const pending = assertFileOperationAllowedWithConfirmation({
+    await assertFileOperationAllowedWithConfirmation({
       path: filePath,
       capability: 'delete',
       allowedRoots: [root],
       source: 'agent',
     });
 
-    await expect.poll(() => harness.sent.length).toBe(1);
-    await harness.respond('allow-persistent');
-    await pending;
-
-    const grants = await listAllPathGrants();
-    expect(grants).toHaveLength(1);
-    expect(grants[0]).toMatchObject({
-      capabilities: ['delete'],
-      scope: 'persistent',
-      source: 'security-confirmation',
-    });
+    expect(harness.sent).toHaveLength(0);
+    expect(await listAllPathGrants()).toHaveLength(0);
   });
 
   it('allows file read without confirmation when inside workspace', async () => {
