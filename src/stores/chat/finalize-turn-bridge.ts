@@ -2,6 +2,7 @@ import { clearErrorRecoveryTimer, clearHistoryPoll, hasVisibleAssistantContent }
 import {
   buildClearedActiveRunPatch,
   hasVisibleAssistantReplyForActiveTurn,
+  isVisibleAssistantTextWithoutToolUse,
   shouldKeepRunActiveAfterAssistantFinal,
   shouldSilentlyFinalizeRunOnAssistantFinal,
 } from './run-lifecycle';
@@ -24,17 +25,28 @@ import type { RawMessage, SessionStreamingState } from './types';
 import {
   findConcludingAssistantForActiveTurn,
   findTerminalAssistantForActiveTurn,
+  transcriptHasCommittedConcludingReply,
 } from './run-lifecycle';
 import {
   collectChildDelegationBindings,
   collectCompletedSubagentSessionKeys,
   isGatewayIdleForSpawnedChildren,
+  isInterimSubagentWaitAssistantReply,
   isSubagentDelegationAnnounceRun,
+  isVisibleWrapUpAssistantReply,
   parseChildSessionKeyFromAnnounceRun,
   pruneSettledChildProcessingKeys,
   resolveCompletedChildSessionKeys,
 } from '@/lib/subagent-delegation';
 import { hasDelegationSpawnForActiveTurn, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
+import {
+  summarizeAssistantMessage,
+  summarizeBackendActivity,
+  summarizeGatewayBackground,
+  summarizeTranscriptTail,
+  summarizeUiSignals,
+  traceTurnTransition,
+} from './turn-state-trace';
 
 let _finalizeGraceTimer: ReturnType<typeof setTimeout> | null = null;
 let _finalizeGraceSessionKey: string | null = null;
@@ -51,6 +63,24 @@ export function clearFinalizeGraceTimer(): void {
 
 export function getFinalizeGraceStartedAt(sessionKey: string): number | null {
   return _finalizeGraceSessionKey === sessionKey ? _finalizeGraceStartedAt : null;
+}
+
+function traceFinalizeOutcome(
+  outcome: string,
+  context: { sessionKey: string; runId?: string; terminalMessage?: RawMessage },
+  state: ReturnType<ChatGet>,
+  snapshot?: { session: import('./user-turn-lifecycle').SessionBackendActivity; background: import('./user-turn-lifecycle').GatewayBackgroundActivity },
+): void {
+  traceTurnTransition('finalize-turn', {
+    outcome,
+    sessionKey: context.sessionKey,
+    runId: context.runId ?? null,
+    terminal: summarizeAssistantMessage(context.terminalMessage),
+    ui: summarizeUiSignals(state),
+    backend: summarizeBackendActivity(snapshot?.session ?? state.sessionBackendActivity),
+    gateway: summarizeGatewayBackground(snapshot?.background ?? state.gatewayBackgroundActivity),
+    transcript: summarizeTranscriptTail(state.messages, state.lastUserMessageAt),
+  });
 }
 
 function buildCanClearInput(
@@ -219,16 +249,36 @@ export function buildSettledActiveRunPatch(state: {
   messages: RawMessage[];
   gatewayBackgroundActivity: import('./types').ChatState['gatewayBackgroundActivity'];
   announcedChildSessionKeys: readonly string[];
+  lastUserMessageAt?: number | null;
+  currentSessionKey?: string;
 }): Partial<import('./types').ChatState> {
   const completedChildSessionKeys = resolveCompletedChildSessionKeys(
     state.messages,
     state.announcedChildSessionKeys,
   );
-  const prunedProcessingKeys = pruneSettledChildProcessingKeys(
-    state.messages,
-    state.gatewayBackgroundActivity?.processingSessionKeys ?? [],
-    [...completedChildSessionKeys],
-  );
+  const processingKeys = state.gatewayBackgroundActivity?.processingSessionKeys ?? [];
+  const delegationSpawned = hasDelegationSpawnForActiveTurn(state.messages, {
+    lastUserMessageAt: state.lastUserMessageAt,
+  });
+  const delegationFullySettled = isDelegationWrapUpComplete(state.messages, processingKeys, {
+    lastUserMessageAt: state.lastUserMessageAt,
+    completedChildSessionKeys,
+  });
+  let prunedProcessingKeys = delegationSpawned && !delegationFullySettled
+    ? [...processingKeys]
+    : pruneSettledChildProcessingKeys(
+      state.messages,
+      processingKeys,
+      [...completedChildSessionKeys],
+    );
+  const parentSessionKey = state.currentSessionKey;
+  if (
+    parentSessionKey
+    && prunedProcessingKeys.includes(parentSessionKey)
+    && transcriptHasCommittedConcludingReply(state.messages, state.lastUserMessageAt ?? null)
+  ) {
+    prunedProcessingKeys = prunedProcessingKeys.filter((key) => key !== parentSessionKey);
+  }
   const gatewayBackground = state.gatewayBackgroundActivity
     ? {
       ...state.gatewayBackgroundActivity,
@@ -263,7 +313,10 @@ function emptySessionStreamingSnapshot(lastUserMessageAt: number | null): Sessio
 function applySettledActiveRunPatch(set: ChatSet, get: ChatGet): void {
   const state = get();
   const sessionKey = state.currentSessionKey;
-  const settled = buildSettledActiveRunPatch(state);
+  const settled = buildSettledActiveRunPatch({
+    ...state,
+    currentSessionKey: sessionKey,
+  });
   const cleared = buildClearedActiveRunPatch();
   const prevSnapshot = state.sessionStreamingStates[sessionKey]
     ?? emptySessionStreamingSnapshot(state.lastUserMessageAt);
@@ -386,7 +439,8 @@ function isVisibleAnnounceDelegationAnswer(
   }
   const terminal = input.terminalMessage;
   if (!terminal || !hasVisibleAssistantContent(terminal)) return false;
-  return !shouldKeepRunActiveAfterAssistantFinal(terminal);
+  if (isInterimSubagentWaitAssistantReply(terminal)) return false;
+  return isVisibleWrapUpAssistantReply(terminal, messages);
 }
 
 function hasSettledDelegationAnswer(
@@ -535,6 +589,8 @@ export function reconcileUserTurnAfterDelegationWrapUp(
     messages: state.messages,
     gatewayBackgroundActivity: state.gatewayBackgroundActivity,
     announcedChildSessionKeys: state.announcedChildSessionKeys,
+    lastUserMessageAt: state.lastUserMessageAt,
+    currentSessionKey: sessionKey,
   });
   const currentProcessing = state.gatewayBackgroundActivity?.processingSessionKeys ?? [];
   const prunedProcessing = settledPatch.gatewayBackgroundActivity?.processingSessionKeys ?? [];
@@ -575,10 +631,14 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
   if (state.runAborted) return;
   const isAnnounceWrapUpRun = Boolean(context.runId && isSubagentDelegationAnnounceRun(context.runId));
   if (isAnnounceWrapUpRun && trySyncClearAnnounceWrapUp(get, set, context)) {
+    traceFinalizeOutcome('announce_sync_cleared', context, state);
     ensureSessionBackendPolling(context.sessionKey, set, get);
     return;
   }
-  if (context.runId && state.activeRunId && state.activeRunId !== context.runId && !isAnnounceWrapUpRun) return;
+  if (context.runId && state.activeRunId && state.activeRunId !== context.runId && !isAnnounceWrapUpRun) {
+    traceFinalizeOutcome('run_id_mismatch', context, state);
+    return;
+  }
 
   const snapshot = await refreshSessionBackendActivity(context.sessionKey);
   if (!snapshot) {
@@ -586,6 +646,7 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
     if (next.currentSessionKey !== context.sessionKey) return;
     if (next.runAborted) return;
     if (isAnnounceWrapUpRun) {
+      traceFinalizeOutcome('announce_no_backend_snapshot', context, next);
       ensureSessionBackendPolling(context.sessionKey, set, get);
       return;
     }
@@ -595,9 +656,11 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
       next.sessionBackendActivity,
       { lastUserMessageAt: next.lastUserMessageAt },
     )) {
+      traceFinalizeOutcome('keep_open_no_snapshot_delegation', context, next);
       applyKeepUserTurnOpen(set, get, context);
       return;
     }
+    traceFinalizeOutcome('no_backend_snapshot_poll', context, next);
     ensureSessionBackendPolling(context.sessionKey, set, get);
     return;
   }
@@ -624,6 +687,12 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
     clearHistoryPoll();
     clearErrorRecoveryTimer();
     applySettledActiveRunPatch(set, get);
+    traceFinalizeOutcome(
+      canClearAnnounceWrapUp ? 'announce_cleared' : 'cleared',
+      context,
+      next,
+      snapshot,
+    );
     ensureSessionBackendPolling(context.sessionKey, set, get);
     return;
   }
@@ -640,15 +709,18 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
     clearHistoryPoll();
     clearErrorRecoveryTimer();
     applySettledActiveRunPatch(set, get);
+    traceFinalizeOutcome('announce_visible_answer_cleared', context, next, snapshot);
     ensureSessionBackendPolling(context.sessionKey, set, get);
     return;
   }
 
   if (isAnnounceWrapUpRun) {
+    traceFinalizeOutcome('announce_wait', context, next, snapshot);
     ensureSessionBackendPolling(context.sessionKey, set, get);
     return;
   }
 
+  traceFinalizeOutcome('keep_open', context, next, snapshot);
   applyKeepUserTurnOpen(set, get, context, snapshot);
 }
 

@@ -926,6 +926,46 @@ describe('syncProviderConfigToOpenClaw', () => {
     await rm(testUserData, { recursive: true, force: true });
   });
 
+  it('strips Sub2API-only model metadata before writing provider models', async () => {
+    await writeOpenClawJson({
+      models: { providers: {} },
+    });
+
+    const { syncProviderConfigToOpenClaw } = await import('@electron/utils/openclaw-auth');
+
+    await syncProviderConfigToOpenClaw('custom-sub2apig', 'MiniMax-M2.7', {
+      baseUrl: 'http://10.0.2.77:8090/v1',
+      api: 'openai-completions',
+      modelOverrides: {
+        'MiniMax-M2.7': {
+          id: 'MiniMax-M2.7',
+          name: 'LY-MiniMax-M2.7',
+          modelId: 'MiniMax-M2.7',
+          displayName: 'MiniMax raw name',
+          timeoutSeconds: 900,
+          input: ['text', 'image'],
+          contextWindow: 200000,
+        },
+      },
+    });
+
+    const result = await readOpenClawJson();
+    const models = (result.models as { providers: Record<string, { models: Array<Record<string, unknown>> }> })
+      .providers['custom-sub2apig'].models;
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        id: 'MiniMax-M2.7',
+        name: 'LY-MiniMax-M2.7',
+        input: ['text', 'image'],
+        contextWindow: 200000,
+      }),
+    ]);
+    expect(models[0]).not.toHaveProperty('modelId');
+    expect(models[0]).not.toHaveProperty('displayName');
+    expect(models[0]).not.toHaveProperty('timeoutSeconds');
+  });
+
   it('uses legacy minimax-portal-auth plugin registration when only the legacy plugin exists', async () => {
     await writeOpenClawJson({
       models: { providers: {} },
@@ -1517,6 +1557,36 @@ describe('ensureAgentContextTokensCapForLargeModels', () => {
     const changed = await ensureAgentContextTokensCapForLargeModels();
     expect(changed).toBe(false);
   });
+
+  it('does not raise default contextTokens for Sub2API DeepSeek models using explicit ly-auto limits', async () => {
+    await writeOpenClawJson({
+      models: {
+        providers: {
+          'custom-sub2g3e5cd874': {
+            models: [{
+              id: 'deepseek-v4-pro',
+              contextWindow: 200_000,
+              contextTokens: 200_000,
+              maxTokens: 16_384,
+            }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          contextTokens: 200_000,
+        },
+      },
+    });
+
+    const { ensureAgentContextTokensCapForLargeModels } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureAgentContextTokensCapForLargeModels();
+    expect(changed).toBe(false);
+
+    const result = await readOpenClawJson();
+    const defaults = (result.agents as Record<string, unknown>).defaults as Record<string, unknown>;
+    expect(defaults.contextTokens).toBe(200_000);
+  });
 });
 
 describe('ensureModelCatalogContextTokensForLargeModels', () => {
@@ -1603,7 +1673,41 @@ describe('ensureModelCatalogContextTokensForLargeModels', () => {
     const model = (
       (result.models as Record<string, unknown>).providers as Record<string, { models: Array<Record<string, unknown>> }>
     )['custom-customb5'].models[0];
-    expect(model.maxTokens).toBe(65_536);
+    expect(model.maxTokens).toBe(384_000);
+  });
+
+  it('preserves Sub2API DeepSeek ly-auto limits during catalog repair', async () => {
+    await writeOpenClawJson({
+      models: {
+        providers: {
+          'custom-sub2g3e5cd874': {
+            baseUrl: 'http://10.0.2.77:8090/v1',
+            api: 'openai-completions',
+            models: [{
+              id: 'deepseek-v4-pro',
+              name: 'LY-deepseek-v4-pro',
+              contextWindow: 200_000,
+              contextTokens: 200_000,
+              maxTokens: 16_384,
+            }],
+          },
+        },
+      },
+    });
+
+    const { ensureModelCatalogContextTokensForLargeModels } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureModelCatalogContextTokensForLargeModels();
+    expect(changed).toBe(true);
+
+    const result = await readOpenClawJson();
+    const provider = (
+      (result.models as Record<string, unknown>).providers as Record<string, { models: Array<Record<string, unknown>> }>
+    )['custom-sub2g3e5cd874'];
+    expect(provider.models[0]).toMatchObject({
+      contextWindow: 200_000,
+      contextTokens: 200_000,
+      maxTokens: 16_384,
+    });
   });
 });
 
@@ -1656,5 +1760,42 @@ describe('ensureAgentModelsJsonValid', () => {
     };
     expect(repaired.providers['ly-auto'].models[0].input).toEqual(['text', 'image']);
     expect(repaired.providers['custom-customb5'].models[0].contextTokens).toBe(1_048_576);
+  });
+
+  it('preserves Sub2API DeepSeek ly-auto limits while repairing agent models.json', async () => {
+    const modelsPath = join(testHome, '.openclaw', 'agents', 'main', 'agent', 'models.json');
+    await mkdir(dirname(modelsPath), { recursive: true });
+    await writeFile(modelsPath, JSON.stringify({
+      providers: {
+        'custom-sub2g3e5cd874': {
+          baseUrl: 'http://10.0.2.77:8090/v1',
+          apiKey: 'test-key',
+          api: 'openai-completions',
+          models: [{
+            id: 'deepseek-v4-pro',
+            name: 'LY-deepseek-v4-pro',
+            input: ['text', 'image', 'video'],
+            contextWindow: 200_000,
+            contextTokens: 200_000,
+            maxTokens: 16_384,
+          }],
+        },
+      },
+    }, null, 2));
+
+    const { ensureAgentModelsJsonValid } = await import('@electron/utils/openclaw-auth');
+    const changed = await ensureAgentModelsJsonValid();
+    expect(changed).toBe(true);
+
+    const repaired = JSON.parse(await readFile(modelsPath, 'utf8')) as {
+      providers: Record<string, { models: Array<Record<string, unknown>> }>;
+    };
+    const provider = repaired.providers['custom-sub2g3e5cd874'];
+    expect(provider.models[0]).toMatchObject({
+      input: ['text', 'image'],
+      contextWindow: 200_000,
+      contextTokens: 200_000,
+      maxTokens: 16_384,
+    });
   });
 });

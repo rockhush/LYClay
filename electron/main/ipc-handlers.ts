@@ -1334,6 +1334,30 @@ function registerLogHandlers(): void {
   ipcMain.handle('log:listFiles', async () => {
     return await logger.listLogFiles();
   });
+
+  // Append a renderer-originated line to the main-process log file (fire-and-forget).
+  ipcMain.handle('log:append', async (_, payload?: { level?: string; message?: string; details?: unknown }) => {
+    const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
+    if (!message) return { ok: false };
+
+    const details = payload?.details;
+    const args = details === undefined ? [] : [details];
+    switch (payload?.level) {
+      case 'debug':
+        logger.debug(message, ...args);
+        break;
+      case 'warn':
+        logger.warn(message, ...args);
+        break;
+      case 'error':
+        logger.error(message, ...args);
+        break;
+      default:
+        logger.info(message, ...args);
+        break;
+    }
+    return { ok: true };
+  });
 }
 
 /**

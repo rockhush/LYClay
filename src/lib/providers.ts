@@ -122,6 +122,7 @@ export interface ProviderAccount {
   model?: string;
   fallbackModels?: string[];
   fallbackAccountIds?: string[];
+  runtimeModels?: Array<Record<string, unknown> & { id: string; name: string }>;
   enabled: boolean;
   isDefault: boolean;
   metadata?: {
@@ -129,7 +130,11 @@ export interface ProviderAccount {
     email?: string;
     resourceUrl?: string;
     customModels?: string[];
-    managedBy?: 'lyclaw';
+    managedBy?: 'lyclaw' | 'sub2api';
+    scope?: 'global' | 'digitalEmployee';
+    subjectHash?: string;
+    hiddenInProviderSettings?: boolean;
+    lastSuccessAt?: string;
     readonly?: boolean;
   };
   createdAt: string;

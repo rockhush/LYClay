@@ -19,6 +19,31 @@ const PROVIDER_KEY_ALIASES: Record<string, string> = {
   'minimax-portal-cn': OPENCLAW_PROVIDER_KEY_MINIMAX,
 };
 
+function stableProviderSuffix(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+function getSub2ApiRuntimeSuffix(providerId: string): string | null {
+  if (providerId.startsWith('sub2api-employee-')) {
+    return `sub2e${stableProviderSuffix(providerId)}`;
+  }
+  if (providerId.startsWith('sub2api-global-')) {
+    return `sub2g${stableProviderSuffix(providerId)}`;
+  }
+  return null;
+}
+
+export function getLegacyOpenClawProviderKeyForType(type: string, providerId: string): string | null {
+  if (!MULTI_INSTANCE_PROVIDER_TYPES.has(type)) return null;
+  const suffix = providerId.replace(/-/g, '').slice(0, 8);
+  return suffix ? `${type}-${suffix}` : null;
+}
+
 export function getOpenClawProviderKeyForType(type: string, providerId: string): string {
   if (MULTI_INSTANCE_PROVIDER_TYPES.has(type)) {
     // If the providerId is already a runtime key (e.g. re-seeded from openclaw.json
@@ -30,13 +55,16 @@ export function getOpenClawProviderKeyForType(type: string, providerId: string):
         return providerId;
       }
     }
+    const sub2ApiSuffix = getSub2ApiRuntimeSuffix(providerId);
+    if (sub2ApiSuffix) {
+      return `${type}-${sub2ApiSuffix}`;
+    }
     const suffix = providerId.replace(/-/g, '').slice(0, 8);
     return `${type}-${suffix}`;
   }
 
   return PROVIDER_KEY_ALIASES[type] ?? type;
 }
-
 export function extractModelIdFromStoredModel(model: string): string {
   const trimmed = model.trim();
   const slash = trimmed.indexOf('/');

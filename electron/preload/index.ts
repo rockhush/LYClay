@@ -133,6 +133,7 @@ const electronAPI = {
         'log:getFilePath',
         'log:getDir',
         'log:listFiles',
+        'log:append',
         // File staging & media
         'fs:readdir',
         'fs:readFile',

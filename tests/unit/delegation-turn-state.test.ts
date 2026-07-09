@@ -418,4 +418,20 @@ describe('delegation-turn-state', () => {
     expect(isSegmentDelegationPhaseOpen(messages.slice(1), [])).toBe(true);
     expect(isDelegationWrapUpComplete(messages, [], { lastUserMessageAt: 1000 })).toBe(false);
   });
+
+  it('does not wrap up multi-spawn turns on partial phase progress replies', () => {
+    const child1 = 'agent:main:subagent:phase-1';
+    const child2 = 'agent:main:subagent:phase-2';
+    const child3 = 'agent:main:subagent:phase-3';
+    const messages = spawnMessages([child1, child2, child3]);
+    messages.push({
+      role: 'assistant',
+      content: 'Phase 1（slides 1-5）也完成了！✅ 继续等待 Phase 3（slides 11-15）～',
+      stopReason: 'stop',
+      timestamp: 5000,
+    });
+
+    expect(isDelegationWrapUpComplete(messages, [], { lastUserMessageAt: 1000 })).toBe(false);
+    expect(isParentDelegationPhaseOpen(messages, [], { lastUserMessageAt: 1000 })).toBe(true);
+  });
 });

@@ -33,6 +33,25 @@ describe('known-model-capabilities', () => {
     });
   });
 
+  it('preserves explicit DeepSeek V4 limits for Sub2API supplied model metadata', () => {
+    const result = syncOpenClawModelCatalogEntry('deepseek-v4-pro', {
+      id: 'deepseek-v4-pro',
+      name: 'LY-deepseek-v4-pro',
+      contextWindow: 200000,
+      contextTokens: 200000,
+      maxTokens: 16384,
+    }, { baseUrl: 'http://10.0.2.77:8090/v1', preserveExplicitLimits: true });
+
+    expect(result).toMatchObject({
+      id: 'deepseek-v4-pro',
+      name: 'LY-deepseek-v4-pro',
+      contextWindow: 200000,
+      contextTokens: 200000,
+      maxTokens: 16384,
+      compat: { maxTokensField: 'max_tokens' },
+    });
+  });
+
   it('sets max_tokens field for any custom provider base URL', () => {
     const result = syncOpenClawModelCatalogEntry('my-model', {
       id: 'my-model',

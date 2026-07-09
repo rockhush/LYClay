@@ -15,6 +15,7 @@ const DEEPSEEK_V4_MODEL_SUFFIXES = ['deepseek-v4-pro', 'deepseek-v4-flash'] as c
 
 export type SyncOpenClawModelCatalogOptions = {
   baseUrl?: string;
+  preserveExplicitLimits?: boolean;
 };
 
 /**
@@ -109,8 +110,9 @@ export function applyEndpointMaxTokensFieldCompat(
 function applyKnownModelCatalogLimits(
   modelId: string,
   modelEntry: Record<string, unknown>,
+  options: SyncOpenClawModelCatalogOptions = {},
 ): Record<string, unknown> {
-  if (!isDeepSeekV4ModelId(modelId)) {
+  if (!isDeepSeekV4ModelId(modelId) || options.preserveExplicitLimits) {
     return modelEntry;
   }
 
@@ -134,7 +136,7 @@ export function syncOpenClawModelCatalogEntry(
   let entry = sanitizeOpenClawModelEntry(modelEntry);
   entry = alignContextTokensWithWindow(entry);
   entry = applyEndpointMaxTokensFieldCompat(entry, options.baseUrl);
-  entry = applyKnownModelCatalogLimits(modelId, entry);
+  entry = applyKnownModelCatalogLimits(modelId, entry, options);
   // Re-align after catalog limits may have raised contextWindow.
   entry = alignContextTokensWithWindow(entry);
   entry = applyEndpointMaxTokensFieldCompat(entry, options.baseUrl);

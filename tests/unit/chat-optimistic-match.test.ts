@@ -186,6 +186,44 @@ describe('matchesOptimisticUserMessage', () => {
     expect(deduped[0]?.content).toBe('这张图是什么类型的图片');
   });
 
+  it('keeps same user text when attached files differ', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: '/think medium 这个呢',
+        timestamp: 1_700_000_000,
+        id: 'resume-a',
+        _attachedFiles: [
+          {
+            fileName: '刁荣琦算法-3年.pdf',
+            mimeType: 'application/pdf',
+            fileSize: 1,
+            preview: null,
+            filePath: 'C:\\Users\\test\\刁荣琦算法-3年.pdf',
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: '/think medium 这个呢',
+        timestamp: 1_700_000_120,
+        id: 'resume-b',
+        _attachedFiles: [
+          {
+            fileName: '谢皓杰-简历原件.pdf',
+            mimeType: 'application/pdf',
+            fileSize: 1,
+            preview: null,
+            filePath: 'C:\\Users\\test\\谢皓杰-简历原件.pdf',
+          },
+        ],
+      },
+    ] as const;
+
+    const deduped = dedupeConsecutiveEquivalentUserMessages([...messages]);
+    expect(deduped).toHaveLength(2);
+  });
+
   it('keeps repeated user questions separated by an assistant reply', () => {
     const messages = [
       { role: 'user', content: 'hello', timestamp: 1 },

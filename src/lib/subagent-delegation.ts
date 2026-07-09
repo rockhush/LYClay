@@ -78,6 +78,11 @@ export function parseAgentIdFromSessionKey(sessionKey: string): string | null {
   return parts[1] || null;
 }
 
+/** Child delegation sessions embed `:subagent:` in the session key. */
+export function isSubagentSessionKey(sessionKey: string): boolean {
+  return sessionKey.includes(':subagent:');
+}
+
 export function parseSubagentCompletionInfo(message: RawMessage): SubagentCompletionInfo | null {
   const text = typeof message.content === 'string'
     ? message.content
@@ -160,9 +165,21 @@ export function isInterimSubagentWaitAssistantReply(message: RawMessage): boolea
   const text = extractText(message).trim();
   if (!text) return false;
   if (shouldSilentlyFinalizeRunOnAssistantFinal(message)) return false;
-  if (/(?:已生成|生成完毕|✅|saved|slides?:\s*\d+|共\s*\d+\s*页)/i.test(text)) return false;
+
+  // Partial multi-phase progress: one slice done but explicitly waiting for another.
+  if (/(?:继续等待|continue\s+waiting|waiting\s+(?:for\s+)?Phase|等待\s*Phase)/i.test(text)) return true;
+  if (/(?:已完成|完成了|also completed|completed).{0,48}(?:继续|等待|waiting)/i.test(text)) return true;
+  if (/(?:Phase\s*\d+).{0,40}(?:完成|completed).{0,48}(?:继续|等待|waiting)/i.test(text)) return true;
+
   if (/(?:稍等|等一下|启动了一个子任务)/i.test(text)) return true;
-  return /(?:预计|等待|几分钟后|完成后.{0,12}通知|已启动|已交给|正在.{0,12}(?:构建|生成)|sub-?agent|子代理|子智能体)/i.test(text);
+  if (/(?:预计|等待|几分钟后|完成后.{0,12}通知|已启动|已交给|正在.{0,12}(?:构建|生成)|sub-?agent|子代理|子智能体)/i.test(text)) {
+    return true;
+  }
+
+  // Deliverable finals often include ✅ / slide counts — but not when still waiting.
+  if (/(?:已生成|生成完毕|✅|saved|slides?:\s*\d+|共\s*\d+\s*页)/i.test(text)) return false;
+
+  return false;
 }
 
 export function isVisibleWrapUpAssistantReply(

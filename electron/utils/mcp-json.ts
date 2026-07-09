@@ -17,11 +17,16 @@ export interface McpServerEntry {
   transport?: 'streamable-http' | 'sse';
   url?: string;
   command?: string;
+  /** Portable launcher declaration for packaged digital employee MCP servers. */
+  runtime?: 'node';
+  /** Package-relative entry file used with runtime declarations. */
+  entry?: string;
   args?: string[];
   env?: Record<string, string>;
   disabled?: boolean;
   headers?: Record<string, string>;
   tools?: McpServerToolsFilter;
+  toolFilter?: { include?: string[]; exclude?: string[] };
   [key: string]: unknown;
 }
 

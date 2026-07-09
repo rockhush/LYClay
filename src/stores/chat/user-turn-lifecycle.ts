@@ -3,10 +3,14 @@ import {
   findConcludingAssistantForActiveTurn,
   findTerminalAssistantForActiveTurn,
   isRunTerminalAssistantMessage,
+  isToolUseStopReasonAssistantMessage,
+  findLatestVisibleUserIndex,
   hasVisibleAssistantReplyForActiveTurn,
   isVisibleAssistantTextWithoutToolUse,
+  resolveActiveTurnLastUserMessageAt,
   shouldKeepRunActiveAfterAssistantFinal,
   shouldSilentlyFinalizeRunOnAssistantFinal,
+  transcriptHasCommittedConcludingReply,
 } from './run-lifecycle';
 import type { RawMessage, SessionStreamingState } from './types';
 import {
@@ -15,9 +19,16 @@ import {
   resolveCompletedChildSessionKeys,
 } from '@/lib/subagent-delegation';
 import { hasDelegationSpawnForActiveTurn, isParentDelegationPhaseOpen, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
-import { isGatewayIdleForSpawnedChildren } from '@/lib/subagent-delegation';
 import { hasGatewayActiveChildDelegations } from '@/lib/subagent-delegation-watch';
 import { isUserAbortedSession } from './user-aborted-sessions';
+import {
+  summarizeBackendActivity,
+  summarizeGatewayBackground,
+  summarizeTranscriptTail,
+  summarizeUiSignals,
+  traceTurnDecision,
+  traceTurnTransition,
+} from './turn-state-trace';
 
 export type SessionBackendActivity = {
   sessionKey: string;
@@ -104,6 +115,7 @@ export type UserTurnActiveRunOptions = {
   /** When set, a persisted user-abort marker suppresses executing UI until backend idle. */
   sessionKey?: string;
   completedChildSessionKeys?: ReadonlySet<string>;
+  nowMs?: number;
 };
 
 export function hasLocalRunSignals(state: UserTurnUiSignals): boolean {
@@ -160,25 +172,63 @@ export function deriveIsExecuting(
   backendActivity?: SessionBackendActivity | null,
   options?: UserTurnActiveRunOptions,
 ): boolean {
-  if (options?.sessionKey && isUserAbortedSession(options.sessionKey)) return false;
-  if (state.runAborted) return false;
+  const sessionKey = options?.sessionKey ?? 'current';
   const messages = options?.messages ?? [];
-  const processingKeys = options?.gatewayBackground?.processingSessionKeys ?? [];
-  const completedChildSessionKeys = options?.completedChildSessionKeys;
-  if (messages.length > 0
-    && isDelegationWrapUpComplete(messages, processingKeys, {
-      lastUserMessageAt: options?.lastUserMessageAt,
-      completedChildSessionKeys,
-    })) {
+  const traceBase = {
+    ui: summarizeUiSignals(state),
+    backend: summarizeBackendActivity(backendActivity),
+    gateway: summarizeGatewayBackground(options?.gatewayBackground),
+    transcript: messages.length > 0
+      ? summarizeTranscriptTail(messages, options?.lastUserMessageAt ?? null)
+      : null,
+  };
+  const logDecision = (decision: boolean, reason: string, extra?: Record<string, unknown>) => {
+    traceTurnDecision('derive-is-executing', decision, { reason, ...traceBase, ...extra }, sessionKey);
+  };
+
+  if (options?.sessionKey && isUserAbortedSession(options.sessionKey)) {
+    logDecision(false, 'user_aborted_session');
     return false;
   }
-  if (options?.waitingOnSubagentDelegation) return true;
+  if (state.runAborted) {
+    logDecision(false, 'run_aborted_flag');
+    return false;
+  }
+  const processingKeys = options?.gatewayBackground?.processingSessionKeys ?? [];
+  const completedChildSessionKeys = options?.completedChildSessionKeys;
+  if (options?.waitingOnSubagentDelegation) {
+    logDecision(true, 'waiting_on_subagent_delegation');
+    return true;
+  }
   if (messages.length > 0 && isParentDelegationPhaseOpen(messages, processingKeys, {
     lastUserMessageAt: options?.lastUserMessageAt,
     streamingMessage: options?.streamingMessage,
     completedChildSessionKeys: options?.completedChildSessionKeys,
   })) {
+    logDecision(true, 'parent_delegation_phase_open');
     return true;
+  }
+  if (messages.length > 0
+    && isDelegationWrapUpComplete(messages, processingKeys, {
+      lastUserMessageAt: options?.lastUserMessageAt,
+      completedChildSessionKeys,
+    })
+    && !isParentDelegationPhaseOpen(messages, processingKeys, {
+      lastUserMessageAt: options?.lastUserMessageAt,
+      streamingMessage: options?.streamingMessage,
+      completedChildSessionKeys,
+    })) {
+    logDecision(false, 'delegation_wrap_up_complete');
+    return false;
+  }
+  if (isTranscriptTurnSettledForDisplay(messages, {
+    lastUserMessageAt: options?.lastUserMessageAt ?? null,
+    backendActivity,
+    gatewayBackground: options?.gatewayBackground,
+    completedChildSessionKeys,
+  })) {
+    logDecision(false, 'transcript_turn_settled');
+    return false;
   }
   if (hasLocalRunSignals(state) && messages.length > 0 && canClearUserTurnNow({
     messages,
@@ -186,6 +236,7 @@ export function deriveIsExecuting(
     backendActivity,
     gatewayBackground: options?.gatewayBackground,
   })) {
+    logDecision(false, 'can_clear_user_turn_now');
     return false;
   }
   if (hasLocalRunSignals(state) && messages.length > 0 && canForceClearOnVisibleCommittedReply({
@@ -195,14 +246,76 @@ export function deriveIsExecuting(
     gatewayBackground: options?.gatewayBackground,
     completedChildSessionKeys,
   })) {
+    logDecision(false, 'can_force_clear_visible_reply');
     return false;
   }
-  return isUserTurnOpen(
+  if (isRecentUnsettledToolRound(messages, {
+    lastUserMessageAt: options?.lastUserMessageAt ?? null,
+    backendActivity,
+    gatewayBackground: options?.gatewayBackground,
+    nowMs: options?.nowMs,
+  })) {
+    logDecision(true, 'recent_unsettled_tool_round');
+    return true;
+  }
+  if (
+    messages.length > 0
+    && isStaleGatewayProcessingAfterCommittedReply(
+      options?.sessionKey ?? null,
+      backendActivity,
+      options?.gatewayBackground,
+    )
+    && canForceClearOnVisibleCommittedReply({
+      messages,
+      lastUserMessageAt: options?.lastUserMessageAt ?? null,
+      backendActivity,
+      gatewayBackground: options?.gatewayBackground,
+      completedChildSessionKeys,
+    })
+  ) {
+    logDecision(false, 'stale_gateway_processing_after_committed_reply');
+    return false;
+  }
+  if (
+    options?.sessionKey
+    && processingKeys.includes(options.sessionKey)
+    && !hasTranscriptDelegationBlock(
+      messages,
+      options?.gatewayBackground,
+      options?.lastUserMessageAt ?? null,
+      completedChildSessionKeys,
+    )
+  ) {
+    logDecision(true, 'gateway_processing_session_key');
+    return true;
+  }
+  if (
+    !options?.sessionKey
+    && !backendActivity
+    && messages.length === 0
+    && processingKeys.length === 1
+    && options?.gatewayBackground?.hasBackgroundProcessing
+  ) {
+    logDecision(true, 'single_gateway_processing_empty_snapshot', {
+      inferredSessionKey: processingKeys[0],
+    });
+    return true;
+  }
+  const open = isUserTurnOpen(
     state,
     backendActivity,
     options?.gatewayBackground,
     messages,
   );
+  logDecision(open, open ? 'user_turn_open' : 'idle', {
+    hasLocalRunSignals: hasLocalRunSignals(state),
+    hasOpenBackendWork: hasOpenBackendWorkForUserTurn(
+      options?.gatewayBackground,
+      backendActivity,
+      messages,
+    ),
+  });
+  return open;
 }
 
 export function deriveHasActiveRunSignal(
@@ -343,6 +456,71 @@ export type CanClearUserTurnInput = {
 
 /** After parent terminal + gateway idle, release UI if transcript delegation never clears. */
 export const DELEGATION_FINALIZE_GRACE_MS = 30_000;
+export const TRANSCRIPT_TOOL_ROUND_SETTLE_GRACE_MS = 15_000;
+
+const STALE_PROCESSING_DONE_STATUSES = new Set(['done', 'idle', 'completed', 'finished']);
+
+function isStaleGatewayProcessingAfterCommittedReply(
+  sessionKey: string | null,
+  backendActivity: SessionBackendActivity | null | undefined,
+  gatewayBackground: GatewayBackgroundActivity | null | undefined,
+): boolean {
+  if (!sessionKey || !backendActivity || backendActivity.sessionKey !== sessionKey) return false;
+  if (!gatewayBackground?.processingSessionKeys?.includes(sessionKey)) return false;
+  if (backendActivity.hasTrackedUserRun) return false;
+  if ((backendActivity.activeRunIds ?? []).length > 0) return false;
+  const status = String(backendActivity.status ?? '').toLowerCase();
+  return STALE_PROCESSING_DONE_STATUSES.has(status);
+}
+
+function contentHasToolUse(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((part) => {
+    if (!part || typeof part !== 'object') return false;
+    const record = part as { type?: unknown };
+    return record.type === 'tool_use' || record.type === 'toolCall';
+  });
+}
+
+function toTimestampMs(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value < 1e12 ? Math.round(value * 1000) : Math.round(value);
+}
+
+function messageTimestampMs(message: RawMessage): number | null {
+  const msg = message as RawMessage & { timestamp?: unknown; createdAt?: unknown; created_at?: unknown };
+  return toTimestampMs(msg.timestamp ?? msg.createdAt ?? msg.created_at);
+}
+
+function isRecentUnsettledToolRound(
+  messages: RawMessage[],
+  input: {
+    lastUserMessageAt: number | null;
+    backendActivity?: SessionBackendActivity | null;
+    gatewayBackground?: GatewayBackgroundActivity | null;
+    nowMs?: number;
+  },
+): boolean {
+  if (messages.length === 0) return false;
+  if (hasOpenBackendWorkForUserTurn(input.gatewayBackground, input.backendActivity, messages)) return false;
+
+  const turnAnchor = resolveActiveTurnLastUserMessageAt(messages, input.lastUserMessageAt);
+  if (transcriptHasCommittedConcludingReply(messages, turnAnchor)) return false;
+  if (hasTranscriptDelegationBlock(messages, input.gatewayBackground, turnAnchor)) return false;
+
+  const latestUserIdx = findLatestVisibleUserIndex(messages);
+  const turnMessages = latestUserIdx >= 0 ? messages.slice(latestUserIdx + 1) : messages;
+  const latestAssistant = [...turnMessages].reverse().find((message) => message.role === 'assistant');
+  if (!latestAssistant) return false;
+  if (!isToolUseStopReasonAssistantMessage(latestAssistant) && !contentHasToolUse(latestAssistant.content)) {
+    return false;
+  }
+
+  const timestampMs = messageTimestampMs(latestAssistant);
+  if (timestampMs == null) return false;
+  const nowMs = input.nowMs ?? Date.now();
+  return nowMs - timestampMs <= TRANSCRIPT_TOOL_ROUND_SETTLE_GRACE_MS;
+}
 
 /**
  * Transcript-only delegation signals (spawn bindings, waiting markers).
@@ -436,23 +614,72 @@ export function hasOpenSubagentDelegation(
  * Only used when the gateway is not actively processing this session or children.
  */
 export function canForceClearOnVisibleCommittedReply(input: CanClearUserTurnInput): boolean {
-  const terminal = input.terminalMessage
-    ?? findTerminalAssistantForActiveTurn(input.messages, input.lastUserMessageAt)
-    ?? findConcludingAssistantForActiveTurn(input.messages, input.lastUserMessageAt);
-  if (!terminal) return false;
-  if (!hasVisibleAssistantContent(terminal) && !isRunTerminalAssistantMessage(terminal)) return false;
-  if (shouldKeepRunActiveAfterAssistantFinal(terminal) && !isVisibleAssistantTextWithoutToolUse(terminal)) {
-    return false;
+  const turnAnchor = resolveActiveTurnLastUserMessageAt(
+    input.messages,
+    input.lastUserMessageAt ?? null,
+  );
+  const hasCommitted = transcriptHasCommittedConcludingReply(input.messages, turnAnchor);
+  if (isBackendStronglyActive(input.backendActivity)) {
+    const committedReply = findTerminalAssistantForActiveTurn(input.messages, turnAnchor)
+      ?? findConcludingAssistantForActiveTurn(input.messages, turnAnchor);
+    if (isToolUseStopReasonAssistantMessage(committedReply)) {
+      return false;
+    }
+    const sessionKey = input.backendActivity?.sessionKey;
+    const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
+    const sessionStillProcessing = Boolean(input.backendActivity?.processing
+      || (sessionKey && processingKeys.includes(sessionKey)));
+    if (sessionStillProcessing && committedReply && !isRunTerminalAssistantMessage(committedReply)) {
+      return false;
+    }
   }
+
+  const completedChildSessionKeys = input.completedChildSessionKeys
+    ?? resolveCompletedChildSessionKeys(input.messages);
+  if (hasCommitted) {
+    const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
+    if (isDelegationWrapUpComplete(
+      input.messages,
+      processingKeys,
+      { lastUserMessageAt: turnAnchor, completedChildSessionKeys },
+    )) {
+      return true;
+    }
+    if (hasDelegationSpawnForActiveTurn(input.messages, { lastUserMessageAt: turnAnchor })) {
+      return false;
+    }
+    if (hasTranscriptDelegationBlock(
+      input.messages,
+      input.gatewayBackground,
+      turnAnchor,
+      completedChildSessionKeys,
+    )) {
+      return false;
+    }
+    const childBindings = collectChildDelegationBindings(input.messages, completedChildSessionKeys);
+    if (hasGatewayActiveChildDelegations(childBindings, processingKeys)) {
+      return false;
+    }
+    const sessionKey = input.backendActivity?.sessionKey;
+    if (sessionKey && processingKeys.includes(sessionKey)) {
+      return true;
+    }
+    return true;
+  }
+
+  const terminal = findTerminalAssistantForActiveTurn(input.messages, turnAnchor)
+    ?? findConcludingAssistantForActiveTurn(input.messages, turnAnchor)
+    ?? input.terminalMessage;
+  if (!terminal) return false;
+  if (shouldKeepRunActiveAfterAssistantFinal(terminal)) return false;
+  if (!hasVisibleAssistantContent(terminal) && !isRunTerminalAssistantMessage(terminal)) return false;
 
   const sessionKey = input.backendActivity?.sessionKey;
   const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
-  const completedChildSessionKeys = input.completedChildSessionKeys
-    ?? resolveCompletedChildSessionKeys(input.messages);
   const wrapUpComplete = isDelegationWrapUpComplete(
     input.messages,
     processingKeys,
-    { lastUserMessageAt: input.lastUserMessageAt, completedChildSessionKeys },
+    { lastUserMessageAt: turnAnchor, completedChildSessionKeys },
   );
   if (wrapUpComplete) {
     return true;
@@ -464,9 +691,12 @@ export function canForceClearOnVisibleCommittedReply(input: CanClearUserTurnInpu
     if (hasTranscriptDelegationBlock(
       input.messages,
       input.gatewayBackground,
-      input.lastUserMessageAt,
+      turnAnchor,
       completedChildSessionKeys,
     )) {
+      return false;
+    }
+    if (hasDelegationSpawnForActiveTurn(input.messages, { lastUserMessageAt: turnAnchor })) {
       return false;
     }
     return true;
@@ -475,12 +705,52 @@ export function canForceClearOnVisibleCommittedReply(input: CanClearUserTurnInpu
   if (hasTranscriptDelegationBlock(
     input.messages,
     input.gatewayBackground,
-    input.lastUserMessageAt,
+    turnAnchor,
     completedChildSessionKeys,
   )) {
     return false;
   }
 
+  return false;
+}
+
+/**
+ * Transcript shows a concluding user-visible answer and gateway has no open work.
+ * Used to suppress stale run UI (thinking / graph active / re-adopt) on long chains.
+ */
+export function isTranscriptTurnSettledForDisplay(
+  messages: RawMessage[],
+  input: {
+    lastUserMessageAt: number | null;
+    backendActivity?: SessionBackendActivity | null;
+    gatewayBackground?: GatewayBackgroundActivity | null;
+    completedChildSessionKeys?: ReadonlySet<string>;
+  },
+): boolean {
+  if (messages.length === 0) return false;
+  const turnAnchor = resolveActiveTurnLastUserMessageAt(messages, input.lastUserMessageAt);
+  if (!transcriptHasCommittedConcludingReply(messages, turnAnchor)) return false;
+  if (hasOpenBackendWorkForUserTurn(
+    input.gatewayBackground,
+    input.backendActivity,
+    messages,
+  )) {
+    return false;
+  }
+  const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
+  if (isParentDelegationPhaseOpen(messages, processingKeys, {
+    lastUserMessageAt: turnAnchor,
+    completedChildSessionKeys: input.completedChildSessionKeys,
+  })) {
+    return false;
+  }
+  if (hasDelegationSpawnForActiveTurn(messages, { lastUserMessageAt: turnAnchor })
+    && !isDelegationWrapUpComplete(messages, processingKeys, {
+      lastUserMessageAt: turnAnchor,
+      completedChildSessionKeys: input.completedChildSessionKeys,
+    })) {
+    return false;
+  }
   return true;
 }
 
@@ -517,6 +787,11 @@ export function sanitizeLeavingSessionStreamingSnapshot(
 
   if (!canForceClearOnVisibleCommittedReply({
     messages,
+    lastUserMessageAt: snapshot.lastUserMessageAt,
+    backendActivity,
+    gatewayBackground: options.gatewayBackground ?? null,
+    completedChildSessionKeys,
+  }) && !isTranscriptTurnSettledForDisplay(messages, {
     lastUserMessageAt: snapshot.lastUserMessageAt,
     backendActivity,
     gatewayBackground: options.gatewayBackground ?? null,
@@ -607,14 +882,18 @@ export function shouldFinalizeUserTurn(
 ): boolean {
   if (hasOpenBackendWorkForUserTurn(gatewayBackground, backendActivity, messages)) return false;
   if (hasTranscriptDelegationBlock(messages, gatewayBackground, lastUserMessageAt)) return false;
-  const strictTerminal = terminalMessage
-    ?? findTerminalAssistantForActiveTurn(messages, lastUserMessageAt);
+  const strictTerminal = findTerminalAssistantForActiveTurn(messages, lastUserMessageAt)
+    ?? findConcludingAssistantForActiveTurn(messages, lastUserMessageAt)
+    ?? terminalMessage;
   if (strictTerminal) {
     if (silentDelegationFinalWouldHideUnansweredTurn(messages, lastUserMessageAt, strictTerminal)) {
       return false;
     }
     if (shouldKeepRunActiveAfterAssistantFinal(strictTerminal)) {
-      return isVisibleAssistantTextWithoutToolUse(strictTerminal);
+      if (isBackendStronglyActive(backendActivity)) return false;
+      if (isVisibleAssistantTextWithoutToolUse(strictTerminal)) return true;
+      if (hasVisibleAssistantContent(strictTerminal)) return true;
+      return Boolean(findConcludingAssistantForActiveTurn(messages, lastUserMessageAt));
     }
     return !isBackendStronglyActive(backendActivity);
   }
@@ -675,6 +954,18 @@ export function buildReAdoptRunPatch(
   })) {
     return null;
   }
+  if (isTranscriptTurnSettledForDisplay(messages, {
+    lastUserMessageAt: state.lastUserMessageAt ?? null,
+    backendActivity,
+    gatewayBackground,
+  })) {
+    traceTurnTransition('re-adopt-skipped', {
+      sessionKey,
+      reason: 'transcript_turn_settled',
+      transcript: summarizeTranscriptTail(messages, state.lastUserMessageAt ?? null),
+    });
+    return null;
+  }
   if (!hasOpenBackendWorkForUserTurn(gatewayBackground, backendActivity, messages)) {
     return null;
   }
@@ -682,6 +973,14 @@ export function buildReAdoptRunPatch(
     return null;
   }
   const runId = backendActivity?.activeRunIds[0] ?? null;
+  traceTurnTransition('re-adopt-run', {
+    sessionKey,
+    runId,
+    ui: summarizeUiSignals(state),
+    backend: summarizeBackendActivity(backendActivity),
+    gateway: summarizeGatewayBackground(gatewayBackground),
+    transcript: summarizeTranscriptTail(messages, state.lastUserMessageAt ?? null),
+  });
   return {
     sending: true,
     pendingFinal: true,

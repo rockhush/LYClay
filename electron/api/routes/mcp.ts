@@ -13,6 +13,7 @@ import { coerceMcpConfig, validateMcpConfigNetworkPolicy } from '../../utils/mcp
 import { fetchGatewayToolNamesForServer } from '../../utils/mcp-gateway-tools';
 import { assertMcpServerAllowedWithConfirmation } from '../../security/confirmation-service';
 import { buildMcpServerFingerprint } from '../../security/mcp-server-policy';
+import { isDigitalEmployeeMcpServer } from '../../utils/digital-employee-mcp';
 
 function reloadGatewayMcp(ctx: HostApiContext): void {
   ctx.gatewayManager.debouncedReload();
@@ -48,6 +49,31 @@ function mergeToolInventory(
   return [...set].sort((a, b) => a.localeCompare(b));
 }
 
+function visibleMcpServers(servers: Record<string, McpServerEntry>): Record<string, McpServerEntry> {
+  return Object.fromEntries(
+    Object.entries(servers).filter(([, server]) => !isDigitalEmployeeMcpServer(server)),
+  );
+}
+
+function mergeVisibleServersWithHidden(
+  current: Record<string, McpServerEntry>,
+  visibleNext: Record<string, McpServerEntry>,
+): Record<string, McpServerEntry> {
+  return {
+    ...visibleNext,
+    ...Object.fromEntries(
+      Object.entries(current).filter(([, server]) => isDigitalEmployeeMcpServer(server)),
+    ),
+  };
+}
+
+function sendManagedEmployeeMcpError(res: ServerResponse): void {
+  sendJson(res, 403, {
+    success: false,
+    error: 'This MCP server is managed by a digital employee',
+  });
+}
+
 async function assertChangedEnabledMcpServersAllowed(
   current: Record<string, McpServerEntry>,
   next: Record<string, McpServerEntry>,
@@ -72,7 +98,7 @@ export async function handleMcpRoutes(
   if (path === '/api/mcp/servers' && req.method === 'GET') {
     try {
       const config = await readMcpConfig();
-      const list = Object.entries(config.servers).map(([name, server]) => {
+      const list = Object.entries(visibleMcpServers(config.servers)).map(([name, server]) => {
         const { allow, deny } = readToolsFilter(server);
         return {
           name,
@@ -100,7 +126,7 @@ export async function handleMcpRoutes(
     try {
       const config = await readMcpConfig();
       const server = config.servers[name];
-      if (!server) {
+      if (!server || isDigitalEmployeeMcpServer(server)) {
         sendJson(res, 404, { success: false, error: `Unknown MCP server: ${name}` });
         return true;
       }
@@ -135,6 +161,10 @@ export async function handleMcpRoutes(
         sendJson(res, 404, { success: false, error: `Unknown MCP server: ${name}` });
         return true;
       }
+      if (isDigitalEmployeeMcpServer(server)) {
+        sendManagedEmployeeMcpError(res);
+        return true;
+      }
       const prev = readToolsFilter(server);
       const deny = [...new Set([...prev.deny, toolName])];
       const nextTools: McpServerEntry['tools'] = { ...(server.tools ?? {}), deny };
@@ -167,6 +197,10 @@ export async function handleMcpRoutes(
       const server = config.servers[name];
       if (!server) {
         sendJson(res, 404, { success: false, error: `Unknown MCP server: ${name}` });
+        return true;
+      }
+      if (isDigitalEmployeeMcpServer(server)) {
+        sendManagedEmployeeMcpError(res);
         return true;
       }
       const prev = readToolsFilter(server);
@@ -207,6 +241,10 @@ export async function handleMcpRoutes(
         sendJson(res, 404, { success: false, error: `Unknown MCP server: ${name}` });
         return true;
       }
+      if (isDigitalEmployeeMcpServer(config.servers[name])) {
+        sendManagedEmployeeMcpError(res);
+        return true;
+      }
       const { [name]: _removed, ...rest } = config.servers;
       const next = { servers: rest };
       const check = await validateMcpConfigNetworkPolicy(next);
@@ -231,6 +269,10 @@ export async function handleMcpRoutes(
       const config = await readMcpConfig();
       if (!config.servers[ename]) {
         sendJson(res, 404, { success: false, error: `Unknown MCP server: ${ename}` });
+        return true;
+      }
+      if (isDigitalEmployeeMcpServer(config.servers[ename])) {
+        sendManagedEmployeeMcpError(res);
         return true;
       }
       config.servers[ename].disabled = false;
@@ -263,6 +305,10 @@ export async function handleMcpRoutes(
         sendJson(res, 404, { success: false, error: `Unknown MCP server: ${dname}` });
         return true;
       }
+      if (isDigitalEmployeeMcpServer(config.servers[dname])) {
+        sendManagedEmployeeMcpError(res);
+        return true;
+      }
       config.servers[dname].disabled = true;
       await writeMcpConfigAtomic(getMcpConfigPath(), config);
       reloadGatewayMcp(ctx);
@@ -276,7 +322,7 @@ export async function handleMcpRoutes(
   if (path === '/api/mcp/config' && req.method === 'GET') {
     try {
       const config = await readMcpConfig();
-      sendJson(res, 200, { config, path: getMcpConfigPath() });
+      sendJson(res, 200, { config: { servers: visibleMcpServers(config.servers) }, path: getMcpConfigPath() });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }
@@ -291,14 +337,15 @@ export async function handleMcpRoutes(
         return true;
       }
       const coerced = coerceMcpConfig(body.config);
-      const validation = await validateMcpConfigNetworkPolicy(coerced);
+      const current = await readMcpConfig();
+      const merged = { servers: mergeVisibleServersWithHidden(current.servers, coerced.servers) };
+      const validation = await validateMcpConfigNetworkPolicy(merged);
       if (!validation.valid) {
         sendJson(res, 400, { success: false, errors: validation.errors });
         return true;
       }
-      const current = await readMcpConfig();
-      await assertChangedEnabledMcpServersAllowed(current.servers, coerced.servers, 'settings:mcp-config');
-      await writeMcpConfigAtomic(getMcpConfigPath(), coerced);
+      await assertChangedEnabledMcpServersAllowed(current.servers, merged.servers, 'settings:mcp-config');
+      await writeMcpConfigAtomic(getMcpConfigPath(), merged);
       reloadGatewayMcp(ctx);
       sendJson(res, 200, { success: true });
     } catch (error) {

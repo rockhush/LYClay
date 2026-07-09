@@ -20,16 +20,18 @@ import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard, buildTurnRunAnchorId } from './ExecutionGraphCard';
 import { ChatToolbar } from './ChatToolbar';
 import { extractImages, extractText, extractThinking, extractToolUse, stripProcessMessagePrefix } from './message-utils';
-import { attachSubagentChildSteps, collectChildDelegationBindings, deriveTaskSteps, filterHiddenExecutionGraphSteps, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationNarration, isSubagentOrchestrationToolName, parseSubagentCompletionInfo, type TaskStep } from './task-visualization';
+import { attachSubagentChildSteps, collectChildDelegationBindings, committedReplyShouldSettleExecutionGraph, deriveTaskSteps, filterHiddenExecutionGraphSteps, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationNarration, isSubagentOrchestrationToolName, isSupersededRawMediaAssistantReply, parseSubagentCompletionInfo, shouldPromoteStreamingTextAsReply, type TaskStep } from './task-visualization';
 import { resolveCompletedChildSessionKeys } from '@/lib/subagent-delegation';
 import { mergeDelegationBindingsWithLiveStream } from '@/lib/subagent-delegation';
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
 import { cn } from '@/lib/utils';
-import { isSuppressedRunError, isAbortErrorMessage, truncateRunErrorMessage, isBackendRunFailureError, areEquivalentUserMessageTexts } from '@/stores/chat/helpers';
+import { isSuppressedRunError, isAbortErrorMessage, truncateRunErrorMessage, isBackendRunFailureError, areEquivalentUserMessageTexts, areEquivalentAssistantMessageTexts, assistantTextMatchesNormalized } from '@/stores/chat/helpers';
 import { deriveHasActiveRunSignal, deriveIsExecuting, backendActivityForSession } from '@/stores/chat/user-turn-lifecycle';
 import {
   hasCommittedUserReplyInMessages,
+  isEmbeddedAgentFailureNoticeAssistantMessage,
+  isFailedAssistantMessage,
 } from '@/stores/chat/run-lifecycle';
 import {
   collectActiveChildDelegations,
@@ -37,7 +39,7 @@ import {
   isParentDelegationPhaseOpen,
   isSegmentDelegationPhaseOpen,
 } from '@/lib/delegation-turn-state';
-import { isInterimSubagentWaitAssistantReply, summarizeChildRunActivity, collectPendingChildDelegationBindings } from '@/lib/subagent-delegation';
+import { isInterimSubagentWaitAssistantReply, isSubagentSessionKey, summarizeChildRunActivity, collectPendingChildDelegationBindings } from '@/lib/subagent-delegation';
 import {
   detectStalledChildDelegation,
   isChildDelegationStillActive,
@@ -46,6 +48,7 @@ import {
 } from '@/lib/subagent-delegation-watch';
 import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
 import { useMinLoading } from '@/hooks/use-min-loading';
+import { useSessionSwitchLoadingOverlay } from '@/hooks/use-session-switch-loading-overlay';
 import { getChatWaitingMode, isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
 import { estimateGatewayWarmupProgress } from '@/lib/gateway-warmup-progress';
 import { useSkillsStore } from '@/stores/skills';
@@ -255,6 +258,29 @@ export function Chat() {
     }
     return hidden;
   }, [messages]);
+  const hiddenDuplicateAssistantIndices = useMemo(() => {
+    const hidden = new Set<number>();
+    for (let index = 0; index < messages.length; index += 1) {
+      const current = messages[index];
+      if (current.role !== 'assistant') continue;
+      for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+        const previous = messages[previousIndex];
+        if (previous.role === 'user') {
+          const content = previous.content;
+          const isToolResultWrapper = Array.isArray(content)
+            && (content as Array<{ type?: string }>).length > 0
+            && (content as Array<{ type?: string }>).every((block) => block.type === 'tool_result');
+          if (!isToolResultWrapper) break;
+          continue;
+        }
+        if (previous.role === 'assistant' && areEquivalentAssistantMessageTexts(previous, current)) {
+          hidden.add(index);
+          break;
+        }
+      }
+    }
+    return hidden;
+  }, [messages]);
 
   const cleanupEmptySession = useChatStore((s) => s.cleanupEmptySession);
   const [childTranscripts, setChildTranscripts] = useState<Record<string, RawMessage[]>>({});
@@ -271,6 +297,8 @@ export function Chat() {
   // Include empty-thread loads (session switch clears messages before chat.history returns).
   // Otherwise the Welcome screen flashes and looks 鈥渟tuck鈥?until messages arrive.
   const minLoading = useMinLoading(loading);
+  const sessionSwitchLoading = useSessionSwitchLoadingOverlay(currentSessionKey);
+  const showHistoryLoadingOverlay = (minLoading || sessionSwitchLoading) && !sending;
   const { contentRef, scrollRef } = useStickToBottomInstant(currentSessionKey);
 
   useEffect(() => {
@@ -438,14 +466,19 @@ export function Chat() {
 
   useEffect(() => {
     const processingKeySet = new Set(processingSubagentKeys);
-    const activeBindings = collectChildDelegationBindings(
+    const bindings = collectChildDelegationBindings(
       messages,
       completedChildSessionKeys,
-    ).filter((binding) => isChildDelegationStillActive(binding, processingKeySet));
+    );
+    const activeBindings = bindings.filter((binding) => isChildDelegationStillActive(binding, processingKeySet));
+    const completedBindingsMissingTranscript = bindings.filter((binding) =>
+      binding.completed && (childTranscripts[binding.childSessionKey]?.length ?? 0) === 0,
+    );
     const activeKeys = new Set([
       ...pendingChildDelegations.map((binding) => binding.childSessionKey),
-      ...processingSubagentKeys,
+      ...processingSubagentKeys.filter((key) => isSubagentSessionKey(key)),
       ...activeBindings.map((binding) => binding.childSessionKey),
+      ...completedBindingsMissingTranscript.map((binding) => binding.childSessionKey),
     ]);
     if (activeKeys.size === 0) return;
 
@@ -490,7 +523,7 @@ export function Chat() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [completedChildSessionKeys, messages, pendingChildDelegations, processingSubagentKeys]);
+  }, [childTranscripts, completedChildSessionKeys, messages, pendingChildDelegations, processingSubagentKeys]);
 
   useEffect(() => {
     const activeBindings = collectChildDelegationBindings(
@@ -693,6 +726,11 @@ export function Chat() {
     const nextUserIndex = nextUserMessageIndexes[idx];
     const segmentEnd = nextUserIndex === -1 ? messages.length : nextUserIndex;
     const segmentMessages = messages.slice(idx + 1, segmentEnd);
+    for (let offset = 0; offset < segmentMessages.length; offset += 1) {
+      if (isSupersededRawMediaAssistantReply(segmentMessages, offset)) {
+        folded.add(idx + 1 + offset);
+      }
+    }
     const segmentBindings = mergeDelegationBindingsWithLiveStream(
       collectChildDelegationBindings(
         segmentMessages,
@@ -756,6 +794,7 @@ export function Chat() {
       if (i <= lastToolUseOffset) return false;
       if (m.role !== 'assistant') return false;
       if (isInterimSubagentWaitAssistantReply(m)) return false;
+      if (isEmbeddedAgentFailureNoticeAssistantMessage(m) || isFailedAssistantMessage(m)) return false;
       const replyText = extractText(m).trim();
       if (replyText.length === 0) return false;
       if (isSubagentOrchestrationNarration(replyText)) return false;
@@ -768,6 +807,17 @@ export function Chat() {
       const runStillExecutingTools = hasToolActivity && !hasFinalReply;
       const segmentChildrenIdle = !delegationTurn.anyChildActive;
       const committedReplyOffset = findReplyMessageIndex(segmentMessages, false);
+      const hasCommittedConcludingReply = committedReplyOffset !== -1
+        && (lastToolUseOffset === -1 || committedReplyOffset >= lastToolUseOffset);
+      const committedReplySettlesGraph = committedReplyShouldSettleExecutionGraph({
+        committedReplyOffset,
+        isUserTurnExecuting,
+        hasAnyStreamContent,
+        segmentDelegationOpen,
+        segmentHasPendingChild,
+        segmentWaitingOnSubagent,
+        stalledChildSessionKey,
+      });
       const stuckWaitingOnCommittedReply = nextUserIndex === -1
         && !runAborted
         && (sending || pendingFinal)
@@ -778,7 +828,18 @@ export function Chat() {
         && !segmentWaitingOnSubagent
         && !stalledChildSessionKey
         && committedReplyOffset !== -1;
-      const turnVisiblyComplete = (hasFinalReply || stuckWaitingOnCommittedReply)
+      const turnVisiblyComplete = (
+        hasFinalReply
+        || stuckWaitingOnCommittedReply
+        || committedReplySettlesGraph
+        || (
+          hasCommittedConcludingReply
+          && !segmentDelegationOpen
+          && !segmentHasPendingChild
+          && !segmentWaitingOnSubagent
+          && !stalledChildSessionKey
+        )
+      )
         && segmentChildrenIdle
         && !segmentDelegationOpen;
       const isLatestOpenRun = !turnVisiblyComplete
@@ -837,9 +898,13 @@ export function Chat() {
       if (offset === segmentReplyOffset) continue;
       const candidate = segmentMessages[offset];
       if (!candidate || candidate.role !== 'assistant') continue;
+      if (isSupersededRawMediaAssistantReply(segmentMessages, offset)) continue;
       const hasNarrationText = extractText(candidate).trim().length > 0;
       const hasThinking = !!extractThinking(candidate);
       if (!hasNarrationText && !hasThinking) continue;
+      if (isEmbeddedAgentFailureNoticeAssistantMessage(candidate) || isFailedAssistantMessage(candidate)) {
+        continue;
+      }
       folded.add(idx + 1 + offset);
     }
 
@@ -894,7 +959,11 @@ export function Chat() {
     //
     const rawStreamingReplyCandidate = isLatestOpenRun
       && (hasStreamText || hasStreamImages)
-      && streamTools.length === 0;
+      && shouldPromoteStreamingTextAsReply({
+        streamText,
+        hasStreamImages,
+        streamToolUseCount: streamTools.length,
+      });
 
     let steps = buildSteps(rawStreamingReplyCandidate);
     let streamingReplyText: string | null = null;
@@ -923,7 +992,7 @@ export function Chat() {
           );
           return [{
             triggerIndex: idx,
-            replyIndex: cached.replyIndex,
+            replyIndex: replyIndex ?? cached.replyIndex,
             active: false,
             agentLabel: cached.agentLabel,
             sessionLabel: cached.sessionLabel,
@@ -968,7 +1037,7 @@ export function Chat() {
       );
       return [{
         triggerIndex: idx,
-        replyIndex: cached.replyIndex,
+        replyIndex: replyIndex ?? cached.replyIndex,
         active: false,
         agentLabel: cached.agentLabel,
         sessionLabel: cached.sessionLabel,
@@ -1151,6 +1220,30 @@ export function Chat() {
     return map;
   }, [userRunCards, messages]);
   const streamingReplyText = userRunCards.find((card) => card.streamingReplyText != null)?.streamingReplyText ?? null;
+  const streamingDuplicatesCommittedAssistant = useMemo(() => {
+    if (!shouldRenderStreaming) return false;
+    const candidateText = (streamingReplyText ?? streamText).replace(/\s+/g, ' ').trim();
+    if (!candidateText) return false;
+    let lastRealUserIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role !== 'user') continue;
+      const content = message.content;
+      const isToolResultWrapper = Array.isArray(content)
+        && (content as Array<{ type?: string }>).length > 0
+        && (content as Array<{ type?: string }>).every((block) => block.type === 'tool_result');
+      if (isToolResultWrapper) continue;
+      lastRealUserIndex = index;
+      break;
+    }
+    for (let index = lastRealUserIndex + 1; index < messages.length; index += 1) {
+      const message = messages[index];
+      if (message.role === 'assistant' && assistantTextMatchesNormalized(message, candidateText)) {
+        return true;
+      }
+    }
+    return false;
+  }, [messages, shouldRenderStreaming, streamText, streamingReplyText]);
   const userRunCardsByTriggerIndex = useMemo(() => {
     const map = new Map<number, UserRunCard[]>();
     for (const card of userRunCards) {
@@ -1315,6 +1408,7 @@ export function Chat() {
                     if (foldedNarrationIndices.has(idx)) return null;
                     if (subagentCompletionInfos[idx]) return null;
                     if (hiddenConsecutiveDuplicateUserIndices.has(idx)) return null;
+                    if (hiddenDuplicateAssistantIndices.has(idx)) return null;
                     const suppressToolCards = suppressedToolCardIndices.has(idx);
                     return (
                     <div
@@ -1383,7 +1477,9 @@ export function Chat() {
 
                   {/* Streaming message 鈥?render when reply text is separated from graph,
                       OR when there's streaming content without an active graph */}
-                  {shouldRenderStreaming && (streamingReplyText != null || !hasActiveExecutionGraph) && (
+                  {shouldRenderStreaming
+                    && !streamingDuplicatesCommittedAssistant
+                    && (streamingReplyText != null || !hasActiveExecutionGraph) && (
                     <ChatMessage
                       message={(() => {
                         const base = streamMsg
@@ -1544,10 +1640,15 @@ export function Chat() {
       {!isEmpty && chatInputElement}
 
       {/* Transparent loading overlay */}
-      {minLoading && !sending && (
+      {showHistoryLoadingOverlay && (
         <div
           data-testid="chat-history-loading-overlay"
-          className="absolute inset-0 z-50 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-xl pointer-events-auto"
+          className={cn(
+            'absolute inset-0 z-50 flex items-center justify-center rounded-xl pointer-events-auto',
+            sessionSwitchLoading
+              ? 'bg-background/90 backdrop-blur-sm'
+              : 'bg-background/20 backdrop-blur-[1px]',
+          )}
         >
           <LoaderBadge />
         </div>

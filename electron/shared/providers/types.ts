@@ -67,6 +67,8 @@ export interface ProviderConfig {
   model?: string;
   fallbackModels?: string[];
   fallbackProviderIds?: string[];
+  runtimeModels?: ProviderModelEntry[];
+  metadata?: ProviderAccount['metadata'];
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -131,6 +133,7 @@ export interface ProviderAccount {
   model?: string;
   fallbackModels?: string[];
   fallbackAccountIds?: string[];
+  runtimeModels?: ProviderModelEntry[];
   enabled: boolean;
   isDefault: boolean;
   metadata?: {
@@ -138,7 +141,11 @@ export interface ProviderAccount {
     email?: string;
     resourceUrl?: string;
     customModels?: string[];
-    managedBy?: 'lyclaw';
+    managedBy?: 'lyclaw' | 'sub2api';
+    scope?: 'global' | 'digitalEmployee';
+    subjectHash?: string;
+    hiddenInProviderSettings?: boolean;
+    lastSuccessAt?: string;
     readonly?: boolean;
   };
   createdAt: string;
@@ -183,3 +190,4 @@ export interface ModelSummary {
   };
   source: 'builtin' | 'remote' | 'gateway' | 'custom';
 }
+

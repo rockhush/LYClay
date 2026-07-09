@@ -20,6 +20,7 @@ import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 import { ensureClawXContext } from '../../utils/openclaw-workspace';
 import { listLocalDigitalEmployees, readInstalledManifest } from '../../utils/digital-employee-storage';
+import { readDigitalEmployeeModelScope } from '../../utils/digital-employee-model-scope';
 import { terminateGatewayListenersOnPort, terminateGatewayProcessByPid } from '../../gateway/supervisor';
 
 function scheduleGatewayReload(ctx: HostApiContext, reason: string): void {
@@ -132,6 +133,25 @@ export async function handleAgentRoutes(
     return true;
   }
 
+  if (url.pathname.startsWith('/api/agents/') && url.pathname.endsWith('/model-scope') && req.method === 'GET') {
+    const suffix = url.pathname.slice('/api/agents/'.length, -'/model-scope'.length);
+    const agentId = decodeURIComponent(suffix).trim();
+    if (!agentId) {
+      sendJson(res, 400, { success: false, error: 'Missing agentId' });
+      return true;
+    }
+
+    const employees = await listLocalDigitalEmployees();
+    const employee = employees.find((entry) => entry.agentId === agentId || entry.instanceId === agentId) ?? null;
+    if (!employee) {
+      sendJson(res, 404, { success: false, error: 'Digital employee not found' });
+      return true;
+    }
+
+    const modelScope = await readDigitalEmployeeModelScope(employee.instanceId);
+    sendJson(res, 200, { success: true, modelScope });
+    return true;
+  }
   if (url.pathname === '/api/agents/is-digital-employee' && req.method === 'GET') {
     const agentId = url.searchParams.get('agentId')?.trim();
     if (!agentId) {

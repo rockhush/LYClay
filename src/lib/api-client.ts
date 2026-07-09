@@ -1042,6 +1042,29 @@ export async function invokeIpc<T>(channel: string, ...args: unknown[]): Promise
   return invokeApi<T>(channel, ...args);
 }
 
+export type RendererLogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+/** Fire-and-forget: mirror renderer diagnostics into the main-process LYClaw log file. */
+export function appendRendererLog(
+  level: RendererLogLevel,
+  message: string,
+  details?: unknown,
+): void {
+  const trimmed = message.trim();
+  if (!trimmed) return;
+
+  try {
+    if (typeof window === 'undefined' || !window.electron?.ipcRenderer) return;
+    void window.electron.ipcRenderer
+      .invoke('log:append', { level, message: trimmed, details })
+      .catch(() => {
+        // Best-effort only — never block UI/state-machine paths on logging.
+      });
+  } catch {
+    // ignore
+  }
+}
+
 export async function invokeIpcWithRetry<T>(
   channel: string,
   args: unknown[] = [],

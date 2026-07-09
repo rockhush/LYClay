@@ -6,9 +6,10 @@ const writeMcpConfigAtomicMock = vi.fn();
 const assertMcpServerAllowedWithConfirmationMock = vi.fn();
 const readMcpConfigMock = vi.fn();
 const validateMcpConfigNetworkPolicyMock = vi.fn();
+const parseJsonBodyMock = vi.fn();
 
 vi.mock('@electron/api/route-utils', () => ({
-  parseJsonBody: vi.fn(),
+  parseJsonBody: (...args: unknown[]) => parseJsonBodyMock(...args),
   sendJson: (...args: unknown[]) => sendJsonMock(...args),
 }));
 
@@ -89,5 +90,71 @@ describe('MCP server authorization routes', () => {
       success: false,
       error: 'Error: denied',
     });
+  });
+  it('hides digital employee MCP servers from the connectors list', async () => {
+    readMcpConfigMock.mockResolvedValue({
+      servers: {
+        visible: { command: 'npx', args: ['visible'] },
+        employee: {
+          command: 'node',
+          args: ['mcp/server.mjs'],
+          'x-lyclaw-hidden-from-connectors': true,
+          'x-lyclaw-owner': { type: 'digitalEmployee' },
+        },
+      },
+    });
+    const { handleMcpRoutes } = await import('@electron/api/routes/mcp');
+
+    await handleMcpRoutes(
+      { method: 'GET' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/mcp/servers'),
+      { gatewayManager: { debouncedReload: vi.fn() } } as never,
+    );
+
+    expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, [
+      expect.objectContaining({ name: 'visible' }),
+    ]);
+  });
+
+  it('preserves hidden digital employee MCP servers when saving visible config', async () => {
+    const hidden = {
+      command: 'node',
+      args: ['mcp/server.mjs'],
+      'x-lyclaw-hidden-from-connectors': true,
+      'x-lyclaw-owner': { type: 'digitalEmployee' },
+    };
+    readMcpConfigMock.mockResolvedValue({
+      servers: {
+        employee: hidden,
+      },
+    });
+    parseJsonBodyMock.mockResolvedValue({
+      config: {
+        servers: {
+          visible: { command: 'npx', args: ['visible'], disabled: true },
+        },
+      },
+    });
+    const debouncedReload = vi.fn();
+    const { handleMcpRoutes } = await import('@electron/api/routes/mcp');
+
+    await handleMcpRoutes(
+      { method: 'PUT' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/mcp/config'),
+      { gatewayManager: { debouncedReload } } as never,
+    );
+
+    expect(writeMcpConfigAtomicMock).toHaveBeenCalledWith(
+      'openclaw.json#mcp.servers',
+      {
+        servers: {
+          visible: { command: 'npx', args: ['visible'], disabled: true },
+          employee: hidden,
+        },
+      },
+    );
+    expect(debouncedReload).toHaveBeenCalledTimes(1);
   });
 });

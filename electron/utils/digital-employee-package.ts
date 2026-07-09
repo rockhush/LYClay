@@ -1,4 +1,4 @@
-import { access, lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
+﻿import { access, lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import type {
@@ -37,6 +37,7 @@ const FORBIDDEN_NAMES = new Set([
   '.env',
 ]);
 const FORBIDDEN_SEGMENTS = new Set(['sessions', 'memory']);
+const MAX_SUB2API_USER_NO_LENGTH = 64;
 
 export interface ValidatedDigitalEmployeePackage {
   rootDir: string;
@@ -189,6 +190,19 @@ function parseManifest(value: unknown): DigitalEmployeePackageManifest {
     }
   }
 
+  if (value.sub2api !== undefined) {
+    if (!isRecord(value.sub2api)) throw new Error('sub2api must be an object');
+    if (value.sub2api.userNo !== undefined) {
+      const userNo = requireNonEmptyString(value.sub2api.userNo, 'sub2api.userNo');
+      if (userNo.length > MAX_SUB2API_USER_NO_LENGTH) {
+        throw new Error(`sub2api.userNo must be at most ${MAX_SUB2API_USER_NO_LENGTH} characters`);
+      }
+      if (!/^[A-Za-z0-9_-]+$/.test(userNo)) {
+        throw new Error('sub2api.userNo may only contain letters, numbers, underscores, and hyphens');
+      }
+      value.sub2api.userNo = userNo;
+    }
+  }
   return value as unknown as DigitalEmployeePackageManifest;
 }
 
@@ -365,3 +379,4 @@ export async function validateExtractedDigitalEmployeePackage(
 
   return { rootDir, manifest, agentTemplate, mcpConfig, skillDirectories, warnings };
 }
+

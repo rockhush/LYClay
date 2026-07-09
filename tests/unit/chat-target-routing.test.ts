@@ -750,6 +750,35 @@ describe('chat target routing', () => {
     });
   });
 
+  it('keeps the optimistic session model when sessions.patch times out', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+
+    gatewayRpcMock.mockImplementation(async (method: string) => {
+      if (method === 'sessions.patch') {
+        throw new Error('RPC timeout: sessions.patch');
+      }
+      if (method === 'sessions.list') {
+        return { sessions: [] };
+      }
+      if (method === 'chat.history') {
+        return { messages: [] };
+      }
+      throw new Error(`Unexpected gateway RPC: ${method}`);
+    });
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+    });
+
+    await expect(useChatStore.getState().setCurrentSessionModel('custom-sub2apig/deepseek-v4-pro'))
+      .resolves.toBeUndefined();
+
+    expect(useChatStore.getState().sessions.find((session) => session.key === 'agent:main:main')?.model)
+      .toBe('custom-sub2apig/deepseek-v4-pro');
+    expect(gatewayRpcMock.mock.calls.some(([method]) => method === 'sessions.list')).toBe(false);
+  });
   it('uses the local session model for the next send when sessions.patch fails', async () => {
     const { useChatStore } = await import('@/stores/chat');
 

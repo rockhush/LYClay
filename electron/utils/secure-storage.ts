@@ -6,6 +6,7 @@
  */
 
 import { BUILTIN_PROVIDER_TYPES, LY_AUTO_PROVIDER_ID, type ProviderType } from './provider-registry';
+import type { ProviderModelEntry } from '../shared/providers/types';
 import { getActiveOpenClawProviders } from './openclaw-auth';
 import {
   deleteProviderAccount,
@@ -38,6 +39,14 @@ export interface ProviderConfig {
   model?: string;
   fallbackModels?: string[];
   fallbackProviderIds?: string[];
+  runtimeModels?: ProviderModelEntry[];
+  metadata?: {
+    managedBy?: 'lyclaw' | 'sub2api';
+    scope?: 'global' | 'digitalEmployee';
+    readonly?: boolean;
+    hiddenInProviderSettings?: boolean;
+    [key: string]: unknown;
+  };
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -173,13 +182,17 @@ export async function getAllProviders(): Promise<ProviderConfig[]> {
   await ensureProviderStoreMigrated();
   const s = await getClawXProviderStore();
   const providers = s.get('providers') as Record<string, ProviderConfig>;
-  const legacyProviders = Object.values(providers);
-  if (legacyProviders.length > 0) {
-    return legacyProviders;
+  const providerMap = new Map<string, ProviderConfig>();
+  for (const provider of Object.values(providers ?? {})) {
+    providerMap.set(provider.id, provider);
   }
-
   const accounts = await listProviderAccounts();
-  return accounts.map(providerAccountToConfig);
+  for (const account of accounts) {
+    if (!providerMap.has(account.id)) {
+      providerMap.set(account.id, providerAccountToConfig(account));
+    }
+  }
+  return [...providerMap.values()];
 }
 
 /**

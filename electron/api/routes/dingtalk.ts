@@ -39,6 +39,7 @@ import {
 } from '../../utils/dws-auth';
 import { enrichDingTalkUserProfile } from '../../utils/dingtalk-oauth';
 import { cacheWorkNo, clearCachedWorkNo, ensureWorkNoReady } from '../../utils/reporting/work-no';
+import { syncGlobalSub2ApiModels } from '../../services/sub2api/model-sync-service';
 
 type DingTalkUserStore = NonNullable<AppSettings['dingtalkUser']>;
 type LoginSessionRecord = {
@@ -52,6 +53,13 @@ type LoginSessionRecord = {
 
 let activeLoginSession: LoginSessionRecord | null = null;
 
+function triggerSub2ApiGlobalSyncAfterLogin(ctx: HostApiContext): void {
+  void syncGlobalSub2ApiModels('dingtalk-login', ctx.gatewayManager).then((result) => {
+    logger.info(`[Sub2API] DingTalk login global sync completed status=${result.status} subjectHash=${result.subjectHash ?? 'none'} modelCount=${result.modelCount ?? 0} errorCode=${result.errorCode ?? 'none'}`);
+  }).catch((error) => {
+    logger.warn('[Sub2API] DingTalk login global sync threw unexpectedly:', error);
+  });
+}
 function toWorkspaceUser(user: DingTalkUserInfo): DingTalkUserMinimal {
   return {
     name: user.name,
@@ -215,6 +223,7 @@ export async function handleDingTalkRoutes(
       await cacheWorkNo(userStore.jobNumber || userStore.userId);
       await syncDingTalkUserToWorkspaceIfNeeded(previousUser, enrichedUser);
       await runDingTalkChannelProvisionAfterLogin(ctx, enrichedUser);
+      triggerSub2ApiGlobalSyncAfterLogin(ctx);
 
       // Save access token to environment variable and file
       try {
@@ -282,6 +291,7 @@ export async function handleDingTalkRoutes(
           await cacheWorkNo(userStore.jobNumber || userStore.userId);
           await syncDingTalkUserToWorkspaceIfNeeded(previousUser, enrichedUser);
           await runDingTalkChannelProvisionAfterLogin(ctx, enrichedUser);
+          triggerSub2ApiGlobalSyncAfterLogin(ctx);
 
           if ('accessToken' in result) {
             try {

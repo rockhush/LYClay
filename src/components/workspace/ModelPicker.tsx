@@ -8,8 +8,9 @@ import { useAgentsStore } from '@/stores/agents';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { buildProviderListItems, type ProviderListItem } from '@/lib/provider-accounts';
-import { findProviderItemByModelRef, resolveAccountModelRef } from '@/lib/provider-model-ref';
-import { LY_AUTO_PROVIDER_ID } from '@/lib/providers';
+import { hostApiFetch } from '@/lib/host-api';
+import { extractModelIdFromModelRef, findProviderItemByModelRef, resolveAccountModelRefs, type ProviderModelRefOption } from '@/lib/provider-model-ref';
+import { LY_AUTO_PROVIDER_ID, type ProviderAccount } from '@/lib/providers';
 import {
   formatContextWindowTokens,
   resolveModelPickerCatalog,
@@ -19,6 +20,22 @@ import {
 interface ModelPickerProps {
   disabled?: boolean;
 }
+
+type ConfiguredModelOption = ProviderListItem & {
+  model: ProviderModelRefOption;
+  optionId: string;
+};
+
+type DigitalEmployeeModelScope = {
+  provider: {
+    providerId: string;
+    protocol: 'openai-completions';
+    baseUrl: string;
+  };
+  models: Array<string | (Record<string, unknown> & { modelId?: string; id?: string; name?: string })>;
+  defaultModel: string | null;
+  lastSuccessAt: string | null;
+};
 
 function ModelPickerHoverCard({
   catalog,
@@ -63,8 +80,9 @@ function ModelPickerHoverCard({
 export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const { t } = useTranslation('chat');
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [hoveredAccountId, setHoveredAccountId] = useState<string | null>(null);
+  const [hoveredOptionId, setHoveredOptionId] = useState<string | null>(null);
   const [switchingSessionModel, setSwitchingSessionModel] = useState(false);
+  const [digitalEmployeeModelScope, setDigitalEmployeeModelScope] = useState<DigitalEmployeeModelScope | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   const { accounts, statuses, vendors, defaultAccountId } = useProviderStore();
@@ -75,11 +93,35 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const setCurrentSessionModel = useChatStore((s) => s.setCurrentSessionModel);
   const agents = useAgentsStore((s) => s.agents);
   const defaultModelRef = useAgentsStore((s) => s.defaultModelRef);
+  const currentAgent = agents.find((agent) => agent.id === currentAgentId);
 
   const providerItems = useMemo(() => {
     return buildProviderListItems(accounts, statuses, vendors, defaultAccountId);
   }, [accounts, statuses, vendors, defaultAccountId]);
 
+
+  useEffect(() => {
+    let cancelled = false;
+    const agentId = currentAgent?.isDigitalEmployee ? currentAgent.id : null;
+    if (!agentId) {
+      setDigitalEmployeeModelScope(null);
+      return;
+    }
+
+    void hostApiFetch<{ success: boolean; modelScope?: DigitalEmployeeModelScope | null }>(
+      `/api/agents/${encodeURIComponent(agentId)}/model-scope`,
+    )
+      .then((response) => {
+        if (!cancelled) setDigitalEmployeeModelScope(response.modelScope ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setDigitalEmployeeModelScope(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentAgent?.id, currentAgent?.isDigitalEmployee]);
   const configuredProviders = useMemo(() => {
     return providerItems.filter(item => {
       if (item.account.vendorId === LY_AUTO_PROVIDER_ID) return true;
@@ -93,11 +135,81 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
     });
   }, [providerItems]);
 
+
+  const digitalEmployeeProviderItem = useMemo<ProviderListItem | null>(() => {
+    if (!currentAgent?.isDigitalEmployee || !digitalEmployeeModelScope?.models.length) return null;
+    const now = digitalEmployeeModelScope.lastSuccessAt ?? new Date(0).toISOString();
+    const runtimeModels = digitalEmployeeModelScope.models.map((model) => {
+      if (typeof model === 'string') {
+        return { id: model, name: `LY-${model}` };
+      }
+      const modelId = String(model.modelId ?? model.id ?? '').trim();
+      return {
+        ...model,
+        id: modelId,
+        name: typeof model.name === 'string' && model.name.trim() ? model.name : `LY-${modelId}`,
+      };
+    }).filter((model): model is Record<string, unknown> & { id: string; name: string } => Boolean(model.id));
+    const firstModel = runtimeModels[0]?.id;
+    if (!firstModel) return null;
+    const account: ProviderAccount = {
+      id: digitalEmployeeModelScope.provider.providerId,
+      vendorId: 'custom',
+      label: 'LY-SUB2API',
+      authMode: 'api_key',
+      baseUrl: digitalEmployeeModelScope.provider.baseUrl,
+      apiProtocol: digitalEmployeeModelScope.provider.protocol,
+      model: firstModel,
+      fallbackModels: runtimeModels.map((model) => model.id),
+      runtimeModels,
+      enabled: true,
+      isDefault: false,
+      metadata: {
+        managedBy: 'sub2api',
+        scope: 'digitalEmployee',
+        hiddenInProviderSettings: true,
+        lastSuccessAt: digitalEmployeeModelScope.lastSuccessAt ?? undefined,
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    return {
+      account,
+      vendor: vendors.find((vendor) => vendor.id === 'custom'),
+      status: {
+        id: account.id,
+        name: account.label,
+        type: 'custom',
+        baseUrl: account.baseUrl,
+        apiProtocol: account.apiProtocol,
+        model: account.model,
+        fallbackModels: account.fallbackModels,
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+        hasKey: true,
+        keyMasked: '••••',
+      },
+    };
+  }, [currentAgent?.isDigitalEmployee, digitalEmployeeModelScope, vendors]);
+  const configuredModelOptions = useMemo<ConfiguredModelOption[]>(() => {
+    const sourceProviders = digitalEmployeeProviderItem
+      ? [digitalEmployeeProviderItem, ...configuredProviders]
+      : configuredProviders;
+    return sourceProviders.flatMap((item) =>
+      resolveAccountModelRefs(item.account).map((model) => ({
+        ...item,
+        model,
+        optionId: `${item.account.id}:${model.modelId}`,
+      })),
+    );
+  }, [configuredProviders, digitalEmployeeProviderItem]);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) {
         setPickerOpen(false);
-        setHoveredAccountId(null);
+        setHoveredOptionId(null);
       }
     };
 
@@ -109,69 +221,75 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
   useEffect(() => {
     if (!pickerOpen) {
-      setHoveredAccountId(null);
+      setHoveredOptionId(null);
     }
   }, [pickerOpen]);
 
-  const handleSelectProvider = (item: ProviderListItem) => {
+  const handleSelectProvider = (item: ConfiguredModelOption) => {
     if (switchingSessionModel) {
       return;
     }
 
-    const nextModel = resolveAccountModelRef(item.account);
+    const nextModel = item.model.modelRef;
     if (!nextModel) {
       toast.error(t('composer.noModelConfigured', { defaultValue: '该 Provider 未配置模型' }));
       setPickerOpen(false);
-      setHoveredAccountId(null);
+      setHoveredOptionId(null);
       return;
     }
 
     const currentSessionModel = sessions.find((session) => session.key === currentSessionKey)?.model;
     if (nextModel === currentSessionModel) {
       setPickerOpen(false);
-      setHoveredAccountId(null);
+      setHoveredOptionId(null);
       return;
     }
 
     setPickerOpen(false);
-    setHoveredAccountId(null);
+    setHoveredOptionId(null);
     setSwitchingSessionModel(true);
     void (async () => {
       try {
         await setCurrentSessionModel(nextModel);
-        toast.success(t('composer.modelSwitched', { name: item.vendor?.name || item.account.label }));
+        toast.success(t('composer.modelSwitched', { name: item.model.label || item.vendor?.name || item.account.label }));
       } catch (error) {
-      console.error('Failed to persist session model:', error);
+        console.error('Failed to persist session model:', error);
         toast.error(t('composer.modelSwitchFailed', { error: String(error) }));
-    } finally {
+      } finally {
         setSwitchingSessionModel(false);
       }
     })();
   };
 
-  if (configuredProviders.length === 0) {
+  if (configuredModelOptions.length === 0) {
     return null;
   }
 
   const isDisabled = disabled || isStreaming || switchingSessionModel;
   const currentSessionModel = sessions.find((session) => session.key === currentSessionKey)?.model;
-  const currentAgent = agents.find((agent) => agent.id === currentAgentId);
   const effectiveModelRef = currentSessionModel || currentAgent?.modelRef || defaultModelRef || undefined;
-  const currentItem = findProviderItemByModelRef(configuredProviders, effectiveModelRef)
-    ?? configuredProviders.find((item) => item.account.id === defaultAccountId)
-    ?? configuredProviders[0];
-  const matchedAccount = findProviderItemByModelRef(configuredProviders, effectiveModelRef);
-  const currentLabel = matchedAccount?.account.label
+  const currentItem = configuredModelOptions.find((item) => item.model.modelRef === effectiveModelRef)
+    ?? configuredModelOptions.find((item) => item.account.id === defaultAccountId)
+    ?? configuredModelOptions[0];
+  const effectiveModelId = effectiveModelRef ? extractModelIdFromModelRef(effectiveModelRef) : undefined;
+  const matchedModelOption = configuredModelOptions.find((item) => item.model.modelRef === effectiveModelRef)
+    ?? configuredModelOptions.find((item) => item.account.id === currentItem?.account.id && item.model.modelId === effectiveModelId)
+    ?? configuredModelOptions.find((item) => item.model.modelId === effectiveModelId);
+  const matchedAccount = matchedModelOption ?? findProviderItemByModelRef(configuredProviders, effectiveModelRef);
+  const currentLabel = matchedModelOption?.model.label
+    || (matchedAccount?.account.metadata?.managedBy === 'sub2api' ? effectiveModelId : undefined)
+    || matchedAccount?.account.label
     || matchedAccount?.vendor?.name
-    || effectiveModelRef?.split('/').slice(1).join('/')
+    || effectiveModelId
     || effectiveModelRef
+    || currentItem?.model.label
     || currentItem?.account.label
     || currentItem?.vendor?.name
     || currentAgent?.modelDisplay
     || defaultModelRef?.split('/').pop()
     || t('composer.switchModel');
 
-  const hoveredItem = configuredProviders.find((item) => item.account.id === hoveredAccountId) ?? null;
+  const hoveredItem = configuredModelOptions.find((item) => item.optionId === hoveredOptionId) ?? null;
   const hoveredCatalog = hoveredItem
     ? resolveModelPickerCatalog(hoveredItem.account.vendorId)
     : null;
@@ -181,7 +299,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
       return;
     }
-    setHoveredAccountId(null);
+    setHoveredOptionId(null);
   };
 
   return (
@@ -219,22 +337,21 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
               </div>
 
               <div className="max-h-64 overflow-y-auto">
-                {configuredProviders.map((item) => {
-                  const isSelected = item.account.model === effectiveModelRef
-                    || (!effectiveModelRef && item.account.id === currentItem?.account.id);
-                  const isHovered = item.account.id === hoveredAccountId;
+                {configuredModelOptions.map((item) => {
+                  const isSelected = item.model.modelRef === effectiveModelRef
+                    || item.model.modelId === effectiveModelId
+                    || (!effectiveModelRef && item.optionId === currentItem?.optionId);
+                  const isHovered = item.optionId === hoveredOptionId;
                   const vendorName = item.vendor?.name || item.account.label;
-                  const modelId = item.account.model?.includes('/')
-                    ? item.account.model.split('/').pop()
-                    : item.account.model;
+                  const modelId = item.model.modelId;
 
                   return (
                     <button
-                      key={item.account.id}
+                      key={item.optionId}
                       type="button"
                       disabled={switchingSessionModel}
-                      onMouseEnter={() => setHoveredAccountId(item.account.id)}
-                      onFocus={() => setHoveredAccountId(item.account.id)}
+                      onMouseEnter={() => setHoveredOptionId(item.optionId)}
+                      onFocus={() => setHoveredOptionId(item.optionId)}
                       onClick={() => handleSelectProvider(item)}
                       className={cn(
                         'flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left text-[13px] transition-colors',
@@ -247,7 +364,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
                     >
                       <Sparkles className="h-4 w-4 shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <div className="truncate font-medium">{vendorName}</div>
+                        <div className="truncate font-medium">{item.model.label || vendorName}</div>
                         {modelId && (
                           <div className="truncate text-[11px] text-muted-foreground">{modelId}</div>
                         )}
@@ -269,13 +386,11 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
             {hoveredItem && hoveredCatalog && (
               <div
                 className="pointer-events-auto absolute left-full top-0 z-30 ml-2"
-                onMouseEnter={() => setHoveredAccountId(hoveredItem.account.id)}
+                onMouseEnter={() => setHoveredOptionId(hoveredItem.optionId)}
               >
                 <ModelPickerHoverCard
                   catalog={hoveredCatalog}
-                  modelId={hoveredItem.account.model?.includes('/')
-                    ? hoveredItem.account.model.split('/').pop()
-                    : hoveredItem.account.model}
+                  modelId={hoveredItem.model.modelId}
                 />
               </div>
             )}

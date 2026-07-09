@@ -136,7 +136,7 @@ describe('bootstrapLyManagedProviders', () => {
             input: ['text', 'image'],
             compat: expect.objectContaining({
               supportsUsageInStreaming: true,
-              supportsPromptCacheKey: false,
+              supportsPromptCacheKey: true,
             }),
           }),
         },

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+﻿import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -111,6 +111,87 @@ describe('digital employee package validation', () => {
     });
     expect(result.mcpConfig?.servers.docs.disabled).toBe(true);
   });
+  it('accepts optional safe Sub2API user numbers', async () => {
+    const root = await createPackageRoot();
+    const manifestPath = join(root, 'employee.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest.sub2api = { userNo: 'employee_001-A' };
+    await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    const result = await validateExtractedDigitalEmployeePackage(root);
+
+    expect(result.manifest.sub2api?.userNo).toBe('employee_001-A');
+  });
+
+  it('rejects blank Sub2API user numbers', async () => {
+    const root = await createPackageRoot();
+    const manifestPath = join(root, 'employee.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest.sub2api = { userNo: '   ' };
+    await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    await expect(validateExtractedDigitalEmployeePackage(root))
+      .rejects.toThrow('sub2api.userNo is required');
+  });
+
+  it('rejects unsafe Sub2API user numbers', async () => {
+    const root = await createPackageRoot();
+    const manifestPath = join(root, 'employee.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest.sub2api = { userNo: 'employee/001' };
+    await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    await expect(validateExtractedDigitalEmployeePackage(root))
+      .rejects.toThrow('sub2api.userNo may only contain letters, numbers, underscores, and hyphens');
+  });
+
+  it('accepts portable node runtime MCP declarations', async () => {
+    const root = await createPackageRoot();
+    await writeFile(
+      join(root, 'mcp', 'servers.json'),
+      JSON.stringify({
+        servers: {
+          docs: {
+            type: 'stdio',
+            runtime: 'node',
+            entry: 'mcp/server.mjs',
+            args: ['--stdio'],
+            disabled: true,
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    const result = await validateExtractedDigitalEmployeePackage(root);
+
+    expect(result.mcpConfig?.servers.docs).toMatchObject({
+      type: 'stdio',
+      runtime: 'node',
+      entry: 'mcp/server.mjs',
+      args: ['--stdio'],
+    });
+  });
+
+  it('rejects node runtime MCP declarations with unsafe entry paths', async () => {
+    const root = await createPackageRoot();
+    await writeFile(
+      join(root, 'mcp', 'servers.json'),
+      JSON.stringify({
+        servers: {
+          docs: {
+            type: 'stdio',
+            runtime: 'node',
+            entry: '../outside.mjs',
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    await expect(validateExtractedDigitalEmployeePackage(root))
+      .rejects.toThrow('runtime node requires a portable relative entry path');
+  });
 
   it('rejects Agent templates that request unmanaged paths', async () => {
     const root = await createPackageRoot();
@@ -192,3 +273,4 @@ describe('digital employee package validation', () => {
       .rejects.toThrow('install.allowMultipleInstances must be a boolean');
   });
 });
+

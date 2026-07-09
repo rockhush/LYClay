@@ -1,6 +1,10 @@
 import { extractText, extractTextSegments, extractThinkingSegments, extractToolUse } from './message-utils';
 import type { ContentBlock, RawMessage, ToolStatus } from '@/stores/chat';
 import { parseSubagentCompletionInfo, summarizeChildRunActivity, isInterimSubagentWaitAssistantReply } from '@/lib/subagent-delegation';
+import {
+  isEmbeddedAgentFailureNoticeAssistantMessage,
+  isFailedAssistantMessage,
+} from '@/stores/chat/run-lifecycle';
 
 export type {
   ChildDelegationBinding,
@@ -32,6 +36,72 @@ export interface TaskStep {
   url?: string;
 }
 
+function getMessageMeta(message: RawMessage): Record<string, unknown> {
+  return message as RawMessage & Record<string, unknown>;
+}
+
+function hasRawMediaLine(text: string): boolean {
+  return /(?:^|\n)\s*MEDIA:[^\n]+/i.test(text);
+}
+
+function stripRawMediaLines(text: string): string {
+  return text
+    .replace(/^\s*MEDIA:[^\n]*(?:\r?\n)?/gmi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeComparableReplyText(text: string): string {
+  return stripRawMediaLines(text).replace(/\s+/g, '');
+}
+
+function hasRichMediaBlock(message: RawMessage): boolean {
+  if (Array.isArray(message.content)) {
+    return (message.content as ContentBlock[]).some((block) =>
+      block.type === 'image'
+      || Boolean((block as ContentBlock & { url?: unknown; openUrl?: unknown }).url)
+      || Boolean((block as ContentBlock & { url?: unknown; openUrl?: unknown }).openUrl),
+    );
+  }
+  return false;
+}
+
+export function isGatewayInjectedAssistantMediaMessage(message: RawMessage | undefined): boolean {
+  if (!message || message.role !== 'assistant') return false;
+  const meta = getMessageMeta(message);
+  const idempotencyKey = typeof meta.idempotencyKey === 'string' ? meta.idempotencyKey : '';
+  const provider = typeof meta.provider === 'string' ? meta.provider : '';
+  const model = typeof meta.model === 'string' ? meta.model : '';
+  return (idempotencyKey.endsWith(':assistant-media') || (provider === 'openclaw' && model === 'gateway-injected'))
+    && hasRichMediaBlock(message);
+}
+
+function areEquivalentMediaReplies(rawText: string, injectedText: string): boolean {
+  const raw = normalizeComparableReplyText(rawText);
+  const injected = normalizeComparableReplyText(injectedText);
+  if (!raw || !injected) return false;
+  return raw === injected || raw.startsWith(injected) || injected.startsWith(raw);
+}
+
+export function isSupersededRawMediaAssistantReply(
+  messages: readonly RawMessage[],
+  messageIndex: number,
+): boolean {
+  const message = messages[messageIndex];
+  if (!message || message.role !== 'assistant') return false;
+  const text = extractText(message);
+  if (!hasRawMediaLine(text)) return false;
+
+  for (let idx = messageIndex + 1; idx < messages.length; idx += 1) {
+    const later = messages[idx];
+    if (!later || later.role === 'user') return false;
+    if (!isGatewayInjectedAssistantMediaMessage(later)) continue;
+    if (areEquivalentMediaReplies(text, extractText(later))) return true;
+  }
+
+  return false;
+}
+
 /**
  * Detects the index of the "final reply" assistant message in a run segment.
  *
@@ -51,9 +121,11 @@ export interface TaskStep {
  */
 export function findReplyMessageIndex(messages: RawMessage[], hasStreamingReply: boolean): number {
   if (hasStreamingReply) return -1;
+  let fallbackFailureIdx = -1;
   for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
     const message = messages[idx];
     if (!message || message.role !== 'assistant') continue;
+    if (isSupersededRawMediaAssistantReply(messages, idx)) continue;
     if (extractText(message).trim().length === 0) continue;
     // Internal subagent completion markers ("[Internal task completion event]")
     // carry text but are never the user-facing reply. If picked, the real
@@ -64,9 +136,43 @@ export function findReplyMessageIndex(messages: RawMessage[], hasStreamingReply:
     const replyText = extractText(message).trim();
     if (isSubagentOrchestrationNarration(replyText)) continue;
     if (extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name))) continue;
+    if (isFailedAssistantMessage(message) || isEmbeddedAgentFailureNoticeAssistantMessage(message)) {
+      if (fallbackFailureIdx < 0) fallbackFailureIdx = idx;
+      continue;
+    }
     return idx;
   }
-  return -1;
+  return fallbackFailureIdx;
+}
+
+export function committedReplyShouldSettleExecutionGraph(input: {
+  committedReplyOffset: number;
+  isUserTurnExecuting: boolean;
+  hasAnyStreamContent: boolean;
+  segmentDelegationOpen: boolean;
+  segmentHasPendingChild: boolean;
+  segmentWaitingOnSubagent: boolean;
+  stalledChildSessionKey?: string | null;
+}): boolean {
+  return input.committedReplyOffset !== -1
+    && !input.isUserTurnExecuting
+    && !input.segmentDelegationOpen
+    && !input.segmentHasPendingChild
+    && !input.segmentWaitingOnSubagent
+    && !input.stalledChildSessionKey;
+}
+
+export function shouldPromoteStreamingTextAsReply(input: {
+  streamText: string;
+  hasStreamImages: boolean;
+  streamToolUseCount: number;
+}): boolean {
+  if (input.hasStreamImages) return true;
+  const text = input.streamText.trim();
+  if (!text) return false;
+  if (input.streamToolUseCount === 0) return true;
+  return /(?:^|\n)\s*#{1,3}\s+\S/.test(text)
+    || /(?:^|\n)\s*---\s*\n\s*#{1,3}\s+\S/.test(text);
 }
 
 interface DeriveTaskStepsInput {
@@ -74,6 +180,7 @@ interface DeriveTaskStepsInput {
   streamingMessage: unknown | null;
   streamingTools: ToolStatus[];
   omitLastStreamingMessageSegment?: boolean;
+  includeHiddenToolSteps?: boolean;
 }
 
 function normalizeText(text: string | null | undefined): string | undefined {
@@ -149,7 +256,7 @@ export function filterSubagentOrchestrationSteps(steps: TaskStep[]): TaskStep[] 
 }
 
 function isHiddenExecutionGraphStep(step: TaskStep): boolean {
-  return step.kind === 'tool' && isHiddenExecutionGraphToolName(step.label);
+  return step.kind === 'tool' && step.depth <= 1 && isHiddenExecutionGraphToolName(step.label);
 }
 
 export function filterHiddenExecutionGraphSteps(steps: TaskStep[]): TaskStep[] {
@@ -307,6 +414,7 @@ export function deriveTaskSteps({
   streamingMessage,
   streamingTools,
   omitLastStreamingMessageSegment = false,
+  includeHiddenToolSteps = false,
 }: DeriveTaskStepsInput): TaskStep[] {
   const steps: TaskStep[] = [];
   const stepIndexById = new Map<string, number>();
@@ -338,6 +446,7 @@ export function deriveTaskSteps({
 
   for (const [messageIndex, message] of messages.entries()) {
     if (!message || message.role !== 'assistant') continue;
+    if (isSupersededRawMediaAssistantReply(messages, messageIndex)) continue;
 
     appendDetailSegments(extractThinkingSegments(message), {
       idPrefix: `history-thinking-${message.id || messageIndex}`,
@@ -456,7 +565,8 @@ export function deriveTaskSteps({
     });
   }
 
-  return filterHiddenExecutionGraphSteps(attachTopology(steps));
+  const topology = attachTopology(steps);
+  return includeHiddenToolSteps ? topology : filterHiddenExecutionGraphSteps(topology);
 }
 
 export function findLatestSpawnStepId(steps: TaskStep[]): string | null {
@@ -564,6 +674,7 @@ export function attachSubagentChildSteps(
     messages: childMessages,
     streamingMessage: null,
     streamingTools: [],
+    includeHiddenToolSteps: true,
   });
   const childRunning = !childError && (
     options?.forceChildRunning

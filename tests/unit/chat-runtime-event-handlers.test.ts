@@ -12,6 +12,13 @@ const getMessageErrorMessage = vi.fn((message: { errorMessage?: string; error_me
 const getToolCallFilePath = vi.fn(() => undefined);
 const hasErrorRecoveryTimer = vi.fn(() => false);
 const hasNonToolAssistantContent = vi.fn(() => true);
+const hasVisibleAssistantContent = vi.fn((message: { content?: unknown } | undefined) => {
+  if (!message) return false;
+  const text = getMessageText(message.content);
+  return Boolean(text.trim());
+});
+const shouldSuppressAssistantStreamingText = vi.fn(() => false);
+const shouldTreatAbortAsUserStop = vi.fn(() => false);
 const abortedChatRunIds = new Set<string>();
 const markAbortedChatRun = vi.fn((runId: string) => {
   const id = runId.trim();
@@ -63,6 +70,9 @@ vi.mock('@/stores/chat/helpers', () => ({
   getToolCallFilePath: (...args: unknown[]) => getToolCallFilePath(...args),
   hasErrorRecoveryTimer: (...args: unknown[]) => hasErrorRecoveryTimer(...args),
   hasNonToolAssistantContent: (...args: unknown[]) => hasNonToolAssistantContent(...args),
+  hasVisibleAssistantContent: (...args: unknown[]) => hasVisibleAssistantContent(...args),
+  shouldSuppressAssistantStreamingText: (...args: unknown[]) => shouldSuppressAssistantStreamingText(...args),
+  shouldTreatAbortAsUserStop: (...args: unknown[]) => shouldTreatAbortAsUserStop(...args),
   isAbortedChatRun: (...args: unknown[]) => isAbortedChatRun(...args),
   markAbortedChatRun: (...args: unknown[]) => markAbortedChatRun(...args),
   forgetAbortedChatRun: (...args: unknown[]) => forgetAbortedChatRun(...args),
@@ -209,6 +219,31 @@ describe('chat runtime event handlers', () => {
     expect(next.streamingMessage).toBeNull();
     expect(next.lastUserMessageAt).toBeNull();
     expect(h.read().loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads history with force after assistant final with visible text and tool_use', async () => {
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({
+      sending: true,
+      activeRunId: 'run-mixed',
+      pendingFinal: true,
+      lastUserMessageAt: 123,
+      currentSessionKey: 'agent:main:session-1',
+    });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      sessionKey: 'agent:main:session-1',
+      message: {
+        role: 'assistant',
+        id: 'assistant-mixed',
+        content: [
+          { type: 'text', text: 'Here is the summary.' },
+          { type: 'tool_use', id: 'call-1', name: 'image', input: {} },
+        ],
+      },
+    }, 'final', 'run-mixed');
+
+    expect(h.read().loadHistory).toHaveBeenCalledWith(true, { force: true });
   });
 
   it('marks tool-result attachments before appending them to the final assistant reply', async () => {

@@ -222,16 +222,25 @@ function hasPostDelegationParentConclusion(
     );
 
     // Single-spawn announce/yield wrap-ups settle even when gateway child keys lag.
-    // Multi-spawn turns still require every child to finish before concluding.
-    if (deliverableWrapUp && pendingBindings.length <= 1) {
-      if (pendingBindings.length === 1) {
-        completed.add(pendingBindings[0].childSessionKey);
-        bindings = collectChildDelegationBindings([...scopeMessages], completed);
+    // Multi-spawn turns require every child binding to complete first.
+    if (deliverableWrapUp) {
+      if (bindings.length > 1) {
+        if (pendingBindings.length === 0) {
+          const stillActiveChild = bindings.some((binding) =>
+            !binding.completed && processingSessionKeys.includes(binding.childSessionKey),
+          );
+          if (!stillActiveChild) return true;
+        }
+      } else if (pendingBindings.length <= 1) {
+        if (pendingBindings.length === 1) {
+          completed.add(pendingBindings[0].childSessionKey);
+          bindings = collectChildDelegationBindings([...scopeMessages], completed);
+        }
+        const stillActiveChild = bindings.some((binding) =>
+          !binding.completed && processingSessionKeys.includes(binding.childSessionKey),
+        );
+        if (!stillActiveChild) return true;
       }
-      const stillActiveChild = bindings.some((binding) =>
-        !binding.completed && processingSessionKeys.includes(binding.childSessionKey),
-      );
-      if (!stillActiveChild) return true;
     }
   }
 
@@ -309,6 +318,25 @@ function isDelegationScopeOpen(
       !binding.completed && processingSessionKeys.includes(binding.childSessionKey),
     );
     if (awaitingParentInterim || childOnGateway) return true;
+  }
+
+  const firstSpawnIdx = scope.findIndex((message) =>
+    message.role === 'assistant'
+    && extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name)),
+  );
+  if (firstSpawnIdx >= 0) {
+    const afterSpawn = scope.slice(firstSpawnIdx + 1);
+    const latestAssistant = [...afterSpawn].reverse().find((message) =>
+      message.role === 'assistant' && extractText(message).trim().length > 0,
+    );
+    const latestText = latestAssistant ? extractText(latestAssistant).trim() : '';
+    if (
+      latestAssistant
+      && !/^\[Internal task completion event\]/i.test(latestText)
+      && isInterimSubagentWaitAssistantReply(latestAssistant)
+    ) {
+      return true;
+    }
   }
 
   return false;

@@ -68,7 +68,7 @@ describe('provider metadata', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'auto',
-          compat: { supportsUsageInStreaming: true, supportsPromptCacheKey: false },
+          compat: { supportsUsageInStreaming: true, supportsPromptCacheKey: true },
         }),
       ])
     );

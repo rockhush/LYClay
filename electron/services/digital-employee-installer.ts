@@ -13,6 +13,7 @@ import type {
 import {
   createAgentWithResult,
   deleteAgentConfig,
+  updateAgentModel,
   removeAgentWorkspaceDirectory,
   type AgentSummary,
 } from '../utils/agent-config';
@@ -29,9 +30,12 @@ import {
   type ValidatedDigitalEmployeePackage,
 } from '../utils/digital-employee-package';
 import { extractZipToDir } from '../utils/local-skill-upload';
+import { installEmployeeMcpServers, removeEmployeeMcpServers, writeEmployeeRuntimeMcpConfig } from '../utils/digital-employee-mcp';
 import { ensureClawXContext } from '../utils/openclaw-workspace';
 import { expandPath } from '../utils/paths';
 import { proxyAwareFetch } from '../utils/proxy-fetch';
+import { syncDigitalEmployeeSub2ApiModels } from './sub2api/model-sync-service';
+import { syncAgentModelOverrideToRuntime } from './providers/provider-runtime-sync';
 
 export const MANAGED_AGENT_WORKSPACE_FILES = [
   'AGENTS.md',
@@ -41,6 +45,10 @@ export const MANAGED_AGENT_WORKSPACE_FILES = [
   'IDENTITY.md',
   'HEARTBEAT.md',
   'BOOT.md',
+] as const;
+
+export const MANAGED_AGENT_WORKSPACE_DIRECTORIES = [
+  'resources',
 ] as const;
 
 export const DIGITAL_EMPLOYEE_DOWNLOAD_BASE_URL =
@@ -76,6 +84,9 @@ export interface DigitalEmployeeInstallerDependencies {
   ) => Promise<{ createdAgent: AgentSummary }>;
   deleteAgent: (agentId: string) => Promise<void>;
   ensureContext: typeof ensureClawXContext;
+  syncSub2ApiModels: typeof syncDigitalEmployeeSub2ApiModels;
+  updateAgentModel: typeof updateAgentModel;
+  syncAgentRuntimeModel: typeof syncAgentModelOverrideToRuntime;
 }
 
 export async function downloadDigitalEmployeePackage(
@@ -181,6 +192,9 @@ const defaultDependencies: DigitalEmployeeInstallerDependencies = {
   }),
   deleteAgent: deleteCreatedAgent,
   ensureContext: ensureClawXContext,
+  syncSub2ApiModels: syncDigitalEmployeeSub2ApiModels,
+  updateAgentModel,
+  syncAgentRuntimeModel: syncAgentModelOverrideToRuntime,
 };
 
 export function createDigitalEmployeeInstallerDependencies(
@@ -230,6 +244,20 @@ export function createDigitalEmployeeInstallIdentity(
   };
 }
 
+async function syncAgentWorkspaceResourceDirectories(
+  packageInfo: ValidatedDigitalEmployeePackage,
+  workspaceDir: string,
+): Promise<void> {
+  for (const dirName of MANAGED_AGENT_WORKSPACE_DIRECTORIES) {
+    const source = join(packageInfo.rootDir, dirName);
+    const target = join(workspaceDir, dirName);
+    if (await fileExists(source)) {
+      await rm(target, { recursive: true, force: true });
+      await cp(source, target, { recursive: true, force: true });
+    }
+  }
+}
+
 async function writeAgentWorkspace(
   packageInfo: ValidatedDigitalEmployeePackage,
   agent: AgentSummary,
@@ -256,6 +284,8 @@ async function writeAgentWorkspace(
       if (code !== 'ENOENT') throw error;
     }
   }
+
+  await syncAgentWorkspaceResourceDirectories(packageInfo, workspaceDir);
 
   if (copied === 0) throw new Error('Digital employee package contains no supported Agent workspace files');
 }
@@ -328,8 +358,26 @@ export async function installDigitalEmployee(
       await dependencies.ensureContext();
 
       const warnings = [...packageInfo.warnings];
-      const status = warnings.length > 0 ? 'degraded' : 'active';
       const finalPath = getDigitalEmployeeInstallPath(instanceId);
+      await writeEmployeeRuntimeMcpConfig({
+        manifest: packageInfo.manifest,
+        packageConfig: packageInfo.mcpConfig,
+        installPath: finalPath,
+        targetRoot: preparedDir,
+      });
+      const mcpResult = await installEmployeeMcpServers({
+        instanceId,
+        agentId: createdAgent.id,
+        manifest: packageInfo.manifest,
+        packageConfig: packageInfo.mcpConfig,
+        installPath: finalPath,
+      });
+      rollback.push({
+        label: 'remove installed employee MCP servers',
+        run: () => removeEmployeeMcpServers(mcpResult.installedServers.map((server) => server.runtimeName)),
+      });
+      warnings.push(...mcpResult.warnings);
+      const status = warnings.length > 0 ? 'degraded' : 'active';
       const record: DigitalEmployeeInstallRecord = {
         schemaVersion: 1,
         instanceId,
@@ -344,7 +392,7 @@ export async function installDigitalEmployee(
           path: skill.path,
           required: skill.required,
         })),
-        installedMcpServers: [],
+        installedMcpServers: mcpResult.installedServers,
         status,
         installedAt: new Date().toISOString(),
         warnings,
@@ -355,6 +403,19 @@ export async function installDigitalEmployee(
         label: 'remove published employee directory',
         run: () => removeDigitalEmployeeDirectory(publishedDir!),
       });
+
+      const sub2ApiResult = await dependencies.syncSub2ApiModels({
+        manifest: packageInfo.manifest,
+        marketEmployeeId,
+        instanceId,
+        agentId: createdAgent.id,
+      }, 'install');
+      if (sub2ApiResult.status === 'success' && sub2ApiResult.defaultModel) {
+        await dependencies.updateAgentModel(createdAgent.id, sub2ApiResult.defaultModel);
+        await dependencies.syncAgentRuntimeModel(createdAgent.id).catch(() => undefined);
+      } else if (sub2ApiResult.status !== 'skipped-missing-subject') {
+        warnings.push(`Sub2API model sync skipped: ${sub2ApiResult.errorCode ?? sub2ApiResult.status}`);
+      }
 
       return {
         instanceId,

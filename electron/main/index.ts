@@ -58,6 +58,7 @@ import { browserOAuthManager } from '../utils/browser-oauth';
 import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { syncAllProviderAuthToRuntime } from '../services/providers/provider-runtime-sync';
 import { bootstrapLyManagedProviders } from '../services/providers/default-provider-bootstrap';
+import { syncGlobalSub2ApiModels } from '../services/sub2api/model-sync-service';
 
 const WINDOWS_APP_USER_MODEL_ID = 'app.LYClaw.desktop';
 const isE2EMode = process.env.CLAWX_E2E === '1';
@@ -578,6 +579,12 @@ async function initialize(): Promise<void> {
   });
 
   if (!isE2EMode) {
+    await syncGlobalSub2ApiModels('startup').catch((error) => {
+      logger.warn('[Sub2API] Startup global sync threw unexpectedly:', error);
+    });
+  }
+
+  if (!isE2EMode) {
     await bootstrapLyManagedProviders(gatewayManager).catch((error) => {
       logger.warn('Failed to bootstrap LY managed providers:', error);
     });
@@ -595,10 +602,6 @@ async function initialize(): Promise<void> {
       await syncAllProviderAuthToRuntime().catch((error) => {
         logger.warn('Failed to re-sync provider compat after gateway start:', error);
       });
-      if (gatewayManager.getStatus().state !== 'stopped') {
-        logger.info('Reloading gateway after post-start provider sync');
-        gatewayManager.debouncedReload();
-      }
     } catch (error) {
       logger.error('Gateway auto-start failed:', error);
       mainWindow?.webContents.send('gateway:error', String(error));

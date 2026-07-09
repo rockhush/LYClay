@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DigitalEmployeePackageManifest } from '../../shared/types/digital-employee';
 
@@ -43,12 +46,14 @@ describe('digital employee MCP installation', () => {
     writeMcpConfigAtomicMock.mockResolvedValue(undefined);
   });
 
-  it('namespaces packaged MCP servers and registers them disabled', async () => {
+  it('namespaces packaged MCP servers and registers them as hidden employee tools', async () => {
     const { installEmployeeMcpServers } = await import('@electron/utils/digital-employee-mcp');
 
     const result = await installEmployeeMcpServers({
       instanceId: 'emp_123',
+      agentId: 'employee-emp-123',
       manifest,
+      installPath: 'C:/employees/emp_123',
       packageConfig: {
         servers: {
           'company docs': {
@@ -71,8 +76,17 @@ describe('digital employee MCP installation', () => {
         servers: {
           existing: { type: 'streamable-http', url: 'https://existing.example/mcp' },
           'emp_123--company-docs': expect.objectContaining({
-            disabled: true,
-            tools: { allow: ['search_documents'] },
+            disabled: false,
+            toolFilter: { include: ['search_documents'] },
+            'x-lyclaw-hidden-from-connectors': true,
+            'x-lyclaw-auto-enabled': true,
+            'x-lyclaw-owner': {
+              type: 'digitalEmployee',
+              instanceId: 'emp_123',
+              agentId: 'employee-emp-123',
+              packageId: 'com.lyclaw.employee.document-analyst',
+              sourceName: 'company docs',
+            },
           }),
         },
       },
@@ -84,7 +98,9 @@ describe('digital employee MCP installation', () => {
 
     await expect(installEmployeeMcpServers({
       instanceId: 'emp_123',
+      agentId: 'employee-emp-123',
       manifest,
+      installPath: 'C:/employees/emp_123',
       packageConfig: {
         servers: {
           'company docs': {
@@ -128,7 +144,7 @@ describe('digital employee MCP installation', () => {
           tools: { allow: ['old_tool'] },
         },
         'document-analyst--1234--removed': {
-          command: 'node',
+          command: process.execPath,
           args: ['removed.js'],
           disabled: true,
         },
@@ -138,6 +154,7 @@ describe('digital employee MCP installation', () => {
 
     const result = await updateEmployeeMcpServers({
       instanceId: 'document-analyst--1234',
+      agentId: 'employee-document-analyst-1234',
       manifest: {
         ...manifest,
         mcp: {
@@ -160,7 +177,7 @@ describe('digital employee MCP installation', () => {
           },
           removed: {
             type: 'stdio',
-            command: 'node',
+            command: process.execPath,
             args: ['removed.js'],
             disabled: true,
           },
@@ -176,6 +193,7 @@ describe('digital employee MCP installation', () => {
           },
         },
       },
+      installPath: 'C:/employees/document-analyst--1234',
       installedServers: [
         {
           sourceName: 'company docs',
@@ -201,10 +219,180 @@ describe('digital employee MCP installation', () => {
             url: 'https://local.example/mcp',
             headers: { Authorization: 'Bearer local-token' },
             disabled: false,
-            tools: { allow: ['new_tool'] },
+            toolFilter: { include: ['new_tool'] },
+            'x-lyclaw-hidden-from-connectors': true,
           }),
         },
       },
     );
+  });
+
+  it('writes employee-local runtime MCP config with enabled stdio cwd', async () => {
+    const {
+      buildEmployeeRuntimeMcpConfig,
+      resolveDigitalEmployeeNodeExecutable,
+      writeEmployeeRuntimeMcpConfig,
+    } = await import('@electron/utils/digital-employee-mcp');
+    const installPath = 'C:/employees/emp_123';
+    const expectedNode = resolveDigitalEmployeeNodeExecutable();
+    const packageConfig = {
+      servers: {
+        'company docs': {
+          type: 'stdio' as const,
+          command: 'node',
+          args: ['mcp/server.mjs'],
+          disabled: true,
+          tools: { allow: ['unwanted_tool'] },
+        },
+      },
+    };
+
+    expect(buildEmployeeRuntimeMcpConfig({
+      manifest,
+      packageConfig,
+      installPath,
+    })).toEqual({
+      servers: {
+        'company docs': {
+          type: 'stdio',
+          command: expectedNode,
+          args: ['mcp/server.mjs'],
+          disabled: false,
+          cwd: installPath,
+          toolFilter: { include: ['search_documents'] },
+        },
+      },
+    });
+
+    const targetRoot = await mkdtemp(join(tmpdir(), 'lyclaw-employee-mcp-'));
+    try {
+      await writeEmployeeRuntimeMcpConfig({
+        manifest,
+        packageConfig,
+        installPath,
+        targetRoot,
+      });
+
+      expect(JSON.parse(await readFile(join(targetRoot, 'mcp', 'servers.json'), 'utf8'))).toEqual({
+        servers: {
+          'company docs': {
+            type: 'stdio',
+            command: expectedNode,
+            args: ['mcp/server.mjs'],
+            disabled: false,
+            cwd: installPath,
+            toolFilter: { include: ['search_documents'] },
+          },
+        },
+      });
+    } finally {
+      await rm(targetRoot, { recursive: true, force: true });
+    }
+  });
+  it('expands portable node runtime MCP entries to the platform Node executable', async () => {
+    const {
+      buildEmployeeRuntimeMcpConfig,
+      installEmployeeMcpServers,
+      resolveDigitalEmployeeNodeExecutable,
+    } = await import('@electron/utils/digital-employee-mcp');
+    const installPath = 'C:/employees/emp_123';
+    const expectedNode = resolveDigitalEmployeeNodeExecutable();
+    expect(expectedNode).toBeTruthy();
+
+    const packageConfig = {
+      servers: {
+        'company docs': {
+          type: 'stdio' as const,
+          runtime: 'node' as const,
+          entry: 'mcp/server.mjs',
+          args: ['--mode', 'employee'],
+          env: { FOO: 'bar' },
+          disabled: true,
+        },
+      },
+    };
+
+    expect(buildEmployeeRuntimeMcpConfig({
+      manifest,
+      packageConfig,
+      installPath,
+    })).toEqual({
+      servers: {
+        'company docs': {
+          type: 'stdio',
+          command: expectedNode,
+          args: [join(installPath, 'mcp/server.mjs'), '--mode', 'employee'],
+          env: { FOO: 'bar', CLAWX_NODE: expectedNode, EMPLOYEE_DIR: installPath },
+          disabled: false,
+          cwd: installPath,
+          toolFilter: { include: ['search_documents'] },
+        },
+      },
+    });
+
+    await installEmployeeMcpServers({
+      instanceId: 'emp_123',
+      agentId: 'employee-emp-123',
+      manifest,
+      installPath,
+      packageConfig,
+    });
+
+    expect(writeMcpConfigAtomicMock).toHaveBeenCalledWith(
+      'openclaw.json#mcp.servers',
+      expect.objectContaining({
+        servers: expect.objectContaining({
+          'emp_123--company-docs': expect.objectContaining({
+            command: expectedNode,
+            args: [join(installPath, 'mcp/server.mjs'), '--mode', 'employee'],
+            env: { FOO: 'bar', CLAWX_NODE: expectedNode, EMPLOYEE_DIR: installPath },
+            cwd: installPath,
+            disabled: false,
+            'x-lyclaw-hidden-from-connectors': true,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('writes runtime MCP config to the manifest serverTemplate path', async () => {
+    const { resolveDigitalEmployeeNodeExecutable, writeEmployeeRuntimeMcpConfig } = await import('@electron/utils/digital-employee-mcp');
+    const expectedNode = resolveDigitalEmployeeNodeExecutable();
+    const targetRoot = await mkdtemp(join(tmpdir(), 'lyclaw-employee-mcp-template-'));
+    try {
+      await writeEmployeeRuntimeMcpConfig({
+        manifest: {
+          ...manifest,
+          mcp: {
+            ...manifest.mcp!,
+            serverTemplate: 'mcp/servers.template.json',
+          },
+        },
+        packageConfig: {
+          servers: {
+            'company docs': {
+              type: 'stdio',
+              command: 'node',
+              args: ['mcp/server.mjs'],
+              disabled: true,
+            },
+          },
+        },
+        installPath: 'C:/employees/emp_123',
+        targetRoot,
+      });
+
+      expect(JSON.parse(await readFile(join(targetRoot, 'mcp', 'servers.template.json'), 'utf8'))).toMatchObject({
+        servers: {
+          'company docs': {
+            command: expectedNode,
+            disabled: false,
+            cwd: 'C:/employees/emp_123',
+          },
+        },
+      });
+    } finally {
+      await rm(targetRoot, { recursive: true, force: true });
+    }
   });
 });

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   updateAgentModelProvider: vi.fn(),
   updateSingleAgentModelProvider: vi.fn(),
   listAgentsSnapshot: vi.fn(),
+  listConfiguredAgentIds: vi.fn(),
   resetAgentModelsForProvider: vi.fn(),
   updateAgentModel: vi.fn(),
 }));
@@ -65,11 +66,16 @@ vi.mock('@electron/utils/openclaw-auth', () => ({
 
 vi.mock('@electron/utils/agent-config', () => ({
   listAgentsSnapshot: mocks.listAgentsSnapshot,
+  listConfiguredAgentIds: mocks.listConfiguredAgentIds,
   resetAgentModelsForProvider: mocks.resetAgentModelsForProvider,
   updateAgentModel: mocks.updateAgentModel,
 }));
 
 vi.mock('@electron/utils/logger', () => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
   logger: {
     debug: vi.fn(),
     info: vi.fn(),
@@ -137,6 +143,7 @@ describe('provider-runtime-sync refresh strategy', () => {
     mocks.resetAgentModelsForProvider.mockResolvedValue(undefined);
     mocks.updateAgentModel.mockResolvedValue(undefined);
     mocks.listAgentsSnapshot.mockResolvedValue({ agents: [] });
+    mocks.listConfiguredAgentIds.mockResolvedValue(['main']);
   });
 
   it('hot-updates after saving the default provider config', async () => {
@@ -175,6 +182,26 @@ describe('provider-runtime-sync refresh strategy', () => {
     expect(gateway.debouncedRestart).toHaveBeenCalledTimes(1);
   });
 
+
+  it('removes current and legacy runtime keys when deleting an employee Sub2API provider', async () => {
+    const provider = createProvider({
+      id: 'sub2api-employee-employee-document-1',
+      type: 'custom',
+      baseUrl: 'https://sub2api.internal.example.com/v1',
+      model: 'deepseek-v4-pro',
+      metadata: {
+        managedBy: 'sub2api',
+        scope: 'digitalEmployee',
+        hiddenInProviderSettings: true,
+      },
+    });
+
+    await syncDeletedProviderToRuntime(provider, 'sub2api-employee-employee-document-1');
+
+    expect(mocks.removeProviderFromOpenClaw).toHaveBeenCalledWith('custom-sub2ed291be5b');
+    expect(mocks.removeProviderFromOpenClaw).toHaveBeenCalledWith('custom-sub2apie');
+    expect(mocks.removeProviderFromOpenClaw).toHaveBeenCalledWith('sub2api-employee-employee-document-1');
+  });
   it('only clears the api-key profile when deleting a provider api key', async () => {
     const openaiProvider = createProvider({
       id: 'openai-personal',
@@ -209,12 +236,43 @@ describe('provider-runtime-sync refresh strategy', () => {
     expect(gateway.debouncedRestart).not.toHaveBeenCalled();
   });
 
+  it('syncs default models only to configured agents, not disk-only digital employees', async () => {
+    mocks.getProvider.mockResolvedValue(createProvider({
+      id: 'sub2api-global-740eff8f-apiKey-21',
+      type: 'custom',
+      model: 'MiniMax-M2.7',
+      baseUrl: 'http://10.0.2.77:8090/v1',
+      apiProtocol: 'openai-completions',
+    }));
+    mocks.getDefaultProvider.mockResolvedValue('sub2api-global-740eff8f-apiKey-21');
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.listConfiguredAgentIds.mockResolvedValue(['main', 'dingtalk']);
+    mocks.listAgentsSnapshot.mockResolvedValue({
+      agents: [
+        { id: 'main', modelRef: 'custom-sub2g3e5cd874/MiniMax-M2.7' },
+        { id: 'dingtalk', modelRef: 'custom-sub2g3e5cd874/MiniMax-M2.7' },
+        { id: 'employee-document-analyst-720d8d8a', modelRef: 'custom-sub2g3e5cd874/MiniMax-M2.7' },
+      ],
+    });
+
+    const gateway = createGateway('stopped');
+    await syncDefaultProviderToRuntime('sub2api-global-740eff8f-apiKey-21', gateway as GatewayManager);
+
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('main', 'custom-sub2g3e5cd874/MiniMax-M2.7');
+    expect(mocks.updateAgentModel).toHaveBeenCalledWith('dingtalk', 'custom-sub2g3e5cd874/MiniMax-M2.7');
+    expect(mocks.updateAgentModel).not.toHaveBeenCalledWith(
+      'employee-document-analyst-720d8d8a',
+      expect.any(String),
+    );
+  });
+
   it('syncs every agent model when DeepSeek becomes the default provider', async () => {
     mocks.getProvider.mockResolvedValue(createProvider({
       id: 'ly-deepseek-default',
       type: 'deepseek',
       model: 'deepseek-v4-flash',
     }));
+    mocks.listConfiguredAgentIds.mockResolvedValue(['main', 'research', 'dingtalk']);
     mocks.listAgentsSnapshot.mockResolvedValue({
       agents: [
         { id: 'main', modelRef: 'moonshot/kimi-k2.6' },
@@ -571,6 +629,216 @@ describe('provider-runtime-sync refresh strategy', () => {
         api: 'openai-completions',
       }),
       expect.any(Array),
+    );
+  });
+  it('writes Sub2API runtime model names and capabilities when saving the default custom provider', async () => {
+    const sub2ApiProvider = createProvider({
+      id: 'sub2api-global-740eff8f-apiKey-21',
+      type: 'custom',
+      name: 'LY-SUB2API',
+      model: 'MiniMax-M2.7',
+      fallbackModels: ['MiniMax-M2.7'],
+      baseUrl: 'http://10.0.2.77:8090/v1',
+      apiProtocol: 'openai-completions',
+      metadata: { managedBy: 'sub2api', scope: 'global' },
+      runtimeModels: [{
+        id: 'MiniMax-M2.7',
+        name: 'LY-MiniMax-M2.7',
+        input: ['text', 'image'],
+        contextWindow: 200000,
+        contextTokens: 200000,
+        maxTokens: 16384,
+        timeoutSeconds: 900,
+        reasoning: true,
+      }],
+    });
+
+    mocks.getDefaultProvider.mockResolvedValue('sub2api-global-740eff8f-apiKey-21');
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getAllProviders.mockResolvedValue([sub2ApiProvider]);
+    mocks.getApiKey.mockResolvedValue('sk-sub2api');
+
+    const gateway = createGateway('stopped');
+    await syncSavedProviderToRuntime(sub2ApiProvider, 'sk-sub2api', gateway as GatewayManager);
+
+    expect(mocks.setOpenClawDefaultModelWithOverride).toHaveBeenCalledWith(
+      'custom-sub2g3e5cd874',
+      'custom-sub2g3e5cd874/MiniMax-M2.7',
+      expect.objectContaining({
+        baseUrl: 'http://10.0.2.77:8090/v1',
+        api: 'openai-completions',
+        modelOverrides: {
+          'MiniMax-M2.7': expect.objectContaining({
+            name: 'LY-MiniMax-M2.7',
+            input: ['text', 'image'],
+            contextWindow: 200000,
+            contextTokens: 200000,
+            maxTokens: 16384,
+            timeoutSeconds: 900,
+            reasoning: true,
+            compat: expect.objectContaining({
+              supportsPromptCacheKey: true,
+            }),
+          }),
+        },
+        timeoutSeconds: 900,
+      }),
+      ['custom-sub2g3e5cd874/MiniMax-M2.7'],
+    );
+  });
+  it('writes all Sub2API models to the agent provider registry', async () => {
+    const sub2ApiProvider = createProvider({
+      id: 'sub2api-global-740eff8f-apiKey-21',
+      type: 'custom',
+      name: 'LY-SUB2API',
+      model: 'MiniMax-M2.7',
+      fallbackModels: ['MiniMax-M2.7', 'deepseek-v4-pro'],
+      baseUrl: 'http://10.0.2.77:8090/v1',
+      apiProtocol: 'openai-completions',
+      metadata: { managedBy: 'sub2api', scope: 'global' },
+      runtimeModels: [
+        { id: 'MiniMax-M2.7', name: 'LY-MiniMax-M2.7', input: ['text', 'image'], contextWindow: 200000 },
+        { id: 'deepseek-v4-pro', name: 'LY-deepseek-v4-pro', input: ['text'], contextWindow: 1048576 },
+      ],
+    });
+
+    mocks.getDefaultProvider.mockResolvedValue('sub2api-global-740eff8f-apiKey-21');
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getApiKey.mockResolvedValue('sk-sub2api');
+
+    const gateway = createGateway('stopped');
+    await syncSavedProviderToRuntime(sub2ApiProvider, 'sk-sub2api', gateway as GatewayManager);
+
+    expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
+      'custom-sub2g3e5cd874',
+      expect.objectContaining({
+        models: [
+          expect.objectContaining({
+            id: 'MiniMax-M2.7',
+            name: 'LY-MiniMax-M2.7',
+            compat: expect.objectContaining({ supportsPromptCacheKey: true }),
+          }),
+          expect.objectContaining({
+            id: 'deepseek-v4-pro',
+            name: 'LY-deepseek-v4-pro',
+            compat: expect.objectContaining({ supportsPromptCacheKey: true }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('preserves Sub2API DeepSeek ly-auto default limits instead of raising to catalog 1M limits', async () => {
+    const sub2ApiProvider = createProvider({
+      id: 'sub2api-global-740eff8f-apiKey-21',
+      type: 'custom',
+      name: 'LY-SUB2API',
+      model: 'deepseek-v4-pro',
+      fallbackModels: ['deepseek-v4-pro'],
+      baseUrl: 'http://10.0.2.77:8090/v1',
+      apiProtocol: 'openai-completions',
+      metadata: { managedBy: 'sub2api', scope: 'global' },
+      runtimeModels: [{
+        id: 'deepseek-v4-pro',
+        name: 'LY-deepseek-v4-pro',
+        input: ['text', 'image'],
+        contextWindow: 200000,
+        contextTokens: 200000,
+        maxTokens: 16384,
+        timeoutSeconds: 900,
+        reasoning: true,
+        compat: { supportsPromptCacheKey: true },
+      }],
+    });
+
+    mocks.getDefaultProvider.mockResolvedValue('sub2api-global-740eff8f-apiKey-21');
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getAllProviders.mockResolvedValue([sub2ApiProvider]);
+    mocks.getApiKey.mockResolvedValue('sk-sub2api');
+
+    await syncSavedProviderToRuntime(sub2ApiProvider, 'sk-sub2api', createGateway('stopped') as GatewayManager);
+
+    expect(mocks.syncProviderConfigToOpenClaw).toHaveBeenCalledWith(
+      'custom-sub2g3e5cd874',
+      'deepseek-v4-pro',
+      expect.objectContaining({
+        preserveExplicitModelLimits: true,
+        modelOverrides: {
+          'deepseek-v4-pro': expect.objectContaining({
+            contextWindow: 200000,
+            contextTokens: 200000,
+            maxTokens: 16384,
+            compat: expect.objectContaining({ supportsPromptCacheKey: true }),
+          }),
+        },
+      }),
+    );
+    expect(mocks.updateAgentModelProvider).toHaveBeenCalledWith(
+      'custom-sub2g3e5cd874',
+      expect.objectContaining({
+        preserveExplicitModelLimits: true,
+        models: [expect.objectContaining({
+          id: 'deepseek-v4-pro',
+          contextWindow: 200000,
+          contextTokens: 200000,
+          maxTokens: 16384,
+        })],
+      }),
+    );
+  });
+  it('syncs Sub2API runtime model names and capabilities when it becomes the default custom provider', async () => {
+    const sub2ApiProvider = createProvider({
+      id: 'sub2api-global-740eff8f-apiKey-21',
+      type: 'custom',
+      name: 'LY-SUB2API',
+      model: 'MiniMax-M2.7',
+      fallbackModels: ['MiniMax-M2.7'],
+      baseUrl: 'http://10.0.2.77:8090/v1',
+      apiProtocol: 'openai-completions',
+      metadata: { managedBy: 'sub2api', scope: 'global' },
+      runtimeModels: [{
+        id: 'MiniMax-M2.7',
+        name: 'LY-MiniMax-M2.7',
+        input: ['text', 'image'],
+        contextWindow: 200000,
+        contextTokens: 200000,
+        maxTokens: 16384,
+        timeoutSeconds: 900,
+        reasoning: true,
+      }],
+    });
+
+    mocks.getProvider.mockResolvedValue(sub2ApiProvider);
+    mocks.getDefaultProvider.mockResolvedValue('sub2api-global-740eff8f-apiKey-21');
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getApiKey.mockResolvedValue('sk-sub2api');
+
+    const gateway = createGateway('stopped');
+    await syncDefaultProviderToRuntime('sub2api-global-740eff8f-apiKey-21', gateway as GatewayManager);
+
+    expect(mocks.setOpenClawDefaultModelWithOverride).toHaveBeenCalledWith(
+      'custom-sub2g3e5cd874',
+      'custom-sub2g3e5cd874/MiniMax-M2.7',
+      expect.objectContaining({
+        baseUrl: 'http://10.0.2.77:8090/v1',
+        api: 'openai-completions',
+        modelOverrides: {
+          'MiniMax-M2.7': expect.objectContaining({
+            name: 'LY-MiniMax-M2.7',
+            input: ['text', 'image'],
+            contextWindow: 200000,
+            contextTokens: 200000,
+            maxTokens: 16384,
+            timeoutSeconds: 900,
+            reasoning: true,
+            compat: expect.objectContaining({
+              supportsPromptCacheKey: true,
+            }),
+          }),
+        },
+        timeoutSeconds: 900,
+      }),
+      ['custom-sub2g3e5cd874/MiniMax-M2.7'],
     );
   });
   it('syncs updated Ollama provider as default with correct override config', async () => {

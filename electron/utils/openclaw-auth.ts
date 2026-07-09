@@ -790,6 +790,7 @@ interface RuntimeProviderConfigOverride {
   authHeader?: boolean;
   timeoutSeconds?: number;
   modelOverrides?: Record<string, Record<string, unknown>>;
+  preserveExplicitModelLimits?: boolean;
 }
 
 type ProviderEntryBuildOptions = {
@@ -803,6 +804,7 @@ type ProviderEntryBuildOptions = {
   includeRegistryModels?: boolean;
   mergeExistingModels?: boolean;
   timeoutSeconds?: number;
+  preserveExplicitModelLimits?: boolean;
 };
 
 function normalizeModelRef(provider: string, modelOverride?: string): string | undefined {
@@ -918,7 +920,7 @@ function ensureOpenClawModelAllowlistEntries(
 }
 
 /** Keys that LYClaw/registry may attach but OpenClaw models.providers schema rejects. */
-const UNSUPPORTED_OPENCLAW_MODEL_KEYS = ['requestTimeoutMs'] as const;
+const UNSUPPORTED_OPENCLAW_MODEL_KEYS = ['requestTimeoutMs', 'timeoutSeconds', 'modelId', 'displayName'] as const;
 
 function stripUnsupportedOpenClawModelKeys(
   model: Record<string, unknown>,
@@ -930,6 +932,18 @@ function stripUnsupportedOpenClawModelKeys(
     }
   }
   return next;
+}
+
+function shouldPreserveProviderExplicitModelLimits(providerKey: string, providerEntry?: Record<string, unknown>): boolean {
+  if (
+    providerKey.startsWith('custom-sub2api')
+    || providerKey.startsWith('custom-sub2g')
+    || providerKey.startsWith('custom-sub2e')
+  ) {
+    return true;
+  }
+  const managedBy = typeof providerEntry?.managedBy === 'string' ? providerEntry.managedBy : undefined;
+  return managedBy === 'sub2api';
 }
 
 function mergeProviderModels(
@@ -980,7 +994,10 @@ function upsertOpenClawProviderEntry(
     api: options.api,
     models: mergeProviderModels(registryModels, existingModels, runtimeModels).map((model) => {
       const id = typeof model.id === 'string' ? model.id : '';
-      return syncOpenClawModelCatalogEntry(id, model, { baseUrl: options.baseUrl });
+      return syncOpenClawModelCatalogEntry(id, model, {
+        baseUrl: options.baseUrl,
+        preserveExplicitLimits: options.preserveExplicitModelLimits,
+      });
     }),
   };
   if (options.apiKeyEnv) nextProvider.apiKey = options.apiKeyEnv;
@@ -1194,6 +1211,7 @@ export async function syncProviderConfigToOpenClaw(
         modelOverrides: override.modelOverrides,
         mergeExistingModels: true,
         timeoutSeconds: override.timeoutSeconds,
+        preserveExplicitModelLimits: override.preserveExplicitModelLimits,
       });
       if (modelId) {
         ensureOpenClawModelAllowlistEntries(config, [`${provider}/${modelId}`]);
@@ -1237,14 +1255,15 @@ export async function ensureModelCatalogContextTokensForLargeModels(
     }>;
 
     let changed = false;
-    for (const provider of Object.values(providers)) {
+    for (const [providerKey, provider] of Object.entries(providers)) {
       if (!Array.isArray(provider?.models)) continue;
       const baseUrl = typeof provider.baseUrl === 'string' ? provider.baseUrl : undefined;
+      const preserveExplicitLimits = shouldPreserveProviderExplicitModelLimits(providerKey, provider as Record<string, unknown>);
       for (let index = 0; index < provider.models.length; index += 1) {
         const model = provider.models[index];
         if (!model || typeof model !== 'object') continue;
         const id = typeof model.id === 'string' ? model.id : '';
-        const next = syncOpenClawModelCatalogEntry(id, model, { baseUrl });
+        const next = syncOpenClawModelCatalogEntry(id, model, { baseUrl, preserveExplicitLimits });
         if (JSON.stringify(next) !== JSON.stringify(model)) {
           provider.models[index] = next;
           changed = true;
@@ -1288,7 +1307,7 @@ export async function ensureAgentModelsJsonValid(): Promise<boolean> {
     }
 
     let fileChanged = false;
-    for (const provider of Object.values(providers as Record<string, {
+    for (const [providerKey, provider] of Object.entries(providers as Record<string, {
       baseUrl?: string;
       models?: Array<Record<string, unknown>>;
     }>)) {
@@ -1296,13 +1315,14 @@ export async function ensureAgentModelsJsonValid(): Promise<boolean> {
         continue;
       }
       const baseUrl = typeof provider.baseUrl === 'string' ? provider.baseUrl : undefined;
+      const preserveExplicitLimits = shouldPreserveProviderExplicitModelLimits(providerKey, provider as Record<string, unknown>);
       for (let index = 0; index < provider.models.length; index += 1) {
         const model = provider.models[index];
         if (!model || typeof model !== 'object') {
           continue;
         }
         const id = typeof model.id === 'string' ? model.id : '';
-        const next = syncOpenClawModelCatalogEntry(id, model, { baseUrl });
+        const next = syncOpenClawModelCatalogEntry(id, model, { baseUrl, preserveExplicitLimits });
         if (JSON.stringify(next) !== JSON.stringify(model)) {
           provider.models[index] = next;
           fileChanged = true;
@@ -1337,14 +1357,15 @@ export async function ensureAgentContextTokensCapForLargeModels(
   return withConfigLock(async () => {
     const config = await readOpenClawJson();
     const models = (config.models ?? {}) as Record<string, unknown>;
-    const providers = (models.providers ?? {}) as Record<string, { models?: Array<{ id?: string; contextWindow?: number }> }>;
+    const providers = (models.providers ?? {}) as Record<string, Record<string, unknown> & { models?: Array<{ id?: string; contextWindow?: number }> }>;
 
     let needsLargeWindow = false;
-    for (const entry of Object.values(providers)) {
+    for (const [providerKey, entry] of Object.entries(providers)) {
+      const preserveExplicitLimits = shouldPreserveProviderExplicitModelLimits(providerKey, entry);
       for (const model of entry?.models ?? []) {
         const id = typeof model?.id === 'string' ? model.id : '';
         const window = typeof model?.contextWindow === 'number' ? model.contextWindow : 0;
-        if (isDeepSeekV4ModelId(id) || window >= minimumContextTokens) {
+        if ((!preserveExplicitLimits && isDeepSeekV4ModelId(id)) || window >= minimumContextTokens) {
           needsLargeWindow = true;
           break;
         }
@@ -1817,6 +1838,7 @@ type AgentModelProviderEntry = {
   /** When true, pi-ai sends Authorization: Bearer instead of x-api-key */
   authHeader?: boolean;
   timeoutSeconds?: number;
+  preserveExplicitModelLimits?: boolean;
 };
 
 async function updateModelsJsonProviderEntriesForAgents(
@@ -1846,11 +1868,16 @@ async function updateModelsJsonProviderEntriesForAgents(
       ? (existing.models as Array<Record<string, unknown>>)
       : [];
 
+    const preserveExplicitLimits = entry.preserveExplicitModelLimits
+      ?? shouldPreserveProviderExplicitModelLimits(providerType, existing);
     const mergedModels = (entry.models ?? []).map((m) => {
       const prev = existingModels.find((e) => e.id === m.id);
       const merged = stripUnsupportedOpenClawModelKeys(prev ? { ...prev, ...m, id: m.id, name: m.name } : { ...m });
       const id = typeof merged.id === 'string' ? merged.id : '';
-      return syncOpenClawModelCatalogEntry(id, merged, { baseUrl: entry.baseUrl });
+      return syncOpenClawModelCatalogEntry(id, merged, {
+        baseUrl: entry.baseUrl,
+        preserveExplicitLimits,
+      });
     });
 
     if (entry.baseUrl !== undefined) existing.baseUrl = entry.baseUrl;

@@ -5,6 +5,7 @@ import {
   canClearUserTurnNow,
   canForceClearOnVisibleCommittedReply,
   DELEGATION_FINALIZE_GRACE_MS,
+  TRANSCRIPT_TOOL_ROUND_SETTLE_GRACE_MS,
   deriveHasActiveRunSignal,
   deriveIsExecuting,
   deriveSidebarSessionIsExecuting,
@@ -12,6 +13,7 @@ import {
   isUserAbortedSessionBackendIdle,
   isBackendSessionActive,
   isTranscriptOnlyDelegationDefer,
+  isTranscriptTurnSettledForDisplay,
   sanitizeLeavingSessionStreamingSnapshot,
   shouldFinalizeUserTurn,
   shouldForceAbortStuckRun,
@@ -120,6 +122,54 @@ describe('user-turn-lifecycle', () => {
     )).toBe(false);
   });
 
+  it('does not re-open a cleared final reply when only stale gateway processing remains', () => {
+    const sessionKey = 'agent:main:session-log-analysis';
+    const userAt = 1_800_000_000_000;
+    const messages: RawMessage[] = [
+      { role: 'user', content: '@日志分析工具 请使用这个技能，帮我 分析一下这个日志', timestamp: userAt },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'read-log', name: 'read', input: {} }],
+        stopReason: 'toolUse',
+        timestamp: userAt + 1_000,
+      },
+      {
+        role: 'assistant',
+        content: '## LYClaw 日志分析报告\n\n日志级别分布和根因分析已完成。',
+        stopReason: 'stop',
+        timestamp: userAt + 2_000,
+      },
+    ];
+    const backend = {
+      sessionKey,
+      status: 'done',
+      processing: true,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+    const gatewayBackground = {
+      hasBackgroundProcessing: true,
+      processingSessionKeys: [sessionKey],
+    };
+
+    expect(isTranscriptTurnSettledForDisplay(messages, {
+      lastUserMessageAt: null,
+      backendActivity: backend,
+      gatewayBackground,
+    })).toBe(true);
+    expect(canForceClearOnVisibleCommittedReply({
+      messages,
+      lastUserMessageAt: null,
+      backendActivity: backend,
+      gatewayBackground,
+    })).toBe(true);
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      backend,
+      { sessionKey, messages, lastUserMessageAt: null, gatewayBackground },
+    )).toBe(false);
+  });
+
   it('keeps tool-round finals active even when backend is idle', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: 'question', timestamp: 1000 },
@@ -134,22 +184,208 @@ describe('user-turn-lifecycle', () => {
     }    )).toBe(false);
   });
 
-  it('forces clear when visible concluding reply exists but stale hasTrackedUserRun blocks canClear', () => {
+  it('finalizes gateway finals with visible text co-located with tool_use when backend is idle', () => {
+    const mixedFinal: RawMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Analysis complete.' },
+        { type: 'tool_use', id: 'call-1', name: 'image', input: {} },
+      ],
+      timestamp: 2000,
+    };
     const messages: RawMessage[] = [
-      { role: 'user', content: 'summarize', timestamp: 1000 },
-      { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: {} }], timestamp: 1500 },
-      { role: 'assistant', content: 'Here is the summary.', timestamp: 2000 },
+      { role: 'user', content: 'analyze', timestamp: 1000 },
+      mixedFinal,
+    ];
+    expect(shouldFinalizeUserTurn(messages, 1000, {
+      sessionKey: 'agent:main:session-1',
+      status: 'idle',
+      processing: false,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    }, mixedFinal)).toBe(true);
+  });
+
+  it('does not finalize visible text with tool_use while backend is still active', () => {
+    const mixedFinal: RawMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Let me process that.' },
+        { type: 'tool_use', id: 'call-1', name: 'process', input: {} },
+      ],
+      timestamp: 2000,
+    };
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'analyze', timestamp: 1000 },
+      mixedFinal,
+    ];
+    expect(shouldFinalizeUserTurn(messages, 1000, {
+      sessionKey: 'agent:main:session-1',
+      status: 'processing',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: ['run-1'],
+    }, mixedFinal)).toBe(false);
+  });
+
+  it('treats long-chain transcript with mixed final as settled for display when backend is idle', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'make sip', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 't1', name: 'exec', input: {} }],
+        timestamp: 2000,
+      },
+      { role: 'toolresult', toolCallId: 't1', content: 'timeout', timestamp: 3000 },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'All three requests timed out.' },
+          { type: 'tool_use', id: 't2', name: 'image', input: {} },
+        ],
+        timestamp: 4000,
+      },
+    ];
+    const backend = {
+      sessionKey: 'agent:main:session-1',
+      status: 'idle',
+      processing: false,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+    expect(isTranscriptTurnSettledForDisplay(messages, {
+      lastUserMessageAt: 1000,
+      backendActivity: backend,
+      gatewayBackground: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+    })).toBe(true);
+    expect(deriveIsExecuting(
+      { sending: true, activeRunId: 'stale-run', pendingFinal: true },
+      backend,
+      { messages, lastUserMessageAt: 1000 },
+    )).toBe(false);
+    expect(canForceClearOnVisibleCommittedReply({
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: backend,
+      gatewayBackground: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+    })).toBe(true);
+    expect(buildReAdoptRunPatch(
+      { sending: false, activeRunId: null, pendingFinal: false, messages, lastUserMessageAt: 1000 },
+      'agent:main:session-1',
+      { ...backend, hasTrackedUserRun: true, activeRunIds: ['stale-run'] },
+      { hasBackgroundProcessing: false, processingSessionKeys: [] },
+    )).toBeNull();
+  });
+
+  it('does not treat transcript as settled while backend still tracks an active run', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'go', timestamp: 1000 },
+      { role: 'assistant', content: 'done', timestamp: 2000 },
     ];
     const backend = {
       sessionKey: 'agent:main:session-1',
       status: 'processing',
       processing: true,
       hasTrackedUserRun: true,
-      activeRunIds: ['stale-run'],
+      activeRunIds: ['run-1'],
+    };
+    expect(isTranscriptTurnSettledForDisplay(messages, {
+      lastUserMessageAt: 1000,
+      backendActivity: backend,
+    })).toBe(false);
+    expect(deriveIsExecuting(
+      { sending: true, activeRunId: 'run-1', pendingFinal: true },
+      backend,
+      { messages, lastUserMessageAt: 1000 },
+    )).toBe(true);
+  });
+
+  it('keeps running during the short backend-done window while transcript still ends in a tool round', () => {
+    const nowMs = 1_800_000_000_000;
+    const sessionKey = 'agent:main:session-tool-lag';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'process procurement workbook', timestamp: 1_000 },
+      {
+        role: 'assistant',
+        content: 'I will inspect the workbook and generate the report.',
+        stopReason: 'toolUse',
+        timestamp: nowMs - 1_000,
+      },
+    ];
+
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      {
+        sessionKey,
+        status: 'done',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+      {
+        sessionKey,
+        messages,
+        lastUserMessageAt: 1_000,
+        nowMs,
+        gatewayBackground: {
+          hasBackgroundProcessing: true,
+          processingSessionKeys: ['agent:main:session-other'],
+        },
+      },
+    )).toBe(true);
+  });
+
+  it('does not keep old backend-done tool-round transcripts running indefinitely', () => {
+    const nowMs = 1_800_000_000_000;
+    const sessionKey = 'agent:main:session-old-tool-lag';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'process procurement workbook', timestamp: 1_000 },
+      {
+        role: 'assistant',
+        content: 'I will inspect the workbook and generate the report.',
+        stopReason: 'toolUse',
+        timestamp: nowMs - TRANSCRIPT_TOOL_ROUND_SETTLE_GRACE_MS - 1,
+      },
+    ];
+
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      {
+        sessionKey,
+        status: 'done',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+      {
+        sessionKey,
+        messages,
+        lastUserMessageAt: 1_000,
+        nowMs,
+        gatewayBackground: {
+          hasBackgroundProcessing: false,
+          processingSessionKeys: [],
+        },
+      },
+    )).toBe(false);
+  });
+
+  it('forces clear when visible concluding reply exists but stale hasTrackedUserRun blocks canClear', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'summarize', timestamp: 1000 },
+      { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: {} }], timestamp: 1500 },
+      { role: 'assistant', content: 'Here is the summary.', stopReason: 'stop', timestamp: 2000 },
+    ];
+    const backend = {
+      sessionKey: 'agent:main:session-1',
+      status: 'done',
+      processing: false,
+      hasTrackedUserRun: false,
+      activeRunIds: [] as string[],
     };
     const background = {
       hasBackgroundProcessing: false,
-      processingSessionKeys: [],
+      processingSessionKeys: [] as string[],
     };
     const input = {
       messages,
@@ -157,8 +393,46 @@ describe('user-turn-lifecycle', () => {
       backendActivity: backend,
       gatewayBackground: background,
     };
-    expect(canClearUserTurnNow(input)).toBe(false);
+    expect(canClearUserTurnNow(input)).toBe(true);
     expect(canForceClearOnVisibleCommittedReply(input)).toBe(true);
+  });
+
+  it('does not force clear bundled tool-round narration while backend still tracks the run', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: '/think medium @testLYAI process file', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '我先读取 testLYAI 技能的说明文档。' },
+          { type: 'toolCall', id: 'read-1', name: 'read', arguments: {} },
+        ],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+    ];
+    const backend = {
+      sessionKey: 'agent:main:session-1',
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: ['run-1'],
+    };
+    const background = {
+      hasBackgroundProcessing: true,
+      processingSessionKeys: ['agent:main:session-1'],
+    };
+    const input = {
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: backend,
+      gatewayBackground: background,
+    };
+    expect(canForceClearOnVisibleCommittedReply(input)).toBe(false);
+    expect(deriveIsExecuting(
+      { sending: true, activeRunId: 'run-1', pendingFinal: false },
+      backend,
+      { messages, lastUserMessageAt: 1000, gatewayBackground: background },
+    )).toBe(true);
   });
 
   it('forces clear when gateway still lists the session as processing but transcript is settled', () => {
@@ -388,6 +662,57 @@ describe('user-turn-lifecycle', () => {
     _resetUserAbortedSessionsForTests();
   });
 
+  it('does not re-adopt or keep executing an aborted session even when a visible result lands later', () => {
+    const sessionKey = 'agent:main:session-aborted-with-result';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'analyze workbook', timestamp: 1_000 },
+      {
+        role: 'assistant',
+        content: 'The analysis report was generated before the stop completed.',
+        stopReason: 'stop',
+        timestamp: 2_000,
+      },
+    ];
+    const backend = {
+      sessionKey,
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: ['run-aborted'],
+    };
+    persistUserAbortedSession(sessionKey, 'run-aborted');
+
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false, runAborted: false },
+      backend,
+      {
+        sessionKey,
+        messages,
+        lastUserMessageAt: 1_000,
+        gatewayBackground: {
+          hasBackgroundProcessing: true,
+          processingSessionKeys: [sessionKey],
+        },
+      },
+    )).toBe(false);
+    expect(buildReAdoptRunPatch(
+      {
+        currentSessionKey: sessionKey,
+        sending: false,
+        activeRunId: null,
+        pendingFinal: false,
+        runAborted: false,
+        messages,
+        lastUserMessageAt: 1_000,
+      },
+      sessionKey,
+      backend,
+      { hasBackgroundProcessing: true, processingSessionKeys: [sessionKey] },
+    )).toBeNull();
+
+    _resetUserAbortedSessionsForTests();
+  });
+
   it('does not re-adopt when transcript already has a visible terminal reply', () => {
     expect(buildReAdoptRunPatch(
       {
@@ -442,6 +767,35 @@ describe('user-turn-lifecycle', () => {
     expect(deriveIsExecuting(
       { sending: false, activeRunId: null, pendingFinal: false },
       null,
+    )).toBe(false);
+  });
+
+  it('keeps an empty current snapshot running when gateway exposes one processing session', () => {
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      null,
+      {
+        gatewayBackground: {
+          hasBackgroundProcessing: true,
+          processingSessionKeys: ['agent:main:session-1783473176326'],
+        },
+      },
+    )).toBe(true);
+  });
+
+  it('does not infer the current session from multiple anonymous processing keys', () => {
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      null,
+      {
+        gatewayBackground: {
+          hasBackgroundProcessing: true,
+          processingSessionKeys: [
+            'agent:main:session-a',
+            'agent:main:session-b',
+          ],
+        },
+      },
     )).toBe(false);
   });
 
@@ -599,6 +953,242 @@ describe('user-turn-lifecycle', () => {
         processingSessionKeys: ['agent:main:subagent:child-123'],
       },
     )).toBe(false);
+  });
+
+  it('keeps the current sidebar row running during the child-complete parent-wrapup gap', () => {
+    const sessionKey = 'agent:main:session-1';
+    const childKey = 'agent:main:subagent:child-123';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'generate report', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'spawn-1',
+          name: 'sessions_spawn',
+          input: { task: 'report' },
+        }],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            status: 'accepted',
+            childSessionKey: childKey,
+            runId: 'child-run',
+          }),
+        }],
+        timestamp: 2100,
+      },
+      {
+        role: 'assistant',
+        content: `[Internal task completion event]\nsession_key: ${childKey}\nsession_id: child-session-id`,
+        timestamp: 3000,
+      },
+    ];
+    const idleBackend = {
+      sessionKey,
+      status: 'idle',
+      processing: false,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+    const idleGateway = {
+      hasBackgroundProcessing: false,
+      processingSessionKeys: [],
+    };
+
+    expect(canClearUserTurnNow({
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: idleBackend,
+      gatewayBackground: idleGateway,
+    })).toBe(false);
+    expect(canForceClearOnVisibleCommittedReply({
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: idleBackend,
+      gatewayBackground: idleGateway,
+    })).toBe(false);
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: true,
+      currentUi: {
+        sending: true,
+        activeRunId: `announce:v1:${childKey}:child-run`,
+        pendingFinal: true,
+      },
+      currentMessages: messages,
+      currentLastUserMessageAt: 1000,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: idleBackend,
+      gatewayBackground: idleGateway,
+    })).toBe(true);
+  });
+
+  it('marks the current sidebar row completed after delegated parent wrap-up lands', () => {
+    const sessionKey = 'agent:main:session-1';
+    const childKey = 'agent:main:subagent:child-123';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'generate report', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: { task: 'report' } }],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'accepted', childSessionKey: childKey, runId: 'child-run' }) }],
+        timestamp: 2100,
+      },
+      {
+        role: 'assistant',
+        content: `[Internal task completion event]\nsession_key: ${childKey}\nsession_id: child-session-id`,
+        timestamp: 3000,
+      },
+      {
+        role: 'assistant',
+        content: 'Report is ready. Please review the generated file.',
+        stopReason: 'stop',
+        timestamp: 4000,
+      },
+    ];
+    const idleBackend = {
+      sessionKey,
+      status: 'idle',
+      processing: false,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+    const idleGateway = { hasBackgroundProcessing: false, processingSessionKeys: [] };
+
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: true,
+      currentUi: {
+        sending: true,
+        activeRunId: `announce:v1:${childKey}:child-run`,
+        pendingFinal: true,
+      },
+      currentMessages: messages,
+      currentLastUserMessageAt: 1000,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: idleBackend,
+      gatewayBackground: idleGateway,
+    })).toBe(false);
+  });
+
+  it('does not revive idle sidebar state from a completed child marker alone', () => {
+    const sessionKey = 'agent:main:session-1';
+    const childKey = 'agent:main:subagent:child-123';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'generate report', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: { task: 'report' } }],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'accepted', childSessionKey: childKey, runId: 'child-run' }) }],
+        timestamp: 2100,
+      },
+      {
+        role: 'assistant',
+        content: `[Internal task completion event]\nsession_key: ${childKey}\nsession_id: child-session-id`,
+        timestamp: 3000,
+      },
+    ];
+
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: true,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: messages,
+      currentLastUserMessageAt: 1000,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: {
+        sessionKey,
+        status: 'idle',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+      gatewayBackground: { hasBackgroundProcessing: false, processingSessionKeys: [] },
+    })).toBe(false);
+  });
+
+  it('keeps current sidebar running after switching back while gateway still processes the parent session', () => {
+    const sessionKey = 'agent:main:session-1';
+    const childKey = 'agent:main:subagent:child-123';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'merge ppt files', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: { task: 'make slides' } }],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'accepted', childSessionKey: childKey, runId: 'child-run' }) }],
+        timestamp: 2100,
+      },
+      {
+        role: 'assistant',
+        content: `[Internal task completion event]\nsession_key: ${childKey}\nsession_id: child-session-id`,
+        timestamp: 3000,
+      },
+    ];
+
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: true,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: messages,
+      currentLastUserMessageAt: 1000,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: null,
+      gatewayBackground: { hasBackgroundProcessing: true, processingSessionKeys: [sessionKey] },
+    })).toBe(true);
+  });
+
+  it('does not keep current sidebar running on a stale parent processing key after final reply', () => {
+    const sessionKey = 'agent:main:session-1';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'merge ppt files', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: 'The merged 15-page PPT is ready.',
+        stopReason: 'stop',
+        timestamp: 4000,
+      },
+    ];
+
+    expect(deriveSidebarSessionIsExecuting({
+      sessionKey,
+      isCurrent: true,
+      currentUi: { sending: false, activeRunId: null, pendingFinal: false },
+      currentMessages: messages,
+      currentLastUserMessageAt: 1000,
+      currentStreamingMessage: null,
+      waitingOnSubagentDelegation: false,
+      sessionBackendActivity: null,
+      gatewayBackground: { hasBackgroundProcessing: true, processingSessionKeys: [sessionKey] },
+    })).toBe(false);
   });
 
   it('treats in-flight subagent delegation as an active run signal', () => {
@@ -1156,6 +1746,52 @@ describe('user-turn-lifecycle', () => {
       { messages, lastUserMessageAt: 1000, gatewayBackground },
     )).toBe(true);
   });
+
+  it('does not treat delegation wrap-up as complete while backend still tracks an active run', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'make ppt', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: { task: 'section 1' } }],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'accepted', childSessionKey: 'agent:main:subagent:child-1', runId: 'child-run-1' }) }],
+        timestamp: 2100,
+      },
+      {
+        role: 'assistant',
+        content: '✅ 已启动 3 个并行 sub-agent，分别生成第 1-5、6-10、11-15 页 PPT。',
+        stopReason: 'stop',
+        timestamp: 3000,
+      },
+    ];
+    const activeBackend = {
+      sessionKey: 'agent:main:session-ppt',
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: ['parent-run-1'],
+    };
+
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      activeBackend,
+      {
+        sessionKey: 'agent:main:session-ppt',
+        messages,
+        lastUserMessageAt: 1000,
+        gatewayBackground: {
+          hasBackgroundProcessing: true,
+          processingSessionKeys: ['agent:main:session-ppt'],
+        },
+      },
+    )).toBe(true);
+  });
+
   it('deriveSidebarSessionIsExecuting treats completed background snapshots as idle despite stale run ids', () => {
     const sessionKey = 'agent:main:session-a';
     const messages: RawMessage[] = [

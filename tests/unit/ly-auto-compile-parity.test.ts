@@ -12,7 +12,7 @@ describe('ly-auto-compile-parity', () => {
     expect(overrides).toEqual({
       compat: {
         supportsUsageInStreaming: true,
-        supportsPromptCacheKey: false,
+        supportsPromptCacheKey: true,
         thinkingFormat: 'qwen-chat-template',
       },
       reasoning: true,
@@ -25,7 +25,7 @@ describe('ly-auto-compile-parity', () => {
     expect(buildLyAutoModelOverrides({ input: ['text', 'image', 'audio'] })).toEqual({
       compat: {
         supportsUsageInStreaming: true,
-        supportsPromptCacheKey: false,
+        supportsPromptCacheKey: true,
         thinkingFormat: 'qwen-chat-template',
       },
       reasoning: true,

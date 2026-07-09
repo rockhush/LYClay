@@ -45,6 +45,31 @@ function isReadonlyProviderAccount(account: Pick<ProviderAccount, 'vendorId' | '
   return account.vendorId === LY_AUTO_PROVIDER_ID || account.metadata?.readonly === true;
 }
 
+function isHiddenProviderAccount(account: Pick<ProviderAccount, 'metadata'>): boolean {
+  return account.metadata?.hiddenInProviderSettings === true;
+}
+
+function isEmployeeSub2ApiRuntimeProviderKey(key: string): boolean {
+  return key.startsWith('custom-sub2e') || key === 'custom-sub2apie';
+}
+function isStaleEmployeeSub2ApiProviderAccount(account: ProviderAccount): boolean {
+  if (account.id === 'custom-sub2apie') return true;
+  if (account.metadata?.managedBy === 'sub2api' && account.metadata.scope === 'digitalEmployee') return true;
+  return getOpenClawProviderKeyForType(account.vendorId, account.id).startsWith('custom-sub2e');
+}
+
+async function cleanupStaleEmployeeSub2ApiProviderAccounts(accounts: ProviderAccount[]): Promise<ProviderAccount[]> {
+  const kept: ProviderAccount[] = [];
+  for (const account of accounts) {
+    if (isStaleEmployeeSub2ApiProviderAccount(account)) {
+      logger.info(`[provider-sync] Removing stale employee-scoped Sub2API provider account "${account.id}" from provider store`);
+      await deleteProviderAccount(account.id);
+      continue;
+    }
+    kept.push(account);
+  }
+  return kept;
+}
 function withNormalizedStoredModel(account: ProviderAccount): ProviderAccount {
   const model = account.model?.trim();
   if (!model || (account.vendorId !== 'custom' && account.vendorId !== 'ollama')) {
@@ -142,7 +167,7 @@ export class ProviderService {
     }
 
     // Read store accounts as a lookup cache (NOT as the source of what to display).
-    const allStoreAccounts = await listProviderAccounts();
+    const allStoreAccounts = await cleanupStaleEmployeeSub2ApiProviderAccounts(await listProviderAccounts());
 
     // Index store accounts by their openclaw runtime key for fast lookup.
     const storeByKey = new Map<string, ProviderAccount[]>();
@@ -161,7 +186,12 @@ export class ProviderService {
       if (processedKeys.has(key)) continue;
       processedKeys.add(key);
 
-      const storeGroup = storeByKey.get(key) ?? [];
+      if (isEmployeeSub2ApiRuntimeProviderKey(key)) {
+        logger.info(`[provider-sync] Skipping employee-scoped Sub2API runtime provider "${key}" in provider settings`);
+        continue;
+      }
+
+      const storeGroup = (storeByKey.get(key) ?? []).filter((account) => !isHiddenProviderAccount(account));
 
       if (storeGroup.length > 0) {
         // Pick the best store account for this key:
@@ -229,6 +259,7 @@ export class ProviderService {
 
     for (const [key, entry] of Object.entries(providers)) {
       if (existingIds.has(key)) continue;
+      if (isEmployeeSub2ApiRuntimeProviderKey(key)) continue;
 
       const definition = getProviderDefinition(key);
       const isBuiltin = (BUILTIN_PROVIDER_TYPES as readonly string[]).includes(key);

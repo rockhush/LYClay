@@ -11,10 +11,11 @@ export const LY_AUTO_DEFAULT_INPUT = ['text', 'image'] as const;
 /** Match llm-gateway nginx `proxy_read_timeout` / `proxy_send_timeout` (900s). */
 export const LY_AUTO_REQUEST_TIMEOUT_SECONDS = 900;
 
+
 export const LY_AUTO_VLLM_MODEL_OPTIONS: Record<string, unknown> = {
   compat: {
     supportsUsageInStreaming: true,
-    supportsPromptCacheKey: false,
+    supportsPromptCacheKey: true,
     thinkingFormat: "qwen-chat-template",
   },
   reasoning: true,

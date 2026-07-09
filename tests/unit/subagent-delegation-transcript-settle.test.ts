@@ -110,6 +110,19 @@ describe('subagent-delegation transcript settle inference', () => {
     })).toBe(true);
   });
 
+  it('classifies partial multi-phase progress as interim wait, not final delivery', () => {
+    expect(isInterimSubagentWaitAssistantReply({
+      role: 'assistant',
+      content: 'Phase 1（slides 1-5）也完成了！✅ 继续等待 Phase 3（slides 11-15）～',
+      stopReason: 'stop',
+    })).toBe(true);
+    expect(isInterimSubagentWaitAssistantReply({
+      role: 'assistant',
+      content: 'Phase 2 和 Phase 3 已完成，继续等待 Phase 1（slides 1-5）～',
+      stopReason: 'stop',
+    })).toBe(true);
+  });
+
   it('closes delegation UI gates from transcript inference alone', () => {
     const messages = cad82Messages();
     const segment = messages.slice(1);

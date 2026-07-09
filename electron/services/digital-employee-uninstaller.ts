@@ -3,6 +3,7 @@ import type {
   UninstallDigitalEmployeeResult,
 } from '../../shared/types/digital-employee';
 import { deleteAgentConfig, removeAgentWorkspaceDirectory } from '../utils/agent-config';
+import { removeEmployeeMcpServers } from '../utils/digital-employee-mcp';
 import {
   getDigitalEmployeeInstallPath,
   listLocalDigitalEmployees,
@@ -10,12 +11,15 @@ import {
   removeDigitalEmployeeDirectory,
 } from '../utils/digital-employee-storage';
 import { withDigitalEmployeeInstallLock } from './digital-employee-installer';
+import { cleanupDigitalEmployeeSub2ApiModels } from './sub2api/model-sync-service';
 
 export interface DigitalEmployeeUninstallerDependencies {
   listInstalled: typeof listLocalDigitalEmployees;
   readRecord: (instanceId: string) => Promise<DigitalEmployeeInstallRecord>;
   deleteAgent: (agentId: string) => Promise<void>;
+  cleanupSub2ApiModels: typeof cleanupDigitalEmployeeSub2ApiModels;
   removeInstallDirectory: (path: string) => Promise<void>;
+  removeMcpServers: (runtimeNames: string[]) => Promise<void>;
 }
 
 async function deleteBoundAgent(agentId: string): Promise<void> {
@@ -27,7 +31,9 @@ const defaultDependencies: DigitalEmployeeUninstallerDependencies = {
   listInstalled: listLocalDigitalEmployees,
   readRecord: async (instanceId) => readInstallRecord(getDigitalEmployeeInstallPath(instanceId)),
   deleteAgent: deleteBoundAgent,
+  cleanupSub2ApiModels: cleanupDigitalEmployeeSub2ApiModels,
   removeInstallDirectory: removeDigitalEmployeeDirectory,
+  removeMcpServers: removeEmployeeMcpServers,
 };
 
 export function createDigitalEmployeeUninstallerDependencies(
@@ -47,7 +53,9 @@ export async function uninstallDigitalEmployee(
 
   return withDigitalEmployeeInstallLock(async () => {
     const record = await dependencies.readRecord(normalizedInstanceId);
+    await dependencies.cleanupSub2ApiModels(record.instanceId);
     await dependencies.deleteAgent(record.agentId);
+    await dependencies.removeMcpServers((record.installedMcpServers ?? []).map((server) => server.runtimeName));
     await dependencies.removeInstallDirectory(record.installPath);
     return {
       instanceId: record.instanceId,

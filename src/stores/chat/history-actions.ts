@@ -9,6 +9,7 @@ import {
 import {
   clearErrorRecoveryTimer,
   clearHistoryPoll,
+  dedupeAssistantMessagesByContent,
   enrichWithCachedImages,
   enrichWithToolResultFiles,
   getLatestOptimisticUserMessage,
@@ -163,9 +164,9 @@ export function createHistoryActions(
           }
         }
 
-        // 在设置消息前进行去重，防止相同内容的用户消息重复出现
+        // 在设置消息前进行去重，防止相同内容的用户/assistant 消息重复出现
         const seenContent = new Set<string>();
-        const deduplicatedMessages = finalMessages.filter((msg) => {
+        const deduplicatedUserMessages = finalMessages.filter((msg) => {
           if (msg.role === 'user') {
             const content = getUserDedupKey(msg);
             if (content && seenContent.has(content)) {
@@ -175,6 +176,7 @@ export function createHistoryActions(
           }
           return true;
         });
+        const deduplicatedMessages = dedupeAssistantMessagesByContent(deduplicatedUserMessages);
 
         const runErrorRaw = getRunErrorFromMessages(deduplicatedMessages);
         const runError = runErrorRaw && (isSuppressedRunError(runErrorRaw) || isAbortErrorMessage(runErrorRaw))

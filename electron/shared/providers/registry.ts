@@ -32,7 +32,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
           id: 'auto',
           name: 'auto',
           input: ['text', 'image'],
-          compat: { supportsUsageInStreaming: true, supportsPromptCacheKey: false },
+          compat: { supportsUsageInStreaming: true, supportsPromptCacheKey: true },
         },
       ],
     },

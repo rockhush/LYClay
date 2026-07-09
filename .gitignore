@@ -85,3 +85,7 @@ docs/
 
 # Accidental shell redirect artifact (Windows)
 findstr
+
+设计文档/
+openspec/
+specs/

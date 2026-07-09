@@ -10,6 +10,7 @@ vi.mock('@/stores/gateway', () => ({
       rpc: gatewayRpcMock,
       status: { gatewayReady: true },
     }),
+    subscribe: vi.fn(),
   },
 }));
 

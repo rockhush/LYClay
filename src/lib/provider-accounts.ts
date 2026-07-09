@@ -98,7 +98,7 @@ export function buildProviderListItems(
   vendors: ProviderVendorInfo[],
   defaultAccountId: string | null,
 ): ProviderListItem[] {
-  const safeAccounts = accounts ?? [];
+  const safeAccounts = (accounts ?? []).filter((account) => account.metadata?.hiddenInProviderSettings !== true);
   const safeStatuses = statuses ?? [];
   const safeVendors = vendors ?? [];
   const vendorMap = new Map(safeVendors.map((vendor) => [vendor.id, vendor]));

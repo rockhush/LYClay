@@ -28,9 +28,11 @@ beforeEach(async () => {
   await rm(root, { recursive: true, force: true });
   await mkdir(join(packageRoot, 'agent', 'workspace'), { recursive: true });
   await mkdir(join(packageRoot, 'mcp'), { recursive: true });
+  await mkdir(join(packageRoot, 'resources'), { recursive: true });
   await writeFile(join(packageRoot, 'employee.json'), JSON.stringify(manifest), 'utf8');
   await writeFile(join(packageRoot, 'agent', 'workspace', 'AGENTS.md'), '# Installed role\n', 'utf8');
   await writeFile(join(packageRoot, 'agent', 'workspace', 'USER.md'), '# Packaged user\n', 'utf8');
+  await writeFile(join(packageRoot, 'resources', 'api-contracts.md'), '# API contracts\n', 'utf8');
   await writeFile(
     join(packageRoot, 'mcp', 'servers.template.json'),
     JSON.stringify({ servers: { docs: { url: 'https://mcp.example.com/docs' } } }),
@@ -75,6 +77,9 @@ function createDependencies(overrides: Partial<DigitalEmployeeInstallerDependenc
     }),
     deleteAgent,
     ensureContext: async () => undefined,
+    syncSub2ApiModels: async () => ({ status: 'skipped-missing-subject' }),
+    updateAgentModel: async () => ({ agents: [], defaultAgentId: 'main', defaultModelRef: null, configuredChannelTypes: [], channelOwners: {}, channelAccountOwners: {} }),
+    syncAgentRuntimeModel: async () => undefined,
     ...overrides,
   };
   return { dependencies, deleteAgent };
@@ -120,7 +125,7 @@ describe('digital employee installer', () => {
     }, dependencies);
 
     expect(result.agentId).toMatch(/^employee-document-analyst-[a-f0-9]{8}$/);
-    expect(result.instanceId).toMatch(/^document-analyst--[a-f0-9]{8}$/);
+    expect(result.instanceId).toMatch(/^document-analyst-[a-f0-9]{8}$/);
     expect(result.status).toBe('active');
     expect(createAgent).toHaveBeenCalledWith('Document Analyst', {
       preferredId: expect.stringMatching(/^employee-document-analyst-[a-f0-9]{8}$/),
@@ -131,10 +136,11 @@ describe('digital employee installer', () => {
       'com.lyclaw.employee.document-analyst',
       'A1B2C3D4',
     )).toEqual({
-      instanceId: 'document-analyst--a1b2c3d4',
+      instanceId: 'document-analyst-a1b2c3d4',
       agentId: 'employee-document-analyst-a1b2c3d4',
     });
     expect(await readFile(join(agentWorkspace, 'AGENTS.md'), 'utf8')).toContain('Installed role');
+    expect(await readFile(join(agentWorkspace, 'resources', 'api-contracts.md'), 'utf8')).toBe('# API contracts\n');
     expect(
       JSON.parse(
         await readFile(
@@ -159,6 +165,41 @@ describe('digital employee installer', () => {
     });
   });
 
+
+  it('syncs employee-scoped Sub2API models after publishing and applies the scoped default model', async () => {
+    const syncSub2ApiModels = vi.fn(async () => ({
+      status: 'success' as const,
+      subjectHash: 'employeehash',
+      modelCount: 1,
+      defaultModel: 'custom-sub2ed291be5b/recruiting-model',
+    }));
+    const updateAgentModelMock = vi.fn(async () => ({
+      agents: [],
+      defaultAgentId: 'main',
+      defaultModelRef: null,
+      configuredChannelTypes: [],
+      channelOwners: {},
+      channelAccountOwners: {},
+    }));
+    const syncAgentRuntimeModel = vi.fn(async () => undefined);
+    const { dependencies } = createDependencies({
+      syncSub2ApiModels,
+      updateAgentModel: updateAgentModelMock,
+      syncAgentRuntimeModel,
+    });
+    const { installDigitalEmployee } = await import('@electron/services/digital-employee-installer');
+
+    const result = await installDigitalEmployee({ marketEmployeeId: '7' }, dependencies);
+
+    expect(syncSub2ApiModels).toHaveBeenCalledWith(expect.objectContaining({
+      marketEmployeeId: '7',
+      instanceId: result.instanceId,
+      agentId: result.agentId,
+      manifest,
+    }), 'install');
+    expect(updateAgentModelMock).toHaveBeenCalledWith(result.agentId, 'custom-sub2ed291be5b/recruiting-model');
+    expect(syncAgentRuntimeModel).toHaveBeenCalledWith(result.agentId);
+  });
   it('preserves USER.md inherited from the main Agent during installation', async () => {
     await mkdir(agentWorkspace, { recursive: true });
     await writeFile(join(agentWorkspace, 'USER.md'), '# Main user profile\n', 'utf8');

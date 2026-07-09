@@ -1,4 +1,4 @@
-export type DigitalEmployeeInstallStatus =
+﻿export type DigitalEmployeeInstallStatus =
   | 'preparing'
   | 'active'
   | 'degraded'
@@ -69,6 +69,9 @@ export interface DigitalEmployeePackageManifest {
     agentOwnership?: 'exclusive';
     allowMultipleInstances?: boolean;
     requiresUserConfirmation?: boolean;
+  };
+  sub2api?: {
+    userNo?: string;
   };
 }
 
@@ -169,3 +172,4 @@ export interface UninstallDigitalEmployeeResult {
   agentId: string;
   marketEmployeeId: string;
 }
+

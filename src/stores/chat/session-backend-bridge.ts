@@ -6,13 +6,23 @@ import type { ChatGet, ChatSet } from './store-api';
 import {
   buildReAdoptRunPatch,
   backendActivityForSession,
+  canForceClearOnVisibleCommittedReply,
   hasLocalRunSignals,
   hasOpenBackendWorkForUserTurn,
   isBackendStronglyActive,
+  isTranscriptTurnSettledForDisplay,
   isUserAbortedSessionBackendIdle,
   type GatewayBackgroundActivity,
   type SessionBackendActivity,
 } from './user-turn-lifecycle';
+import { buildClearedActiveRunPatch } from './run-lifecycle';
+import {
+  summarizeBackendActivity,
+  summarizeGatewayBackground,
+  summarizeTranscriptTail,
+  summarizeUiSignals,
+  traceTurnTransition,
+} from './turn-state-trace';
 import {
   isUserAbortedSession,
   reabortPersistedUserSessionIfActive,
@@ -153,6 +163,33 @@ async function runBackendReconcileOnce(
     );
     if (reAdopt) {
       apply(reAdopt);
+    } else {
+      const reconciled = getState();
+      const settledInput = {
+        lastUserMessageAt: reconciled.lastUserMessageAt,
+        backendActivity: snapshot.session,
+        gatewayBackground: snapshot.background,
+      };
+      if (
+        reconciled.currentSessionKey === sessionKey
+        && hasLocalRunSignals(reconciled)
+        && (
+          isTranscriptTurnSettledForDisplay(reconciled.messages, settledInput)
+          || canForceClearOnVisibleCommittedReply({
+            messages: reconciled.messages,
+            ...settledInput,
+          })
+        )
+      ) {
+        traceTurnTransition('backend-reconcile-clear-stale-run', {
+          sessionKey,
+          ui: summarizeUiSignals(reconciled),
+          backend: summarizeBackendActivity(snapshot.session),
+          gateway: summarizeGatewayBackground(snapshot.background),
+          transcript: summarizeTranscriptTail(reconciled.messages, reconciled.lastUserMessageAt),
+        });
+        apply(buildClearedActiveRunPatch());
+      }
     }
 
     if (isUserAbortedSession(sessionKey)) {

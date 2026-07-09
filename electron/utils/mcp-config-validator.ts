@@ -5,7 +5,7 @@ import { evaluateSecurityPolicy } from '../security/policy-engine';
 const TRANSPORTS: ReadonlySet<McpTransportType> = new Set(['streamable-http', 'stdio', 'sse']);
 
 const ALLOWED_COMMAND_BASENAMES = new Set([
-  'npx', 'node', 'uvx', 'npm', 'pnpm', 'yarn', 'bun', 'deno',
+  'npx', 'node', 'node.exe', 'uvx', 'npm', 'pnpm', 'yarn', 'bun', 'deno',
 ]);
 
 function basenameFirstToken(command: string): string {
@@ -17,6 +17,20 @@ function basenameFirstToken(command: string): string {
 
 function looksLikeShellInjection(command: string): boolean {
   return /[;&|`$]|\n|\r/.test(command);
+}
+
+function isPortableRelativeEntry(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (/^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith('~')) return false;
+  if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return false;
+  try {
+    if (new URL(trimmed).protocol) return false;
+  } catch {
+    // Not a URL, continue with path checks.
+  }
+  const normalized = trimmed.replace(/\\/g, '/');
+  return normalized !== '..' && !normalized.startsWith('../') && !normalized.includes('/../');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,7 +87,7 @@ function isRemoteMcpType(type: string | undefined): boolean {
 function getMcpServerType(entry: Record<string, unknown>): string | undefined {
   return typeof entry.type === 'string'
     ? entry.type
-    : typeof entry.command === 'string'
+    : typeof entry.command === 'string' || entry.runtime === 'node'
       ? 'stdio'
       : typeof entry.transport === 'string'
         ? entry.transport
@@ -105,12 +119,26 @@ export function validateMcpServerEntry(name: string, entry: unknown): string[] {
   }
 
   if (type === 'stdio') {
-    if (typeof s.command !== 'string' || !s.command.trim()) {
+    const usesRuntimeNode = s.runtime === 'node';
+    if (s.runtime !== undefined && s.runtime !== 'node') {
+      errors.push(`Server "${name}": runtime must be node when present`);
+    }
+    if (usesRuntimeNode) {
+      if (s.command !== undefined) {
+        errors.push(`Server "${name}": runtime node entries must not also set command`);
+      }
+      if (typeof s.entry !== 'string' || !isPortableRelativeEntry(s.entry)) {
+        errors.push(`Server "${name}": runtime node requires a portable relative entry path`);
+      }
+    } else if (typeof s.command !== 'string' || !s.command.trim()) {
       errors.push(`Server "${name}": stdio requires non-empty command`);
     } else if (looksLikeShellInjection(s.command)) {
       errors.push(`Server "${name}": command contains disallowed shell metacharacters`);
     } else if (!ALLOWED_COMMAND_BASENAMES.has(basenameFirstToken(s.command))) {
       errors.push(`Server "${name}": command must use an allowed launcher (e.g. npx, node, uvx)`);
+    }
+    if (!usesRuntimeNode && s.entry !== undefined) {
+      errors.push(`Server "${name}": entry is only allowed with runtime node`);
     }
     if (s.args !== undefined) {
       if (!Array.isArray(s.args) || !s.args.every((a) => typeof a === 'string')) {

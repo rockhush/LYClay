@@ -73,6 +73,26 @@ index 244ff4c..8e379fc 100644
 +	} catch {}
 +	return null;
 +}
++function isPortableDigitalEmployeeEntryPath(value) {
++	if (typeof value !== "string" || !value.trim()) return false;
++	const trimmed = value.trim();
++	if (path.isAbsolute(trimmed) || /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith("~")) return false;
++	const normalized = trimmed.replace(/\\/g, "/");
++	return normalized !== ".." && !normalized.startsWith("../") && !normalized.includes("/../");
++}
++function expandDigitalEmployeeRuntimeMcpServer(entry, employeeDir) {
++	if (entry?.runtime !== "node") return { ...entry };
++	if (!isPortableDigitalEmployeeEntryPath(entry.entry)) throw new Error("Digital employee MCP runtime entry must be a package-relative path");
++	if (entry.command !== void 0) throw new Error("Digital employee MCP runtime entry must not also set command");
++	const { runtime: _runtime, entry: entryPath, args, env, ...rest } = entry;
++	const nodeCommand = process.env.CLAWX_NODE || process.execPath;
++	return {
++		...rest,
++		command: nodeCommand,
++		args: [path.resolve(employeeDir, entryPath), ...(Array.isArray(args) ? args : [])],
++		env: { ...env, CLAWX_NODE: nodeCommand, EMPLOYEE_DIR: employeeDir },
++	};
++}
 +async function buildDigitalEmployeeMcpServers(employeeDir) {
 +	const manifest = await readJsonFileSafe(path.join(employeeDir, "employee.json"));
 +	const templatePath = typeof manifest?.mcp?.serverTemplate === "string" && manifest.mcp.serverTemplate.trim()
@@ -80,7 +100,12 @@ index 244ff4c..8e379fc 100644
 +		: path.join(employeeDir, "mcp", "servers.json");
 +	let config = await readJsonFileSafe(templatePath);
 +	if (!config && templatePath.endsWith("servers.json")) config = await readJsonFileSafe(path.join(employeeDir, "mcp", "servers.template.json"));
-+	return config?.servers && typeof config.servers === "object" ? config.servers : {};
++	const sourceServers = config?.servers && typeof config.servers === "object" ? config.servers : {};
++	return Object.fromEntries(Object.entries(sourceServers).map(([name, entry]) => {
++		const next = expandDigitalEmployeeRuntimeMcpServer(entry, employeeDir);
++		if (next.command && next.cwd === void 0 && next.workingDirectory === void 0) next.cwd = employeeDir;
++		return [name, next];
++	}));
 +}
 +async function loadDigitalEmployeeWorkflows(employeeDir) {
 +	const wfDir = path.join(employeeDir, "workflows");

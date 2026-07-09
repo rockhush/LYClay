@@ -34,7 +34,7 @@ import {
 import {
   buildClearedActiveRunPatch,
   findLatestVisibleUserIndex,
-  isVisibleAssistantTextWithoutToolUse,
+  isCumulativeRunFinalText,
   shouldKeepRunActiveAfterAssistantFinal,
   shouldSilentlyFinalizeRunOnAssistantFinal,
 } from './run-lifecycle';
@@ -44,6 +44,12 @@ import { hasOpenDelegatedBackendWork } from './user-turn-lifecycle';
 import { ensureSessionBackendPolling } from './session-backend-bridge';
 import { extractInvokedSkillIds } from './usage-report-extract';
 import { reportSkillInvoke } from '@/lib/usage-reporter';
+import {
+  summarizeAssistantMessage,
+  summarizeStreamingTools,
+  summarizeUiSignals,
+  traceTurnTransition,
+} from './turn-state-trace';
 
 import type { AttachedFileMeta, RawMessage } from './types';
 import type { ChatGet, ChatSet } from './store-api';
@@ -225,6 +231,27 @@ export function handleRuntimeEventState(
         }
       };
 
+      if (
+        resolvedState === 'started'
+        || resolvedState === 'final'
+        || resolvedState === 'error'
+        || resolvedState === 'aborted'
+        || resolvedState === 'tool_timeout'
+      ) {
+        traceTurnTransition('runtime-event', {
+          state: resolvedState,
+          runId: runId || null,
+          sessionKey: targetSessionKey,
+          isForeground: isForegroundEvent,
+          ui: isForegroundEvent ? summarizeUiSignals(get()) : null,
+          message: summarizeAssistantMessage(
+            event.message && typeof event.message === 'object'
+              ? (event.message as RawMessage)
+              : null,
+          ),
+        });
+      }
+
       switch (resolvedState) {
         case 'started': {
           // Run just started (e.g. from console); show loading immediately.
@@ -233,6 +260,10 @@ export function handleRuntimeEventState(
               const { sending: currentSending } = get();
               if (!currentSending) {
                 set({ sending: true, activeRunId: runId, error: null });
+                traceTurnTransition('runtime-run-started', {
+                  runId,
+                  sessionKey: targetSessionKey,
+                });
               }
             } else {
               applyStreamingState({ sending: true, activeRunId: runId, runAborted: false });
@@ -250,6 +281,14 @@ export function handleRuntimeEventState(
             set({ error: null });
           }
           const updates = collectToolUpdates(event.message, resolvedState);
+          if (updates.length > 0) {
+            traceTurnTransition('runtime-tool-update', {
+              state: resolvedState,
+              runId: runId || null,
+              sessionKey: targetSessionKey,
+              tools: summarizeStreamingTools(updates),
+            });
+          }
           const computeNewStreamingMessage = (currentStream: unknown | null) => {
             if (event.message && typeof event.message === 'object') {
               const msgRole = (event.message as RawMessage).role;
@@ -541,9 +580,13 @@ export function handleRuntimeEventState(
               ? false
               : shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
               && !isExecApprovalFollowupRun(runId);
-            const shouldReconcileVisibleFinal = keepRunActiveAfterFinal
-              && isVisibleAssistantTextWithoutToolUse(normalizedFinalMessage);
             const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
+            const userIdx = findLatestVisibleUserIndex(get().messages);
+            const turnMessages = userIdx >= 0 ? get().messages.slice(userIdx + 1) : get().messages;
+            const skipCumulativeOptimisticFinal = !keepRunActiveAfterFinal
+              && hasOutput
+              && msgId === `run-${runId}`
+              && isCumulativeRunFinalText(getMessageText(normalizedFinalMessage.content), turnMessages);
             set((s) => {
               const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
               const streamingTools = hasOutput && !keepRunActiveAfterFinal ? [] : nextTools;
@@ -562,7 +605,7 @@ export function handleRuntimeEventState(
 
               // Check if message already exists (prevent duplicates)
               const alreadyExists = s.messages.some(m => m.id === msgId);
-              if (alreadyExists) {
+              if (alreadyExists || skipCumulativeOptimisticFinal) {
                 return keepRunActiveAfterFinal ? {
                   streamingText: '',
                   streamingMessage: null,
@@ -604,34 +647,43 @@ export function handleRuntimeEventState(
             // the normalized payload so usage / tool_use blocks are stable.
             reportUsageFromFinalAssistant(normalizedFinalMessage, runId);
 
-            if (!keepRunActiveAfterFinal || shouldReconcileVisibleFinal || isSubagentDelegationAnnounceRun(runId)) {
-              if (isSubagentDelegationAnnounceRun(runId)) {
-                trySyncClearAnnounceWrapUp(get, set, { sessionKey: targetSessionKey, runId });
-              }
-              void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
-                sessionKey: targetSessionKey,
-                runId,
-                terminalMessage: normalizedFinalMessage,
-              });
-              clearHistoryPoll();
-              void get().loadHistory(true);
-              const pendingPlan = getPendingComplexTaskPlan(get().currentSessionKey);
-              const finalText = getMessageText(normalizedFinalMessage.content);
-              const isPlanningRun = pendingPlan
-                && (!pendingPlan.planningRunId || pendingPlan.planningRunId === runId);
-              if (isPlanningRun && finalText.trim()) {
-                const sessionKey = get().currentSessionKey;
-                clearPendingComplexTaskPlan(sessionKey);
-                const executionRequest = buildComplexTaskExecutionRequest(
-                  pendingPlan.originalMessage,
-                  finalText,
-                );
-                window.setTimeout(() => {
-                  const state = get();
-                  if (state.currentSessionKey !== sessionKey || state.sending) return;
-                  void state.sendMessage(executionRequest);
-                }, 250);
-              }
+            traceTurnTransition('runtime-assistant-final', {
+              runId: runId || null,
+              sessionKey: targetSessionKey,
+              keepRunActiveAfterFinal,
+              hasOutput,
+              terminal: summarizeAssistantMessage(normalizedFinalMessage),
+              tools: summarizeStreamingTools(updates),
+            });
+
+            // Gateway state=final is authoritative. Intermediate tool rounds still
+            // defer clearing via backend-activity gates inside tryFinalize.
+            if (isSubagentDelegationAnnounceRun(runId)) {
+              trySyncClearAnnounceWrapUp(get, set, { sessionKey: targetSessionKey, runId });
+            }
+            void tryFinalizeUserTurnAfterAssistantFinal(get, set, {
+              sessionKey: targetSessionKey,
+              runId,
+              terminalMessage: normalizedFinalMessage,
+            });
+            clearHistoryPoll();
+            void get().loadHistory(true, { force: true });
+            const pendingPlan = getPendingComplexTaskPlan(get().currentSessionKey);
+            const finalText = getMessageText(normalizedFinalMessage.content);
+            const isPlanningRun = pendingPlan
+              && (!pendingPlan.planningRunId || pendingPlan.planningRunId === runId);
+            if (isPlanningRun && finalText.trim()) {
+              const sessionKey = get().currentSessionKey;
+              clearPendingComplexTaskPlan(sessionKey);
+              const executionRequest = buildComplexTaskExecutionRequest(
+                pendingPlan.originalMessage,
+                finalText,
+              );
+              window.setTimeout(() => {
+                const state = get();
+                if (state.currentSessionKey !== sessionKey || state.sending) return;
+                void state.sendMessage(executionRequest);
+              }, 250);
             }
           } else {
             // No message in final event - confirm against history/diagnostics before

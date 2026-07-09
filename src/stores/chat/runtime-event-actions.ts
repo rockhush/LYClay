@@ -76,6 +76,14 @@ function shouldProcessSessionRunEvent(activeRunId: string | null, runId: string)
   return isSubagentDelegationAnnounceRun(runId);
 }
 
+function isGatewayProcessingSession(
+  sessionKey: string | null,
+  gatewayBackgroundActivity: ReturnType<ChatGet>['gatewayBackgroundActivity'],
+): boolean {
+  if (!sessionKey) return false;
+  return gatewayBackgroundActivity?.processingSessionKeys?.includes(sessionKey) ?? false;
+}
+
 function applyBackgroundChatEvent(
   get: ChatGet,
   sessionKey: string,
@@ -257,7 +265,8 @@ function finalizeBackgroundSessionRunIfCompleted(
   runId: string,
 ): void {
   const prev = get().sessionStreamingStates[eventSessionKey];
-  if (!prev || (!prev.sending && !prev.activeRunId)) return;
+  if (!prev) return;
+  if (!prev.sending && !prev.activeRunId && prev.messagesSnapshot.length === 0) return;
   // Ignore events from a different run than the one tracked for this session.
   if (prev.activeRunId && runId && prev.activeRunId !== runId) return;
 
@@ -395,13 +404,17 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
       const resolvedSessionKey = eventSessionKey ?? inferredSessionKey;
       const isForegroundEvent = !resolvedSessionKey || resolvedSessionKey === currentSessionKey;
       const backgroundSessionState = resolvedSessionKey ? sessionStreamingStates[resolvedSessionKey] : undefined;
+      const gatewayProcessingEventSession = isGatewayProcessingSession(
+        resolvedSessionKey,
+        get().gatewayBackgroundActivity,
+      );
 
       // If the event targets a different session, only accept it if it belongs to
       // a known background run or if it is the start of a new run in that session.
       if (!isForegroundEvent) {
         const isKnownBackgroundRun = !!backgroundSessionState && backgroundSessionState.activeRunId === runId;
         const isPotentialStart = eventState === 'started';
-        if (!isKnownBackgroundRun && !isPotentialStart) {
+        if (!isKnownBackgroundRun && !isPotentialStart && !gatewayProcessingEventSession) {
           return;
         }
       }
@@ -421,7 +434,7 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
       }
 
       setLastChatEventAt(Date.now());
-      const isCurrentSessionEvent = eventSessionKey == null || eventSessionKey === currentSessionKey;
+      const isCurrentSessionEvent = isForegroundEvent;
 
       // Defensive: if state is missing but we have a message, try to infer state.
       let resolvedState = eventState;
@@ -439,9 +452,13 @@ export function createRuntimeEventActions(set: ChatSet, get: ChatGet): Pick<Runt
       // the visible (current-session) streaming fields, but we still need to
       // finalize that background session's saved state so switching back shows
       // the completed answer instead of a frozen "thinking..." state.
-      if (eventSessionKey != null && eventSessionKey !== currentSessionKey) {
-        recordRunawayToolObservation(set, get, event, resolvedState, runId, eventSessionKey);
-        finalizeBackgroundSessionRunIfCompleted(set, get, eventSessionKey, event, resolvedState, runId);
+      if (resolvedSessionKey != null && resolvedSessionKey !== currentSessionKey) {
+        recordRunawayToolObservation(set, get, event, resolvedState, runId, resolvedSessionKey);
+        const nextSessionStreamingStates = applyBackgroundChatEvent(get, resolvedSessionKey, event, resolvedState, runId);
+        if (nextSessionStreamingStates) {
+          set({ sessionStreamingStates: nextSessionStreamingStates });
+        }
+        finalizeBackgroundSessionRunIfCompleted(set, get, resolvedSessionKey, event, resolvedState, runId);
         return;
       }
 

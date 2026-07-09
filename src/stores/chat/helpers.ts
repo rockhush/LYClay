@@ -534,7 +534,7 @@ function normalizeComplexTaskControlUserMessages(messages: RawMessage[]): RawMes
   return visibleMessages;
 }
 
-function getComparableAttachmentSignature(message: Pick<RawMessage, '_attachedFiles'>): string {
+export function getComparableAttachmentSignature(message: Pick<RawMessage, '_attachedFiles'>): string {
   const files = (message._attachedFiles || [])
     .map((file) => file.filePath || `${file.fileName}|${file.mimeType}|${file.fileSize}`)
     .filter(Boolean)
@@ -588,12 +588,15 @@ export function areEquivalentUserMessageTexts(a: RawMessage, b: RawMessage): boo
 
   const textA = normalizeComparableUserText(a.content);
   const textB = normalizeComparableUserText(b.content);
-  if (textA && textB && textA === textB) return true;
+  const signatureA = getComparableAttachmentSignature(a);
+  const signatureB = getComparableAttachmentSignature(b);
+  const hasAttachmentSignature = signatureA.length > 0 || signatureB.length > 0;
+  if (textA && textB && textA === textB) {
+    return hasAttachmentSignature ? signatureA === signatureB : true;
+  }
   if (areEquivalentAttachmentOnlyUserTexts(textA, textB)) return true;
 
   if (!textA && !textB) {
-    const signatureA = getComparableAttachmentSignature(a);
-    const signatureB = getComparableAttachmentSignature(b);
     return signatureA.length > 0 && signatureA === signatureB;
   }
 
@@ -657,6 +660,91 @@ export function dedupeEquivalentAttachmentUserMessages(messages: RawMessage[]): 
   return dedupeConsecutiveEquivalentUserMessages(echoed);
 }
 
+function isRealUserAuthoredMessage(msg: RawMessage): boolean {
+  if (msg.role !== 'user') return false;
+  const content = msg.content;
+  if (!Array.isArray(content)) return true;
+  const blocks = content as Array<{ type?: string }>;
+  return blocks.length === 0
+    || !blocks.every((b) => b.type === 'tool_result' || b.type === 'toolResult');
+}
+
+export function normalizeComparableAssistantText(message: RawMessage): string | null {
+  if (message.role !== 'assistant') return null;
+  const text = stripSilentReplyToken(getMessageText(message.content)).replace(/\s+/g, ' ').trim();
+  return text || null;
+}
+
+export function areEquivalentAssistantMessageTexts(a: RawMessage, b: RawMessage): boolean {
+  if (a.role !== 'assistant' || b.role !== 'assistant') return false;
+  const textA = normalizeComparableAssistantText(a);
+  const textB = normalizeComparableAssistantText(b);
+  return Boolean(textA && textB && textA === textB);
+}
+
+function dedupeAssistantTurnSlice(messages: RawMessage[]): RawMessage[] {
+  if (messages.length < 2) return messages;
+
+  const result: RawMessage[] = [];
+  const lastIndexByText = new Map<string, number>();
+
+  for (const message of messages) {
+    if (message.role !== 'assistant') {
+      result.push(message);
+      continue;
+    }
+    const key = normalizeComparableAssistantText(message);
+    if (!key) {
+      result.push(message);
+      continue;
+    }
+    const previousIndex = lastIndexByText.get(key);
+    if (previousIndex != null) {
+      result[previousIndex] = message;
+      continue;
+    }
+    lastIndexByText.set(key, result.length);
+    result.push(message);
+  }
+
+  return result.length === messages.length ? messages : result;
+}
+
+/**
+ * Within each user-turn segment, collapse assistant messages that share the
+ * same visible text, keeping the latest occurrence (most complete snapshot).
+ */
+export function dedupeAssistantMessagesByContent(messages: RawMessage[]): RawMessage[] {
+  if (messages.length < 2) return messages;
+
+  const result: RawMessage[] = [];
+  let turnStart = 0;
+
+  const flushTurn = (turnEnd: number) => {
+    if (turnStart >= turnEnd) return;
+    result.push(...dedupeAssistantTurnSlice(messages.slice(turnStart, turnEnd)));
+    turnStart = turnEnd;
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    if (!isRealUserAuthoredMessage(messages[index])) continue;
+    flushTurn(index);
+    result.push(messages[index]);
+    turnStart = index + 1;
+  }
+
+  flushTurn(messages.length);
+  return result.length === messages.length ? messages : result;
+}
+
+export function assistantTextMatchesNormalized(
+  message: RawMessage,
+  normalizedText: string,
+): boolean {
+  const comparable = normalizeComparableAssistantText(message);
+  return Boolean(comparable && comparable === normalizedText);
+}
+
 function mergeAttachmentOnlyUserMessage(existing: RawMessage, incoming: RawMessage): RawMessage {
   const existingFiles = existing._attachedFiles ?? [];
   const incomingFiles = incoming._attachedFiles ?? [];
@@ -669,7 +757,11 @@ function mergeAttachmentOnlyUserMessage(existing: RawMessage, incoming: RawMessa
   let content = base.content;
   const baseText = base === incoming ? incomingText : existingText;
   const otherText = base === incoming ? existingText : incomingText;
-  if (isAttachmentOnlyPlaceholderText(String(baseText)) && otherText && !isAttachmentOnlyPlaceholderText(otherText)) {
+  if (existingText && incomingText && existingText === incomingText) {
+    content = getMessageText(existing.content).length <= getMessageText(incoming.content).length
+      ? existing.content
+      : incoming.content;
+  } else if (isAttachmentOnlyPlaceholderText(String(baseText)) && otherText && !isAttachmentOnlyPlaceholderText(otherText)) {
     content = other.content;
   } else if (!baseText && otherText) {
     content = other.content;

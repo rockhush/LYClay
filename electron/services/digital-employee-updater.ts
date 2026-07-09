@@ -5,6 +5,7 @@ import {
   cp,
   mkdir,
   mkdtemp,
+  readFile,
   rename,
   rm,
 } from 'node:fs/promises';
@@ -31,10 +32,13 @@ import {
   readInstallRecord,
   writeInstallRecord,
 } from '../utils/digital-employee-storage';
+import { restoreEmployeeMcpConfig, updateEmployeeMcpServers, writeEmployeeRuntimeMcpConfig } from '../utils/digital-employee-mcp';
+import type { McpConfigFile } from '../utils/mcp-json';
 import { extractZipToDir } from '../utils/local-skill-upload';
 import { expandPath } from '../utils/paths';
 import {
   downloadDigitalEmployeePackage,
+  MANAGED_AGENT_WORKSPACE_DIRECTORIES,
   MANAGED_AGENT_WORKSPACE_FILES,
   withDigitalEmployeeInstallLock,
 } from './digital-employee-installer';
@@ -131,7 +135,26 @@ async function backupManagedWorkspace(workspace: string, backupDir: string): Pro
     existing.add(fileName);
     await copyFile(source, join(backupDir, fileName));
   }
+  for (const dirName of MANAGED_AGENT_WORKSPACE_DIRECTORIES) {
+    const source = join(workspace, dirName);
+    if (!(await pathExists(source))) continue;
+    existing.add(`${dirName}/`);
+    await cp(source, join(backupDir, dirName), { recursive: true, force: true });
+  }
   return existing;
+}
+
+async function readInstalledPackageMcpConfig(installPath: string): Promise<McpConfigFile | null> {
+  const manifestPath = join(installPath, 'employee.json');
+  if (!(await pathExists(manifestPath))) return null;
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+    mcp?: { serverTemplate?: unknown };
+  };
+  const templatePath = typeof manifest.mcp?.serverTemplate === 'string'
+    ? join(installPath, manifest.mcp.serverTemplate)
+    : null;
+  if (!templatePath || !(await pathExists(templatePath))) return null;
+  return JSON.parse(await readFile(templatePath, 'utf8')) as McpConfigFile;
 }
 
 async function syncManagedWorkspace(
@@ -151,6 +174,14 @@ async function syncManagedWorkspace(
       await rm(target, { force: true });
     }
   }
+  for (const dirName of MANAGED_AGENT_WORKSPACE_DIRECTORIES) {
+    const source = join(packageInfo.rootDir, dirName);
+    const target = join(workspace, dirName);
+    await rm(target, { recursive: true, force: true });
+    if (await pathExists(source)) {
+      await cp(source, target, { recursive: true, force: true });
+    }
+  }
 }
 
 async function restoreManagedWorkspace(
@@ -164,6 +195,13 @@ async function restoreManagedWorkspace(
       await copyFile(join(backupDir, fileName), target);
     } else {
       await rm(target, { force: true });
+    }
+  }
+  for (const dirName of MANAGED_AGENT_WORKSPACE_DIRECTORIES) {
+    const target = join(workspace, dirName);
+    await rm(target, { recursive: true, force: true });
+    if (existing.has(`${dirName}/`)) {
+      await cp(join(backupDir, dirName), target, { recursive: true, force: true });
     }
   }
 }
@@ -190,6 +228,7 @@ export async function updateDigitalEmployee(
   return withDigitalEmployeeInstallLock(async () => {
     const installPath = getDigitalEmployeeInstallPath(instanceId);
     const currentRecord = await readInstallRecord(installPath);
+    const previousMcpConfig = await readInstalledPackageMcpConfig(installPath);
     const currentAgent = await dependencies.getAgent(currentRecord.agentId);
     const tempRoot = await mkdtemp(join(tmpdir(), `lyclaw-employee-update-${randomBytes(6).toString('hex')}-`));
     const zipPath = join(tempRoot, 'employee.zip');
@@ -260,6 +299,25 @@ export async function updateDigitalEmployee(
       });
 
       const warnings = [...packageInfo.warnings];
+      await writeEmployeeRuntimeMcpConfig({
+        manifest: packageInfo.manifest,
+        packageConfig: packageInfo.mcpConfig,
+        installPath,
+      });
+      const mcpResult = await updateEmployeeMcpServers({
+        instanceId,
+        agentId: currentRecord.agentId,
+        manifest: packageInfo.manifest,
+        previousPackageConfig: previousMcpConfig,
+        packageConfig: packageInfo.mcpConfig,
+        installedServers: currentRecord.installedMcpServers ?? [],
+        installPath,
+      });
+      rollback.push({
+        label: 'restore employee MCP config',
+        run: () => restoreEmployeeMcpConfig(mcpResult.previousConfig),
+      });
+      warnings.push(...mcpResult.warnings);
       const status = warnings.length > 0 ? 'degraded' : 'active';
       const updatedAt = new Date().toISOString();
       const nextRecord: DigitalEmployeeInstallRecord = {
@@ -270,7 +328,7 @@ export async function updateDigitalEmployee(
           path: skill.path,
           required: skill.required,
         })),
-        installedMcpServers: [],
+        installedMcpServers: mcpResult.installedServers,
         status,
         updatedAt,
         updateHistory: [

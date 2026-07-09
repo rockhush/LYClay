@@ -7,6 +7,16 @@ import {
 } from './helpers';
 import type { ChatState, RawMessage } from './types';
 import { extractToolUse } from '@/pages/Chat/message-utils';
+import { isInterimSubagentWaitAssistantReply } from '@/lib/subagent-delegation';
+
+function isPartialDelegationWaitReply(message: RawMessage): boolean {
+  if (message.role !== 'assistant') return false;
+  const text = getMessageText(message.content).trim();
+  if (!text) return false;
+  if (/(?:继续等待|continue\s+waiting|waiting\s+(?:for\s+)?Phase|等待\s*Phase)/i.test(text)) return true;
+  if (/(?:已完成|完成了|also completed|completed).{0,48}(?:继续|等待|waiting)/i.test(text)) return true;
+  return /(?:Phase\s*\d+).{0,40}(?:完成|completed).{0,48}(?:继续|等待|waiting)/i.test(text);
+}
 
 function containsSilentReplyToken(text: string): boolean {
   return /\b(?:NO_REPLY|HEARTBEAT_OK)\b/i.test(text);
@@ -20,6 +30,56 @@ function isToolResultRole(role: unknown): boolean {
 
 function messageHasToolUse(message: RawMessage): boolean {
   return extractToolUse(message).length > 0;
+}
+
+function isSubagentCompletionEventMessage(message: RawMessage | undefined): boolean {
+  if (!message || message.role !== 'assistant') return false;
+  const text = getMessageText(message.content);
+  return text.includes('[Internal task completion event]')
+    && /session_key:\s*\S+/i.test(text)
+    && /session_id:\s*\S+/i.test(text);
+}
+
+const RENDERER_SYNTHETIC_RUN_ID = /^run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-tool-\d+)?$/i;
+
+/** Optimistic assistant finals appended by the renderer (`run-<uuid>`), not authoritative JSONL. */
+export function isRendererSyntheticRunMessage(message: RawMessage | undefined): boolean {
+  if (!message?.id || typeof message.id !== 'string') return false;
+  return RENDERER_SYNTHETIC_RUN_ID.test(message.id);
+}
+
+/** Drop renderer-only run finals when the authoritative transcript already has assistant turns. */
+export function stripRendererSyntheticRunMessages(messages: RawMessage[]): RawMessage[] {
+  if (messages.length === 0) return messages;
+  const hasAuthoritativeAssistant = messages.some((message) =>
+    message.role === 'assistant' && !isRendererSyntheticRunMessage(message),
+  );
+  if (!hasAuthoritativeAssistant) return messages;
+  const filtered = messages.filter((message) => !isRendererSyntheticRunMessage(message));
+  return filtered.length === messages.length ? messages : filtered;
+}
+
+/** Gateway finals may carry cumulative stream text across tool rounds — detect and skip. */
+export function isCumulativeRunFinalText(
+  candidateText: string,
+  turnMessages: readonly RawMessage[],
+): boolean {
+  const trimmed = candidateText.trim();
+  if (!trimmed) return false;
+
+  const priorTexts = turnMessages
+    .filter((message) => message.role === 'assistant' && !isRendererSyntheticRunMessage(message))
+    .map((message) => getMessageText(message.content).trim())
+    .filter((text) => text.length >= 24);
+
+  let embeddedPriorCount = 0;
+  for (const prior of priorTexts) {
+    if (trimmed.includes(prior)) embeddedPriorCount += 1;
+  }
+  if (embeddedPriorCount >= 2) return true;
+
+  const longestPrior = priorTexts.reduce((max, text) => Math.max(max, text.length), 0);
+  return embeddedPriorCount >= 1 && longestPrior >= 40 && trimmed.length > longestPrior * 1.4;
 }
 
 export function isVisibleAssistantTextWithoutToolUse(message: RawMessage | undefined): boolean {
@@ -74,6 +134,22 @@ export function isFailedAssistantMessage(message: RawMessage | undefined): boole
   if (!message || message.role !== 'assistant') return false;
   if (isFailedAssistantStopReason(getAssistantStopReason(message))) return true;
   return Boolean(getAssistantErrorMessage(message));
+}
+
+/** Gateway-injected notice when the embedded agent errors before a model reply. */
+export function isEmbeddedAgentFailureNoticeAssistantMessage(message: RawMessage | undefined): boolean {
+  if (!message || message.role !== 'assistant') return false;
+  const text = getMessageText(message.content).trim();
+  if (!text) return false;
+  return /^⚠️?\s*Agent failed before reply:/i.test(text)
+    || /^All models failed\s*\(/i.test(text);
+}
+
+/** Assistant turn that ended to invoke tools — not a user-visible concluding answer. */
+export function isToolUseStopReasonAssistantMessage(message: RawMessage | undefined): boolean {
+  if (!message || message.role !== 'assistant') return false;
+  const stop = String(getAssistantStopReason(message) ?? '').toLowerCase();
+  return stop === 'tooluse' || stop === 'tool_use';
 }
 
 /** Visible assistant reply with an explicit non-tool stop reason. */
@@ -141,7 +217,11 @@ export function findTerminalAssistantAfterLatestUser(messages: RawMessage[]): Ra
   const userIdx = findLatestVisibleUserIndex(messages);
   const afterUser = userIdx >= 0 ? messages.slice(userIdx + 1) : messages;
   return [...afterUser].reverse().find((message) =>
-    message.role === 'assistant' && isRunTerminalAssistantMessage(message),
+    message.role === 'assistant'
+    && !isRendererSyntheticRunMessage(message)
+    && !isSubagentCompletionEventMessage(message)
+    && !isPartialDelegationWaitReply(message)
+    && isRunTerminalAssistantMessage(message),
   );
 }
 
@@ -181,15 +261,37 @@ export function findConcludingAssistantReply(
   for (let i = messages.length - 1; i > lastToolIdx; i -= 1) {
     const message = messages[i];
     if (!message || message.role !== 'assistant') continue;
+    if (isRendererSyntheticRunMessage(message)) continue;
+    if (isSubagentCompletionEventMessage(message)) continue;
+    if (isPartialDelegationWaitReply(message)) continue;
+    if (isEmbeddedAgentFailureNoticeAssistantMessage(message)) continue;
     if (isRunTerminalAssistantMessage(message)) return message;
     if (isFailedAssistantMessage(message)) continue;
     if (!hasVisibleAssistantContent(message)) continue;
-    if (messageHasToolUse(message)) continue;
+    if (messageHasToolUse(message)) {
+      const hasLaterToolUse = messages.slice(i + 1).some((later) =>
+        later.role === 'assistant' && messageHasToolUse(later),
+      );
+      if (hasLaterToolUse) continue;
+      // Gateway finals may bundle visible text with co-located tool_use blocks.
+      return message;
+    }
     const hasLaterToolUse = messages.slice(i + 1).some((later) =>
       later.role === 'assistant' && messageHasToolUse(later),
     );
     if (hasLaterToolUse) continue;
     return message;
+  }
+
+  const lastActivity = messages[lastToolIdx];
+  if (lastActivity?.role === 'assistant' && hasVisibleAssistantContent(lastActivity)) {
+    if (isRunTerminalAssistantMessage(lastActivity)) return lastActivity;
+    if (!isFailedAssistantMessage(lastActivity)) {
+      const hasLaterToolUse = messages.slice(lastToolIdx + 1).some((later) =>
+        later.role === 'assistant' && messageHasToolUse(later),
+      );
+      if (!hasLaterToolUse) return lastActivity;
+    }
   }
   return undefined;
 }
@@ -217,6 +319,45 @@ export function findConcludingAssistantForActiveTurn(
   return concluding;
 }
 
+/** Recover turn anchor when UI cleared lastUserMessageAt while the same user turn is still open. */
+export function resolveActiveTurnLastUserMessageAt(
+  messages: RawMessage[],
+  lastUserMessageAt: number | null,
+): number | null {
+  if (lastUserMessageAt != null) return lastUserMessageAt;
+  const userIdx = findLatestVisibleUserIndex(messages);
+  if (userIdx < 0) return null;
+  const user = messages[userIdx];
+  if (user?.timestamp == null) return null;
+  return toMs(user.timestamp);
+}
+
+/** Transcript already contains a user-visible concluding answer for the active turn. */
+export function transcriptHasCommittedConcludingReply(
+  messages: RawMessage[],
+  lastUserMessageAt: number | null,
+): boolean {
+  const turnAnchor = resolveActiveTurnLastUserMessageAt(messages, lastUserMessageAt);
+  const terminal = findTerminalAssistantForActiveTurn(messages, turnAnchor);
+  if (terminal) {
+    if (isPartialDelegationWaitReply(terminal) || isInterimSubagentWaitAssistantReply(terminal)) {
+      return false;
+    }
+    if (!isRunTerminalAssistantMessage(terminal)) return false;
+    return true;
+  }
+  const userIdx = findLatestVisibleUserIndex(messages);
+  const turnMessages = userIdx >= 0 ? messages.slice(userIdx + 1) : messages;
+  const concluding = findConcludingAssistantForActiveTurn(messages, turnAnchor);
+  if (!concluding || !hasVisibleAssistantContent(concluding)) return false;
+  if (!isConcludingAssistantReply(concluding, turnMessages)) return false;
+  if (isPartialDelegationWaitReply(concluding) || isInterimSubagentWaitAssistantReply(concluding)) {
+    return false;
+  }
+  if (isToolUseStopReasonAssistantMessage(concluding)) return false;
+  return true;
+}
+
 /** User-visible assistant reply committed in the active turn, ignoring silent plumbing finals. */
 export function findVisibleAssistantReplyForActiveTurn(
   messages: RawMessage[],
@@ -231,6 +372,8 @@ export function findVisibleAssistantReplyForActiveTurn(
   for (let i = turnMessages.length - 1; i >= startIdx; i -= 1) {
     const message = turnMessages[i];
     if (!message || message.role !== 'assistant') continue;
+    if (isRendererSyntheticRunMessage(message)) continue;
+    if (isSubagentCompletionEventMessage(message)) continue;
     if (isFailedAssistantMessage(message)) continue;
     if (shouldSilentlyFinalizeRunOnAssistantFinal(message)) continue;
     if (messageHasToolUse(message)) continue;
@@ -255,7 +398,9 @@ export function hasCommittedUserReplyInMessages(messages: readonly RawMessage[])
   return findConcludingAssistantReply(messages) != null;
 }
 
-export function buildClearedActiveRunPatch(): Partial<ChatState> {
+export function buildClearedActiveRunPatch(
+  options?: { preserveTurnAnchor?: boolean },
+): Partial<ChatState> {
   return {
     sending: false,
     activeRunId: null,
@@ -264,7 +409,7 @@ export function buildClearedActiveRunPatch(): Partial<ChatState> {
     streamingMessage: null,
     streamingTools: [],
     pendingToolImages: [],
-    lastUserMessageAt: null,
+    ...(options?.preserveTurnAnchor ? {} : { lastUserMessageAt: null }),
     runAborted: false,
     error: null,
     runError: null,

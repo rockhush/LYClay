@@ -11,11 +11,14 @@ import {
   findTerminalAssistantAfterLatestUser,
   findTerminalAssistantForActiveTurn,
   hasCommittedUserReplyInMessages,
+  isCumulativeRunFinalText,
   isRunTerminalAssistantMessage,
   isSilentTerminalAssistantMessage,
   isTerminalAssistantMessage,
   shouldKeepRunActiveAfterAssistantFinal,
   shouldSilentlyFinalizeRunOnAssistantFinal,
+  stripRendererSyntheticRunMessages,
+  transcriptHasCommittedConcludingReply,
 } from '@/stores/chat/run-lifecycle';
 import type { RawMessage } from '@/stores/chat/types';
 
@@ -248,6 +251,31 @@ describe('chat run lifecycle helpers', () => {
     expect(findConcludingAssistantForActiveTurn(messages, 1000)?.id).toBe('a-final-no-stop');
   });
 
+  it('treats post-tool visible text with co-located tool_use as concluding', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'analyze', id: 'u1', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 't1', name: 'process', input: {} }],
+        id: 'a1',
+        timestamp: 2000,
+      },
+      { role: 'toolresult', toolCallId: 't1', content: 'ok', timestamp: 3000 },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'All three requests timed out.' },
+          { type: 'tool_use', id: 't2', name: 'image', input: {} },
+        ],
+        id: 'a-final-mixed',
+        timestamp: 4000,
+      },
+    ];
+
+    expect(findConcludingAssistantReply(messages.slice(1))?.id).toBe('a-final-mixed');
+    expect(transcriptHasCommittedConcludingReply(messages, 1000)).toBe(true);
+  });
+
   it('does not treat pre-tool narration as concluding', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: 'go', id: 'u1', timestamp: 1000 },
@@ -316,5 +344,137 @@ describe('silent run finalization whitelist', () => {
     expect(shouldSuppressAssistantStreamingText('NO_REPLY')).toBe(true);
     expect(shouldSuppressAssistantStreamingText('Please reply /approve d0aebe53 to continue.')).toBe(false);
     expect(shouldSuppressAssistantStreamingText('I will send the meeting notice through DingTalk next.')).toBe(false);
+  });
+});
+
+describe('renderer synthetic run messages', () => {
+  it('strips optimistic run-* finals when authoritative assistant messages exist', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'send file', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '找到机器人了。' },
+          { type: 'tool_use', id: 't1', name: 'exec', input: {} },
+        ],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+      { role: 'assistant', content: '发送成功！', stopReason: 'stop', timestamp: 3000 },
+      {
+        role: 'assistant',
+        id: 'run-5ac41c40-7449-41c5-a7de-4dc250219356',
+        content: '好，我来发送。找到机器人了。发送成功！',
+        timestamp: 3001,
+      },
+    ];
+
+    const stripped = stripRendererSyntheticRunMessages(messages);
+    expect(stripped).toHaveLength(3);
+    expect(findConcludingAssistantReply(stripped)?.content).toBe('发送成功！');
+    expect(findTerminalAssistantAfterLatestUser(stripped)?.content).toBe('发送成功！');
+  });
+
+  it('detects cumulative gateway finals that embed prior narration', () => {
+    const turnMessages: RawMessage[] = [
+      { role: 'assistant', content: '好，我来把截图通过钉钉机器人发给你。首先需要上传图片获取 mediaId：' },
+      { role: 'assistant', content: '找到机器人了。接下来我需要先通过聊天消息接口查询自己的会话 ID。' },
+    ];
+    const cumulative = [
+      turnMessages[0]?.content,
+      turnMessages[1]?.content,
+      '发送成功！',
+    ].join('');
+
+    expect(isCumulativeRunFinalText(cumulative, turnMessages)).toBe(true);
+    expect(isCumulativeRunFinalText('发送成功！', turnMessages)).toBe(false);
+  });
+
+  it('does not treat partial phase wait as concluding reply', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'make ppt', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 't1', name: 'sessions_spawn', input: {} }],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 't1', content: 'ok' },
+      {
+        role: 'assistant',
+        content: 'Phase 1（slides 1-5）也完成了！✅ 继续等待 Phase 3（slides 11-15）～',
+        stopReason: 'stop',
+        timestamp: 3000,
+      },
+    ];
+    expect(findConcludingAssistantReply(messages)).toBeUndefined();
+    expect(transcriptHasCommittedConcludingReply(messages, 1000)).toBe(false);
+  });
+
+  it('does not treat tool-round narration as committed concluding reply', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'analyze skill', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: '我先读取技能文档。',
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+    ];
+    expect(transcriptHasCommittedConcludingReply(messages, 1000)).toBe(false);
+  });
+
+  it('does not treat bundled narration+tool_call as committed while backend is active', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: '/think medium @testLYAI process file', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '我先读取 testLYAI 技能的说明文档。' },
+          { type: 'toolCall', id: 'read-1', name: 'read', arguments: {} },
+        ],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+    ];
+    expect(transcriptHasCommittedConcludingReply(messages, 1000)).toBe(false);
+  });
+
+  it('recovers turn anchor when lastUserMessageAt was cleared mid-run', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'analyze skill', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: '我先读取技能文档。',
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+    ];
+    expect(transcriptHasCommittedConcludingReply(messages, null)).toBe(false);
+  });
+
+  it('does not treat trailing embedded agent failure notice as concluding reply', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'process excel', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'exec-1', name: 'exec', arguments: {} }],
+        stopReason: 'toolUse',
+        timestamp: 2000,
+      },
+      {
+        role: 'assistant',
+        content: '✅ 运行成功！来看看填表结果。',
+        stopReason: 'stop',
+        timestamp: 3000,
+      },
+      {
+        role: 'assistant',
+        content: '⚠️ Agent failed before reply: All models failed (1): custom-customb5/deepseek-v4-pro: Provider custom-customb5 is in cooldown (suspending lanes) (timeout).',
+        stopReason: 'stop',
+        timestamp: 4000,
+      },
+    ];
+    expect(findConcludingAssistantReply(messages.slice(1))?.content).toBe('✅ 运行成功！来看看填表结果。');
+    expect(transcriptHasCommittedConcludingReply(messages, 1000)).toBe(true);
   });
 });

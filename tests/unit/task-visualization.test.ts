@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveTaskSteps, attachSubagentChildSteps, findInFlightChildDelegation, findReplyMessageIndex, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo } from '@/pages/Chat/task-visualization';
+import { deriveTaskSteps, attachSubagentChildSteps, committedReplyShouldSettleExecutionGraph, findInFlightChildDelegation, findReplyMessageIndex, isSupersededRawMediaAssistantReply, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo, shouldPromoteStreamingTextAsReply } from '@/pages/Chat/task-visualization';
 import { stripProcessMessagePrefix } from '@/pages/Chat/message-utils';
 import type { RawMessage, ToolStatus } from '@/stores/chat';
 
@@ -66,6 +66,94 @@ describe('findReplyMessageIndex', () => {
       },
     ];
     expect(findReplyMessageIndex(messages, false)).toBe(4);
+  });
+
+  it('prefers deliverable reply over trailing embedded agent failure notice', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'process excel' },
+      {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'exec-1', name: 'exec', arguments: {} }],
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'assistant',
+        content: '✅ 运行成功！来看看填表结果：主要填写 946-39180-A-TL',
+        stopReason: 'stop',
+      },
+      {
+        role: 'assistant',
+        content: '⚠️ Agent failed before reply: All models failed (1): custom-customb5/deepseek-v4-pro: Provider custom-customb5 is in cooldown (suspending lanes) (timeout).',
+        stopReason: 'stop',
+      },
+    ];
+    expect(findReplyMessageIndex(messages, false)).toBe(2);
+  });
+
+  it('falls back to embedded agent failure notice when it is the only reply', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'continue' },
+      {
+        role: 'assistant',
+        content: '⚠️ Agent failed before reply: All models failed (1): custom-customb5/deepseek-v4-pro: Provider custom-customb5 is in cooldown (suspending lanes) (timeout).',
+        stopReason: 'stop',
+      },
+    ];
+    expect(findReplyMessageIndex(messages, false)).toBe(1);
+  });
+
+  it('prefers gateway-injected media reply over raw MEDIA reply', () => {
+    const rawReply: RawMessage = {
+      role: 'assistant',
+      id: 'raw-final',
+      content: [{
+        type: 'text',
+        text: [
+          '完美！现在让我附上生成的 PPTX 文件和图表：',
+          '📊 **AOI 外观 AI 分析技能汇报已完成！**',
+          '## 附件',
+          'MEDIA:C:\\Users\\Ricky.Diao\\.openclaw\\workspace\\AOI 外观 AI 分析_技能汇报_完整版.pptx',
+          'MEDIA:C:\\Users\\Ricky.Diao\\.openclaw\\workspace\\I36_defect_pie.png',
+          '所有文件位于：`C:\\Users\\Ricky.Diao\\.openclaw\\workspace\\`',
+        ].join('\n\n'),
+      }],
+      stopReason: 'stop',
+    };
+    const injectedReply = {
+      role: 'assistant',
+      id: 'media-final',
+      content: [
+        {
+          type: 'text',
+          text: [
+            '完美！现在让我附上生成的 PPTX 文件和图表：',
+            '📊 **AOI 外观 AI 分析技能汇报已完成！**',
+            '## 附件',
+            '所有文件位于：`C:\\Users\\Ricky.Diao\\.openclaw\\workspace\\`',
+          ].join('\n'),
+        },
+        {
+          type: 'image',
+          url: '/api/chat/media/outgoing/session/id/full',
+          mimeType: 'image/png',
+        },
+      ],
+      stopReason: 'stop',
+      provider: 'openclaw',
+      model: 'gateway-injected',
+      idempotencyKey: 'run-1:assistant-media',
+    } as RawMessage;
+    const messages = [
+      { role: 'user', content: 'make ppt' },
+      { role: 'assistant', content: [{ type: 'toolCall', id: 'write-1', name: 'write', arguments: {} }], stopReason: 'toolUse' },
+      rawReply,
+      injectedReply,
+    ] as RawMessage[];
+
+    expect(isSupersededRawMediaAssistantReply(messages, 2)).toBe(true);
+    expect(findReplyMessageIndex(messages, false)).toBe(3);
+    expect(deriveTaskSteps({ messages: messages.slice(1), streamingMessage: null, streamingTools: [] })
+      .some((step) => step.detail?.includes('MEDIA:'))).toBe(false);
   });
 });
 
@@ -654,6 +742,81 @@ status: completed successfully`,
   });
 });
 
+describe('committedReplyShouldSettleExecutionGraph', () => {
+  it('settles a graph when a reply is committed and the turn state is already idle', () => {
+    expect(committedReplyShouldSettleExecutionGraph({
+      committedReplyOffset: 2,
+      isUserTurnExecuting: false,
+      hasAnyStreamContent: false,
+      segmentDelegationOpen: false,
+      segmentHasPendingChild: false,
+      segmentWaitingOnSubagent: false,
+      stalledChildSessionKey: null,
+    })).toBe(true);
+  });
+
+  it('settles despite stale stream content once the turn state is idle', () => {
+    expect(committedReplyShouldSettleExecutionGraph({
+      committedReplyOffset: 2,
+      isUserTurnExecuting: false,
+      hasAnyStreamContent: true,
+      segmentDelegationOpen: false,
+      segmentHasPendingChild: false,
+      segmentWaitingOnSubagent: false,
+      stalledChildSessionKey: null,
+    })).toBe(true);
+  });
+
+  it('does not settle delegated turns or still-executing turns', () => {
+    const base = {
+      committedReplyOffset: 2,
+      isUserTurnExecuting: false,
+      hasAnyStreamContent: false,
+      segmentDelegationOpen: false,
+      segmentHasPendingChild: false,
+      segmentWaitingOnSubagent: false,
+      stalledChildSessionKey: null,
+    };
+
+    expect(committedReplyShouldSettleExecutionGraph({
+      ...base,
+      isUserTurnExecuting: true,
+    })).toBe(false);
+    expect(committedReplyShouldSettleExecutionGraph({
+      ...base,
+      segmentDelegationOpen: true,
+    })).toBe(false);
+    expect(committedReplyShouldSettleExecutionGraph({
+      ...base,
+      committedReplyOffset: -1,
+    })).toBe(false);
+  });
+});
+
+describe('shouldPromoteStreamingTextAsReply', () => {
+  it('keeps short tool-accompanied OpenClaw activity as graph narration', () => {
+    expect(shouldPromoteStreamingTextAsReply({
+      streamText: '再补充一些详细信息。',
+      hasStreamImages: false,
+      streamToolUseCount: 2,
+    })).toBe(false);
+  });
+
+  it('promotes a Markdown final reply even if stale tool signals are still attached', () => {
+    expect(shouldPromoteStreamingTextAsReply({
+      streamText: [
+        '信息已经非常丰富了。现在让我整理输出本周的AI资讯简报。',
+        '',
+        '---',
+        '',
+        '# 🤖 每日AI资讯简报 | 2026年7月1日-7月8日',
+      ].join('\n'),
+      hasStreamImages: false,
+      streamToolUseCount: 2,
+    })).toBe(true);
+  });
+});
+
 describe('findInFlightChildDelegation', () => {
   it('returns child session info after spawn until completion event arrives', () => {
     const messages: RawMessage[] = [
@@ -927,6 +1090,61 @@ describe('attachSubagentChildSteps', () => {
       depth: 3,
       parentId: 'spawn-1:branch',
     }));
+  });
+
+  it('keeps non-whitelisted child tools visible under the subagent branch', () => {
+    const parentSteps = deriveTaskSteps({
+      messages: [
+        {
+          role: 'assistant',
+          id: 'assistant-spawn',
+          content: [{
+            type: 'tool_use',
+            id: 'spawn-1',
+            name: 'sessions_spawn',
+            input: { taskName: 'skill-test' },
+          }],
+        },
+      ],
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    const merged = attachSubagentChildSteps(
+      parentSteps,
+      [
+        {
+          role: 'assistant',
+          id: 'child-assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'tool-child-exec',
+            name: 'exec',
+            input: { command: 'python skill_test.py' },
+          }],
+        },
+      ],
+      'agent:main:subagent:child-1',
+      { branchLabel: 'skill-test', spawnStepId: 'spawn-1' },
+    );
+
+    expect(deriveTaskSteps({
+      messages: [{
+        role: 'assistant',
+        id: 'parent-exec',
+        content: [{ type: 'tool_use', id: 'parent-tool-exec', name: 'exec', input: { command: 'python parent.py' } }],
+      }],
+      streamingMessage: null,
+      streamingTools: [],
+    }).some((step) => step.label === 'exec')).toBe(false);
+
+    expect(merged.find((step) => step.id === 'agent:main:subagent:child-1:tool-child-exec')).toEqual(
+      expect.objectContaining({
+        label: 'exec',
+        depth: 3,
+        parentId: 'spawn-1:branch',
+      }),
+    );
   });
 
   it('shows a running branch placeholder while waiting for child transcript', () => {

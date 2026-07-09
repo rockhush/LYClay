@@ -42,13 +42,17 @@ beforeEach(async () => {
   await rm(root, { recursive: true, force: true });
   await mkdir(join(installPath, 'agent', 'workspace'), { recursive: true });
   await mkdir(join(installPath, 'mcp'), { recursive: true });
+  await mkdir(join(installPath, 'resources'), { recursive: true });
   await mkdir(join(packageRoot, 'agent', 'workspace'), { recursive: true });
   await mkdir(join(packageRoot, 'mcp'), { recursive: true });
+  await mkdir(join(packageRoot, 'resources'), { recursive: true });
   await mkdir(workspace, { recursive: true });
   await writeFile(join(installPath, 'employee.json'), JSON.stringify(oldManifest), 'utf8');
   await writeFile(join(installPath, 'old-package-file.txt'), 'old package', 'utf8');
+  await writeFile(join(installPath, 'resources', 'api-contracts.md'), '# Old API', 'utf8');
   await writeFile(join(packageRoot, 'employee.json'), JSON.stringify(newManifest), 'utf8');
   await writeFile(join(packageRoot, 'new-package-file.txt'), 'new package', 'utf8');
+  await writeFile(join(packageRoot, 'resources', 'api-contracts.md'), '# New API', 'utf8');
   await writeFile(
     join(installPath, 'mcp', 'servers.template.json'),
     JSON.stringify({ servers: { docs: { url: 'https://old.example.com/docs' } } }),
@@ -64,6 +68,8 @@ beforeEach(async () => {
   await writeFile(join(workspace, 'AGENTS.md'), '# Old role', 'utf8');
   await writeFile(join(workspace, 'TOOLS.md'), '# Old tools', 'utf8');
   await writeFile(join(workspace, 'USER.md'), '# User data', 'utf8');
+  await mkdir(join(workspace, 'resources'), { recursive: true });
+  await writeFile(join(workspace, 'resources', 'api-contracts.md'), '# Workspace old API', 'utf8');
   const record: DigitalEmployeeInstallRecord = {
     schemaVersion: 1,
     instanceId,
@@ -146,6 +152,7 @@ describe('digital employee updater', () => {
     expect(await readFile(join(workspace, 'USER.md'), 'utf8')).toBe('# User data');
     await expect(access(join(installPath, 'old-package-file.txt'))).rejects.toThrow();
     expect(await readFile(join(installPath, 'new-package-file.txt'), 'utf8')).toBe('new package');
+    expect(await readFile(join(workspace, 'resources', 'api-contracts.md'), 'utf8')).toBe('# New API');
     expect(
       JSON.parse(await readFile(join(installPath, 'mcp', 'servers.template.json'), 'utf8')),
     ).toEqual({
@@ -228,6 +235,7 @@ describe('digital employee updater', () => {
     expect(await readFile(join(workspace, 'TOOLS.md'), 'utf8')).toBe('# Old tools');
     await expect(access(join(workspace, 'SOUL.md'))).rejects.toThrow();
     expect(await readFile(join(workspace, 'USER.md'), 'utf8')).toBe('# User data');
+    expect(await readFile(join(workspace, 'resources', 'api-contracts.md'), 'utf8')).toBe('# Workspace old API');
     expect(updates).toEqual([
       { name: 'Updated Employee', modelRef: 'provider/new-model' },
       { name: 'Old Employee', modelRef: 'provider/old-model' },

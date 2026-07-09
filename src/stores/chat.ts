@@ -56,9 +56,11 @@ import {
   isWithinUserAbortWindow,
   shouldSuppressAssistantStreamingText,
   dedupeEquivalentAttachmentUserMessages,
+  dedupeAssistantMessagesByContent,
   matchesOptimisticUserMessage,
   getLatestOptimisticUserMessage,
   normalizeComparableUserText,
+  getComparableAttachmentSignature,
   areEquivalentAttachmentOnlyUserTexts,
   stripGatewayUserMetadata,
   isSyntheticSessionLabelUserMessage,
@@ -71,10 +73,14 @@ import {
   findTerminalAssistantAfterLatestUser,
   findTerminalAssistantForActiveTurn,
   isConcludingAssistantReply,
+  isCumulativeRunFinalText,
   isFailedAssistantMessage,
+  isRendererSyntheticRunMessage,
   isRunTerminalAssistantMessage,
   shouldKeepRunActiveAfterAssistantFinal,
   shouldSilentlyFinalizeRunOnAssistantFinal,
+  stripRendererSyntheticRunMessages,
+  transcriptHasCommittedConcludingReply,
 } from './chat/run-lifecycle';
 import {
   backendActivityForSession,
@@ -84,6 +90,8 @@ import {
   shouldForceAbortStuckRun,
   buildReAdoptRunPatch,
   hasOpenDelegatedBackendWork,
+  hasOpenBackendWorkForUserTurn,
+  isTranscriptTurnSettledForDisplay,
   isUserAbortedSessionBackendIdle,
   sanitizeLeavingSessionStreamingSnapshot,
 } from './chat/user-turn-lifecycle';
@@ -139,6 +147,15 @@ import {
   pickUserFacingSession,
 } from '@/lib/session-key-utils';
 import { isEmptyChatScratchpad } from '@/lib/chat-scratchpad';
+import {
+  summarizeAssistantMessage,
+  summarizeBackendActivity,
+  summarizeGatewayBackground,
+  summarizeStreamingTools,
+  summarizeTranscriptTail,
+  summarizeUiSignals,
+  traceTurnTransition,
+} from './chat/turn-state-trace';
 
 export type {
   AttachedFileMeta,
@@ -1276,6 +1293,7 @@ function mergeMissingLocalAssistantReplies(
 
   for (const localAssistant of localTailAssistants) {
     if (isInternalMessage(localAssistant)) continue;
+    if (isRendererSyntheticRunMessage(localAssistant)) continue;
     const text = getMessageText(localAssistant.content).trim();
     if (!text) continue;
     if (
@@ -1389,6 +1407,8 @@ function applyClearedActiveRunForSession(
       messages: s.messages,
       gatewayBackgroundActivity: s.gatewayBackgroundActivity,
       announcedChildSessionKeys: s.announcedChildSessionKeys,
+      lastUserMessageAt: s.lastUserMessageAt,
+      currentSessionKey: sessionKey,
     });
     const prevSnapshot = s.sessionStreamingStates[sessionKey] ?? createEmptySessionStreamingState();
     const messagesSnapshot = options?.preserveMessagesSnapshot === false
@@ -1503,7 +1523,7 @@ function applyBackgroundChatEvent(
       next.pendingFinal = false;
       next.pendingToolImages = [];
       next.lastUserMessageAt = null;
-      next.runAborted = isUserAbortedSession(sessionKey);
+      next.runAborted = resolvedState === 'aborted' || isUserAbortedSession(sessionKey);
       break;
     default:
       return null;
@@ -1539,8 +1559,10 @@ function dedupeUserMessagesByContent(messages: RawMessage[]): RawMessage[] {
       result.push(message);
       continue;
     }
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const attachmentSignature = getComparableAttachmentSignature(message);
+    const dedupeKey = attachmentSignature ? `${key}\0${attachmentSignature}` : key;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     result.push(message);
   }
 
@@ -1580,19 +1602,24 @@ function resolveFinalMessagesWithLocalPreservation(
   // This safety net catches those remaining duplicates by comparing normalized
   // text content — the same message with the same text should only appear once.
   finalMessages = dedupeUserMessagesByContent(finalMessages);
+  finalMessages = dedupeAssistantMessagesByContent(finalMessages);
   finalMessages = stripSyntheticSessionLabelUserMessages(finalMessages, sessionKey);
 
   if (finalMessages.length > 0) return finalMessages;
 
   const preservedLocalMessages = stripSyntheticSessionLabelUserMessages(state.messages, sessionKey);
   if (preservedLocalMessages.length > 0) {
-    return dedupeEquivalentAttachmentUserMessages(preservedLocalMessages);
+    return dedupeAssistantMessagesByContent(
+      dedupeEquivalentAttachmentUserMessages(preservedLocalMessages),
+    );
   }
 
   const snapshot = state.sessionStreamingStates[sessionKey]?.messagesSnapshot;
   if (snapshot && snapshot.length > 0) {
-    return dedupeEquivalentAttachmentUserMessages(
-      stripSyntheticSessionLabelUserMessages(snapshot, sessionKey),
+    return dedupeAssistantMessagesByContent(
+      dedupeEquivalentAttachmentUserMessages(
+        stripSyntheticSessionLabelUserMessages(snapshot, sessionKey),
+      ),
     );
   }
 
@@ -1830,6 +1857,7 @@ function buildSendingUiPatchFromTranscript(
   for (const message of rawMessages) {
     if (!isMessageAfterUserTimestamp(message, userTs)) continue;
     if (message.role !== 'assistant') continue;
+    if (isRendererSyntheticRunMessage(message)) continue;
 
     const normalized = normalizeStreamingMessage(message) as RawMessage;
     const progressInfo = classifyVisibleProgress(normalized);
@@ -1845,9 +1873,28 @@ function buildSendingUiPatchFromTranscript(
     if (!isMessageAfterUserTimestamp(message, userTs)) return false;
     return isRunTerminalAssistantMessage(message);
   });
-  const concludingReply = findConcludingAssistantForActiveTurn(rawMessages, userTs);
   const hasCommittedVisibleReply = hasTerminalReply
-    || (concludingReply != null && hasVisibleAssistantContent(concludingReply));
+    || transcriptHasCommittedConcludingReply(rawMessages, userTs);
+
+  if (hasCommittedVisibleReply) {
+    if (!hasLive) {
+      patch.streamingText = '';
+      patch.streamingMessage = null;
+      patch.streamingTools = [];
+    } else if (mergedTools.length !== state.streamingTools.length
+      || JSON.stringify(mergedTools) !== JSON.stringify(state.streamingTools)) {
+      patch.streamingTools = mergedTools;
+    }
+    traceTurnTransition('transcript-mirror-skipped', {
+      reason: 'committed_concluding_reply',
+      hasLive,
+      hasTerminalReply,
+      progress,
+      mirrorTarget: summarizeAssistantMessage(longestAssistant),
+      tools: summarizeStreamingTools(mergedTools),
+    });
+    return Object.keys(patch).length > 0 ? patch : null;
+  }
 
   if (hasLive) {
     if (mergedTools.length !== state.streamingTools.length
@@ -1878,6 +1925,16 @@ function buildSendingUiPatchFromTranscript(
 
   if (!hasCommittedVisibleReply && (progress.assistantCount > 0 || progress.toolResultCount > 0)) {
     patch.pendingFinal = true;
+  }
+
+  if (Object.keys(patch).length > 0) {
+    traceTurnTransition('transcript-mirror-applied', {
+      hasLive,
+      progress,
+      mirrorTarget: summarizeAssistantMessage(longestAssistant),
+      tools: summarizeStreamingTools(mergedTools),
+      patchKeys: Object.keys(patch),
+    });
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
@@ -3110,6 +3167,10 @@ function isRecoverableChatSendTimeout(error: string): boolean {
   return error.includes('RPC timeout: chat.send');
 }
 
+function isRecoverableSessionPatchTimeout(error: unknown): boolean {
+  return String(error).includes('RPC timeout: sessions.patch');
+}
+
 function collectToolUpdates(message: unknown, eventState: string): ToolStatus[] {
   const updates: ToolStatus[] = [];
   const toolResultUpdate = extractToolResultUpdate(message, eventState);
@@ -3639,7 +3700,8 @@ function finalizeBackgroundSessionRunIfCompleted(
   runId: string,
 ): void {
   const prev = get().sessionStreamingStates[eventSessionKey];
-  if (!prev || (!prev.sending && !prev.activeRunId)) return;
+  if (!prev) return;
+  if (!prev.sending && !prev.activeRunId && prev.messagesSnapshot.length === 0) return;
   // Ignore events from a different run than the one tracked for this session.
   if (prev.activeRunId && runId && prev.activeRunId !== runId) return;
 
@@ -3749,6 +3811,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       _pendingSessionModelPatches.delete(sessionKey);
     } catch (error) {
       deferSessionModelPatch(sessionKey, normalizedModel);
+      if (isRecoverableSessionPatchTimeout(error)) {
+        console.warn('[chat.session-model] sessions.patch timed out; keeping optimistic model and queued retry', {
+          sessionKey,
+          model: normalizedModel,
+          error,
+        });
+        return;
+      }
       throw error;
     }
   },
@@ -4031,16 +4101,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(reAdopt);
       } else {
         const settled = get();
+        const settledInput = {
+          messages: settled.messages,
+          lastUserMessageAt: settled.lastUserMessageAt,
+          backendActivity: snapshot.session,
+          gatewayBackground: snapshot.background,
+        };
         if (
           (settled.sending || settled.pendingFinal || settled.activeRunId)
-          && settled.messages.length > 0
-          && canForceClearOnVisibleCommittedReply({
-            messages: settled.messages,
-            lastUserMessageAt: settled.lastUserMessageAt,
-            backendActivity: snapshot.session,
-            gatewayBackground: snapshot.background,
-          })
+          && (
+            canForceClearOnVisibleCommittedReply(settledInput)
+            || isTranscriptTurnSettledForDisplay(settled.messages, settledInput)
+          )
         ) {
+          traceTurnTransition('session-switch-clear-stale-run', {
+            sessionKey: key,
+            ui: summarizeUiSignals(settled),
+            backend: summarizeBackendActivity(snapshot.session),
+            transcript: summarizeTranscriptTail(settled.messages, settled.lastUserMessageAt),
+          });
           applyClearedActiveRunForSession(set, key);
         }
       }
@@ -4499,7 +4578,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(interruptedOut.resumePatch);
       }
       const pipelineMessages = interruptedOut.messages;
-      const finalMessages = resolveFinalMessagesWithLocalPreservation(currentSessionKey, pipelineMessages, get);
+      const finalMessages = stripRendererSyntheticRunMessages(
+        resolveFinalMessagesWithLocalPreservation(currentSessionKey, pipelineMessages, get),
+      );
 
       set((state) => ({
         messages: finalMessages,
@@ -4575,6 +4656,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         finalMessages,
         lastUserMessageAt,
       );
+      const hasCommittedConcludingReply = transcriptHasCommittedConcludingReply(
+        finalMessages,
+        lastUserMessageAt,
+      );
 
       const backendSnapshot = await refreshSessionBackendActivity(currentSessionKey);
       if (backendSnapshot) {
@@ -4584,7 +4669,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         });
       }
 
-      if ((isSendingNow || get().pendingFinal || get().activeRunId) && recentTerminalAssistant) {
+      if ((isSendingNow || get().pendingFinal || get().activeRunId) && (recentTerminalAssistant || hasCommittedConcludingReply)) {
+        const terminalForClear = recentTerminalAssistant
+          ?? findConcludingAssistantForActiveTurn(finalMessages, lastUserMessageAt);
         const completedChildSessionKeys = resolveCompletedChildSessionKeys(
           finalMessages,
           get().announcedChildSessionKeys,
@@ -4593,17 +4680,55 @@ export const useChatStore = create<ChatState>((set, get) => ({
           messages: finalMessages,
           lastUserMessageAt,
           backendActivity: backendSnapshot?.session ?? get().sessionBackendActivity,
-          terminalMessage: recentTerminalAssistant,
+          terminalMessage: terminalForClear,
           gatewayBackground: backendSnapshot?.background ?? get().gatewayBackgroundActivity,
           finalizeGraceStartedAt: getFinalizeGraceStartedAt(currentSessionKey),
           completedChildSessionKeys,
         };
         if (!canClearUserTurnNow(canClearInput)) {
           if (canForceClearOnVisibleCommittedReply(canClearInput)) {
+            traceTurnTransition('history-finalize', {
+              sessionKey: currentSessionKey,
+              outcome: 'force_clear',
+              terminal: summarizeAssistantMessage(terminalForClear),
+              ui: summarizeUiSignals(get()),
+              backend: summarizeBackendActivity(canClearInput.backendActivity),
+              gateway: summarizeGatewayBackground(canClearInput.gatewayBackground),
+            });
             clearHistoryPoll();
             clearErrorRecoveryTimer();
             applyClearedActiveRunForSession(set, currentSessionKey);
             ensureSessionBackendPolling(currentSessionKey, set, get);
+          } else if (hasCommittedConcludingReply) {
+            set({
+              streamingText: '',
+              streamingMessage: null,
+              streamingTools: [],
+              pendingToolImages: [],
+            });
+            if (!hasOpenBackendWorkForUserTurn(
+              backendSnapshot?.background ?? get().gatewayBackgroundActivity,
+              backendSnapshot?.session ?? get().sessionBackendActivity,
+              finalMessages,
+            )) {
+              traceTurnTransition('history-finalize', {
+                sessionKey: currentSessionKey,
+                outcome: 'settled_clear_streaming',
+                terminal: summarizeAssistantMessage(terminalForClear),
+                transcript: summarizeTranscriptTail(finalMessages, lastUserMessageAt),
+              });
+              clearHistoryPoll();
+              clearErrorRecoveryTimer();
+              applyClearedActiveRunForSession(set, currentSessionKey);
+              ensureSessionBackendPolling(currentSessionKey, set, get);
+            } else {
+              traceTurnTransition('history-finalize', {
+                sessionKey: currentSessionKey,
+                outcome: 'settled_clear_streaming_only',
+                terminal: summarizeAssistantMessage(terminalForClear),
+                backend: summarizeBackendActivity(backendSnapshot?.session ?? get().sessionBackendActivity),
+              });
+            }
           } else {
             if (isSendingNow) {
               applySendingUiPatchFromTranscript(rawMessages, set, get);
@@ -4612,9 +4737,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // reports processing (async desync). Clear stale streaming buffers so
             // the committed reply in messages[] is visible without waiting for stop.
             if (
-              recentTerminalAssistant
-              && (isRunTerminalAssistantMessage(recentTerminalAssistant)
-                || hasVisibleAssistantContent(recentTerminalAssistant))
+              terminalForClear
+              && (isRunTerminalAssistantMessage(terminalForClear)
+                || hasVisibleAssistantContent(terminalForClear))
             ) {
               set({
                 streamingText: '',
@@ -4625,13 +4750,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
           }
         } else {
+          traceTurnTransition('history-finalize', {
+            sessionKey: currentSessionKey,
+            outcome: 'can_clear',
+            terminal: summarizeAssistantMessage(terminalForClear),
+          });
           clearHistoryPoll();
           clearErrorRecoveryTimer();
           applyClearedActiveRunForSession(set, currentSessionKey);
           ensureSessionBackendPolling(currentSessionKey, set, get);
         }
       } else if (isSendingNow) {
-        applySendingUiPatchFromTranscript(rawMessages, set, get);
+        if (!hasCommittedConcludingReply) {
+          applySendingUiPatchFromTranscript(rawMessages, set, get);
+        } else {
+          traceTurnTransition('history-finalize', {
+            sessionKey: currentSessionKey,
+            outcome: 'skip_transcript_mirror_committed',
+            transcript: summarizeTranscriptTail(finalMessages, lastUserMessageAt),
+          });
+        }
         // When the loaded history already ends with a visible assistant reply,
         // clear any stale streaming state so the same content does not appear
         // both as a committed message bubble and a streaming reply bubble.
@@ -4708,6 +4846,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ) => {
         const state = get();
         if (!state.sending) return;
+        if (transcriptHasCommittedConcludingReply(rawMessages, state.lastUserMessageAt)) {
+          traceTurnTransition('history-poll-skipped', {
+            sessionKey: currentSessionKey,
+            reason: 'committed_concluding_reply',
+            source: _source,
+            transcript: summarizeTranscriptTail(rawMessages, state.lastUserMessageAt),
+          });
+          return;
+        }
         const progress = getRuntimeTranscriptProgress(rawMessages, state.lastUserMessageAt);
         if (!progress) return;
 
@@ -5660,8 +5807,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const runId = String(event.runId || '');
     const eventState = String(event.state || '');
     const eventSessionKey = event.sessionKey != null ? String(event.sessionKey) : null;
-    const { activeRunId, currentSessionKey } = get();
-    const isCurrentSessionEvent = eventSessionKey == null || eventSessionKey === currentSessionKey;
+    const { activeRunId, currentSessionKey, sessionStreamingStates } = get();
+    const inferredSessionKey = (() => {
+      if (eventSessionKey != null) return eventSessionKey;
+      if (!runId) return null;
+      if (activeRunId && runId === activeRunId) return currentSessionKey;
+      for (const [sessionKey, state] of Object.entries(sessionStreamingStates)) {
+        if (state.activeRunId === runId) return sessionKey;
+      }
+      return null;
+    })();
+    const resolvedSessionKey = eventSessionKey ?? inferredSessionKey;
+    const isCurrentSessionEvent = !resolvedSessionKey || resolvedSessionKey === currentSessionKey;
 
     // The child that triggers a parent's auto-announce wrap-up never gets an
     // `[Internal task completion event]` written to the parent transcript — its
@@ -5697,7 +5854,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
 
-      if (eventSessionKey && isUserAbortedSession(eventSessionKey)) {
+      if (resolvedSessionKey && isUserAbortedSession(resolvedSessionKey)) {
         if (backgroundState !== 'aborted') {
           return;
         }
@@ -5716,16 +5873,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         event,
         backgroundState,
         runId,
-        eventSessionKey,
+        resolvedSessionKey,
       );
       if (backgroundObservationPatch) {
         set(backgroundObservationPatch);
       }
 
-      const nextSessionStreamingStates = applyBackgroundChatEvent(get(), eventSessionKey, event, backgroundState, runId);
+      const nextSessionStreamingStates = applyBackgroundChatEvent(get(), resolvedSessionKey, event, backgroundState, runId);
       if (nextSessionStreamingStates) {
         set({ sessionStreamingStates: nextSessionStreamingStates });
       }
+      finalizeBackgroundSessionRunIfCompleted(set, get, resolvedSessionKey, event, backgroundState, runId);
       return;
     }
 
@@ -5753,8 +5911,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // saved streaming state when its run completes, otherwise switching back
     // strands it on a frozen "thinking?? indicator and blocks the loadHistory
     // that would surface the finished answer.
-    if (eventSessionKey != null && eventSessionKey !== currentSessionKey) {
-      finalizeBackgroundSessionRunIfCompleted(set, get, eventSessionKey, event, resolvedState, runId);
+    if (resolvedSessionKey != null && resolvedSessionKey !== currentSessionKey) {
+      const nextSessionStreamingStates = applyBackgroundChatEvent(get(), resolvedSessionKey, event, resolvedState, runId);
+      if (nextSessionStreamingStates) {
+        set({ sessionStreamingStates: nextSessionStreamingStates });
+      }
+      finalizeBackgroundSessionRunIfCompleted(set, get, resolvedSessionKey, event, resolvedState, runId);
       return;
     }
 
@@ -6143,6 +6305,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             );
           const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
           const shouldClearOnFinalMessage = !keepRunActiveAfterFinal && !isAnnounceWrapUpFinal;
+          const skipCumulativeOptimisticFinal = !keepRunActiveAfterFinal
+            && hasOutput
+            && msgId === `run-${runId}`
+            && isCumulativeRunFinalText(getMessageText(normalizedFinalMessage.content), turnMessages);
           let skippedDuplicateFinal = false;
           set((s) => {
             const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
@@ -6162,7 +6328,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
             // Check if message already exists (prevent duplicates)
             const alreadyExists = isDuplicateAssistantFinal(s.messages, msgId, msgWithImages);
-            if (alreadyExists) {
+            if (alreadyExists || skipCumulativeOptimisticFinal) {
               skippedDuplicateFinal = true;
               return keepRunActiveAfterFinal ? {
                 streamingText: '',
@@ -6679,6 +6845,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const state = get();
     const resolvedSessionKey = sessionKey != null ? String(sessionKey) : state.currentSessionKey;
     const resolvedRunId = runId != null ? String(runId) : null;
+    traceTurnTransition('gateway-run-completed', {
+      runId: resolvedRunId,
+      sessionKey: resolvedSessionKey,
+      ui: summarizeUiSignals(state),
+    });
     const matchesSession = resolvedSessionKey === state.currentSessionKey;
     const matchesRun = !resolvedRunId || !state.activeRunId || state.activeRunId === resolvedRunId;
 
@@ -6727,6 +6898,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           gatewayBackground: backendSnapshot?.background ?? next.gatewayBackgroundActivity,
           finalizeGraceStartedAt: getFinalizeGraceStartedAt(resolvedSessionKey),
         })) {
+          traceTurnTransition('gateway-run-completed-finalize', {
+            sessionKey: resolvedSessionKey,
+            runId: resolvedRunId,
+            outcome: 'can_clear',
+            attempt,
+          });
           clearFinalizeGraceTimer();
           clearHistoryPoll();
           clearErrorRecoveryTimer();
@@ -6743,6 +6920,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
           finalizeGraceStartedAt: getFinalizeGraceStartedAt(resolvedSessionKey),
         };
         if (canForceClearOnVisibleCommittedReply(forceClearInput)) {
+          traceTurnTransition('gateway-run-completed-finalize', {
+            sessionKey: resolvedSessionKey,
+            runId: resolvedRunId,
+            outcome: 'force_clear',
+            attempt,
+          });
+          clearFinalizeGraceTimer();
+          clearHistoryPoll();
+          clearErrorRecoveryTimer();
+          applyClearedActiveRunForSession(set, resolvedSessionKey);
+          ensureSessionBackendPolling(resolvedSessionKey, set, get);
+          return;
+        }
+
+        if (isTranscriptTurnSettledForDisplay(next.messages, {
+          lastUserMessageAt: next.lastUserMessageAt,
+          backendActivity: backendSnapshot?.session ?? next.sessionBackendActivity,
+          gatewayBackground: backendSnapshot?.background ?? next.gatewayBackgroundActivity,
+        })) {
+          traceTurnTransition('gateway-run-completed-finalize', {
+            sessionKey: resolvedSessionKey,
+            runId: resolvedRunId,
+            outcome: 'transcript_settled',
+            attempt,
+          });
           clearFinalizeGraceTimer();
           clearHistoryPoll();
           clearErrorRecoveryTimer();
@@ -6766,6 +6968,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         // Gateway reported completed but transcript may still be in-flight (tool rounds,
         // narration-before-tools). Do not force idle UI without a terminal assistant turn.
+        traceTurnTransition('gateway-run-completed-finalize', {
+          sessionKey: resolvedSessionKey,
+          runId: resolvedRunId,
+          outcome: 'keep_open_pending_final',
+          attempt,
+          transcript: summarizeTranscriptTail(next.messages, next.lastUserMessageAt),
+          backend: summarizeBackendActivity(backendSnapshot?.session ?? next.sessionBackendActivity),
+        });
         set({
           streamingText: '',
           streamingMessage: null,
