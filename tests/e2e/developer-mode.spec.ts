@@ -1,4 +1,5 @@
 import { completeSetup, expect, test } from './fixtures/electron';
+import { openSidebarMoreNav } from './helpers/sidebar-more-nav';
 
 test.describe('ClawX developer-mode gated UI', () => {
   test('keeps developer-only configuration hidden until dev mode is enabled', async ({ page }) => {
@@ -17,6 +18,7 @@ test.describe('ClawX developer-mode gated UI', () => {
     await expect(page.getByTestId('dreams-page')).toHaveCount(0);
     await expect(page.getByTestId('chat-composer-input')).toBeVisible();
 
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-models').click();
     await page.getByTestId('providers-add-button').click();
     await expect(page.getByTestId('add-provider-dialog')).toBeVisible();
@@ -33,6 +35,7 @@ test.describe('ClawX developer-mode gated UI', () => {
     await expect(page.getByTestId('sidebar-open-dev-console')).toHaveCount(0);
     await expect(page.getByTestId('sidebar-nav-dreams')).toBeVisible();
 
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-models').click();
     await page.getByTestId('providers-add-button').click();
     await expect(page.getByTestId('add-provider-dialog')).toBeVisible();

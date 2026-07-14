@@ -21,6 +21,7 @@ test.describe('ClawX main navigation without setup flow', () => {
 
       await expect(page.getByTestId('main-layout')).toBeVisible();
 
+      await openSidebarMoreNav(page);
       await page.getByTestId('sidebar-nav-models').click();
       await expect(page.getByTestId('models-page')).toBeVisible();
       await expect(page.getByTestId('models-page-title')).toBeVisible();

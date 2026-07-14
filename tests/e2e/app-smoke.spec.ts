@@ -1,4 +1,5 @@
 import { closeElectronApp, expect, test } from './fixtures/electron';
+import { openSidebarMoreNav } from './helpers/sidebar-more-nav';
 
 test.describe('ClawX Electron smoke flows', () => {
   test('shows the setup wizard on a fresh profile', async ({ page }) => {
@@ -12,6 +13,7 @@ test.describe('ClawX Electron smoke flows', () => {
     await page.getByTestId('setup-skip-button').click();
 
     await expect(page.getByTestId('main-layout')).toBeVisible();
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-models').click();
 
     await expect(page.getByTestId('models-page')).toBeVisible();

@@ -991,13 +991,13 @@ export function Sidebar() {
   const extraNavItems = rendererExtensionRegistry.getExtraNavItems();
 
   const coreNavItems = [
-    { to: '/cron', icon: <Clock className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.cronTasks'), testId: 'sidebar-nav-cron', end: true },
-    { to: '/models', icon: <Cpu className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
     { to: '/cron/digital-employee', icon: <Briefcase className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.digitalEmployee'), testId: 'sidebar-nav-digital-employee', end: true },
     { to: '/skills', icon: <Puzzle className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
+    { to: '/cron', icon: <Clock className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.cronTasks'), testId: 'sidebar-nav-cron', end: true },
   ];
 
   const moreNavItems = [
+    { to: '/models', Icon: Cpu, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
     { to: '/ai-tools', Icon: Wrench, label: t('sidebar.aiTools'), testId: 'sidebar-nav-ai-tools' },
     { to: '/channels', Icon: Network, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
     { to: '/connectors', Icon: Link2, label: t('sidebar.connectors'), testId: 'sidebar-nav-connectors' },

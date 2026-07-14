@@ -9,6 +9,7 @@ test.describe('ClawX gateway lifecycle resilience', () => {
 
     // Navigate through all major pages to verify nothing crashes
     // when the gateway is not running.
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-models').click();
     await expect(page.getByTestId('models-page')).toBeVisible();
 
@@ -66,6 +67,7 @@ test.describe('ClawX gateway lifecycle resilience', () => {
     await page.waitForTimeout(500);
 
     // Verify navigation still works after status transitions
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-models').click();
     await expect(page.getByTestId('models-page')).toBeVisible();
 
@@ -142,6 +144,7 @@ test.describe('ClawX gateway lifecycle resilience', () => {
     await expect(page.getByTestId('main-layout')).toBeVisible();
 
     // Navigate to verify no page is in a broken state
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-models').click();
     await expect(page.getByTestId('models-page')).toBeVisible();
 
