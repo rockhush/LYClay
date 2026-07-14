@@ -1094,7 +1094,7 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
                         </div>
                       ) : mentionableAgents.length === 0 ? (
                         <div className="px-3 py-3 text-[12px] text-muted-foreground">
-                          暂无可用数字员工
+                          暂无可用岗位助理
                         </div>
                       ) : mentionableAgents.map((agent) => (
                         <AgentPickerItem

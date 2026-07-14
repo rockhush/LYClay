@@ -22,9 +22,24 @@ export interface DigitalEmployeeUninstallerDependencies {
   removeMcpServers: (runtimeNames: string[]) => Promise<void>;
 }
 
+function isAgentNotFoundError(error: unknown, agentId: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.trim().toLowerCase() === `agent "${agentId}" not found`.toLowerCase();
+}
+
 async function deleteBoundAgent(agentId: string): Promise<void> {
-  const { removedEntry } = await deleteAgentConfig(agentId);
-  await removeAgentWorkspaceDirectory(removedEntry);
+  try {
+    const { removedEntry } = await deleteAgentConfig(agentId);
+    await removeAgentWorkspaceDirectory(removedEntry);
+  } catch (error) {
+    if (!isAgentNotFoundError(error, agentId)) {
+      throw error;
+    }
+    await removeAgentWorkspaceDirectory({
+      id: agentId,
+      workspace: `~/.openclaw/workspace-${agentId}`,
+    });
+  }
 }
 
 const defaultDependencies: DigitalEmployeeUninstallerDependencies = {
@@ -54,7 +69,13 @@ export async function uninstallDigitalEmployee(
   return withDigitalEmployeeInstallLock(async () => {
     const record = await dependencies.readRecord(normalizedInstanceId);
     await dependencies.cleanupSub2ApiModels(record.instanceId);
-    await dependencies.deleteAgent(record.agentId);
+    try {
+      await dependencies.deleteAgent(record.agentId);
+    } catch (error) {
+      if (!isAgentNotFoundError(error, record.agentId)) {
+        throw error;
+      }
+    }
     await dependencies.removeMcpServers((record.installedMcpServers ?? []).map((server) => server.runtimeName));
     await dependencies.removeInstallDirectory(record.installPath);
     return {

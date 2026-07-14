@@ -20,7 +20,7 @@ import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard, buildTurnRunAnchorId } from './ExecutionGraphCard';
 import { ChatToolbar } from './ChatToolbar';
 import { extractImages, extractText, extractThinking, extractToolUse, stripProcessMessagePrefix } from './message-utils';
-import { attachSubagentChildSteps, collectChildDelegationBindings, committedReplyShouldSettleExecutionGraph, deriveTaskSteps, filterHiddenExecutionGraphSteps, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationNarration, isSubagentOrchestrationToolName, isSupersededRawMediaAssistantReply, parseSubagentCompletionInfo, shouldPromoteStreamingTextAsReply, type TaskStep } from './task-visualization';
+import { attachSubagentChildSteps, collectChildDelegationBindings, committedReplyShouldSettleExecutionGraph, deriveTaskSteps, filterHiddenExecutionGraphSteps, findCommittedReplyMessageIndex, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationNarration, isSubagentOrchestrationToolName, isSupersededRawMediaAssistantReply, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo, shouldPromoteStreamingTextAsReply, type TaskStep } from './task-visualization';
 import { resolveCompletedChildSessionKeys } from '@/lib/subagent-delegation';
 import { mergeDelegationBindingsWithLiveStream } from '@/lib/subagent-delegation';
 import { useTranslation } from 'react-i18next';
@@ -100,6 +100,30 @@ function getPrimaryMessageStepTexts(steps: TaskStep[]): string[] {
   return steps
     .filter((step) => step.kind === 'message' && step.parentId === 'agent-run' && !!step.detail)
     .map((step) => step.detail!);
+}
+
+function normalizeGraphReplyText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function filterCommittedReplyDuplicateSteps(
+  steps: TaskStep[],
+  replyMessage: RawMessage | null | undefined,
+): TaskStep[] {
+  if (!replyMessage || replyMessage.role !== 'assistant') return steps;
+  const replyText = normalizeGraphReplyText(extractText(replyMessage));
+  if (!replyText) return steps;
+
+  const filtered = steps.filter((step) => {
+    if (step.kind !== 'message' || !step.detail) return true;
+    const stepText = normalizeGraphReplyText(step.detail);
+    if (!stepText) return true;
+    if (stepText === replyText) return false;
+    const longEnoughForContainment = stepText.length >= 80 && replyText.length >= 80;
+    return !longEnoughForContainment || (!stepText.includes(replyText) && !replyText.includes(stepText));
+  });
+
+  return filtered.length === steps.length ? steps : filtered;
 }
 
 // Non-actionable runtime errors (user abort, session lock races) are hidden
@@ -790,71 +814,67 @@ export function Chat() {
         break;
       }
     }
-    const hasFinalReply = segmentMessages.some((m, i) => {
-      if (i <= lastToolUseOffset) return false;
-      if (m.role !== 'assistant') return false;
-      if (isInterimSubagentWaitAssistantReply(m)) return false;
-      if (isEmbeddedAgentFailureNoticeAssistantMessage(m) || isFailedAssistantMessage(m)) return false;
-      const replyText = extractText(m).trim();
-      if (replyText.length === 0) return false;
-      if (isSubagentOrchestrationNarration(replyText)) return false;
-      const content = m.content;
-      if (!Array.isArray(content)) return true;
-      return !(content as Array<{ type?: string }>).some(
-        (b) => b.type === 'tool_use' || b.type === 'toolCall',
-      );
+    const committedReplyOffset = findCommittedReplyMessageIndex(segmentMessages);
+    const hasCommittedConcludingReply = committedReplyOffset !== -1
+      && (lastToolUseOffset === -1 || committedReplyOffset >= lastToolUseOffset);
+    // Prefer the same reply picker used for bubble selection. A pure
+    // "text after last tool_use" scan can miss concluding answers that still
+    // carry residual tool metadata, leaving the graph stuck on trailing
+    // "思考中" after the turn has already settled.
+    const hasFinalReply = hasCommittedConcludingReply;
+    const runStillExecutingTools = hasToolActivity && !hasFinalReply;
+    const segmentChildrenIdle = !delegationTurn.anyChildActive;
+    const committedReplySettlesGraph = committedReplyShouldSettleExecutionGraph({
+      committedReplyOffset,
+      isUserTurnExecuting,
+      hasAnyStreamContent,
+      segmentDelegationOpen,
+      segmentHasPendingChild,
+      segmentWaitingOnSubagent,
+      stalledChildSessionKey,
     });
-      const runStillExecutingTools = hasToolActivity && !hasFinalReply;
-      const segmentChildrenIdle = !delegationTurn.anyChildActive;
-      const committedReplyOffset = findReplyMessageIndex(segmentMessages, false);
-      const hasCommittedConcludingReply = committedReplyOffset !== -1
-        && (lastToolUseOffset === -1 || committedReplyOffset >= lastToolUseOffset);
-      const committedReplySettlesGraph = committedReplyShouldSettleExecutionGraph({
-        committedReplyOffset,
-        isUserTurnExecuting,
-        hasAnyStreamContent,
-        segmentDelegationOpen,
-        segmentHasPendingChild,
-        segmentWaitingOnSubagent,
-        stalledChildSessionKey,
-      });
-      const stuckWaitingOnCommittedReply = nextUserIndex === -1
-        && !runAborted
-        && (sending || pendingFinal)
-        && !hasAnyStreamContent
-        && !runStillExecutingTools
+    const stuckWaitingOnCommittedReply = nextUserIndex === -1
+      && !runAborted
+      && (sending || pendingFinal)
+      && !hasAnyStreamContent
+      && !runStillExecutingTools
+      && !segmentDelegationOpen
+      && !segmentHasPendingChild
+      && !segmentWaitingOnSubagent
+      && !stalledChildSessionKey
+      && committedReplyOffset !== -1;
+    const turnVisiblyComplete = (
+      hasFinalReply
+      || stuckWaitingOnCommittedReply
+      || committedReplySettlesGraph
+      || (
+        hasCommittedConcludingReply
         && !segmentDelegationOpen
         && !segmentHasPendingChild
         && !segmentWaitingOnSubagent
         && !stalledChildSessionKey
-        && committedReplyOffset !== -1;
-      const turnVisiblyComplete = (
-        hasFinalReply
-        || stuckWaitingOnCommittedReply
-        || committedReplySettlesGraph
-        || (
-          hasCommittedConcludingReply
-          && !segmentDelegationOpen
-          && !segmentHasPendingChild
-          && !segmentWaitingOnSubagent
-          && !stalledChildSessionKey
-        )
       )
-        && segmentChildrenIdle
-        && !segmentDelegationOpen;
-      const isLatestOpenRun = !turnVisiblyComplete
-        && nextUserIndex === -1
-        && !runAborted
-        && (
-          segmentDelegationOpen
-          || segmentHasPendingChild
-          || segmentWaitingOnSubagent
-          || Boolean(stalledChildSessionKey)
-          || isUserTurnExecuting
-          || hasAnyStreamContent
-          || (runStillExecutingTools && !error && !hasFinalReply)
-        );
-    let replyIndexOffset = findReplyMessageIndex(segmentMessages, isLatestOpenRun);
+    )
+      && segmentChildrenIdle
+      && !segmentDelegationOpen;
+    // Stale tool rows in history must not keep the graph "active" after local
+    // run signals have cleared. Otherwise trailing "思考中" persists forever
+    // even though deriveIsExecuting is already false.
+    const localRunStillLive = sending || pendingFinal || Boolean(activeRunId) || isUserTurnExecuting;
+    const isLatestOpenRun = !turnVisiblyComplete
+      && nextUserIndex === -1
+      && !runAborted
+      && (
+        segmentDelegationOpen
+        || segmentHasPendingChild
+        || segmentWaitingOnSubagent
+        || Boolean(stalledChildSessionKey)
+        || isUserTurnExecuting
+        || hasAnyStreamContent
+        || (runStillExecutingTools && !error && !hasFinalReply && localRunStillLive)
+      );
+    const hasStreamingReplyBubble = isLatestOpenRun && hasAnyStreamContent;
+    let replyIndexOffset = findReplyMessageIndex(segmentMessages, hasStreamingReplyBubble);
     // Safety net for the latest run: a turn can stay "open" only because we're
     // still waiting on the final-event confirmation (pendingFinal/sending) while
     // no live stream content is being rendered. In that window a concluding
@@ -914,6 +934,7 @@ export function Chat() {
         streamingMessage: isLatestOpenRun ? streamingMessage : null,
         streamingTools: isLatestOpenRun ? streamingTools : [],
         omitLastStreamingMessageSegment: isLatestOpenRun ? omitLastStreamingMessageSegment : false,
+        committedReplyIndex: committedReplyOffset !== -1 ? committedReplyOffset : null,
       });
 
       for (const binding of segmentBindings) {
@@ -933,7 +954,10 @@ export function Chat() {
         );
       }
 
-      return builtSteps;
+      return filterCommittedReplyDuplicateSteps(
+        builtSteps,
+        committedReplyOffset !== -1 ? segmentMessages[committedReplyOffset] : null,
+      );
     };
 
     // Show a text-only stream as a normal assistant bubble while it arrives.
@@ -985,14 +1009,18 @@ export function Chat() {
       if (!isLatestOpenRun && !segmentDelegationOpen && !segmentHasPendingChild) {
         const cached = graphStepCache[runKey];
         if (cached) {
-          const cleanedSteps = filterHiddenExecutionGraphSteps(
-            cached.steps.filter(
-              (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+          const cachedReplyIndex = replyIndex ?? cached.replyIndex;
+          const cleanedSteps = filterCommittedReplyDuplicateSteps(
+            filterHiddenExecutionGraphSteps(
+              cached.steps.filter(
+                (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+              ),
             ),
+            typeof cachedReplyIndex === 'number' ? messages[cachedReplyIndex] : null,
           );
           return [{
             triggerIndex: idx,
-            replyIndex: replyIndex ?? cached.replyIndex,
+            replyIndex: cachedReplyIndex,
             active: false,
             agentLabel: cached.agentLabel,
             sessionLabel: cached.sessionLabel,
@@ -1030,14 +1058,18 @@ export function Chat() {
       // generated message steps that include accumulated narration + reply
       // text.  Strip these out 鈥?historical message steps (from messages[])
       // will be properly recomputed on the next render with fresh data.
-      const cleanedSteps = filterHiddenExecutionGraphSteps(
-        cached.steps.filter(
-          (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+      const cachedReplyIndex = replyIndex ?? cached.replyIndex;
+      const cleanedSteps = filterCommittedReplyDuplicateSteps(
+        filterHiddenExecutionGraphSteps(
+          cached.steps.filter(
+            (s) => !(s.kind === 'message' && s.id.startsWith('stream-message')),
+          ),
         ),
+        typeof cachedReplyIndex === 'number' ? messages[cachedReplyIndex] : null,
       );
       return [{
         triggerIndex: idx,
-        replyIndex: replyIndex ?? cached.replyIndex,
+        replyIndex: cachedReplyIndex,
         active: false,
         agentLabel: cached.agentLabel,
         sessionLabel: cached.sessionLabel,
@@ -1213,7 +1245,7 @@ export function Chat() {
       if (!replyMessage || replyMessage.role !== 'assistant') continue;
       const fullReplyText = extractText(replyMessage);
       const trimmedReplyText = stripProcessMessagePrefix(fullReplyText, card.messageStepTexts);
-      if (trimmedReplyText !== fullReplyText) {
+      if (trimmedReplyText && trimmedReplyText !== fullReplyText) {
         map.set(card.replyIndex, trimmedReplyText);
       }
     }

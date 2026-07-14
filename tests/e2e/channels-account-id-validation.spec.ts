@@ -1,4 +1,5 @@
 import { completeSetup, expect, test } from './fixtures/electron';
+import { openSidebarMoreNav } from './helpers/sidebar-more-nav';
 
 const testConfigResponses = {
   channelsAccounts: {
@@ -70,6 +71,7 @@ test.describe('Channels account ID validation', () => {
 
     await completeSetup(page);
 
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-channels').click();
     await expect(page.getByTestId('channels-page')).toBeVisible();
     await expect(page.getByText('Feishu / Lark')).toBeVisible();

@@ -30,6 +30,7 @@ const forgetAbortedChatRun = vi.fn((runId: string) => {
 const isAbortedChatRun = vi.fn((runId: string) => abortedChatRunIds.has(runId.trim()));
 const isBackendRunFailureError = vi.fn(() => false);
 const isRecoverableRuntimeError = vi.fn(() => false);
+const isFatalRuntimeError = vi.fn(() => false);
 const truncateRunErrorMessage = vi.fn((message: string) => message);
 const resolveRunFailureErrorMessage = vi.fn((message: string) => message);
 const isInternalMessage = vi.fn(() => false);
@@ -58,36 +59,52 @@ const setErrorRecoveryTimer = vi.fn();
 const snapshotStreamingAssistantMessage = vi.fn((currentStream: unknown) => currentStream ? [currentStream] : []);
 const upsertToolStatuses = vi.fn((_current, updates) => updates);
 
-vi.mock('@/stores/chat/helpers', () => ({
+const confirmEmptyFinalWithHistory = vi.fn();
+
+vi.mock('@/stores/chat/finalize-turn-bridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/stores/chat/finalize-turn-bridge')>();
+  return {
+    ...actual,
+    deferClearUserTurnForOpenDelegation: vi.fn(() => false),
+    tryFinalizeUserTurnAfterAssistantFinal: vi.fn((_get, set) => {
+      set({
+        sending: false,
+        activeRunId: null,
+        pendingFinal: false,
+        streamingText: '',
+        streamingMessage: null,
+      });
+    }),
+  };
+});
+
+vi.mock('@/stores/chat/empty-final-recovery', () => ({
+  confirmEmptyFinalWithHistory: (...args: unknown[]) => confirmEmptyFinalWithHistory(...args),
+}));
+
+vi.mock('@/stores/chat/helpers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/stores/chat/helpers')>();
+  return {
+    ...actual,
   clearErrorRecoveryTimer: (...args: unknown[]) => clearErrorRecoveryTimer(...args),
   clearHistoryPoll: (...args: unknown[]) => clearHistoryPoll(...args),
   collectToolUpdates: (...args: unknown[]) => collectToolUpdates(...args),
   extractImagesAsAttachedFiles: (...args: unknown[]) => extractImagesAsAttachedFiles(...args),
   extractMediaRefs: (...args: unknown[]) => extractMediaRefs(...args),
-  getMessageErrorMessage: (...args: unknown[]) => getMessageErrorMessage(...args),
   extractRawFilePaths: (...args: unknown[]) => extractRawFilePaths(...args),
   getMessageText: (...args: unknown[]) => getMessageText(...args),
   getToolCallFilePath: (...args: unknown[]) => getToolCallFilePath(...args),
   hasErrorRecoveryTimer: (...args: unknown[]) => hasErrorRecoveryTimer(...args),
   hasNonToolAssistantContent: (...args: unknown[]) => hasNonToolAssistantContent(...args),
   hasVisibleAssistantContent: (...args: unknown[]) => hasVisibleAssistantContent(...args),
-  shouldSuppressAssistantStreamingText: (...args: unknown[]) => shouldSuppressAssistantStreamingText(...args),
   shouldTreatAbortAsUserStop: (...args: unknown[]) => shouldTreatAbortAsUserStop(...args),
   isAbortedChatRun: (...args: unknown[]) => isAbortedChatRun(...args),
   markAbortedChatRun: (...args: unknown[]) => markAbortedChatRun(...args),
   forgetAbortedChatRun: (...args: unknown[]) => forgetAbortedChatRun(...args),
-  isBackendRunFailureError: (...args: unknown[]) => isBackendRunFailureError(...args),
-  isRecoverableRuntimeError: (...args: unknown[]) => isRecoverableRuntimeError(...args),
-  truncateRunErrorMessage: (...args: unknown[]) => truncateRunErrorMessage(...args),
-  resolveRunFailureErrorMessage: (...args: unknown[]) => resolveRunFailureErrorMessage(...args),
-  attachmentFileNameFromPath: (filePath: string) => filePath.split(/[/\\]/).pop() || filePath,
-  isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
-  isInternalMessageText: (...args: unknown[]) => isInternalMessageText(...args),
   isUserSecurityDenialMessage: (...args: unknown[]) => isUserSecurityDenialMessage(...args),
   isSuppressedRunError: (...args: unknown[]) => isSuppressedRunError(...args),
   shouldSuppressPartialSuccessRunError: (...args: unknown[]) => shouldSuppressPartialSuccessRunError(...args),
   buildSecurityCancelNotice: (...args: unknown[]) => buildSecurityCancelNotice(...args),
-  isTerminalAssistantErrorMessage: (...args: unknown[]) => isTerminalAssistantErrorMessage(...args),
   isToolOnlyMessage: (...args: unknown[]) => isToolOnlyMessage(...args),
   isToolResultRole: (...args: unknown[]) => isToolResultRole(...args),
   makeAttachedFile: (...args: unknown[]) => makeAttachedFile(...args),
@@ -95,7 +112,8 @@ vi.mock('@/stores/chat/helpers', () => ({
   setErrorRecoveryTimer: (...args: unknown[]) => setErrorRecoveryTimer(...args),
   snapshotStreamingAssistantMessage: (...args: unknown[]) => snapshotStreamingAssistantMessage(...args),
   upsertToolStatuses: (...args: unknown[]) => upsertToolStatuses(...args),
-}));
+  };
+});
 
 type ChatLikeState = {
   sending: boolean;
@@ -151,6 +169,16 @@ describe('chat runtime event handlers', () => {
     abortedChatRunIds.clear();
     hasErrorRecoveryTimer.mockReturnValue(false);
     collectToolUpdates.mockReturnValue([]);
+    confirmEmptyFinalWithHistory.mockImplementation((set, get) => {
+      set({
+        sending: false,
+        activeRunId: null,
+        pendingFinal: false,
+        streamingMessage: null,
+        lastUserMessageAt: null,
+      });
+      void get().loadHistory(true, { force: true });
+    });
     getMessageText.mockImplementation((content: unknown) => {
       if (typeof content === 'string') return content;
       if (Array.isArray(content)) {
@@ -167,12 +195,12 @@ describe('chat runtime event handlers', () => {
     isUserSecurityDenialMessage.mockImplementation((message: unknown) =>
       typeof message === 'string' && /NETWORK_ACCESS_DENIED_BY_USER|Network access denied:/i.test(message));
     normalizeStreamingMessage.mockImplementation((message: unknown) => message);
-    snapshotStreamingAssistantMessage.mockImplementation((currentStream: unknown) => currentStream ? [currentStream as Record<string, unknown>] : []);
+    snapshotStreamingAssistantMessage.mockImplementation((currentStream: unknown, messages?: unknown[]) => {
+      if (!currentStream) return [];
+      if (Array.isArray(messages)) return [currentStream as Record<string, unknown>];
+      return [currentStream as Record<string, unknown>];
+    });
     upsertToolStatuses.mockImplementation((_current, updates) => updates);
-    isBackendRunFailureError.mockReturnValue(false);
-    isRecoverableRuntimeError.mockReturnValue(false);
-    truncateRunErrorMessage.mockImplementation((message: string) => message);
-    resolveRunFailureErrorMessage.mockImplementation((message: string) => message);
   });
 
   it('marks sending on started event', async () => {
@@ -295,11 +323,10 @@ describe('chat runtime event handlers', () => {
     const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
     const h = makeHarness({ sending: false, activeRunId: 'r1', lastUserMessageAt: 123 });
 
-    handleRuntimeEventState(h.set as never, h.get as never, { errorMessage: 'boom' }, 'error', 'r1');
+    handleRuntimeEventState(h.set as never, h.get as never, { errorMessage: 'Error: 401 unauthorized' }, 'error', 'r1');
     const next = h.read();
-    expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
-    expect(next.error).toBe('boom');
-    expect(next.runError).toBe('boom');
+    expect(next.error).toBe('Error: 401 unauthorized');
+    expect(next.runError).toBe('Error: 401 unauthorized');
     expect(next.sending).toBe(false);
     expect(next.activeRunId).toBeNull();
     expect(next.lastUserMessageAt).toBeNull();
@@ -346,7 +373,8 @@ describe('chat runtime event handlers', () => {
     }, 'final', 'run-err');
 
     const next = h.read();
-    expect(next.error).toBe('404 Resource not found');
+    expect(next.runError).toBe('404 Resource not found');
+    expect(next.error).toBeNull();
     expect(next.pendingFinal).toBe(false);
     expect(next.streamingMessage).toBeNull();
     expect(clearHistoryPoll).toHaveBeenCalledTimes(1);
@@ -535,7 +563,6 @@ describe('chat runtime event handlers', () => {
 
   it('surfaces backend abort as a run failure instead of silently completing', async () => {
     const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
-    resolveRunFailureErrorMessage.mockReturnValueOnce('Backend agent stopped');
     const h = makeHarness({
       sending: true,
       activeRunId: 'r2',
@@ -553,8 +580,8 @@ describe('chat runtime event handlers', () => {
     expect(next.pendingFinal).toBe(false);
     expect(next.lastUserMessageAt).toBeNull();
     expect(next.pendingToolImages).toEqual([]);
-    expect(next.error).toBe('Backend agent stopped');
-    expect(next.runError).toBe('Backend agent stopped');
+    expect(next.error).toBe('The run was interrupted before it finished. Please try again.');
+    expect(next.runError).toBe('The run was interrupted before it finished. Please try again.');
     expect(next.runAborted).toBe(true);
   });
 
@@ -605,6 +632,7 @@ describe('chat runtime event handlers', () => {
         role: 'assistant',
         content: [{ type: 'text', text: 'HEARTBEAT_OK' }],
         id: 'a-heartbeat',
+        stopReason: 'stop',
       },
     }, 'final', 'run-heartbeat');
 
@@ -614,7 +642,6 @@ describe('chat runtime event handlers', () => {
   });
 
   it('filters out NO_REPLY internal message in final event without adding to messages', async () => {
-    isInternalMessage.mockReturnValueOnce(true);
     const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
     const h = makeHarness({
       sending: true,
@@ -625,7 +652,7 @@ describe('chat runtime event handlers', () => {
     handleRuntimeEventState(
       h.set as never,
       h.get as never,
-      { message: { role: 'assistant', content: 'NO_REPLY', id: 'a1' } },
+      { message: { role: 'assistant', content: 'NO_REPLY', id: 'a1', stopReason: 'stop' } },
       'final',
       'r3',
     );

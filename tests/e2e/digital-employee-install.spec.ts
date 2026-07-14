@@ -67,7 +67,7 @@ test.describe('digital employee marketplace installation', () => {
 
       const page = await getStableWindow(app);
       await page.getByTestId('sidebar-nav-digital-employee').click();
-      await page.getByRole('button', { name: '数字员工广场' }).click();
+      await page.getByRole('button', { name: '岗位助理广场' }).click();
 
       await expect(page.getByText('test11')).toBeVisible();
       await page.getByTestId('digital-employee-install-7').click();
@@ -101,7 +101,7 @@ test.describe('digital employee marketplace installation', () => {
             result: {
               sessions: [
                 { key: 'agent:main:main', displayName: 'main' },
-                { key: localSessionKey, displayName: '文档分析数字员工' },
+                { key: localSessionKey, displayName: '文档分析岗位助理' },
               ],
             },
           },
@@ -172,7 +172,7 @@ test.describe('digital employee marketplace installation', () => {
                   },
                   {
                     slug: '8',
-                    name: '文档分析数字员工',
+                    name: '文档分析岗位助理',
                     description: 'plaza catalog doc',
                     version: '1.0.1',
                     author: '龙鸣',
@@ -194,7 +194,7 @@ test.describe('digital employee marketplace installation', () => {
               json: {
                 agents: [
                   { id: 'main', name: 'main' },
-                  { id: 'employee-document-analyst-bbb', name: '文档分析数字员工' },
+                  { id: 'employee-document-analyst-bbb', name: '文档分析岗位助理' },
                 ],
                 defaultAgentId: 'main',
               },
@@ -230,13 +230,13 @@ test.describe('digital employee marketplace installation', () => {
 
       // Display names come from the marketplace catalog, not local manifests.
       await expect(page.getByText('test11')).toBeVisible();
-      await expect(page.getByText('文档分析数字员工')).toBeVisible();
+      await expect(page.getByText('文档分析岗位助理')).toBeVisible();
       await expect(page.getByText('local-test11-name')).toHaveCount(0);
       await expect(page.getByText('local-doc-name')).toHaveCount(0);
 
       await page.getByTestId(`digital-employee-my-use-${localInstanceId}`).click();
       await expect(page.getByTestId('chat-composer-input')).toBeVisible({ timeout: 30_000 });
-      await expect(page.getByText('文档分析数字员工')).toBeVisible();
+      await expect(page.getByText('文档分析岗位助理')).toBeVisible();
     } finally {
       await closeElectronApp(app);
     }

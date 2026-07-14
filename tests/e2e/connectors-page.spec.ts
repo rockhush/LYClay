@@ -1,4 +1,5 @@
 import { closeElectronApp, expect, getStableWindow, test } from './fixtures/electron';
+import { openSidebarMoreNav } from './helpers/sidebar-more-nav';
 
 test.describe('Connectors & MCP settings', () => {
   test('shows connectors page with built-in and custom tabs from sidebar', async ({ launchElectronApp }) => {
@@ -7,6 +8,7 @@ test.describe('Connectors & MCP settings', () => {
       const page = await getStableWindow(app);
       await page.waitForLoadState('domcontentloaded');
       await expect(page.getByTestId('main-layout')).toBeVisible();
+      await openSidebarMoreNav(page);
       await page.getByTestId('sidebar-nav-connectors').click();
       await expect(page.getByTestId('connectors-page')).toBeVisible();
       await expect(page.getByTestId('connectors-tab-builtin')).toBeVisible();

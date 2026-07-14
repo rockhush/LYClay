@@ -89,3 +89,8 @@ findstr
 设计文档/
 openspec/
 specs/
+!harness/specs/
+harness/specs/*
+!harness/specs/tasks/
+harness/specs/tasks/*
+!harness/specs/tasks/protect-committed-final-from-stale-stream-folding.md

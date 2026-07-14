@@ -92,11 +92,11 @@
         "prep:win-binaries": "pnpm run prep:win-gateway && pnpm run dws:verify:win",
         "icons": "zx scripts/generate-icons.mjs",
         "package": "node scripts/generate-ext-bridge.mjs && pnpm run build:vite && zx scripts/bundle-openclaw.mjs && zx scripts/bundle-openclaw-plugins.mjs && zx scripts/bundle-preinstalled-skills.mjs && zx scripts/merge-bundled-skills.mjs",
-        "package:mac": "pnpm run dws:verify:mac && pnpm run package && node scripts/run-electron-builder.mjs --config electron-builder.yml --mac dmg --x64 --arm64 --publish never",
-        "package:mac:local": "pnpm run dws:verify:mac && SKIP_PREINSTALLED_SKILLS=1 pnpm run package && node scripts/run-electron-builder.mjs --mac --publish never",
+        "package:mac": "pnpm run prep:mac-binaries && pnpm run package && node scripts/run-electron-builder.mjs --config electron-builder.yml --mac dmg --x64 --arm64 --publish never",
+        "package:mac:local": "pnpm run prep:mac-binaries && SKIP_PREINSTALLED_SKILLS=1 pnpm run package && node scripts/run-electron-builder.mjs --mac --publish never",
         "package:win": "pnpm run prep:win-binaries && pnpm run package && node scripts/run-electron-builder.mjs --win --publish never",
         "package:win:cn": "pnpm run prep:win-binaries && pnpm run package:cn && node scripts/run-electron-builder.mjs --win --publish never",
-        "package:linux": "pnpm run dws:verify:linux && pnpm run package && node scripts/run-electron-builder.mjs --linux --publish never",
+        "package:linux": "pnpm run prep:linux-binaries && pnpm run package && node scripts/run-electron-builder.mjs --linux --publish never",
         "release": "pnpm run uv:download && pnpm run package && node scripts/run-electron-builder.mjs --publish always",
         "version": "node scripts/assert-release-version.mjs",
         "version:patch": "pnpm version patch",
@@ -106,7 +106,12 @@
         "version:prerelease-alpha": "pnpm version prerelease --preid=alpha",
         "version:prerelease-beta": "pnpm version prerelease --preid=beta",
         "release:validate": "node scripts/assert-tag-matches-package.mjs",
-        "postversion": "git push && git push --tags"
+        "postversion": "git push && git push --tags",
+        "node:download:mac": "zx scripts/download-bundled-node.mjs --platform=mac",
+        "node:download:linux": "zx scripts/download-bundled-node.mjs --platform=linux",
+        "node:download:all": "zx scripts/download-bundled-node.mjs --all",
+        "prep:mac-binaries": "pnpm run uv:download:mac && pnpm run node:download:mac && pnpm run dws:verify:mac",
+        "prep:linux-binaries": "pnpm run uv:download:linux && pnpm run node:download:linux && pnpm run dws:verify:linux"
     },
     "dependencies": {
         "@langfuse/otel": "^5.4.1",

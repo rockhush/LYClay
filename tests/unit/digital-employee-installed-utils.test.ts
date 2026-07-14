@@ -12,7 +12,7 @@ function createEmployee(overrides: Partial<LocalDigitalEmployee> = {}): LocalDig
     marketEmployeeId: '7',
     packageId: 'com.lyclaw.employee.document-analyst',
     packageVersion: '1.0.1',
-    name: '文档分析数字员工',
+    name: '文档分析岗位助理',
     description: '分析本地文档，提炼事实并生成结构化报告。',
     tags: ['文档分析', '内容总结', '报告生成'],
     installPath: '/tmp/document-analyst--abc',

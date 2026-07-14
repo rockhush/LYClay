@@ -189,7 +189,7 @@ index 97733b6..76c321a 100644
  //#region src/auto-reply/reply/get-reply-directives-utils.ts
  const CLEARED_EXEC_FIELDS = {
  	hasExecDirective: false,
-@@ -5046,13 +5047,97 @@ async function applyLinkUnderstandingIfNeeded(params) {
+@@ -5046,13 +5047,122 @@ async function applyLinkUnderstandingIfNeeded(params) {
  		return false;
  	}
  }

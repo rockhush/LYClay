@@ -166,6 +166,14 @@ export function isInterimSubagentWaitAssistantReply(message: RawMessage): boolea
   if (!text) return false;
   if (shouldSilentlyFinalizeRunOnAssistantFinal(message)) return false;
 
+  const normalized = text.replace(/\s+/g, ' ');
+  const hasSubagentContext = /(?:sub-?agent|子\s*(?:agent|任务|智能体|代理)|PPT|分支|并行|spawn|delegate|瀛愪唬鐞唡瀛愭櫤鑳戒綋)/i.test(normalized);
+  const hasBroadInterimSignal = /(?:预计|等待|几分钟|稍等|完成后.{0,12}通知|已(?:启动|交给)|正在.{0,12}(?:构建|生成)|in progress|waiting|will notify|minutes?)/i.test(normalized);
+  const hasPhaseWaitSignal = /(?:continue\s+waiting|waiting\s+(?:for\s+)?Phase|Phase\s*\d+.*(?:completed|完成).*(?:waiting|等待|继续))/i.test(normalized);
+  if (!hasSubagentContext && hasBroadInterimSignal && !hasPhaseWaitSignal) return false;
+  if (/(?:all|both).{0,24}(?:sub-?agents?|children).{0,40}(?:returned|completed).{0,80}(?:summary|analysis|final)/i.test(normalized)) return false;
+  if (/(?:两个|所有).{0,24}(?:子\s*agent|子任务|子智能体).{0,40}(?:都?已?(?:返回|完成)|返回|完成).{0,80}(?:汇总|分析|综合|结论)/i.test(normalized)) return false;
+
   // Partial multi-phase progress: one slice done but explicitly waiting for another.
   if (/(?:继续等待|continue\s+waiting|waiting\s+(?:for\s+)?Phase|等待\s*Phase)/i.test(text)) return true;
   if (/(?:已完成|完成了|also completed|completed).{0,48}(?:继续|等待|waiting)/i.test(text)) return true;

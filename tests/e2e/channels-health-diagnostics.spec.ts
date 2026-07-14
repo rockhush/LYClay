@@ -1,4 +1,5 @@
 import { completeSetup, expect, test } from './fixtures/electron';
+import { openSidebarMoreNav } from './helpers/sidebar-more-nav';
 
 test.describe('Channels health diagnostics', () => {
   test('shows degraded banner, restarts gateway, and copies diagnostics', async ({ electronApp, page }) => {
@@ -134,6 +135,7 @@ test.describe('Channels health diagnostics', () => {
       });
     });
 
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-channels').click();
     await expect(page.getByTestId('channels-page')).toBeVisible();
     await expect(page.getByTestId('channels-health-banner')).toBeVisible();

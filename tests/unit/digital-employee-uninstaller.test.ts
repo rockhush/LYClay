@@ -66,6 +66,29 @@ describe('digital-employee-uninstaller', () => {
     expect(deleteAgentMock.mock.invocationCallOrder[0]).toBeLessThan(removeInstallDirectoryMock.mock.invocationCallOrder[0]);
   });
 
+  it('continues uninstall when the bound agent is already missing', async () => {
+    deleteAgentMock.mockRejectedValue(new Error('Agent "employee-pkg-1234" not found'));
+    const { createDigitalEmployeeUninstallerDependencies, uninstallDigitalEmployee } = await import(
+      '@electron/services/digital-employee-uninstaller'
+    );
+
+    const dependencies = createDigitalEmployeeUninstallerDependencies({
+      readRecord: readInstallRecordMock,
+      deleteAgent: deleteAgentMock,
+      cleanupSub2ApiModels: cleanupSub2ApiModelsMock,
+      removeInstallDirectory: removeInstallDirectoryMock,
+      removeMcpServers: removeMcpServersMock,
+    });
+
+    const result = await uninstallDigitalEmployee('pkg--1234', dependencies);
+
+    expect(result.agentId).toBe('employee-pkg-1234');
+    expect(removeMcpServersMock).toHaveBeenCalledWith(['pkg--1234--docs']);
+    expect(removeInstallDirectoryMock).toHaveBeenCalledWith('/employees/pkg--1234');
+    expect(cleanupSub2ApiModelsMock.mock.invocationCallOrder[0]).toBeLessThan(deleteAgentMock.mock.invocationCallOrder[0]);
+    expect(deleteAgentMock.mock.invocationCallOrder[0]).toBeLessThan(removeInstallDirectoryMock.mock.invocationCallOrder[0]);
+  });
+
   it('uninstalls by marketplace id', async () => {
     const { createDigitalEmployeeUninstallerDependencies, uninstallDigitalEmployeeByMarketId } = await import(
       '@electron/services/digital-employee-uninstaller'

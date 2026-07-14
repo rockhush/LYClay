@@ -72,6 +72,7 @@ import {
 } from '@/lib/session-sidebar-order';
 import { buildBatchDeleteSessionGroups } from '@/lib/session-batch-delete-groups';
 import { BatchDeleteSessionsDialog } from '@/components/chat/BatchDeleteSessionsDialog';
+import { SidebarMoreNavPanel } from '@/components/layout/SidebarMoreNavPanel';
 import { isUserFacingSessionKey } from '@/lib/session-key-utils';
 import { resolveSessionDisplayLabel, isPlaceholderSessionTitle } from '@/lib/session-label-utils';
 import {
@@ -473,7 +474,15 @@ export function Sidebar() {
   }, [fetchTokenUsageHistory]);
 
   const navigate = useNavigate();
-  const isOnChat = useLocation().pathname === '/';
+  const location = useLocation();
+  const isOnChat = location.pathname === '/';
+  const [moreNavOpen, setMoreNavOpen] = useState(false);
+  const [moreNavAnchor, setMoreNavAnchor] = useState<{ top: number; left: number } | null>(null);
+  const moreNavMenuRef = useRef<HTMLDivElement | null>(null);
+  const closeMoreNav = useCallback(() => {
+    setMoreNavOpen(false);
+    setMoreNavAnchor(null);
+  }, []);
 
   // Distinguish "+ 新对话" active state from "session selected" active state.
   // A session is considered "really opened" only when it has actual history
@@ -623,6 +632,21 @@ export function Sidebar() {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [openSessionMenuKey]);
+
+  useEffect(() => {
+    if (!moreNavOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (moreNavMenuRef.current?.contains(target)) return;
+      if ((event.target as HTMLElement).closest?.('[data-testid="sidebar-nav-more"]')) return;
+      setMoreNavOpen(false);
+      setMoreNavAnchor(null);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [moreNavOpen]);
 
   const dingtalkOrg = dingtalkUser
     ? dingtalkUser.exclusiveAccountCorpName
@@ -971,12 +995,15 @@ export function Sidebar() {
     { to: '/models', icon: <Cpu className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.models'), testId: 'sidebar-nav-models' },
     { to: '/cron/digital-employee', icon: <Briefcase className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.digitalEmployee'), testId: 'sidebar-nav-digital-employee', end: true },
     { to: '/skills', icon: <Puzzle className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.skills'), testId: 'sidebar-nav-skills' },
-    { to: '/ai-tools', icon: <Wrench className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.aiTools'), testId: 'sidebar-nav-ai-tools' },
-    { to: '/channels', icon: <Network className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
-    { to: '/connectors', icon: <Link2 className="h-[18px] w-[18px]" strokeWidth={2} />, label: t('sidebar.connectors'), testId: 'sidebar-nav-connectors' },
   ];
 
-  const navItems = [
+  const moreNavItems = [
+    { to: '/ai-tools', Icon: Wrench, label: t('sidebar.aiTools'), testId: 'sidebar-nav-ai-tools' },
+    { to: '/channels', Icon: Network, label: t('sidebar.channels'), testId: 'sidebar-nav-channels' },
+    { to: '/connectors', Icon: Link2, label: t('sidebar.connectors'), testId: 'sidebar-nav-connectors' },
+  ];
+
+  const primaryNavItems = [
     ...coreNavItems.filter((item) => !hiddenRoutes.has(item.to)),
     ...extraNavItems.map((item) => ({
       to: item.to,
@@ -985,6 +1012,11 @@ export function Sidebar() {
       testId: item.testId,
     })),
   ];
+
+  const visibleMoreNavItems = moreNavItems.filter((item) => !hiddenRoutes.has(item.to));
+  const isMoreNavActive = visibleMoreNavItems.some(
+    (item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`),
+  );
 
   return (
     <>
@@ -1086,14 +1118,74 @@ export function Sidebar() {
           {!sidebarCollapsed && <span className="flex-1 text-left overflow-hidden text-ellipsis whitespace-nowrap">{t('sidebar.newChat')}</span>}
         </button>
 
-        {navItems.map((item) => (
+        {primaryNavItems.map((item) => (
           <NavItem
             key={item.to}
             {...item}
             collapsed={sidebarCollapsed}
           />
         ))}
+
+        {visibleMoreNavItems.length > 0 && (
+          <button
+            type="button"
+            data-testid="sidebar-nav-more"
+            aria-expanded={moreNavOpen}
+            title={sidebarCollapsed ? t('sidebar.more') : undefined}
+            onClick={(e) => {
+              if (moreNavOpen) {
+                setMoreNavOpen(false);
+                setMoreNavAnchor(null);
+                return;
+              }
+              const rect = e.currentTarget.getBoundingClientRect();
+              setMoreNavAnchor({
+                top: rect.top + rect.height / 2,
+                left: rect.right + 4,
+              });
+              setMoreNavOpen(true);
+            }}
+            className={cn(
+              'group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-all',
+              !isMoreNavActive &&
+                'hover:bg-white/60 hover:shadow-sm dark:hover:bg-white/10 dark:hover:shadow-md dark:hover:shadow-white/[0.12]',
+              isMoreNavActive
+                ? 'bg-white text-[#FF922B] shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-foreground dark:shadow-none'
+                : 'text-foreground/80',
+              sidebarCollapsed && 'justify-center px-0',
+            )}
+          >
+            <div
+              className={cn(
+                'flex shrink-0 items-center justify-center transition-colors',
+                isMoreNavActive ? 'text-[#FF922B] dark:text-foreground' : 'text-muted-foreground',
+              )}
+            >
+              <MoreHorizontal className="h-[18px] w-[18px]" strokeWidth={2} />
+            </div>
+            {!sidebarCollapsed && (
+              <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-left">
+                {t('sidebar.more')}
+              </span>
+            )}
+          </button>
+        )}
       </nav>
+
+      <SidebarMoreNavPanel
+        open={moreNavOpen}
+        anchor={moreNavAnchor}
+        menuRef={moreNavMenuRef}
+        onOpenChange={(open) => {
+          if (!open) closeMoreNav();
+        }}
+        items={visibleMoreNavItems.map((item) => ({
+          to: item.to,
+          label: item.label,
+          testId: item.testId,
+          icon: <item.Icon className="h-3.5 w-3.5" strokeWidth={2} />,
+        }))}
+      />
 
       {/* Workspace section */}
       {/* Session list */}

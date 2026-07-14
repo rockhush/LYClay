@@ -763,7 +763,363 @@ status: completed successfully`,
 
     render(<Chat />);
 
-    expect(screen.queryByTestId('chat-execution-graph')).not.toBeInTheDocument();
     expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
+    const graph = screen.queryByTestId('chat-execution-graph');
+    if (graph) {
+      expect(graph).toHaveAttribute('data-collapsed', 'true');
+    }
+  });
+
+  it('hides trailing thinking after a committed typhoon final reply even if tool history remains', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: '帮我查下台风实时路径' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '这些台风网页面是动态渲染的，直接抓取不到实时数据。让我换个方式帮你查。' },
+            { type: 'toolCall', id: 'browser-1', name: 'browser', arguments: { action: 'navigate' } },
+          ],
+          stopReason: 'toolUse',
+        },
+        {
+          role: 'assistant',
+          content: [
+            '以下是来自浙江省水利厅台风实时路径系统的数据：',
+            '',
+            '---',
+            '',
+            '## 🌪️ 2026年第09号台风 **巴威 (BAVI)**',
+            '',
+            '需要我持续关注这个台风的后续动态吗？',
+          ].join('\n'),
+          stopReason: 'stop',
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+      sessionBackendActivity: null,
+      gatewayBackgroundActivity: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    expect(screen.getByText(/巴威 \(BAVI\)/)).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
+  });
+
+  it('shows a stopReason stop typhoon report as a bubble after abort, not in graph message steps', async () => {
+    const typhoonReport = [
+      '这些台风网页面是动态渲染的，直接抓取不到实时数据。让我换个方式帮你查。',
+      '这些页面都是动态渲染的，让我用浏览器打开台风实时路径图。',
+      '以下是来自浙江省水利厅台风实时路径系统的数据：',
+      '',
+      '---',
+      '',
+      '## 🌪️ 2026年第09号台风 **巴威 (BAVI)**',
+      '',
+      '| 项目 | 详情 |',
+      '|------|------|',
+      '| **更新时间** | 2026年7月9日 11:00 |',
+      '',
+      '需要我持续关注这个台风的后续动态吗？',
+    ].join('\n');
+
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: '帮我查下台风实时路径' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '这些台风网页面是动态渲染的，直接抓取不到实时数据。让我换个方式帮你查。' },
+            { type: 'toolCall', id: 'browser-1', name: 'browser', arguments: { action: 'navigate' } },
+          ],
+          stopReason: 'toolUse',
+        },
+        {
+          role: 'assistant',
+          content: typhoonReport,
+          stopReason: 'stop',
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      runAborted: true,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+      sessionBackendActivity: null,
+      gatewayBackgroundActivity: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    const bubble = screen.getByTestId('chat-message-2');
+    expect(bubble).toHaveTextContent('以下是来自浙江省水利厅');
+    expect(bubble).toHaveTextContent('巴威 (BAVI)');
+
+    const graph = screen.getByTestId('chat-execution-graph');
+    fireEvent.click(graph);
+    const stepTexts = screen.getAllByTestId('chat-execution-step').map((node) => node.textContent ?? '');
+    expect(stepTexts.some((text) => text.includes('让我换个方式帮你查'))).toBe(true);
+    expect(stepTexts.some((text) => text.includes('巴威 (BAVI)') || text.includes('需要我持续关注'))).toBe(false);
+    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
+  });
+  it('keeps an all-subagents-returned final as a bubble and settles stale execution state', async () => {
+    const finalReply = 'Both sub-agents have returned. Here is the summary analysis.\n\n## Typhoon path + Dongguan weather';
+    const processNarration = 'Both sub-agents started; waiting for their results.';
+
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'check typhoon and dongguan weather with two sub agents', timestamp: 1000 },
+        {
+          role: 'assistant',
+          id: 'spawn-two-children',
+          content: [
+            { type: 'toolCall', id: 'spawn-1', name: 'sessions_spawn', input: { taskName: 'typhoon_tracker' } },
+            { type: 'toolCall', id: 'spawn-2', name: 'sessions_spawn', input: { taskName: 'dongguan_weather' } },
+          ],
+          stopReason: 'toolUse',
+        },
+        { role: 'toolResult', toolCallId: 'spawn-1', content: [{ type: 'text', text: JSON.stringify({ status: 'accepted', childSessionKey: 'agent:main:subagent:typhoon' }) }] },
+        { role: 'toolResult', toolCallId: 'spawn-2', content: [{ type: 'text', text: JSON.stringify({ status: 'accepted', childSessionKey: 'agent:main:subagent:weather' }) }] },
+        {
+          role: 'assistant',
+          id: 'yield-two-children',
+          content: [
+            { type: 'text', text: processNarration },
+            { type: 'toolCall', id: 'yield-1', name: 'sessions_yield', arguments: { message: 'waiting' } },
+          ],
+          stopReason: 'toolUse',
+        },
+        { role: 'toolResult', toolCallId: 'yield-1', content: [{ type: 'text', text: JSON.stringify({ status: 'yielded' }) }] },
+        { role: 'assistant', content: '[Internal task completion event]\nsession_key: agent:main:subagent:typhoon\nsession_id: child-1' },
+        { role: 'assistant', content: '[Internal task completion event]\nsession_key: agent:main:subagent:weather\nsession_id: child-2' },
+        {
+          role: 'assistant',
+          id: 'all-subagents-summary-final',
+          content: finalReply,
+          stopReason: 'stop',
+          timestamp: 5000,
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: true,
+      activeRunId: 'stale-announce-run',
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: true,
+      runAborted: false,
+      lastUserMessageAt: 1000,
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+      sessionBackendActivity: null,
+      gatewayBackgroundActivity: { processingSessionKeys: ['agent:main:session-parent'] },
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    const bubble = screen.getByTestId('chat-message-8');
+    expect(bubble).toHaveTextContent('Both sub-agents have returned');
+    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
+
+    const graph = screen.getByTestId('chat-execution-graph');
+    expect(graph).toHaveAttribute('data-collapsed', 'true');
+    fireEvent.click(graph);
+    const stepTexts = screen.getAllByTestId('chat-execution-step').map((node) => node.textContent ?? '');
+    expect(stepTexts.some((text) => text.includes(processNarration))).toBe(true);
+    expect(stepTexts.some((text) => text.includes('Both sub-agents have returned'))).toBe(false);
+  });
+
+  it('keeps a renderer synthetic final as a bubble when stale streaming state is still present', async () => {
+    const finalReply = 'Most typhoon sites are blocked, but here is the latest useful summary.';
+    const processNarration = 'I will try several weather sources.';
+
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'latest typhoon status' },
+        {
+          role: 'assistant',
+          id: 'tool-round-synthetic-final',
+          content: [
+            { type: 'text', text: processNarration },
+            { type: 'toolCall', id: 'search-1', name: 'web_search', arguments: { query: 'typhoon' } },
+          ],
+          stopReason: 'toolUse',
+        },
+        { role: 'toolResult', toolCallId: 'search-1', toolName: 'web_search', content: 'blocked' },
+        {
+          role: 'assistant',
+          id: 'run-123e4567-e89b-12d3-a456-426614174000',
+          content: finalReply,
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: true,
+      activeRunId: '123e4567-e89b-12d3-a456-426614174000',
+      streamingText: finalReply,
+      streamingMessage: {
+        role: 'assistant',
+        id: 'stale-synthetic-stream',
+        content: finalReply,
+      },
+      streamingTools: [
+        {
+          toolCallId: 'search-1',
+          name: 'web_search',
+          status: 'completed',
+          updatedAt: Date.now(),
+        },
+      ],
+      pendingFinal: true,
+      runAborted: false,
+      lastUserMessageAt: Date.now() - 10_000,
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+      sessionBackendActivity: null,
+      gatewayBackgroundActivity: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    const bubble = screen.getByTestId('chat-message-3');
+    expect(bubble).toHaveTextContent(finalReply);
+    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
+
+    const graph = screen.getByTestId('chat-execution-graph');
+    fireEvent.click(graph);
+    const stepTexts = screen.getAllByTestId('chat-execution-step').map((node) => node.textContent ?? '');
+    expect(stepTexts.some((text) => text.includes(processNarration))).toBe(true);
+    expect(stepTexts.some((text) => text.includes(finalReply))).toBe(false);
+  });
+
+  it('keeps a committed stop final as a bubble when stale streaming state is still present', async () => {
+    const finalReply = 'Final BAVI report for the user.';
+    const processNarration = 'I found advisory data and will fetch details.';
+
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'check current typhoon status' },
+        {
+          role: 'assistant',
+          id: 'tool-round',
+          content: [
+            { type: 'text', text: processNarration },
+            { type: 'toolCall', id: 'fetch-1', name: 'web_fetch', arguments: { url: 'https://example.test/advisory' } },
+          ],
+          stopReason: 'toolUse',
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'fetch-1',
+          toolName: 'web_fetch',
+          content: 'advisory data',
+        },
+        {
+          role: 'assistant',
+          id: 'committed-final',
+          content: [
+            { type: 'thinking', thinking: 'Now I have a good picture. Let me summarize.' },
+            { type: 'text', text: finalReply },
+          ],
+          stopReason: 'stop',
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: true,
+      activeRunId: 'run-stale',
+      streamingText: 'stale stream text that should not hide the committed final',
+      streamingMessage: {
+        role: 'assistant',
+        id: 'stale-stream',
+        content: 'stale stream text that should not hide the committed final',
+      },
+      streamingTools: [
+        {
+          toolCallId: 'fetch-1',
+          name: 'web_fetch',
+          status: 'completed',
+          updatedAt: Date.now(),
+        },
+      ],
+      pendingFinal: true,
+      runAborted: false,
+      lastUserMessageAt: Date.now() - 10_000,
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+      sessionBackendActivity: null,
+      gatewayBackgroundActivity: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    const bubble = screen.getByTestId('chat-message-3');
+    expect(bubble).toHaveTextContent(finalReply);
+    expect(screen.queryByTestId('chat-execution-step-thinking-trailing')).not.toBeInTheDocument();
+
+    const graph = screen.getByTestId('chat-execution-graph');
+    fireEvent.click(graph);
+    const stepTexts = screen.getAllByTestId('chat-execution-step').map((node) => node.textContent ?? '');
+    expect(stepTexts.some((text) => text.includes(processNarration))).toBe(true);
+    expect(stepTexts.some((text) => text.includes(finalReply))).toBe(false);
   });
 });

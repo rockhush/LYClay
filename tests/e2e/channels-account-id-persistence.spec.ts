@@ -1,4 +1,5 @@
 import { completeSetup, expect, installIpcMocks, test } from './fixtures/electron';
+import { openSidebarMoreNav } from './helpers/sidebar-more-nav';
 
 function stableStringify(value: unknown): string {
   if (value == null || typeof value !== 'object') return JSON.stringify(value);
@@ -55,6 +56,7 @@ test.describe('Channels account editor behavior', () => {
     });
 
     await completeSetup(page);
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-channels').click();
     await expect(page.getByTestId('channels-page')).toBeVisible();
 

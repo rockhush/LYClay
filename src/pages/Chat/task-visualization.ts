@@ -2,8 +2,12 @@ import { extractText, extractTextSegments, extractThinkingSegments, extractToolU
 import type { ContentBlock, RawMessage, ToolStatus } from '@/stores/chat';
 import { parseSubagentCompletionInfo, summarizeChildRunActivity, isInterimSubagentWaitAssistantReply } from '@/lib/subagent-delegation';
 import {
+  isConcludingAssistantReply,
   isEmbeddedAgentFailureNoticeAssistantMessage,
   isFailedAssistantMessage,
+  isRunTerminalAssistantMessage,
+  isTerminalAssistantMessage,
+  isToolUseStopReasonAssistantMessage,
 } from '@/stores/chat/run-lifecycle';
 
 export type {
@@ -83,6 +87,28 @@ function areEquivalentMediaReplies(rawText: string, injectedText: string): boole
   return raw === injected || raw.startsWith(injected) || injected.startsWith(raw);
 }
 
+function isToolResultRole(role: unknown): boolean {
+  if (!role) return false;
+  const normalized = String(role).toLowerCase();
+  return normalized === 'toolresult' || normalized === 'tool_result' || normalized === 'tool';
+}
+
+function findLastToolActivityIndex(messages: readonly RawMessage[]): number {
+  let last = -1;
+  for (let idx = 0; idx < messages.length; idx += 1) {
+    const message = messages[idx];
+    if (!message) continue;
+    if (message.role === 'assistant' && extractToolUse(message).length > 0) last = idx;
+    else if (isToolResultRole(message.role)) last = idx;
+  }
+  return last;
+}
+
+function isRendererSyntheticRunId(id: unknown): boolean {
+  return typeof id === 'string'
+    && /^run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
 export function isSupersededRawMediaAssistantReply(
   messages: readonly RawMessage[],
   messageIndex: number,
@@ -122,6 +148,7 @@ export function isSupersededRawMediaAssistantReply(
 export function findReplyMessageIndex(messages: RawMessage[], hasStreamingReply: boolean): number {
   if (hasStreamingReply) return -1;
   let fallbackFailureIdx = -1;
+  let fallbackPlainIdx = -1;
   for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
     const message = messages[idx];
     if (!message || message.role !== 'assistant') continue;
@@ -140,9 +167,67 @@ export function findReplyMessageIndex(messages: RawMessage[], hasStreamingReply:
       if (fallbackFailureIdx < 0) fallbackFailureIdx = idx;
       continue;
     }
-    return idx;
+    // Gateway tool rounds are intermediate narration, never the user-facing bubble.
+    if (isToolUseStopReasonAssistantMessage(message)) continue;
+    if (isTerminalAssistantMessage(message)) {
+      return idx;
+    }
+    if (isConcludingAssistantReply(message, messages)) {
+      // Pure-text concluding replies, or gateway bundled finals with explicit stop.
+      if (extractToolUse(message).length === 0 || isRunTerminalAssistantMessage(message)) {
+        return idx;
+      }
+      continue;
+    }
+    if (fallbackPlainIdx < 0 && extractToolUse(message).length === 0) {
+      fallbackPlainIdx = idx;
+    }
   }
-  return fallbackFailureIdx;
+  return fallbackPlainIdx >= 0 ? fallbackPlainIdx : fallbackFailureIdx;
+}
+
+/**
+ * Strict variant used to detect replies that are already committed to history.
+ * Unlike findReplyMessageIndex, this never falls back to an arbitrary plain
+ * assistant text, because active streaming can mirror partial text into history.
+ */
+export function findCommittedReplyMessageIndex(messages: RawMessage[]): number {
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    const message = messages[idx];
+    if (!message || message.role !== 'assistant') continue;
+    if (isSupersededRawMediaAssistantReply(messages, idx)) continue;
+    if (extractText(message).trim().length === 0) continue;
+    if (parseSubagentCompletionInfo(message)) continue;
+    if (isInterimSubagentWaitAssistantReply(message)) continue;
+    const replyText = extractText(message).trim();
+    if (isSubagentOrchestrationNarration(replyText)) continue;
+    if (extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name))) continue;
+    if (isFailedAssistantMessage(message) || isEmbeddedAgentFailureNoticeAssistantMessage(message)) continue;
+    if (isToolUseStopReasonAssistantMessage(message)) continue;
+    if (isTerminalAssistantMessage(message)) return idx;
+    if (isConcludingAssistantReply(message, messages)) {
+      if (extractToolUse(message).length === 0 || isRunTerminalAssistantMessage(message)) {
+        return idx;
+      }
+    }
+  }
+  const lastToolActivityIndex = findLastToolActivityIndex(messages);
+  if (lastToolActivityIndex >= 0) {
+    for (let idx = messages.length - 1; idx > lastToolActivityIndex; idx -= 1) {
+      const message = messages[idx];
+      if (!message || message.role !== 'assistant') continue;
+      if (!isRendererSyntheticRunId(message.id)) continue;
+      if (extractToolUse(message).length > 0) continue;
+      if (extractText(message).trim().length === 0) continue;
+      if (isFailedAssistantMessage(message) || isEmbeddedAgentFailureNoticeAssistantMessage(message)) continue;
+      if (parseSubagentCompletionInfo(message)) continue;
+      if (isInterimSubagentWaitAssistantReply(message)) continue;
+      if (isSubagentOrchestrationNarration(extractText(message).trim())) continue;
+      return idx;
+    }
+  }
+
+  return -1;
 }
 
 export function committedReplyShouldSettleExecutionGraph(input: {
@@ -168,11 +253,9 @@ export function shouldPromoteStreamingTextAsReply(input: {
   streamToolUseCount: number;
 }): boolean {
   if (input.hasStreamImages) return true;
-  const text = input.streamText.trim();
-  if (!text) return false;
-  if (input.streamToolUseCount === 0) return true;
-  return /(?:^|\n)\s*#{1,3}\s+\S/.test(text)
-    || /(?:^|\n)\s*---\s*\n\s*#{1,3}\s+\S/.test(text);
+  if (!input.streamText.trim()) return false;
+  // Process narration that accompanies a live tool call stays in the graph.
+  return input.streamToolUseCount === 0;
 }
 
 interface DeriveTaskStepsInput {
@@ -181,6 +264,7 @@ interface DeriveTaskStepsInput {
   streamingTools: ToolStatus[];
   omitLastStreamingMessageSegment?: boolean;
   includeHiddenToolSteps?: boolean;
+  committedReplyIndex?: number | null;
 }
 
 function normalizeText(text: string | null | undefined): string | undefined {
@@ -203,7 +287,7 @@ function hasThinkingBlock(message: RawMessage): boolean {
  * Tool name prefixes shown as wrench rows in the execution graph.
  * Extend this list to reveal additional tool types in the UI.
  */
-export const EXECUTION_GRAPH_VISIBLE_TOOL_NAME_PREFIXES = ['read', 'write'] as const;
+export const EXECUTION_GRAPH_VISIBLE_TOOL_NAME_PREFIXES = ['read', 'write', 'edit'] as const;
 
 export function isVisibleExecutionGraphToolName(name: string | undefined | null): boolean {
   if (!name) return false;
@@ -415,6 +499,7 @@ export function deriveTaskSteps({
   streamingTools,
   omitLastStreamingMessageSegment = false,
   includeHiddenToolSteps = false,
+  committedReplyIndex = null,
 }: DeriveTaskStepsInput): TaskStep[] {
   const steps: TaskStep[] = [];
   const stepIndexById = new Map<string, number>();
@@ -442,19 +527,23 @@ export function deriveTaskSteps({
   // the graph to prevent duplication. When a run is still streaming, the
   // reply lives in `streamingMessage`, so every pure-text assistant message in
   // `messages` is treated as intermediate narration.
-  const replyIndex = findReplyMessageIndex(messages, streamMessage != null);
+  const replyIndex = typeof committedReplyIndex === 'number' && committedReplyIndex >= 0
+    ? committedReplyIndex
+    : findReplyMessageIndex(messages, streamMessage != null);
 
   for (const [messageIndex, message] of messages.entries()) {
     if (!message || message.role !== 'assistant') continue;
     if (isSupersededRawMediaAssistantReply(messages, messageIndex)) continue;
 
-    appendDetailSegments(extractThinkingSegments(message), {
-      idPrefix: `history-thinking-${message.id || messageIndex}`,
-      label: 'Thinking',
-      kind: 'thinking',
-      running: false,
-      upsertStep,
-    });
+    if (messageIndex !== replyIndex) {
+      appendDetailSegments(extractThinkingSegments(message), {
+        idPrefix: `history-thinking-${message.id || messageIndex}`,
+        label: 'Thinking',
+        kind: 'thinking',
+        running: false,
+        upsertStep,
+      });
+    }
 
     const toolUses = extractToolUse(message);
     // Fold any intermediate assistant text into the graph as a narration

@@ -1,4 +1,5 @@
 import { completeSetup, expect, installIpcMocks, test } from './fixtures/electron';
+import { openSidebarMoreNav } from './helpers/sidebar-more-nav';
 
 test.describe('ClawX gateway lifecycle resilience', () => {
   test('app remains fully navigable while gateway is disconnected', async ({ page }) => {
@@ -12,11 +13,12 @@ test.describe('ClawX gateway lifecycle resilience', () => {
     await expect(page.getByTestId('models-page')).toBeVisible();
 
     await page.getByTestId('sidebar-nav-digital-employee').click();
-    await expect(page.getByRole('heading', { name: '数字员工' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '岗位助理' })).toBeVisible();
 
     await page.getByTestId('sidebar-nav-skills').click();
     await expect(page.getByTestId('skills-actions-button')).toBeVisible();
 
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-channels').click();
     await expect(page.getByTestId('channels-page')).toBeVisible();
 
@@ -81,7 +83,7 @@ test.describe('ClawX gateway lifecycle resilience', () => {
 
     // App should still be functional in error state
     await page.getByTestId('sidebar-nav-digital-employee').click();
-    await expect(page.getByRole('heading', { name: '数字员工' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '岗位助理' })).toBeVisible();
 
     // Transition 4: error → reconnecting → running (the recovery path)
     await electronApp.evaluate(({ BrowserWindow }) => {
@@ -143,6 +145,7 @@ test.describe('ClawX gateway lifecycle resilience', () => {
     await page.getByTestId('sidebar-nav-models').click();
     await expect(page.getByTestId('models-page')).toBeVisible();
 
+    await openSidebarMoreNav(page);
     await page.getByTestId('sidebar-nav-channels').click();
     await expect(page.getByTestId('channels-page')).toBeVisible();
   });

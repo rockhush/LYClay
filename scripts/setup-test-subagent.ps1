@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-  创建测试用数字员工 "test-analyst"，写入本地 ~/.openclaw 存储。
+  创建测试用岗位助理 "test-analyst"，写入本地 ~/.openclaw 存储。
 
 .DESCRIPTION
-  运行后会在以下路径创建完整的数字员工数据：
+  运行后会在以下路径创建完整的岗位助理数据：
   - ~/.openclaw/digital-employee/test-analyst/     (Skills + MCP + 人设模板)
   - ~/.openclaw/workspace-test-analyst/            (运行时 workspace + 记忆)
   - ~/.openclaw/agents/test-analyst/agent/         (运行配置)
@@ -20,7 +20,7 @@ $ErrorActionPreference = "Stop"
 $OPENCLAW = "$env:USERPROFILE\.openclaw"
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  创建测试数字员工 test-analyst" -ForegroundColor Cyan
+Write-Host "  创建测试岗位助理 test-analyst" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -48,7 +48,7 @@ foreach ($d in $dirs) {
   "schemaVersion": 1,
   "package": {
     "id": "com.lyclaw.employee.test-analyst",
-    "name": "测试分析数字员工",
+    "name": "测试分析岗位助理",
     "version": "1.0.0",
     "description": "用于测试子 Agent 执行流程的模拟数据",
     "category": "test",
@@ -165,7 +165,7 @@ permissions: {
 @'
 {
   "id": "${AGENT_ID}",
-  "name": "测试分析数字员工",
+  "name": "测试分析岗位助理",
   "workspace": "~/.openclaw/workspace-test-analyst",
   "agentDir": "~/.openclaw/agents/test-analyst/agent"
 }
@@ -181,7 +181,7 @@ permissions: {
 '@ | Set-Content -Encoding utf8 "$PKG\agent\workspace\AGENTS.md"
 
 @'
-# SOUL.md - 测试分析数字员工
+# SOUL.md - 测试分析岗位助理
 ## Core Truths
 Be precise and thorough. Double-check facts before reporting.
 ## Vibe
@@ -323,7 +323,7 @@ if ($exists) {
 } else {
     $newAgent = [PSCustomObject]@{
         id         = 'test-analyst'
-        name       = '测试分析数字员工'
+        name       = '测试分析岗位助理'
         workspace  = '~/.openclaw/workspace-test-analyst'
         agentDir   = '~/.openclaw/agents/test-analyst/agent'
     }

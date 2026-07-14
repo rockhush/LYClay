@@ -16,6 +16,7 @@ vi.mock('@/stores/gateway', () => ({
       status: { state: 'running', port: 18789 },
       rpc: gatewayRpcMock,
     }),
+    subscribe: vi.fn(() => vi.fn()),
   },
 }));
 

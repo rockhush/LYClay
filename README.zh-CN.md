@@ -101,9 +101,9 @@ ClawX 直接基于官方 **OpenClaw** 核心构建。无需单独安装，我们
 从安装到第一次 AI 对话，全程通过直观的图形界面完成。无需终端命令，无需 YAML 文件，无需到处寻找环境变量。
 
 ### 💬 智能聊天界面
-通过现代化的聊天体验与 AI 智能体交互。支持多会话上下文、消息历史记录、Markdown 富文本渲染（包括 GitHub 风格表格以及由 KaTeX 渲染的 LaTeX 数学公式：`$行内$`、`$$块级$$`、`\(行内\)` 和 `\[块级\]`），以及在主输入框中通过 `@agent` 让已安装数字员工在当前会话执行。
+通过现代化的聊天体验与 AI 智能体交互。支持多会话上下文、消息历史记录、Markdown 富文本渲染（包括 GitHub 风格表格以及由 KaTeX 渲染的 LaTeX 数学公式：`$行内$`、`$$块级$$`、`\(行内\)` 和 `\[块级\]`），以及在主输入框中通过 `@agent` 让已安装岗位助理在当前会话执行。
 主输入框也提供“快速 / 思考 / 专家”思考模式，会通过 `sessions.patch` 写入当前 OpenClaw 会话的 `off`、`medium` 或 `high` thinking override。
-当你使用 `@agent` 选择已安装数字员工时，ClawX 会保留当前对话，并把该数字员工的流式执行结果展示在同一个会话中，不切换会话，也不创建子 Agent。执行使用当前会话模型、目标数字员工工作空间（`~/.openclaw/workspace-{agentId}`），并且提示词、Skill、工作流和 MCP 只从 `digital-employee/{agentId}/` 或已安装数字员工目录读取，不回退到全局 Skill/MCP。普通聊天会话的工作空间默认不自动挂载目录，需要用户主动选择；更强的运行时隔离仍取决于 OpenClaw 的 sandbox 配置。当某个会话在输入栏选择了工作空间目录后，该会话会显示在左侧栏对应工作空间条目下，其余会话仍按时间分组显示在下方列表中。
+当你使用 `@agent` 选择已安装岗位助理时，ClawX 会保留当前对话，并把该岗位助理的流式执行结果展示在同一个会话中，不切换会话，也不创建子 Agent。执行使用当前会话模型、目标岗位助理工作空间（`~/.openclaw/workspace-{agentId}`），并且提示词、Skill、工作流和 MCP 只从 `digital-employee/{agentId}/` 或已安装岗位助理目录读取，不回退到全局 Skill/MCP。普通聊天会话的工作空间默认不自动挂载目录，需要用户主动选择；更强的运行时隔离仍取决于 OpenClaw 的 sandbox 配置。当某个会话在输入栏选择了工作空间目录后，该会话会显示在左侧栏对应工作空间条目下，其余会话仍按时间分组显示在下方列表中。
 每个 Agent 还可以单独覆盖自己的 `provider/model` 运行时设置；未覆盖的 Agent 会继续继承全局默认模型。
 
 ### 📡 多频道管理
@@ -133,11 +133,11 @@ Skills 页面可展示来自多个 OpenClaw 来源的技能（托管目录、wor
 ### 🔌 MCP 连接器
 在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。启用新增或配置已变化的 MCP 服务时需要明确授权；stdio 服务会启动本地进程，因此按高风险处理。
 
-数字员工广场可通过 Host API 安装数字员工包。渲染进程只传递广场列表项的 `id`，主进程通过 `https://ai.lingyiitech.com/management/agents/download/<id>/` 下载，且不接受渲染进程指定任意包地址。ZIP 下载上限为 512 MiB，解压内容上限为 1 GiB。LYClaw 会校验并解压到 `~/.openclaw/digital-employees/<package-slug>--<short-id>`，自动创建一个 ID 为 `employee-<package-slug>-<short-id>` 的独占本地 OpenClaw Agent，安全应用包内 Agent 模板，将可移植的 Agent 工作空间描述复制到新工作空间，并保留员工包内的专属 Skill 和 MCP 配置。安装阶段不会把员工包内 MCP 注册到全局 `openclaw.json`；后续使用数字员工时由运行时从当前员工目录读取。安装状态与资源归属记录在 `install.json` 中，不依赖 SQLite。
-数字员工广场页面已直接接入该安装流程，卡片会展示安装进度及成功或失败提示，并根据本地数字员工记录判断是否已安装。
+岗位助理广场可通过 Host API 安装岗位助理包。渲染进程只传递广场列表项的 `id`，主进程通过 `https://ai.lingyiitech.com/management/agents/download/<id>/` 下载，且不接受渲染进程指定任意包地址。ZIP 下载上限为 512 MiB，解压内容上限为 1 GiB。LYClaw 会校验并解压到 `~/.openclaw/digital-employees/<package-slug>--<short-id>`，自动创建一个 ID 为 `employee-<package-slug>-<short-id>` 的独占本地 OpenClaw Agent，安全应用包内 Agent 模板，将可移植的 Agent 工作空间描述复制到新工作空间，并保留员工包内的专属 Skill 和 MCP 配置。安装阶段不会把员工包内 MCP 注册到全局 `openclaw.json`；后续使用岗位助理时由运行时从当前员工目录读取。安装状态与资源归属记录在 `install.json` 中，不依赖 SQLite。
+岗位助理广场页面已直接接入该安装流程，卡片会展示安装进度及成功或失败提示，并根据本地岗位助理记录判断是否已安装。
 当员工包明确设置 `"allowMultipleInstances": false` 时，LYClaw 会在创建 Agent 前检查同一 `packageId`，已安装则拒绝重复安装；未配置或设置为 `true` 时允许多实例。
 
-已安装数字员工可通过 Host API 原地升级。升级保持 `instanceId`、`agentId`、会话键和运行目录不变，要求新包 `packageId` 一致且版本更高。员工包、包内 Skill、MCP 配置、工作流、资源以及受管的 Agent 工作空间文件会与新包同步，新包已删除的受管文件也会从本地删除；`USER.md`、会话、记忆、认证信息和用户产物始终保留。任一步失败都会恢复旧包、Workspace 和 Agent 配置。
+已安装岗位助理可通过 Host API 原地升级。升级保持 `instanceId`、`agentId`、会话键和运行目录不变，要求新包 `packageId` 一致且版本更高。员工包、包内 Skill、MCP 配置、工作流、资源以及受管的 Agent 工作空间文件会与新包同步，新包已删除的受管文件也会从本地删除；`USER.md`、会话、记忆、认证信息和用户产物始终保留。任一步失败都会恢复旧包、Workspace 和 Agent 配置。
 
 ### 🔐 安全的供应商集成
 连接多个 AI 供应商（OpenAI、Anthropic 等），凭证安全存储在系统原生密钥链中。OpenAI 同时支持 API Key 与浏览器 OAuth（Codex 订阅）登录。

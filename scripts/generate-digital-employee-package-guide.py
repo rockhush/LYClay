@@ -11,7 +11,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 OUT = Path(os.environ.get(
     "LYCLAW_EMPLOYEE_GUIDE_OUT",
-    "artifacts/docs/LYClaw数字员工ZIP包开发规范.docx",
+    "artifacts/docs/LYClaw岗位助理ZIP包开发规范.docx",
 ))
 BLUE = "2E74B5"
 DARK_BLUE = "1F4D78"
@@ -240,7 +240,7 @@ for style_name in ["List Bullet", "List Number"]:
 
 header = section.header.paragraphs[0]
 header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-set_run_font(header.add_run("LYClaw 数字员工包开发规范"), size=9, color=MID_GRAY)
+set_run_font(header.add_run("LYClaw 岗位助理包开发规范"), size=9, color=MID_GRAY)
 footer = section.footer.paragraphs[0]
 footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
 set_run_font(footer.add_run("LYClaw  |  第 "), size=9, color=MID_GRAY)
@@ -256,11 +256,11 @@ set_run_font(p.add_run("LYClaw"), size=13, bold=True, color=BLUE)
 p = doc.add_paragraph()
 p.paragraph_format.space_after = Pt(8)
 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-set_run_font(p.add_run("数字员工 ZIP 包开发规范"), size=25, bold=True, color="111827")
+set_run_font(p.add_run("岗位助理 ZIP 包开发规范"), size=25, bold=True, color="111827")
 p = doc.add_paragraph()
 p.paragraph_format.space_after = Pt(28)
 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-set_run_font(p.add_run("面向数字员工包作者的结构、配置、安全与发布指南"), size=12, color=MID_GRAY)
+set_run_font(p.add_run("面向岗位助理包作者的结构、配置、安全与发布指南"), size=12, color=MID_GRAY)
 
 table = doc.add_table(rows=4, cols=2)
 table.style = "Table Grid"
@@ -305,14 +305,14 @@ add_note(
 )
 
 doc.add_heading("1. 快速开始", level=1)
-doc.add_paragraph("创建一个数字员工包，可以按以下顺序完成：")
+doc.add_paragraph("创建一个岗位助理包，可以按以下顺序完成：")
 add_steps(doc, [
     "确定永久不变的 package.id，例如 com.example.employee.document-analyst。",
     "创建 employee.json，填写名称、版本、Agent、Skill、MCP 和安装策略。",
     "在 agent/workspace 中编写角色职责、工作方法和安全边界。",
     "将专属 Skill 放入 skills/<slug>/SKILL.md。",
     "如需 MCP，仅提供无真实凭证的配置模板。",
-    "压缩为 ZIP，执行本地安装测试后再上传数字员工广场。",
+    "压缩为 ZIP，执行本地安装测试后再上传岗位助理广场。",
 ])
 
 doc.add_heading("2. ZIP 目录结构", level=1)
@@ -345,12 +345,12 @@ add_note(
 )
 
 doc.add_heading("3. employee.json 清单", level=1)
-doc.add_paragraph("employee.json 是数字员工包的入口文件。所有包内路径都必须使用相对路径。")
+doc.add_paragraph("employee.json 是岗位助理包的入口文件。所有包内路径都必须使用相对路径。")
 
 doc.add_heading("3.1 package", level=2)
 add_field_table(doc, [
     ("package.id", "是", "永久唯一标识。发布后不得修改；升级包必须保持一致。"),
-    ("package.name", "是", "数字员工名称，也是未配置 Agent 模板名称时的默认展示名称。"),
+    ("package.name", "是", "岗位助理名称，也是未配置 Agent 模板名称时的默认展示名称。"),
     ("package.version", "是", "语义化版本，例如 1.0.0、1.1.0。升级必须高于本地版本。"),
     ("package.description", "是", "简明描述员工能完成什么工作。"),
     ("package.category", "否", "广场分类标识，例如 office-document。"),
@@ -362,7 +362,7 @@ doc.add_heading("3.2 agent", level=2)
 add_field_table(doc, [
     ("agent.entryTemplate", "否", "Agent 参数模板路径，例如 agent/agent.template.json。"),
     ("agent.workspaceSource", "是", "Workspace 描述文件目录，例如 agent/workspace。"),
-    ("agent.inheritMainWorkspace", "否", "当前数字员工安装使用独立 Workspace，建议设为 false。"),
+    ("agent.inheritMainWorkspace", "否", "当前岗位助理安装使用独立 Workspace，建议设为 false。"),
     ("agent.modelRef", "否", "可选模型，格式必须为 provider/model；null 表示继承默认模型。"),
 ])
 
@@ -393,7 +393,7 @@ doc.add_heading("4. Agent 模板与 Workspace", level=1)
 doc.add_heading("4.1 agent.template.json", level=2)
 add_code(doc, """{
   "id": "${AGENT_ID}",
-  "name": "文档分析数字员工",
+  "name": "文档分析岗位助理",
   "workspace": "~/.openclaw/workspace-${AGENT_ID}",
   "agentDir": "~/.openclaw/agents/${AGENT_ID}/agent",
   "model": "provider/model-name"
@@ -419,7 +419,7 @@ add_field_table(doc, [
 ])
 
 doc.add_heading("4.3 AGENTS.md 推荐结构", level=2)
-add_code(doc, """# 文档分析数字员工
+add_code(doc, """# 文档分析岗位助理
 
 ## 职责
 - 提取事实、日期、负责人和风险。
@@ -493,20 +493,20 @@ add_code(doc, """{
 add_bullets(doc, [
     "支持 streamable-http、sse 和 stdio。",
     "server 名称必须与 employee.json 中 mcp.bindings[].server 一致。",
-    "MCP 配置会作为数字员工包的一部分复制到本地员工目录，安装器不会将其注册到全局 openclaw.json。",
+    "MCP 配置会作为岗位助理包的一部分复制到本地员工目录，安装器不会将其注册到全局 openclaw.json。",
     "disabled、URL、Header、环境变量等字段均属于包内配置，安装器只负责校验与复制，不解释或改写其启用状态。",
-    "发布者必须确认包内凭证允许随数字员工分发；不得放入无权分发的 Token、密码、Cookie 或 API Key。",
+    "发布者必须确认包内凭证允许随岗位助理分发；不得放入无权分发的 Token、密码、Cookie 或 API Key。",
     "stdio command 只能使用受允许的启动器，例如 node、npx、npm、pnpm、yarn、bun、deno、uvx。",
 ])
 add_note(
     doc,
     "升级行为",
-    "升级时，包内 MCP 配置与数字员工包一起由新版本完整替换。全局 openclaw.json 中的 MCP 配置不会被读取、合并或修改；升级失败时恢复旧数字员工包。",
+    "升级时，包内 MCP 配置与岗位助理包一起由新版本完整替换。全局 openclaw.json 中的 MCP 配置不会被读取、合并或修改；升级失败时恢复旧岗位助理包。",
 )
 
 doc.add_heading("7. 工作流与资源", level=1)
 doc.add_heading("7.1 工作流", level=2)
-doc.add_paragraph("execution.workflow 指向包内工作流说明文件。安装器会校验文件存在，但具体运行时编排由后续数字员工任务执行能力消费。")
+doc.add_paragraph("execution.workflow 指向包内工作流说明文件。安装器会校验文件存在，但具体运行时编排由后续岗位助理任务执行能力消费。")
 add_code(doc, """"execution": {
   "mode": "plan-confirm-execute",
   "workflow": "workflows/default.md",
@@ -525,7 +525,7 @@ add_code(doc, """"resources": [
 doc.add_paragraph("资源必须是包内真实存在的普通文件。不得通过资源路径访问包外文件。")
 
 doc.add_heading("8. 安全限制", level=1)
-doc.add_paragraph("以下内容不得出现在数字员工 ZIP 包中：")
+doc.add_paragraph("以下内容不得出现在岗位助理 ZIP 包中：")
 add_code(doc, """auth-profiles.json
 models.json
 sessions.json
@@ -546,7 +546,7 @@ doc.add_heading("9.1 安装后本地结构", level=2)
 add_code(doc, """~/.openclaw/digital-employees/<package-slug>--<short-id>/
 ~/.openclaw/agents/employee-<package-slug>-<short-id>/
 ~/.openclaw/workspace-employee-<package-slug>-<short-id>/""")
-doc.add_paragraph("每个实例生成独立 instanceId 和 Agent。数字员工包（包括包内 MCP 配置）完整保存在实例安装目录中，install.json 记录资源归属和绑定关系。")
+doc.add_paragraph("每个实例生成独立 instanceId 和 Agent。岗位助理包（包括包内 MCP 配置）完整保存在实例安装目录中，install.json 记录资源归属和绑定关系。")
 
 doc.add_heading("9.2 升级约束", level=2)
 add_bullets(doc, [
@@ -599,7 +599,7 @@ add_code(doc, """{
   "schemaVersion": 1,
   "package": {
     "id": "com.example.employee.document-analyst",
-    "name": "文档分析数字员工",
+    "name": "文档分析岗位助理",
     "version": "1.0.0",
     "description": "分析文档并生成结构化报告。",
     "category": "office-document",

@@ -170,6 +170,132 @@ describe('user-turn-lifecycle', () => {
     )).toBe(false);
   });
 
+  it('does not re-open a committed reply when backend status still says running but no run is tracked', () => {
+    const sessionKey = 'agent:main:session-typhoon';
+    const userAt = 1_800_000_100_000;
+    const messages: RawMessage[] = [
+      { role: 'user', content: '帮我查询最近台风情况', timestamp: userAt },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool-round', name: 'web_search', input: {} }],
+        stopReason: 'toolUse',
+        timestamp: userAt + 1_000,
+      },
+      {
+        role: 'assistant',
+        content: '## 近期台风情况\n\n目前西北太平洋和南海有两个台风活动。',
+        stopReason: 'stop',
+        timestamp: userAt + 2_000,
+      },
+    ];
+    const laggingBackend = {
+      sessionKey,
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+    const gatewayBackground = {
+      hasBackgroundProcessing: true,
+      processingSessionKeys: [sessionKey],
+    };
+
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      laggingBackend,
+      { sessionKey, messages, lastUserMessageAt: null, gatewayBackground },
+    )).toBe(false);
+  });
+
+  it('does not re-open a committed reply when tracked run metrics lag after local run is cleared', () => {
+    const sessionKey = 'agent:main:session-typhoon-path';
+    const runId = 'run-typhoon-final';
+    const userAt = 1_800_000_200_000;
+    const messages: RawMessage[] = [
+      { role: 'user', content: '帮我查下台风的实时路径', timestamp: userAt },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'search', name: 'web_search', input: {} }],
+        stopReason: 'toolUse',
+        timestamp: userAt + 1_000,
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'fetch', name: 'web_fetch', input: {} }],
+        stopReason: 'toolUse',
+        timestamp: userAt + 2_000,
+      },
+      {
+        role: 'assistant',
+        content: '查到了！以下是当前西北太平洋上**台风"巴威"（BAVI）**的实时信息：\n\n---\n\n## 台风 2609 号 — "巴威"',
+        stopReason: 'stop',
+        timestamp: userAt + 3_000,
+      },
+    ];
+    const laggingBackend = {
+      sessionKey,
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: [runId],
+    };
+    const gatewayBackground = {
+      hasBackgroundProcessing: true,
+      processingSessionKeys: [sessionKey],
+    };
+
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      laggingBackend,
+      { sessionKey, messages, lastUserMessageAt: null, gatewayBackground },
+    )).toBe(false);
+  });
+
+  it('settles a visible synthetic run final while backend run metrics lag', () => {
+    const sessionKey = 'agent:main:session-quality-report';
+    const runId = '4f45c93a-7f97-4639-aa92-3699c2f6a1c6';
+    const userAt = 1_800_000_300_000;
+    const messages: RawMessage[] = [
+      { role: 'user', content: '帮我分析良率报告', timestamp: userAt },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'query', name: 'mcp_db_query', input: {} }],
+        stopReason: 'toolUse',
+        timestamp: userAt + 1_000,
+      },
+      {
+        role: 'assistant',
+        content: '数据库查询似乎一直超时。这可能是因为网络问题或数据库负载较高。让我终止进程并向用户报告当前情况：',
+        stopReason: 'toolUse',
+        timestamp: userAt + 2_000,
+      },
+      {
+        role: 'assistant',
+        id: `run-${runId}`,
+        content: '根据我的分析，问题在于：\n\n1. **数据库查询超时**：连接 StarRocks 数据库时查询执行超时。\n2. **HTML 报告已生成**：报告文件已经写入本地目录。',
+        stopReason: null,
+        timestamp: userAt + 3_000,
+      },
+    ];
+    const laggingBackend = {
+      sessionKey,
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: [runId],
+    };
+    const gatewayBackground = {
+      hasBackgroundProcessing: true,
+      processingSessionKeys: [sessionKey],
+    };
+
+    expect(deriveIsExecuting(
+      { sending: false, activeRunId: null, pendingFinal: false },
+      laggingBackend,
+      { sessionKey, messages, lastUserMessageAt: null, gatewayBackground },
+    )).toBe(false);
+  });
+
   it('keeps tool-round finals active even when backend is idle', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: 'question', timestamp: 1000 },
@@ -493,7 +619,7 @@ describe('user-turn-lifecycle', () => {
       },
       {
         role: 'assistant',
-        content: '**数字员工建设方案.pptx** 已生成，共 15 页。',
+        content: '**岗位助理建设方案.pptx** 已生成，共 15 页。',
         stopReason: 'stop',
         timestamp: 5000,
       },

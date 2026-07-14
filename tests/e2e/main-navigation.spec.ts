@@ -1,4 +1,5 @@
 import { closeElectronApp, expect, getStableWindow, installIpcMocks, test } from './fixtures/electron';
+import { openSidebarMoreNav } from './helpers/sidebar-more-nav';
 
 const MAIN_SESSION_KEY = 'agent:main:main';
 
@@ -25,14 +26,16 @@ test.describe('ClawX main navigation without setup flow', () => {
       await expect(page.getByTestId('models-page-title')).toBeVisible();
 
       await page.getByTestId('sidebar-nav-digital-employee').click();
-      await expect(page.getByRole('heading', { name: '数字员工' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '岗位助理' })).toBeVisible();
 
       await page.getByTestId('sidebar-nav-skills').click();
       await expect(page.getByTestId('skills-actions-button')).toBeVisible();
 
+      await openSidebarMoreNav(page);
       await page.getByTestId('sidebar-nav-channels').click();
       await expect(page.getByTestId('channels-page')).toBeVisible();
 
+      await openSidebarMoreNav(page);
       await page.getByTestId('sidebar-nav-connectors').click();
       await expect(page.getByTestId('connectors-page')).toBeVisible();
     } finally {

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-// import { Switch } from '@/components/ui/switch'; // 暂时隐藏「我的数字员工」启用开关
+// import { Switch } from '@/components/ui/switch'; // 暂时隐藏「我的岗位助理」启用开关
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { LoaderBadge, LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { cn } from '@/lib/utils';
@@ -40,7 +40,7 @@ import {
 } from './mock-data';
 
 const AGENT_COLOR = 'bg-[#FF922B]';
-const MARKETPLACE_SEARCH_ERROR_MESSAGE = '数字员工广场搜索失败，请使用公司内网连接';
+const MARKETPLACE_SEARCH_ERROR_MESSAGE = '岗位助理广场搜索失败，请使用公司内网连接';
 const MAX_TAG_COUNT = 3;
 const MAX_TAG_CHARS = 5;
 
@@ -86,7 +86,10 @@ function AgentDescriptionRow({ description }: { description: string }) {
           {displayText}
         </p>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs whitespace-normal break-words">
+      <TooltipContent
+        side="top"
+        className="max-w-xs max-h-60 overflow-y-auto overflow-x-hidden whitespace-normal break-words pr-1 text-[12.5px] leading-relaxed"
+      >
         {displayText}
       </TooltipContent>
     </Tooltip>
@@ -583,7 +586,7 @@ export function DigitalEmployee() {
 
   const handleUseAgent = useCallback((agent: MyAgent) => {
     if (!agent.enabled) {
-      toast.warning('请先启用该数字员工');
+      toast.warning('请先启用该岗位助理');
       return;
     }
     newSession(agent.agentId);
@@ -635,16 +638,16 @@ export function DigitalEmployee() {
       <div className="relative z-10 flex flex-col h-full w-full max-w-[1400px] mx-auto px-8 pt-[2em] pb-6">
         <div className="flex flex-row items-start justify-between mb-5 shrink-0 gap-4">
           <div>
-            <h1 className="text-[20px] font-bold text-foreground leading-tight">数字员工</h1>
-            <p className="text-[13px] text-muted-foreground mt-1">发现、启用并管理面向你工作的数字员工</p>
+            <h1 className="text-[20px] font-bold text-foreground leading-tight">岗位助理</h1>
+            <p className="text-[13px] text-muted-foreground mt-1">发现、启用并管理面向你工作的岗位助理</p>
           </div>
         </div>
 
         <div className="flex items-center justify-between gap-6 mb-4 shrink-0">
           <div className="flex items-center gap-6">
             {([
-              { key: 'mine', label: '我的数字员工' },
-              { key: 'market', label: '数字员工广场' },
+              { key: 'mine', label: '我的岗位助理' },
+              { key: 'market', label: '岗位助理广场' },
             ] as const).map(({ key, label }) => {
               const isActive = activeTab === key;
               return (
@@ -673,7 +676,7 @@ export function DigitalEmployee() {
               <div className="relative flex items-center bg-[#FFF2E5] dark:bg-[#FF922B]/15 rounded-full px-3 py-1.5 border border-transparent focus-within:border-[#FF922B]/40 transition-colors w-64 -translate-y-[2px]">
                 <Search className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
                 <input
-                  placeholder="搜索数字员工"
+                  placeholder="搜索岗位助理"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="ml-2 bg-transparent outline-none w-full text-[13px] text-foreground placeholder:text-[#FF922B]/80"
@@ -765,7 +768,7 @@ export function DigitalEmployee() {
                 <div className="relative flex items-center bg-[#FFF2E5] dark:bg-[#FF922B]/15 rounded-full px-3 py-1.5 border border-transparent focus-within:border-[#FF922B]/40 transition-colors w-64">
                   <Search className="h-3.5 w-3.5 text-[#FF922B] shrink-0" />
                   <input
-                    placeholder="搜索数字员工"
+                    placeholder="搜索岗位助理"
                     value={marketQuery}
                     onChange={(e) => setMarketQuery(e.target.value)}
                     className="ml-2 bg-transparent outline-none w-full text-[13px] text-foreground placeholder:text-[#FF922B]/80"
@@ -829,7 +832,7 @@ export function DigitalEmployee() {
             ) : filteredMyAgents.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Package className="h-10 w-10 mb-4 opacity-50" />
-                <p>{searchQuery.trim() ? '尝试不同的搜索词' : '暂无可用数字员工'}</p>
+                <p>{searchQuery.trim() ? '尝试不同的搜索词' : '暂无可用岗位助理'}</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-stretch">
@@ -887,7 +890,7 @@ export function DigitalEmployee() {
               {!marketLoading && filteredMarketAgents.length === 0 && !marketSearchError && (
                 <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                   <Package className="h-10 w-10 mb-4 opacity-50" />
-                  <p>{marketQuery.trim() ? '未找到匹配的数字员工' : '暂无数字员工'}</p>
+                  <p>{marketQuery.trim() ? '未找到匹配的岗位助理' : '暂无岗位助理'}</p>
                 </div>
               )}
             </>

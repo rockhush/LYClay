@@ -5135,7 +5135,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         });
       }
       if (!_deIsDigital) {
-        set({ error: `@${targetAgentId} 的数字员工未安装或不可用，@agent 仅支持数字员工`, sending: false });
+        set({ error: `@${targetAgentId} 的岗位助理未安装或不可用，@agent 仅支持岗位助理`, sending: false });
         return;
       }
     }

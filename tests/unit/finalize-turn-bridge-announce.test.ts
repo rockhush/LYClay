@@ -40,7 +40,7 @@ function buildYieldAnnounceMessages(): RawMessage[] {
     },
     {
       role: 'assistant',
-      content: '**LYClaw_数字员工闭环体系.pptx** 已生成，共 15 页。',
+      content: '**LYClaw_岗位助理闭环体系.pptx** 已生成，共 15 页。',
       stopReason: 'stop',
       timestamp: 5000,
     },

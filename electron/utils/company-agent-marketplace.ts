@@ -73,6 +73,56 @@ export function mapCompanyAgentRecord(agent: CompanyAgentRecord): MarketplaceAge
   };
 }
 
+export type MarketplaceAgentSortField = 'download_count' | 'update_time';
+
+export interface ParsedMarketplaceAgentSort {
+  field: MarketplaceAgentSortField;
+  desc: boolean;
+}
+
+export function parseMarketplaceAgentSort(sort: string): ParsedMarketplaceAgentSort | null {
+  const trimmed = sort.trim();
+  if (!trimmed) return null;
+
+  const desc = trimmed.startsWith('-');
+  const field = (desc ? trimmed.slice(1) : trimmed) as MarketplaceAgentSortField;
+  if (field !== 'download_count' && field !== 'update_time') {
+    return null;
+  }
+
+  return { field, desc };
+}
+
+function parseMarketplaceTimestamp(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+
+  const normalized = trimmed.includes('T') ? trimmed : trimmed.replace(' ', 'T');
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function sortMarketplaceAgents(
+  agents: MarketplaceAgentResult[],
+  sort: string,
+): MarketplaceAgentResult[] {
+  const parsed = parseMarketplaceAgentSort(sort);
+  if (!parsed) return agents;
+
+  const direction = parsed.desc ? -1 : 1;
+  return [...agents].sort((left, right) => {
+    if (parsed.field === 'download_count') {
+      const diff = left.downloads - right.downloads;
+      if (diff !== 0) return direction * diff;
+      return left.name.localeCompare(right.name, 'zh-CN');
+    }
+
+    const diff = parseMarketplaceTimestamp(left.updateTime) - parseMarketplaceTimestamp(right.updateTime);
+    if (diff !== 0) return direction * diff;
+    return left.name.localeCompare(right.name, 'zh-CN');
+  });
+}
+
 export async function listCompanyAgents(params: CompanyAgentListParams): Promise<MarketplaceAgentResult[]> {
   const os = resolveListOs();
   const sort = params.sort || '';
@@ -120,5 +170,5 @@ export async function listCompanyAgents(params: CompanyAgentListParams): Promise
     );
   }
 
-  return results;
+  return sortMarketplaceAgents(results, sort);
 }

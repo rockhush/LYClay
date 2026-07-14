@@ -195,7 +195,7 @@ function createDefaultSettings(): AppSettings {
     startMinimized: false,
     launchAtStartup: false,
     telemetryEnabled: false,
-    securityMode: 'standard',
+    securityMode: 'trusted',
     machineId: '',
     hasReportedInstall: false,
 

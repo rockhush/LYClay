@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { evaluateSecurityPolicy } from '@electron/security/policy-engine';
-import { applySecurityModeToDecision, setSecurityModeForTests } from '@electron/security/security-mode';
+import { applySecurityModeToDecision, getSecurityMode, setSecurityModeForTests } from '@electron/security/security-mode';
 import type { SecurityDecision } from '@electron/security/types';
 
 const promptDecision: SecurityDecision = {
@@ -37,6 +37,21 @@ describe('security mode overrides', () => {
   it('keeps standard mode decisions unchanged', () => {
     expect(applySecurityModeToDecision(promptDecision, 'standard')).toBe(promptDecision);
     expect(applySecurityModeToDecision(normalDenyDecision, 'standard')).toBe(normalDenyDecision);
+  });
+
+  it('defaults to trusted mode when no setting is configured', async () => {
+    const previous = process.env.CLAWX_SECURITY_MODE;
+    delete process.env.CLAWX_SECURITY_MODE;
+
+    try {
+      await expect(getSecurityMode()).resolves.toBe('trusted');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLAWX_SECURITY_MODE;
+      } else {
+        process.env.CLAWX_SECURITY_MODE = previous;
+      }
+    }
   });
 
   it('auto-allows prompts in trusted mode but keeps denials', () => {

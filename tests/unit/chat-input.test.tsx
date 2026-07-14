@@ -167,7 +167,7 @@ describe('ChatInput agent targeting', () => {
 
     fireEvent.click(screen.getByTitle('Choose agent'));
 
-    expect(screen.getByText('暂无可用数字员工')).toBeInTheDocument();
+    expect(screen.getByText('暂无可用岗位助理')).toBeInTheDocument();
     expect(digitalEmployeesState.fetchEmployees).toHaveBeenCalled();
   });
 
@@ -217,7 +217,7 @@ describe('ChatInput agent targeting', () => {
         marketEmployeeId: 'inline-probe',
         packageId: 'inline-probe',
         packageVersion: '1.0.0',
-        name: '内联探针数字员工',
+        name: '内联探针岗位助理',
         description: 'Probe current-session execution.',
         tags: [],
         installPath: 'C:\\Users\\test\\.openclaw\\digital-employees\\inline-probe--local',
@@ -231,10 +231,10 @@ describe('ChatInput agent targeting', () => {
     renderChatInput(onSend);
 
     fireEvent.click(screen.getByTitle('Choose agent'));
-    fireEvent.click(screen.getByText('内联探针数字员工'));
+    fireEvent.click(screen.getByText('内联探针岗位助理'));
 
     expect(chatState.newSession).not.toHaveBeenCalled();
-    expect(screen.getByText('@内联探针数字员工')).toBeInTheDocument();
+    expect(screen.getByText('@内联探针岗位助理')).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Hello direct agent' } });
     fireEvent.click(screen.getByTitle('Send'));
@@ -253,7 +253,7 @@ describe('ChatInput agent targeting', () => {
         marketEmployeeId: 'inline-probe',
         packageId: 'inline-probe',
         packageVersion: '1.0.0',
-        name: '内联探针数字员工',
+        name: '内联探针岗位助理',
         description: 'Probe current-session execution.',
         tags: [],
         installPath: 'C:\\Users\\test\\.openclaw\\digital-employees\\inline-probe--local',
@@ -282,7 +282,7 @@ describe('ChatInput agent targeting', () => {
         marketEmployeeId: 'document-analyst',
         packageId: 'document-analyst',
         packageVersion: '1.0.0',
-        name: '文档分析数字员工',
+        name: '文档分析岗位助理',
         description: 'Old broken install.',
         tags: [],
         installPath: 'C:\\Users\\test\\.openclaw\\digital-employees\\document-analyst--old',
@@ -312,7 +312,7 @@ describe('ChatInput agent targeting', () => {
     fireEvent.click(screen.getByTitle('Choose agent'));
 
     expect(screen.getByText('test11')).toBeInTheDocument();
-    expect(screen.queryByText('文档分析数字员工')).not.toBeInTheDocument();
+    expect(screen.queryByText('文档分析岗位助理')).not.toBeInTheDocument();
   });
 
   it('renders the skill trigger after the @ agent picker', () => {

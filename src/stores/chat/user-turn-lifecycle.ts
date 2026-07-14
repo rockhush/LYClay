@@ -6,6 +6,7 @@ import {
   isToolUseStopReasonAssistantMessage,
   findLatestVisibleUserIndex,
   hasVisibleAssistantReplyForActiveTurn,
+  isRendererSyntheticRunMessage,
   isVisibleAssistantTextWithoutToolUse,
   resolveActiveTurnLastUserMessageAt,
   shouldKeepRunActiveAfterAssistantFinal,
@@ -227,7 +228,22 @@ export function deriveIsExecuting(
     gatewayBackground: options?.gatewayBackground,
     completedChildSessionKeys,
   })) {
-    logDecision(false, 'transcript_turn_settled');
+    const turnAnchor = resolveActiveTurnLastUserMessageAt(messages, options?.lastUserMessageAt ?? null);
+    const hasTerminalReply = findTerminalAssistantForActiveTurn(messages, turnAnchor) != null;
+    const hasLiveStream = options?.streamingMessage != null;
+    if (!hasLocalRunSignals(state) || hasTerminalReply || !hasLiveStream) {
+      logDecision(false, 'transcript_turn_settled');
+      return false;
+    }
+  }
+  if (!hasLocalRunSignals(state)
+    && messages.length > 0
+    && hasCommittedVisibleReplyWithoutOpenDelegation(messages, {
+      lastUserMessageAt: options?.lastUserMessageAt ?? null,
+      gatewayBackground: options?.gatewayBackground,
+      completedChildSessionKeys,
+    })) {
+    logDecision(false, 'committed_reply_after_local_run_cleared');
     return false;
   }
   if (hasLocalRunSignals(state) && messages.length > 0 && canClearUserTurnNow({
@@ -458,8 +474,6 @@ export type CanClearUserTurnInput = {
 export const DELEGATION_FINALIZE_GRACE_MS = 30_000;
 export const TRANSCRIPT_TOOL_ROUND_SETTLE_GRACE_MS = 15_000;
 
-const STALE_PROCESSING_DONE_STATUSES = new Set(['done', 'idle', 'completed', 'finished']);
-
 function isStaleGatewayProcessingAfterCommittedReply(
   sessionKey: string | null,
   backendActivity: SessionBackendActivity | null | undefined,
@@ -469,8 +483,65 @@ function isStaleGatewayProcessingAfterCommittedReply(
   if (!gatewayBackground?.processingSessionKeys?.includes(sessionKey)) return false;
   if (backendActivity.hasTrackedUserRun) return false;
   if ((backendActivity.activeRunIds ?? []).length > 0) return false;
-  const status = String(backendActivity.status ?? '').toLowerCase();
-  return STALE_PROCESSING_DONE_STATUSES.has(status);
+  return true;
+}
+
+function hasCommittedVisibleReplyWithoutOpenDelegation(
+  messages: RawMessage[],
+  input: {
+    lastUserMessageAt: number | null;
+    gatewayBackground?: GatewayBackgroundActivity | null;
+    completedChildSessionKeys?: ReadonlySet<string>;
+  },
+): boolean {
+  if (messages.length === 0) return false;
+  const turnAnchor = resolveActiveTurnLastUserMessageAt(messages, input.lastUserMessageAt);
+
+  const transcriptReply = findTerminalAssistantForActiveTurn(messages, turnAnchor)
+    ?? findConcludingAssistantForActiveTurn(messages, turnAnchor);
+  const reply = transcriptReply && !isToolUseStopReasonAssistantMessage(transcriptReply)
+    ? transcriptReply
+    : findVisibleSyntheticRunReplyForActiveTurn(messages, turnAnchor);
+  if (!reply) return false;
+  if (isToolUseStopReasonAssistantMessage(reply)) return false;
+  if (!hasVisibleAssistantContent(reply) && !isRunTerminalAssistantMessage(reply)) return false;
+
+  const completedChildSessionKeys = input.completedChildSessionKeys
+    ?? resolveCompletedChildSessionKeys(messages);
+  const processingKeys = input.gatewayBackground?.processingSessionKeys ?? [];
+  if (isParentDelegationPhaseOpen(messages, processingKeys, {
+    lastUserMessageAt: turnAnchor,
+    completedChildSessionKeys,
+  })) {
+    return false;
+  }
+  if (hasDelegationSpawnForActiveTurn(messages, { lastUserMessageAt: turnAnchor })
+    && !isDelegationWrapUpComplete(messages, processingKeys, {
+      lastUserMessageAt: turnAnchor,
+      completedChildSessionKeys,
+    })) {
+    return false;
+  }
+  const childBindings = collectChildDelegationBindings(messages, completedChildSessionKeys);
+  return !hasGatewayActiveChildDelegations(childBindings, processingKeys);
+}
+
+function findVisibleSyntheticRunReplyForActiveTurn(
+  messages: RawMessage[],
+  lastUserMessageAt: number | null,
+): RawMessage | undefined {
+  const userIdx = findLatestVisibleUserIndex(messages);
+  const turnMessages = userIdx >= 0 ? messages.slice(userIdx + 1) : messages;
+  for (let i = turnMessages.length - 1; i >= 0; i -= 1) {
+    const message = turnMessages[i]!;
+    if (message.role !== 'assistant') continue;
+    if (!isRendererSyntheticRunMessage(message)) continue;
+    if (!isVisibleAssistantTextWithoutToolUse(message)) continue;
+    const timestampMs = messageTimestampMs(message);
+    if (lastUserMessageAt != null && timestampMs != null && timestampMs < lastUserMessageAt) continue;
+    return message;
+  }
+  return undefined;
 }
 
 function contentHasToolUse(content: unknown): boolean {

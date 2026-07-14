@@ -120,6 +120,7 @@ const auditResponse = {
 
 function mockHostApiDefaults() {
   vi.mocked(hostApiFetch).mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === '/api/security/settings') return { success: true, mode: 'trusted' };
     if (path.startsWith('/api/security/audit-events')) return auditResponse;
     if (path === '/api/security/grants/domain' && init?.method === 'POST') {
       return { success: true, grant: grantsResponse.domainGrants[0] };
@@ -159,6 +160,19 @@ describe('SecuritySettings', () => {
     expect(screen.queryByText('MCP 服务授权')).not.toBeInTheDocument();
     expect(screen.queryByText('Skill 授权')).not.toBeInTheDocument();
     expect(screen.queryByText('命令授权')).not.toBeInTheDocument();
+  });
+
+  it('selects trusted mode by default', async () => {
+    render(
+      <MemoryRouter>
+        <SecuritySettings />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('security-mode-trusted')).toHaveAttribute('aria-pressed', 'true');
+    });
+    expect(screen.getByTestId('security-mode-standard')).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('adds a domain grant and refreshes the list', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveTaskSteps, attachSubagentChildSteps, committedReplyShouldSettleExecutionGraph, findInFlightChildDelegation, findReplyMessageIndex, isSupersededRawMediaAssistantReply, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo, shouldPromoteStreamingTextAsReply } from '@/pages/Chat/task-visualization';
+import { deriveTaskSteps, attachSubagentChildSteps, committedReplyShouldSettleExecutionGraph, findCommittedReplyMessageIndex, findInFlightChildDelegation, findReplyMessageIndex, isSupersededRawMediaAssistantReply, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo, shouldPromoteStreamingTextAsReply } from '@/pages/Chat/task-visualization';
 import { stripProcessMessagePrefix } from '@/pages/Chat/message-utils';
 import type { RawMessage, ToolStatus } from '@/stores/chat';
 
@@ -154,6 +154,208 @@ describe('findReplyMessageIndex', () => {
     expect(findReplyMessageIndex(messages, false)).toBe(3);
     expect(deriveTaskSteps({ messages: messages.slice(1), streamingMessage: null, streamingTools: [] })
       .some((step) => step.detail?.includes('MEDIA:'))).toBe(false);
+  });
+
+  it('skips toolUse intermediate messages when a later stop answer exists', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: '帮我查下台风实时路径' },
+      {
+        role: 'assistant',
+        content: '这些台风网站都是动态渲染的，web_fetch 无法获取实际数据。让我换个方式试试。',
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'assistant',
+        content: [
+          '根据中央气象台和台风路径数据整理如下：',
+          '',
+          '## 当前台风路径',
+          '目前活跃台风位于西太平洋海域。',
+        ].join('\n'),
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(2);
+  });
+
+  it('finds a committed terminal reply even when stale stream state exists elsewhere', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'check typhoon' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'I found advisory data.' },
+          { type: 'toolCall', id: 'fetch-1', name: 'web_fetch', arguments: { url: 'https://example.test' } },
+        ],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'fetch-1', toolName: 'web_fetch', content: 'advisory data' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Now I have a good picture.' },
+          { type: 'text', text: 'Final BAVI report for the user.' },
+        ],
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, true)).toBe(-1);
+    expect(findCommittedReplyMessageIndex(messages)).toBe(3);
+  });
+
+  it('treats a renderer synthetic plain final after tool activity as committed', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'latest typhoon status' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will try several weather sources.' },
+          { type: 'toolCall', id: 'search-1', name: 'web_search', arguments: { query: 'typhoon' } },
+        ],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'search-1', toolName: 'web_search', content: 'blocked' },
+      {
+        role: 'assistant',
+        id: 'run-123e4567-e89b-12d3-a456-426614174000',
+        content: 'Most typhoon sites are blocked, but here is the latest useful summary.',
+      },
+    ];
+
+    const committedIndex = findCommittedReplyMessageIndex(messages);
+    expect(committedIndex).toBe(3);
+    const steps = deriveTaskSteps({
+      messages: messages.slice(1),
+      streamingMessage: { role: 'assistant', content: 'stale stream copy' },
+      streamingTools: [],
+      committedReplyIndex: committedIndex - 1,
+    });
+    expect(steps.some((step) => step.kind === 'message' && step.detail?.includes('latest useful summary'))).toBe(false);
+    expect(steps.some((step) => step.kind === 'message' && step.detail?.includes('try several weather sources'))).toBe(true);
+  });
+
+  it('does not treat plain mirrored stream text as a committed reply', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'partial mirrored stream text' },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(1);
+    expect(findCommittedReplyMessageIndex(messages)).toBe(-1);
+  });
+  it('does not pick open tool-round narration as the reply bubble', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'Check semiconductor chatter' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Checked X.' },
+          { type: 'tool_use', id: 'browser-search', name: 'browser', input: { action: 'search' } },
+        ],
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(-1);
+  });
+
+  it('skips toolUse messages even when a later concluding answer has no stopReason', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: '帮我查下台风实时路径' },
+      {
+        role: 'assistant',
+        content: '这些台风网站都是动态渲染的，web_fetch 无法获取实际数据。让我换个方式试试。',
+      },
+      {
+        role: 'assistant',
+        content: [
+          '根据 Typhoon2000 最新数据，目前西北太平洋有 **1 个活跃台风**：',
+          '',
+          '---',
+          '',
+          '## 🌀 台风 BAVI（巴威）',
+        ].join('\n'),
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(2);
+  });
+
+  it('skips toolUse browser narration when a later stop answer exists', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: '查台风' },
+      {
+        role: 'assistant',
+        content: [
+          'I have successfully retrieved the typhoon data from the browser.',
+          'Let me now summarize the key information about the typhoon.',
+          'From the snapshot, I can extract the following key information.',
+          'Let me also take a screenshot of the map for a visual reference.',
+        ].join(' '),
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'assistant',
+        content: [
+          '以下是来自浙江省水利厅台风实时路径系统的数据：',
+          '',
+          '---',
+          '',
+          '## 🌪️ 2026年第09号台风 **巴威 (BAVI)**',
+        ].join('\n'),
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(2);
+  });
+
+  it('keeps a stopReason stop message as the reply bubble regardless of text shape', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: '查台风' },
+      {
+        role: 'assistant',
+        content: [
+          '这些台风网页面是动态渲染的，直接抓取不到实时数据。让我换个方式帮你查。',
+          '这些页面都是动态渲染的，让我用浏览器打开台风实时路径图。',
+          '以下是来自浙江省水利厅台风实时路径系统的数据：',
+          '',
+          '---',
+          '',
+          '## 🌪️ 2026年第09号台风 **巴威 (BAVI)**',
+          '',
+          '| 项目 | 详情 |',
+          '|------|------|',
+          '| **更新时间** | 2026年7月9日 11:00 |',
+          '',
+          '需要我持续关注这个台风的后续动态吗？',
+        ].join('\n'),
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(1);
+  });
+
+  it('recovers the committed stop reply while the run is still open but stream has cleared', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: '帮我查下台风实时路径' },
+      {
+        role: 'assistant',
+        content: '这些台风网站都是动态渲染的，web_fetch 无法获取实际数据。让我换个方式试试。',
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'assistant',
+        content: '根据 Typhoon2000 最新数据，目前西北太平洋有 **1 个活跃台风**：',
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, true)).toBe(-1);
+    expect(findReplyMessageIndex(messages, false)).toBe(2);
   });
 });
 
@@ -642,6 +844,72 @@ describe('deriveTaskSteps', () => {
     ]);
   });
 
+  it('does not fold a stopReason stop final into graph message steps', () => {
+    const finalReply = [
+      '这些台风网页面是动态渲染的，直接抓取不到实时数据。让我换个方式帮你查。',
+      '以下是来自浙江省水利厅台风实时路径系统的数据：',
+      '',
+      '---',
+      '',
+      '## 🌪️ 2026年第09号台风 **巴威 (BAVI)**',
+      '',
+      '需要我持续关注这个台风的后续动态吗？',
+    ].join('\n');
+
+    const messages: RawMessage[] = [
+      { role: 'user', content: '查台风' },
+      {
+        role: 'assistant',
+        id: 'typhoon-final',
+        content: finalReply,
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(1);
+
+    const steps = deriveTaskSteps({
+      messages,
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps.filter((step) => step.kind === 'message' && step.detail?.includes('巴威'))).toHaveLength(0);
+    expect(steps.filter((step) => step.kind === 'message' && step.detail?.includes('让我换个方式帮你查'))).toHaveLength(0);
+  });
+
+  it('does not keep thinking from a committed final reply containing estimated wording', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: '帮我输出预计两个字' },
+      {
+        role: 'assistant',
+        id: 'estimated-final',
+        content: [
+          {
+            type: 'thinking',
+            thinking: 'The user wants the reply to include estimated wording.',
+          },
+          {
+            type: 'text',
+            text: '好的，东莞到广州的驾驶距离预计在 60~70 公里左右。',
+          },
+        ],
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(1);
+    expect(findCommittedReplyMessageIndex(messages)).toBe(1);
+
+    const steps = deriveTaskSteps({
+      messages,
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps).toEqual([]);
+  });
+
   it('strips folded process narration from the final reply text', () => {
     expect(stripProcessMessagePrefix(
       'Checked X. Checked Snowball. Here is the summary.',
@@ -794,7 +1062,7 @@ describe('committedReplyShouldSettleExecutionGraph', () => {
 });
 
 describe('shouldPromoteStreamingTextAsReply', () => {
-  it('keeps short tool-accompanied OpenClaw activity as graph narration', () => {
+  it('does not promote streaming text while live tool_use blocks are attached', () => {
     expect(shouldPromoteStreamingTextAsReply({
       streamText: '再补充一些详细信息。',
       hasStreamImages: false,
@@ -802,17 +1070,11 @@ describe('shouldPromoteStreamingTextAsReply', () => {
     })).toBe(false);
   });
 
-  it('promotes a Markdown final reply even if stale tool signals are still attached', () => {
+  it('promotes text-only streaming deltas without live tool_use blocks', () => {
     expect(shouldPromoteStreamingTextAsReply({
-      streamText: [
-        '信息已经非常丰富了。现在让我整理输出本周的AI资讯简报。',
-        '',
-        '---',
-        '',
-        '# 🤖 每日AI资讯简报 | 2026年7月1日-7月8日',
-      ].join('\n'),
+      streamText: '这些台风网站都是动态渲染的，web_fetch 无法获取实际数据。让我换个方式试试。',
       hasStreamImages: false,
-      streamToolUseCount: 2,
+      streamToolUseCount: 0,
     })).toBe(true);
   });
 });

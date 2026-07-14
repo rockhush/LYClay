@@ -21,14 +21,20 @@ const idleBackendActivityResponse = () => ({
   background: { hasBackgroundProcessing: false, processingSessionKeys: [] as string[] },
 });
 
-vi.mock('@/stores/gateway', () => ({
-  useGatewayStore: {
-    getState: () => ({
-      status: { state: 'running', port: 18789 },
-      rpc: gatewayRpcMock,
-    }),
-  },
-}));
+vi.mock('@/stores/gateway', () => {
+  const useGatewayStore = Object.assign(
+    (selector: (state: { status: { state: string; port: number }; rpc: typeof gatewayRpcMock }) => unknown) =>
+      selector({ status: { state: 'running', port: 18789 }, rpc: gatewayRpcMock }),
+    {
+      getState: () => ({
+        status: { state: 'running', port: 18789 },
+        rpc: gatewayRpcMock,
+      }),
+      subscribe: vi.fn(() => vi.fn()),
+    },
+  );
+  return { useGatewayStore };
+});
 
 vi.mock('@/stores/agents', () => ({
   useAgentsStore: {

@@ -2,7 +2,7 @@ import type { SecurityDecision, SecurityMode, SecurityModeOverride } from './typ
 import { getSetting, setSetting } from '../utils/store';
 
 export const SECURITY_MODES: SecurityMode[] = ['standard', 'trusted', 'off'];
-export const DEFAULT_SECURITY_MODE: SecurityMode = 'standard';
+export const DEFAULT_SECURITY_MODE: SecurityMode = 'trusted';
 
 let testSecurityMode: SecurityMode | null = null;
 

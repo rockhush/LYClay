@@ -211,7 +211,7 @@ export function SecuritySettings() {
   const [auditTotalPages, setAuditTotalPages] = useState(1);
   const [auditCapability, setAuditCapability] = useState<'all' | SecurityAuditCapability>('all');
   const [auditDecision, setAuditDecision] = useState<'all' | SecurityAuditDecision>('all');
-  const [securityMode, setSecurityMode] = useState<SecurityMode>('standard');
+  const [securityMode, setSecurityMode] = useState<SecurityMode>('trusted');
   const [savingSecurityMode, setSavingSecurityMode] = useState(false);
 
   const sortedPathGrants = useMemo(

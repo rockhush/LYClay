@@ -110,7 +110,7 @@ describe('handleAgentRoutes', () => {
     vi.mocked(listAgentsSnapshot).mockResolvedValue({
       agents: [
         { id: 'main', name: 'Main', isDefault: true, modelDisplay: 'auto', modelRef: null, overrideModelRef: null, inheritedModel: false, workspace: '', agentDir: '', mainSessionKey: 'agent:main:main', channelTypes: [] },
-        { id: 'employee-doc-1', name: '文档分析数字员工', isDefault: false, modelDisplay: 'auto', modelRef: null, overrideModelRef: null, inheritedModel: true, workspace: '', agentDir: '', mainSessionKey: 'agent:employee-doc-1:main', channelTypes: [] },
+        { id: 'employee-doc-1', name: '文档分析岗位助理', isDefault: false, modelDisplay: 'auto', modelRef: null, overrideModelRef: null, inheritedModel: true, workspace: '', agentDir: '', mainSessionKey: 'agent:employee-doc-1:main', channelTypes: [] },
       ],
       defaultAgentId: 'main',
       defaultModelRef: null,

@@ -14,6 +14,7 @@ test.describe('Security settings', () => {
       await expect(page.getByTestId('security-mode-section')).toBeVisible();
       await expect(page.getByTestId('security-mode-standard')).toBeVisible();
       await expect(page.getByTestId('security-mode-trusted')).toBeVisible();
+      await expect(page.getByTestId('security-mode-trusted')).toHaveAttribute('aria-pressed', 'true');
       await expect(page.getByTestId('security-mode-off')).toBeVisible();
       await expect(page.getByRole('heading', { name: '瀹夊叏鎺堟潈' })).toBeVisible();
       await expect(page.getByRole('heading', { name: '鍩熷悕鎺堟潈' })).toBeVisible();

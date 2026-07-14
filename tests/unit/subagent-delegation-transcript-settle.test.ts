@@ -40,7 +40,7 @@ function cad82Messages(): RawMessage[] {
     },
     {
       role: 'assistant',
-      content: 'PPT 已生成完毕 ✅\n\n文件保存在：**`LYClaw_数字员工体系.pptx`**（15 页）',
+      content: 'PPT 已生成完毕 ✅\n\n文件保存在：**`LYClaw_岗位助理体系.pptx`**（15 页）',
       stopReason: 'stop',
       timestamp: 5000,
     },
@@ -83,7 +83,7 @@ function session6f69Messages(): RawMessage[] {
     { role: 'toolResult', toolCallId: 'exec-1', content: [{ type: 'text', text: 'Size: 579 KB' }] },
     {
       role: 'assistant',
-      content: '已经为你打开了 PPTX 文件。以下是成品概况：\n\n## 数字员工建设方案.pptx — 15 页完成',
+      content: '已经为你打开了 PPTX 文件。以下是成品概况：\n\n## 岗位助理建设方案.pptx — 15 页完成',
       stopReason: 'stop',
       timestamp: 5000,
     },
@@ -121,6 +121,68 @@ describe('subagent-delegation transcript settle inference', () => {
       content: 'Phase 2 和 Phase 3 已完成，继续等待 Phase 1（slides 1-5）～',
       stopReason: 'stop',
     })).toBe(true);
+  });
+
+  it('does not classify all-subagents-returned summary as interim wait', () => {
+    expect(isInterimSubagentWaitAssistantReply({
+      role: 'assistant',
+      content: 'Both sub-agents have returned. Here is the summary analysis.\n\n## Typhoon path + Dongguan weather',
+      stopReason: 'stop',
+    })).toBe(false);
+  });
+
+  it('settles multi-child yield/history wrap-up after all subagents returned', () => {
+    const typhoon = 'agent:main:subagent:typhoon';
+    const weather = 'agent:main:subagent:weather';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'check typhoon and dongguan weather with two sub agents', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', id: 'spawn-1', name: 'sessions_spawn', input: { taskName: 'typhoon_tracker', mode: 'run' } },
+          { type: 'toolCall', id: 'spawn-2', name: 'sessions_spawn', input: { taskName: 'dongguan_weather', mode: 'run' } },
+        ],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'spawn-1', content: [{ type: 'text', text: JSON.stringify({ status: 'accepted', childSessionKey: typhoon }) }] },
+      { role: 'toolResult', toolCallId: 'spawn-2', content: [{ type: 'text', text: JSON.stringify({ status: 'accepted', childSessionKey: weather }) }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Both sub-agents started; waiting for their results.' },
+          { type: 'toolCall', id: 'yield-1', name: 'sessions_yield', arguments: { message: 'waiting' } },
+        ],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'yield-1', content: [{ type: 'text', text: JSON.stringify({ status: 'yielded' }) }] },
+      { role: 'assistant', content: '[Internal task completion event]\nsession_key: agent:main:subagent:typhoon\nsession_id: child-1' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Weather is ready; I will fetch the typhoon child history too.' },
+          { type: 'toolCall', id: 'history-1', name: 'sessions_history', arguments: { sessionKey: typhoon } },
+        ],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'history-1', content: [{ type: 'text', text: JSON.stringify({ messages: [] }) }] },
+      { role: 'assistant', content: '[Internal task completion event]\nsession_key: agent:main:subagent:weather\nsession_id: child-2' },
+      {
+        role: 'assistant',
+        content: 'Both sub-agents have returned. Here is the summary analysis.\n\n## Typhoon path + Dongguan weather',
+        stopReason: 'stop',
+        timestamp: 5000,
+      },
+    ];
+    const staleProcessing = ['agent:main:session-parent', typhoon, weather];
+    const completed = resolveCompletedChildSessionKeys(messages);
+
+    expect(isDelegationWrapUpComplete(messages, staleProcessing, {
+      lastUserMessageAt: 1000,
+      completedChildSessionKeys: completed,
+    })).toBe(true);
+    expect(isSegmentDelegationPhaseOpen(messages.slice(1), staleProcessing, {
+      completedChildSessionKeys: completed,
+    })).toBe(false);
   });
 
   it('closes delegation UI gates from transcript inference alone', () => {

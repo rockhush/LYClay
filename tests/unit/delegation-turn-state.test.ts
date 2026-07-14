@@ -319,7 +319,7 @@ describe('delegation-turn-state', () => {
       { role: 'toolResult', toolCallId: 'exec-1', content: [{ type: 'text', text: '69059 bytes' }] },
       {
         role: 'assistant',
-        content: '**数字员工建设方案.pptx** 已生成，共 15 页。',
+        content: '**岗位助理建设方案.pptx** 已生成，共 15 页。',
         stopReason: 'stop',
         timestamp: 5000,
       },

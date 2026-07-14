@@ -573,6 +573,22 @@ function patchPluginIds(pluginDir, expectedId) {
 // bundle-openclaw-plugins.mjs so the packaged app is self-contained even when
 // build/openclaw-plugins/ was not pre-generated.
 
+function copyBundledWindowsNpmRuntime(resourcesDir, arch) {
+  const src = join(__dirname, '..', 'resources', 'bin', `win32-${arch}`, 'node_modules', 'npm');
+  const dest = join(resourcesDir, 'bin', 'node_modules', 'npm');
+  const npmCli = join(src, 'bin', 'npm-cli.js');
+
+  if (!existsSync(npmCli)) {
+    console.warn(`[after-pack] Bundled npm runtime not found at ${npmCli}. Run pnpm run node:download:win:local before packaging.`);
+    return;
+  }
+
+  rmSync(normWin(dest), { recursive: true, force: true });
+  mkdirSync(normWin(dirname(dest)), { recursive: true });
+  cpSync(normWin(src), normWin(dest), { recursive: true });
+  console.log(`[after-pack] Bundled npm runtime copied to ${dest}`);
+}
+
 function getVirtualStoreNodeModules(realPkgPath) {
   let dir = realPkgPath;
   while (dir !== dirname(dir)) {
@@ -706,6 +722,7 @@ exports.default = async function afterPack(context) {
 
   if (platform === 'win32') {
     applyWindowsExeResources(context);
+    copyBundledWindowsNpmRuntime(resourcesDir, arch);
   }
 
   if (!existsSync(src)) {
