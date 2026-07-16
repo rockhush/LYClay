@@ -475,3 +475,130 @@ index be7afdd..098700b 100644
  	for (const record of bundledSkills) merged.set(record.skill.name, record);
  	for (const record of managedSkills) merged.set(record.skill.name, record);
  	for (const record of personalAgentsSkills) merged.set(record.skill.name, record);
+diff --git a/dist/service-BqOmTMr8.js b/dist/service-BqOmTMr8.js
+--- a/dist/service-BqOmTMr8.js
++++ b/dist/service-BqOmTMr8.js
+@@ -211,9 +211,9 @@ function resolveSkillProposalTarget(params) {
+ 	const skillKey = normalizeSkillIndexName(params.skillName);
+ 	if (!skillKey) throw new Error("Skill name must contain at least one letter or number.");
+-	const skillDir = path.resolve(params.workspaceDir, "skills", skillKey);
++	const skillDir = path.resolve(resolveManagedSkillsDir(), skillKey);
+ 	const skillFile = path.join(skillDir, "SKILL.md");
+-	assertInsideWorkspace(params.workspaceDir, skillDir, "skill directory");
+-	assertInsideWorkspace(params.workspaceDir, skillFile, "skill file");
++	assertInsideSkillWorkshopTarget(params.workspaceDir, skillDir, "skill directory");
++	assertInsideSkillWorkshopTarget(params.workspaceDir, skillFile, "skill file");
+ 	return {
+ 		skillKey,
+ 		skillDir,
+@@ -386,9 +386,9 @@ async function readWorkspaceSupportFile(params) {
+ 	})).buffer.toString("utf8");
+ }
+ async function writeWorkspaceSkillFile(params) {
+-	assertInsideWorkspace(params.workspaceDir, params.filePath, "skill file");
+-	const relativePath = path.relative(path.resolve(params.workspaceDir), path.resolve(params.filePath));
+-	await (await root(params.workspaceDir)).write(relativePath, params.content, {
++	const targetRoot = resolveSkillWorkshopTargetRoot(params.workspaceDir, params.filePath);
++	const relativePath = path.relative(targetRoot, path.resolve(params.filePath));
++	await (await root(targetRoot)).write(relativePath, params.content, {
+ 		encoding: "utf8",
+ 		mkdir: true,
+ 		...params.overwrite === void 0 ? {} : { overwrite: params.overwrite }
+@@ -428,6 +428,24 @@ function assertInsideWorkspace(workspaceDir, targetPath, label) {
+ 	const resolvedTarget = path.resolve(targetPath);
+ 	if (resolvedTarget !== resolvedWorkspaceDir && !isPathInside(resolvedWorkspaceDir, resolvedTarget)) throw new Error(`${label} must stay inside the workspace.`);
+ }
++function resolveManagedSkillsDir() {
++	return path.resolve(resolveStateDir(), "skills");
++}
++function resolveSkillWorkshopTargetRoot(workspaceDir, targetPath) {
++	const resolvedTarget = path.resolve(targetPath);
++	const resolvedWorkspaceDir = path.resolve(workspaceDir);
++	if (resolvedTarget === resolvedWorkspaceDir || isPathInside(resolvedWorkspaceDir, resolvedTarget)) return resolvedWorkspaceDir;
++	const managedSkillsDir = resolveManagedSkillsDir();
++	if (resolvedTarget === managedSkillsDir || isPathInside(managedSkillsDir, resolvedTarget)) return managedSkillsDir;
++	throw new Error("Skill Workshop target must stay inside the workspace or managed skills directory.");
++}
++function assertInsideSkillWorkshopTarget(workspaceDir, targetPath, label) {
++	try {
++		resolveSkillWorkshopTargetRoot(workspaceDir, targetPath);
++	} catch {
++		throw new Error(`${label} must stay inside the workspace or managed skills directory.`);
++	}
++}
+ function assertProposalId(proposalId) {
+ 	if (!PROPOSAL_ID_PATTERN.test(proposalId)) throw new Error("Invalid skill proposal id.");
+ }
+@@ -509,7 +527,7 @@ function proposalRelativeDir(proposalId) {
+ }
+ //#endregion
+ //#region src/skills/workshop/service.ts
+-const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
++const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-managed"]);
+ const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
+ const MAX_PROPOSAL_DIRECTORY_ENTRIES = 256;
+ const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
+@@ -655,7 +673,7 @@ async function proposeCreateSkill(input) {
+ 			skillKey: target.skillKey,
+ 			skillDir: target.skillDir,
+ 			skillFile: target.skillFile,
+-			source: "openclaw-workspace"
++			source: "openclaw-managed"
+ 		},
+ 		scan: scanProposalBundle(proposalContent, supportFiles),
+ 		...supportFiles.length > 0 ? { supportFiles: await buildSupportFileMetadata(supportFiles) } : {},
+@@ -745,8 +763,8 @@ async function reviseSkillProposal(input) {
+ 	const config = resolveSkillWorkshopConfig(input.config);
+ 	return await withPendingSkillProposalMutation(input, "revised", async (read) => {
+ 		const { record } = read;
+-		assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
+-		assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
++		assertInsideSkillWorkshopTarget(input.workspaceDir, record.target.skillFile, "skill file");
++		assertInsideSkillWorkshopTarget(input.workspaceDir, record.target.skillDir, "skill directory");
+ 		if (record.kind === "create") {
+ 			if (await readWorkspaceSkillFile(record.target.skillFile) !== null) {
+ 				await markProposalStale(record, "Target skill was created after proposal creation.");
+@@ -847,8 +865,8 @@ async function applySkillProposal(input) {
+ 			} });
+ 			throw new Error("Proposal scan failed; proposal was quarantined.");
+ 		}
+-		assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
+-		assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
++		assertInsideSkillWorkshopTarget(input.workspaceDir, record.target.skillFile, "skill file");
++		assertInsideSkillWorkshopTarget(input.workspaceDir, record.target.skillDir, "skill directory");
+ 		const targetState = await readApplyTargetState(record, supportFiles);
+ 		const rollback = createSkillProposalRollback({
+ 			proposalId: record.id,
+@@ -1142,8 +1160,8 @@ async function hydrateProposalSupportFiles(read) {
+ }
+ function isProposalInWorkspace(record, workspaceDir) {
+ 	try {
+-		assertInsideWorkspace(workspaceDir, record.target.skillFile, "skill file");
+-		assertInsideWorkspace(workspaceDir, record.target.skillDir, "skill directory");
++		assertInsideSkillWorkshopTarget(workspaceDir, record.target.skillFile, "skill file");
++		assertInsideSkillWorkshopTarget(workspaceDir, record.target.skillDir, "skill directory");
+ 		return true;
+ 	} catch {
+ 		return false;
+@@ -1175,8 +1193,8 @@ function proposalMatchesName(proposal, name) {
+ }
+ function assertWritableSkillTarget(workspaceDir, skill) {
+ 	if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) throw new Error(`Skill source is not writable by Skill Workshop: ${skill.source}`);
+-	assertInsideWorkspace(workspaceDir, skill.filePath, "skill file");
+-	assertInsideWorkspace(workspaceDir, skill.baseDir, "skill directory");
++	assertInsideSkillWorkshopTarget(workspaceDir, skill.filePath, "skill file");
++	assertInsideSkillWorkshopTarget(workspaceDir, skill.baseDir, "skill directory");
+ 	if (path.basename(skill.filePath) !== "SKILL.md") throw new Error("Skill Workshop can only update SKILL.md targets.");
+ }
+ function normalizeRequired(value, label) {
+diff --git a/dist/openclaw-tools-YEJwiczM.js b/dist/openclaw-tools-YEJwiczM.js
+--- a/dist/openclaw-tools-YEJwiczM.js
++++ b/dist/openclaw-tools-YEJwiczM.js
+@@ -12330,6 +12330,6 @@ function createSkillWorkshopTool(options) {
+ 				});
+ 				return actionResult(applied.record, {
+-					contentText: `Applied skill proposal ${applied.record.id}.`,
++					contentText: `Applied skill proposal ${applied.record.id} to ${applied.targetSkillFile}.`,
+ 					targetSkillFile: applied.targetSkillFile
+ 				});
+ 			}

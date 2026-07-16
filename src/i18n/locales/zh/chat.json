@@ -59,6 +59,7 @@
         "gatewayInitializingPlaceholder": "网关初始化中...",
         "gatewayWarmingPlaceholder": "AI 模型预热中...",
         "gatewayPreparingPlaceholder": "网关准备中...",
+        "retiredDigitalEmployeePlaceholder": "该岗位助理已卸载，当前会话仅供查看历史记录",
         "send": "发送",
         "stop": "停止",
         "gatewayConnected": "已连接",

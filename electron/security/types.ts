@@ -221,7 +221,7 @@ export interface OpenTargetPolicyResult {
   matchedRule?: string;
 }
 
-export type SecurityConfirmationKind = 'network' | 'command' | 'open-target' | 'model-secret' | 'mcp-server' | 'file';
+export type SecurityConfirmationKind = 'network' | 'command' | 'open-target' | 'model-secret' | 'mcp-server' | 'file' | 'skill-workshop';
 export type SecurityConfirmationChoice = 'deny' | 'allow-once' | 'allow-session' | 'allow-persistent';
 
 export interface NetworkSecurityConfirmationRequest {
@@ -300,13 +300,28 @@ export interface FileSecurityConfirmationRequest {
   reasons: string[];
 }
 
+export interface SkillWorkshopSecurityConfirmationRequest {
+  id: string;
+  kind: 'skill-workshop';
+  source: string;
+  risk: SecurityRisk;
+  target: {
+    action: 'apply' | 'reject' | 'quarantine';
+    title: string;
+    description?: string;
+    toolCallId?: string;
+  };
+  reasons: string[];
+}
+
 export type SecurityConfirmationRequest =
   | NetworkSecurityConfirmationRequest
   | CommandSecurityConfirmationRequest
   | OpenTargetSecurityConfirmationRequest
   | ModelSecretSecurityConfirmationRequest
   | McpServerSecurityConfirmationRequest
-  | FileSecurityConfirmationRequest;
+  | FileSecurityConfirmationRequest
+  | SkillWorkshopSecurityConfirmationRequest;
 
 export interface SecurityConfirmationResponse {
   id: string;

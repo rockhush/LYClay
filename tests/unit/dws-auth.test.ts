@@ -56,9 +56,12 @@ describe('DWS auth helper', () => {
     execFileMock.mockImplementation((_file, _args, _options, callback) => {
       callback(null, '{"success":true}', '');
     });
-    execFileSyncMock.mockImplementation(() => {
+    execFileSyncMock.mockImplementation((_file, args) => {
+      if (Array.isArray(args) && args.includes('status')) {
+        return '{"success":true,"authenticated":true}';
+      }
       writeFileSync(join(dwsDir, '.dws-cli-temp', process.platform === 'win32' ? 'dws.exe' : 'dws'), '');
-      return Buffer.from('');
+      return '';
     });
     execSyncMock.mockReturnValue('{"success":true,"authenticated":true}');
   });
@@ -103,7 +106,11 @@ describe('DWS auth helper', () => {
       }),
       expect.any(Function),
     );
-    expect(execSyncMock).toHaveBeenCalled();
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      join(testHome, '.dws', process.platform === 'win32' ? 'dws.exe' : 'dws'),
+      ['auth', 'status', '--format', 'json'],
+      expect.objectContaining({ encoding: 'utf-8' }),
+    );
   });
 
   it('keeps an existing DWS app client instead of overwriting it with ClawX OAuth credentials', async () => {
@@ -182,6 +189,60 @@ describe('DWS auth helper', () => {
     });
   });
 
+  it('uses DWS auth login JSON output when contact service is unavailable', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = vi.fn();
+    spawnMock.mockReturnValue(child);
+    execFileMock.mockImplementation((_file, args, _options, callback) => {
+      if (Array.isArray(args) && args.includes('contact')) {
+        const error = new Error('Command failed: unknown command "contact" for "dws"') as Error & {
+          stdout?: string;
+          stderr?: string;
+        };
+        error.stdout = '{"error":{"message":"unknown command \\"contact\\" for \\"dws\\"}}';
+        callback(error, '', error.stdout);
+        return;
+      }
+      callback(null, JSON.stringify({ authenticated: true, token_valid: true }), '');
+    });
+
+    const { startDwsCliLoginSession } = await import('@electron/utils/dws-auth');
+    const sessionPromise = startDwsCliLoginSession();
+    child.stdout.write('https://login.dingtalk.com/oauth2/auth?client_id=dingmbw5n9ktkkbbjv3g&redirect_uri=http%3A%2F%2F127.0.0.1%3A3121%2Fcallback\n');
+    child.stdout.write(`${JSON.stringify({
+      result: {
+        orgEmployeeModel: {
+          userId: 'login-output-user-123',
+          orgUserName: 'Login Output Leon',
+          corpId: 'ding-login-output-corp',
+          orgName: 'Login Output Corp',
+        },
+      },
+      success: true,
+    })}\n`);
+    const session = await sessionPromise;
+    child.emit('close', 0);
+    const result = await session.result;
+
+    expect(result.user).toMatchObject({
+      userId: 'login-output-user-123',
+      name: 'Login Output Leon',
+      corpId: 'ding-login-output-corp',
+      corpName: 'Login Output Corp',
+    });
+    expect(execFileMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining(['contact']),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
   it('uses org employee user name instead of role label name from DWS get-self', async () => {
     const child = new EventEmitter() as EventEmitter & {
       stdout: PassThrough;

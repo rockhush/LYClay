@@ -96,6 +96,40 @@ export function resetSecurityConfirmationForTests(): void {
   openTargetSessionGrants.clear();
 }
 
+export async function assertSkillWorkshopActionAllowedWithConfirmation(input: {
+  action: 'apply' | 'reject' | 'quarantine';
+  title: string;
+  description?: string;
+  toolCallId?: string;
+  source?: string;
+}): Promise<void> {
+  const mode = await getSecurityMode();
+  if (mode === 'trusted' || mode === 'off') return;
+
+  const response = await requestSecurityConfirmation({
+    kind: 'skill-workshop',
+    source: input.source ?? 'gateway:plugin-approval:skill-workshop',
+    risk: input.action === 'apply' ? 'medium' : 'low',
+    target: {
+      action: input.action,
+      title: input.title,
+      description: input.description,
+      toolCallId: input.toolCallId,
+    },
+    reasons: [
+      input.action === 'apply'
+        ? 'Applying a Skill Workshop proposal changes the active workspace skill.'
+        : `The Skill Workshop proposal will be ${input.action === 'reject' ? 'rejected' : 'quarantined'}.`,
+    ],
+  });
+
+  if (response.choice !== 'allow-once') {
+    const error = new Error(`Skill Workshop ${input.action} denied by user`) as Error & { code?: string };
+    error.code = 'SKILL_WORKSHOP_ACTION_DENIED_BY_USER';
+    throw error;
+  }
+}
+
 export async function requestSecurityConfirmation(request: SecurityConfirmationRequestInput): Promise<SecurityConfirmationResponse> {
   const id = crypto.randomUUID();
   const payload: SecurityConfirmationRequest = { ...request, id };

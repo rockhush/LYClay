@@ -1122,4 +1122,102 @@ status: completed successfully`,
     expect(stepTexts.some((text) => text.includes(processNarration))).toBe(true);
     expect(stepTexts.some((text) => text.includes(finalReply))).toBe(false);
   });
+
+  it('removes cached thinking that belongs to the committed final reply', async () => {
+    const { filterCommittedReplyDuplicateSteps } = await import('@/pages/Chat/index');
+
+    const cleaned = filterCommittedReplyDuplicateSteps(
+      [
+        {
+          id: 'stream-thinking-0',
+          label: 'Thinking',
+          status: 'completed',
+          kind: 'thinking',
+          detail: 'The user wants the full document content, not a summary.',
+        },
+        {
+          id: 'history-message-0',
+          label: 'Message',
+          status: 'completed',
+          kind: 'message',
+          detail: 'Earlier tool narration.',
+        },
+      ],
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'The user wants the full document content, not a summary.' },
+          { type: 'text', text: '# Full document content' },
+        ],
+        stopReason: 'stop',
+      },
+    );
+
+    expect(cleaned).toEqual([
+      expect.objectContaining({
+        id: 'history-message-0',
+        detail: 'Earlier tool narration.',
+      }),
+    ]);
+  });
+
+  it('strips thinking-classified process text from a committed final reply bubble', async () => {
+    const processNarration = 'I checked the source messages and grouped the important items.';
+    const finalReply = 'Here are the important items.';
+
+    const { useChatStore } = await import('@/stores/chat');
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'summarize messages' },
+        {
+          role: 'assistant',
+          id: 'thinking-process',
+          content: [
+            { type: 'thinking', thinking: processNarration },
+            { type: 'toolCall', id: 'read-1', name: 'read', arguments: { path: 'messages.json' } },
+          ],
+          stopReason: 'toolUse',
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'read-1',
+          toolName: 'read',
+          content: 'messages',
+        },
+        {
+          role: 'assistant',
+          id: 'final-with-process-prefix',
+          content: `${processNarration} ${finalReply}`,
+          stopReason: 'stop',
+        },
+      ],
+      loading: false,
+      error: null,
+      runError: null,
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      runAborted: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      sessions: [{ key: 'agent:main:main' }],
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessionLabels: {},
+      sessionLastActivity: {},
+      thinkingLevel: null,
+      sessionBackendActivity: null,
+      gatewayBackgroundActivity: null,
+    });
+
+    const { Chat } = await import('@/pages/Chat/index');
+    render(<Chat />);
+
+    const bubble = screen.getByTestId('chat-message-3');
+    expect(bubble).toHaveTextContent(finalReply);
+    expect(bubble).not.toHaveTextContent(processNarration);
+  });
 });

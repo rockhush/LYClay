@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const readInstallRecordMock = vi.fn();
 const deleteAgentMock = vi.fn();
+const archiveAgentSessionsMock = vi.fn();
 const removeInstallDirectoryMock = vi.fn();
 const cleanupSub2ApiModelsMock = vi.fn();
 const listInstalledMock = vi.fn();
@@ -30,6 +31,7 @@ describe('digital-employee-uninstaller', () => {
       installedMcpServers: [{ sourceName: 'docs', runtimeName: 'pkg--1234--docs' }],
     });
     deleteAgentMock.mockResolvedValue(undefined);
+    archiveAgentSessionsMock.mockResolvedValue(true);
     removeInstallDirectoryMock.mockResolvedValue(undefined);
     cleanupSub2ApiModelsMock.mockResolvedValue(undefined);
     removeMcpServersMock.mockResolvedValue(undefined);
@@ -46,6 +48,7 @@ describe('digital-employee-uninstaller', () => {
     const dependencies = createDigitalEmployeeUninstallerDependencies({
       readRecord: readInstallRecordMock,
       deleteAgent: deleteAgentMock,
+      archiveAgentSessions: archiveAgentSessionsMock,
       cleanupSub2ApiModels: cleanupSub2ApiModelsMock,
       removeInstallDirectory: removeInstallDirectoryMock,
       removeMcpServers: removeMcpServersMock,
@@ -59,10 +62,12 @@ describe('digital-employee-uninstaller', () => {
       marketEmployeeId: '7',
     });
     expect(cleanupSub2ApiModelsMock).toHaveBeenCalledWith('pkg--1234');
+    expect(archiveAgentSessionsMock).toHaveBeenCalledWith('employee-pkg-1234');
     expect(deleteAgentMock).toHaveBeenCalledWith('employee-pkg-1234');
     expect(removeMcpServersMock).toHaveBeenCalledWith(['pkg--1234--docs']);
     expect(removeInstallDirectoryMock).toHaveBeenCalledWith('/employees/pkg--1234');
-    expect(cleanupSub2ApiModelsMock.mock.invocationCallOrder[0]).toBeLessThan(deleteAgentMock.mock.invocationCallOrder[0]);
+    expect(cleanupSub2ApiModelsMock.mock.invocationCallOrder[0]).toBeLessThan(archiveAgentSessionsMock.mock.invocationCallOrder[0]);
+    expect(archiveAgentSessionsMock.mock.invocationCallOrder[0]).toBeLessThan(deleteAgentMock.mock.invocationCallOrder[0]);
     expect(deleteAgentMock.mock.invocationCallOrder[0]).toBeLessThan(removeInstallDirectoryMock.mock.invocationCallOrder[0]);
   });
 
@@ -75,6 +80,7 @@ describe('digital-employee-uninstaller', () => {
     const dependencies = createDigitalEmployeeUninstallerDependencies({
       readRecord: readInstallRecordMock,
       deleteAgent: deleteAgentMock,
+      archiveAgentSessions: archiveAgentSessionsMock,
       cleanupSub2ApiModels: cleanupSub2ApiModelsMock,
       removeInstallDirectory: removeInstallDirectoryMock,
       removeMcpServers: removeMcpServersMock,
@@ -83,9 +89,11 @@ describe('digital-employee-uninstaller', () => {
     const result = await uninstallDigitalEmployee('pkg--1234', dependencies);
 
     expect(result.agentId).toBe('employee-pkg-1234');
+    expect(archiveAgentSessionsMock).toHaveBeenCalledWith('employee-pkg-1234');
     expect(removeMcpServersMock).toHaveBeenCalledWith(['pkg--1234--docs']);
     expect(removeInstallDirectoryMock).toHaveBeenCalledWith('/employees/pkg--1234');
-    expect(cleanupSub2ApiModelsMock.mock.invocationCallOrder[0]).toBeLessThan(deleteAgentMock.mock.invocationCallOrder[0]);
+    expect(cleanupSub2ApiModelsMock.mock.invocationCallOrder[0]).toBeLessThan(archiveAgentSessionsMock.mock.invocationCallOrder[0]);
+    expect(archiveAgentSessionsMock.mock.invocationCallOrder[0]).toBeLessThan(deleteAgentMock.mock.invocationCallOrder[0]);
     expect(deleteAgentMock.mock.invocationCallOrder[0]).toBeLessThan(removeInstallDirectoryMock.mock.invocationCallOrder[0]);
   });
 

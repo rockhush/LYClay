@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useChatStore } from '@/stores/chat';
 import { useAgentsStore } from '@/stores/agents';
 import { useDigitalEmployeesStore } from '@/stores/digital-employees';
+import { resolveAgentDisplayName } from '@/lib/retired-digital-employees';
 import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 
@@ -20,13 +21,10 @@ export function ChatToolbar() {
   const agents = useAgentsStore((s) => s.agents);
   const digitalEmployees = useDigitalEmployeesStore((s) => s.employees);
   const { t } = useTranslation('chat');
-  const currentAgentName = useMemo(() => {
-    const fromAgents = (agents ?? []).find((agent) => agent.id === currentAgentId);
-    if (fromAgents?.name) return fromAgents.name;
-    const fromEmployees = (digitalEmployees ?? []).find((employee) => employee.agentId === currentAgentId);
-    if (fromEmployees?.name) return fromEmployees.name;
-    return currentAgentId;
-  }, [agents, currentAgentId, digitalEmployees]);
+  const currentAgentName = useMemo(
+    () => resolveAgentDisplayName(currentAgentId, { agents, digitalEmployees }),
+    [agents, currentAgentId, digitalEmployees],
+  );
 
   return (
     <div className="flex w-full items-center justify-between gap-2">

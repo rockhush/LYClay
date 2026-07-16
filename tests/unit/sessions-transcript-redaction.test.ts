@@ -294,6 +294,36 @@ describe('session transcript redaction', () => {
     expect(messages[0]?.content?.[0]?.text).toBe('昨天的聊天总结');
   });
 
+  it('loads history from retired archive when active agent sessions were removed', async () => {
+    const agentId = 'employee-recruitment-specialist-retired';
+    const sessionKey = `agent:${agentId}:main`;
+    const sessionId = 'session-retired-archive';
+    const retiredDir = join(testOpenClawConfigDir, 'agents', '_retired', agentId, 'sessions');
+    mkdirSync(retiredDir, { recursive: true });
+    writeFileSync(
+      join(retiredDir, 'sessions.json'),
+      JSON.stringify({
+        [sessionKey]: { id: sessionId },
+      }),
+    );
+    writeFileSync(
+      join(retiredDir, `${sessionId}.jsonl`),
+      `${JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'retired session history' }],
+        },
+      })}\n`,
+    );
+
+    const payload = await request(`/api/sessions/history-local?sessionKey=${encodeURIComponent(sessionKey)}`);
+    const messages = payload.messages as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content?.[0]?.text).toBe('retired session history');
+  });
+
   it('prefers indexed UUID transcript over sessionKey fallback when both exist', async () => {
     const sessionKey = 'agent:main:session-prefer-uuid';
     const uuidId = 'uuid-prefer-over-session-key';

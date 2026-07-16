@@ -223,7 +223,38 @@ function hasUsableDwsUser(user: DwsCliLoginUser): boolean {
   return Boolean(user.userId || user.unionId || user.name);
 }
 
-async function fetchDwsCurrentUser(): Promise<DwsCliLoginUser> {
+function parseDwsLoginOutputUser(output: string): DwsCliLoginUser | null {
+  const clean = stripAnsi(output).trim();
+  if (!clean) {
+    return null;
+  }
+
+  const candidates = clean
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('{') || line.startsWith('['))
+    .reverse();
+
+  for (const candidate of candidates) {
+    try {
+      const user = normalizeDwsLoginUser(JSON.parse(candidate));
+      if (hasUsableDwsUser(user)) {
+        return user;
+      }
+    } catch {
+      // Keep scanning: DWS may print progress lines around the final JSON.
+    }
+  }
+
+  return null;
+}
+
+async function fetchDwsCurrentUser(loginOutput?: string): Promise<DwsCliLoginUser> {
+  const loginOutputUser = parseDwsLoginOutputUser(loginOutput || '');
+  if (loginOutputUser) {
+    return loginOutputUser;
+  }
+
   try {
     const raw = await execDwsJsonCommand(['contact', 'user', 'get-self', '--format', 'json']);
     const user = normalizeDwsLoginUser(raw);
@@ -298,7 +329,7 @@ export async function startDwsCliLoginSession(): Promise<DwsCliLoginSession> {
         reject(new Error(`DWS login failed with exit code ${code}: ${stripAnsi(bufferedOutput).trim()}`));
         return;
       }
-      void fetchDwsCurrentUser().then((user) => resolve({ user }), reject);
+      void fetchDwsCurrentUser(bufferedOutput).then((user) => resolve({ user }), reject);
     });
   });
 

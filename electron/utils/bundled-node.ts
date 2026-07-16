@@ -1,12 +1,17 @@
-import { app } from 'electron';
+import { app as electronApp } from 'electron';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { logger } from './logger';
 
+function getElectronApp(): typeof electronApp | undefined {
+  return electronApp && typeof electronApp === 'object' ? electronApp : undefined;
+}
+
 export function getBundledBinDir(): string {
   const target = `${process.platform}-${process.arch}`;
-  return app.isPackaged
+  const app = getElectronApp();
+  return app?.isPackaged === true
     ? path.join(process.resourcesPath, 'bin')
     : path.join(process.cwd(), 'resources', 'bin', target);
 }
@@ -136,7 +141,8 @@ function downloadBundledNodeSync(): boolean {
     return true;
   }
 
-  const projectRoot = app.isPackaged ? path.join(process.resourcesPath, '..') : process.cwd();
+  const app = getElectronApp();
+  const projectRoot = app?.isPackaged === true ? path.join(process.resourcesPath, '..') : process.cwd();
   const scriptPath = path.join(projectRoot, 'scripts', 'download-bundled-node.mjs');
   if (!existsSync(scriptPath)) {
     logger.error(

@@ -115,4 +115,87 @@ describe('ui-state persistence', () => {
     expect(merged.workspaces.temporaryWorkspaces.map((entry) => entry.id)).toEqual(['temp-1']);
     expect(merged.chat.sessionWorkspaceIds['agent:main:session-b']).toBeUndefined();
   });
+
+  it('preserves retired digital employee sessions through normalize and merge', () => {
+    const withRetiredAgents = normalizeUiState({
+      version: 1,
+      updatedAt: 1,
+      digitalEmployees: {
+        cachedDisplayMetadata: {
+          '16': {
+            version: '1.0.4',
+            name: '招聘数字员工',
+          },
+        },
+        retiredAgents: {
+          'employee-recruitment-specialist-183d7da3': {
+            agentId: 'employee-recruitment-specialist-183d7da3',
+            name: '招聘数字员工',
+            marketEmployeeId: '16',
+            retiredAt: '2026-07-15T06:00:00.000Z',
+            readOnly: true,
+          },
+          'employee-recruitment-specialist-9498d361': {
+            agentId: 'employee-recruitment-specialist-9498d361',
+            name: '招聘数字员工',
+            marketEmployeeId: '16',
+            retiredAt: '2026-07-15T06:00:00.000Z',
+            readOnly: false,
+          },
+        },
+      },
+    });
+
+    expect(withRetiredAgents.digitalEmployees.retiredAgents).toEqual({
+      'employee-recruitment-specialist-183d7da3': {
+        agentId: 'employee-recruitment-specialist-183d7da3',
+        name: '招聘数字员工',
+        marketEmployeeId: '16',
+        retiredAt: '2026-07-15T06:00:00.000Z',
+      },
+      'employee-recruitment-specialist-9498d361': {
+        agentId: 'employee-recruitment-specialist-9498d361',
+        name: '招聘数字员工',
+        marketEmployeeId: '16',
+        retiredAt: '2026-07-15T06:00:00.000Z',
+        readOnly: false,
+      },
+    });
+
+    const base = normalizeUiState({
+      digitalEmployees: {
+        cachedDisplayMetadata: {},
+        retiredAgents: {},
+      },
+    });
+    const merged = mergeUiState(base, withRetiredAgents);
+    expect(merged.digitalEmployees.retiredAgents['employee-recruitment-specialist-183d7da3']).toMatchObject({
+      name: '招聘数字员工',
+      marketEmployeeId: '16',
+    });
+    expect(merged.digitalEmployees.retiredAgents['employee-recruitment-specialist-9498d361']).toMatchObject({
+      readOnly: false,
+    });
+  });
+
+  it('drops invalid retired agent records during normalize', () => {
+    const normalized = normalizeUiState({
+      digitalEmployees: {
+        retiredAgents: {
+          'employee-recruitment-specialist-abc': {
+            agentId: 'employee-recruitment-specialist-wrong-id',
+            name: '招聘数字员工',
+            retiredAt: '2026-07-15T06:00:00.000Z',
+          },
+          main: {
+            agentId: 'main',
+            name: 'main',
+            retiredAt: '2026-07-15T06:00:00.000Z',
+          },
+        },
+      },
+    });
+
+    expect(normalized.digitalEmployees.retiredAgents).toEqual({});
+  });
 });

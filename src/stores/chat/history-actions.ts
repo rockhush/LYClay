@@ -14,6 +14,7 @@ import {
   enrichWithToolResultFiles,
   getLatestOptimisticUserMessage,
   getMessageText,
+  getUserMessageDedupeKey,
   stripGatewayUserMetadata,
   isInternalMessage,
   isAbortErrorMessage,
@@ -91,12 +92,7 @@ export function createHistoryActions(
         if (shouldSuppressPartialSuccessRunError(errorMessage, latestAssistantMessage)) return null;
         return errorMessage;
       };
-      const getUserDedupKey = (message: RawMessage): string | null => {
-        const text = stripGatewayUserMetadata(getMessageText(message.content))
-          .replace(/\s+/g, ' ')
-          .trim();
-        return text || null;
-      };
+      const getUserDedupKey = (message: RawMessage): string | null => getUserMessageDedupeKey(message);
       const mergeHydratedMessages = (
         currentMessages: RawMessage[],
         hydratedMessages: RawMessage[],

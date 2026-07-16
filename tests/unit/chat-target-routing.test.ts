@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { gatewayRpcMock, hostApiFetchMock, agentsState } = vi.hoisted(() => ({
+const { gatewayRpcMock, hostApiFetchMock, agentsState, digitalEmployeesState } = vi.hoisted(() => ({
   gatewayRpcMock: vi.fn(),
   hostApiFetchMock: vi.fn(),
   agentsState: {
     agents: [] as Array<Record<string, unknown>>,
+  },
+  digitalEmployeesState: {
+    employees: [] as Array<Record<string, unknown>>,
   },
 }));
 
@@ -20,6 +23,12 @@ vi.mock('@/stores/gateway', () => ({
 vi.mock('@/stores/agents', () => ({
   useAgentsStore: {
     getState: () => agentsState,
+  },
+}));
+
+vi.mock('@/stores/digital-employees', () => ({
+  useDigitalEmployeesStore: {
+    getState: () => digitalEmployeesState,
   },
 }));
 
@@ -66,6 +75,7 @@ describe('chat target routing', () => {
         channelTypes: [],
       },
     ];
+    digitalEmployeesState.employees = [];
 
     gatewayRpcMock.mockReset();
     gatewayRpcMock.mockImplementation(async (method: string) => {
@@ -144,6 +154,93 @@ describe('chat target routing', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const patchCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'sessions.patch');
     expect(patchCall?.[1]).toEqual({ key: 'agent:main:main', thinkingLevel: 'off' });
+  });
+
+  it('executes reactivated historical digital employee sessions via the reinstalled agent id', async () => {
+    const { loadRetiredDigitalEmployees } = await import('@/lib/retired-digital-employees');
+    loadRetiredDigitalEmployees({
+      retiredAgents: {
+        'employee-recruitment-specialist-8dce23b0': {
+          agentId: 'employee-recruitment-specialist-8dce23b0',
+          name: '招聘数字员工',
+          marketEmployeeId: 'employee-recruitment-specialist',
+          retiredAt: '2026-03-11T12:00:00Z',
+          readOnly: false,
+        },
+      },
+    });
+
+    agentsState.agents = [
+      agentsState.agents[0],
+      {
+        id: 'employee-recruitment-specialist-newid01',
+        name: '招聘数字员工',
+        isDefault: false,
+        isDigitalEmployee: true,
+        digitalEmployeeInstanceId: 'recruitment--new',
+        digitalEmployeeInstallPath: 'C:\\Users\\test\\.openclaw\\digital-employees\\recruitment--new',
+        modelDisplay: 'Claude',
+        inheritedModel: false,
+        workspace: '~/.openclaw/workspace-recruitment',
+        agentDir: '~/.openclaw/agents/employee-recruitment-specialist-newid01/agent',
+        mainSessionKey: 'agent:employee-recruitment-specialist-newid01:main',
+        channelTypes: [],
+      },
+    ];
+    digitalEmployeesState.employees = [{
+      instanceId: 'recruitment--new',
+      marketEmployeeId: 'employee-recruitment-specialist',
+      packageId: 'employee-recruitment-specialist',
+      packageVersion: '1.0.0',
+      name: '招聘数字员工',
+      description: '招聘助手',
+      tags: [],
+      installPath: 'C:\\Users\\test\\.openclaw\\digital-employees\\recruitment--new',
+      agentId: 'employee-recruitment-specialist-newid01',
+      sessionKey: 'agent:employee-recruitment-specialist-newid01:main',
+      status: 'active',
+      enabled: true,
+      warnings: [],
+    }];
+
+    const { useChatStore } = await import('@/stores/chat');
+    const historicalSessionKey = 'agent:employee-recruitment-specialist-8dce23b0:main';
+
+    useChatStore.setState({
+      currentSessionKey: historicalSessionKey,
+      currentAgentId: 'employee-recruitment-specialist-8dce23b0',
+      sessions: [{ key: historicalSessionKey }],
+      messages: [{ role: 'assistant', content: '历史会话内容' }],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    await useChatStore.getState().sendMessage('继续帮我分析候选人');
+
+    const state = useChatStore.getState();
+    expect(state.currentSessionKey).toBe(historicalSessionKey);
+    expect(state.currentAgentId).toBe('employee-recruitment-specialist-8dce23b0');
+    expect(state.error).toBeNull();
+
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    expect(sendCall?.[1]).toMatchObject({
+      sessionKey: historicalSessionKey,
+      message: '/think off 继续帮我分析候选人',
+      deliver: false,
+      executeAsAgentId: 'employee-recruitment-specialist-newid01',
+      executedByAgentName: '招聘数字员工',
+    });
   });
 
   it('clears stale active run and tool state before sending a new message', async () => {

@@ -31,6 +31,7 @@ requiredRules:
   - gateway-readiness-policy
   - comms-regression
   - docs-sync
+  - skill-maintenance-boundary
 forbiddenPatterns:
   - window.electron.ipcRenderer.invoke in src/pages/**
   - window.electron.ipcRenderer.invoke in src/components/**

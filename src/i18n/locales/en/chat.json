@@ -59,6 +59,7 @@
         "gatewayInitializingPlaceholder": "Gateway initializing...",
         "gatewayWarmingPlaceholder": "AI model warming up...",
         "gatewayPreparingPlaceholder": "Gateway preparing...",
+        "retiredDigitalEmployeePlaceholder": "This digital employee was uninstalled. This session is read-only.",
         "send": "Send",
         "stop": "Stop",
         "gatewayConnected": "connected",

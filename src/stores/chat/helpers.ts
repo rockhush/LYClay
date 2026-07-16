@@ -534,12 +534,29 @@ function normalizeComplexTaskControlUserMessages(messages: RawMessage[]): RawMes
   return visibleMessages;
 }
 
-export function getComparableAttachmentSignature(message: Pick<RawMessage, '_attachedFiles'>): string {
+export function getComparableAttachmentSignature(
+  message: Pick<RawMessage, '_attachedFiles' | 'content'>,
+): string {
   const files = (message._attachedFiles || [])
     .map((file) => file.filePath || `${file.fileName}|${file.mimeType}|${file.fileSize}`)
     .filter(Boolean)
     .sort();
-  return files.join('::');
+  if (files.length > 0) return files.join('::');
+
+  const mediaRefs = extractMediaRefs(getMessageText(message.content));
+  return mediaRefs
+    .map((ref) => ref.filePath)
+    .filter(Boolean)
+    .sort()
+    .join('::');
+}
+
+/** Stable dedupe key for user messages: normalized text plus attachment identity when present. */
+export function getUserMessageDedupeKey(message: RawMessage): string | null {
+  const text = normalizeComparableUserText(message.content);
+  if (!text) return null;
+  const attachmentSignature = getComparableAttachmentSignature(message);
+  return attachmentSignature ? `${text}\0${attachmentSignature}` : text;
 }
 
 /** Placeholder user bubble synthesized from a truncated sidebar label — not a real send. */
@@ -579,7 +596,14 @@ function matchesOptimisticUserMessage(
   if (sameText && sameAttachments) return true;
   if (sameText && (!optimisticAttachments || !candidateAttachments) && timestampCompatible) return true;
   if (sameAttachments && (!optimisticText || !candidateText) && timestampCompatible) return true;
-  if (equivalentAttachmentOnlyTexts) return true;
+  if (equivalentAttachmentOnlyTexts) {
+    if (!timestampCompatible) return false;
+    if (optimisticAttachments && candidateAttachments) {
+      return optimisticAttachments === candidateAttachments;
+    }
+    // UI optimistic bubble vs gateway echo: one side may lack structured attachment metadata.
+    return true;
+  }
   return false;
 }
 
@@ -594,7 +618,9 @@ export function areEquivalentUserMessageTexts(a: RawMessage, b: RawMessage): boo
   if (textA && textB && textA === textB) {
     return hasAttachmentSignature ? signatureA === signatureB : true;
   }
-  if (areEquivalentAttachmentOnlyUserTexts(textA, textB)) return true;
+  if (areEquivalentAttachmentOnlyUserTexts(textA, textB)) {
+    return signatureA === signatureB;
+  }
 
   if (!textA && !textB) {
     return signatureA.length > 0 && signatureA === signatureB;

@@ -1,6 +1,11 @@
 import { app } from 'electron';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildBundledNpmEnv, getBundledBinDir, getBundledNodeExe } from '@electron/utils/bundled-node';
+
+afterEach(() => {
+  vi.doUnmock('electron');
+  vi.resetModules();
+});
 
 describe('buildBundledNpmEnv', () => {
   it('sets npm_execpath on Windows when npm-cli.js exists', () => {
@@ -54,6 +59,22 @@ describe('bundled Node paths', () => {
       Object.defineProperty(process, 'platform', { value: originalPlatform });
       Object.defineProperty(process, 'arch', { value: originalArch });
       Object.defineProperty(app, 'isPackaged', { value: originalPackaged, configurable: true });
+    }
+  });
+
+  it('falls back to dev resources path when Electron app is unavailable', async () => {
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    vi.resetModules();
+    vi.doMock('electron', () => ({ app: undefined }));
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    Object.defineProperty(process, 'arch', { value: 'x64' });
+    try {
+      const mod = await import('@electron/utils/bundled-node');
+      expect(mod.getBundledNodeExe().replace(/\\/g, '/')).toContain('/resources/bin/win32-x64/node.exe');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+      Object.defineProperty(process, 'arch', { value: originalArch });
     }
   });
 });

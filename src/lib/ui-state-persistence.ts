@@ -9,9 +9,15 @@ import {
   loadDigitalEmployeeDisplayCache,
 } from '@/lib/digital-employee-display-cache';
 import type { CachedDigitalEmployeeDisplayMetadata } from '@/lib/digital-employee-display-cache';
+import {
+  getRetiredDigitalEmployeesSnapshot,
+  loadRetiredDigitalEmployees,
+} from '@/lib/retired-digital-employees';
+import type { RetiredDigitalEmployeesState } from '@/lib/retired-digital-employees';
 import { useChatStore } from '@/stores/chat';
 import type { CompressionStateEntry } from '@/stores/chat/types';
 import { useWorkspacesStore } from '@/stores/workspaces';
+import { useDigitalEmployeesStore } from '@/stores/digital-employees';
 import type { WorkspaceEntry } from '@/types/workspace';
 
 export interface LyclawUiState {
@@ -35,7 +41,7 @@ export interface LyclawUiState {
   };
   digitalEmployees: {
     cachedDisplayMetadata: Record<string, CachedDigitalEmployeeDisplayMetadata>;
-  };
+  } & RetiredDigitalEmployeesState;
 }
 
 const WORKSPACE_STORAGE_KEYS = [
@@ -151,7 +157,10 @@ function readLocalChatState(): LyclawUiState['chat'] {
 }
 
 function readLocalDigitalEmployeesState(): LyclawUiState['digitalEmployees'] {
-  return getDigitalEmployeeDisplayCacheSnapshot();
+  return {
+    ...getDigitalEmployeeDisplayCacheSnapshot(),
+    ...getRetiredDigitalEmployeesSnapshot(),
+  };
 }
 
 function readLocalSkillsState(): LyclawUiState['skills'] {
@@ -209,7 +218,34 @@ export function isNonEmptySkillsState(skills: LyclawUiState['skills']): boolean 
 export function isNonEmptyDigitalEmployeesState(
   digitalEmployees: LyclawUiState['digitalEmployees'],
 ): boolean {
-  return Object.keys(digitalEmployees.cachedDisplayMetadata).length > 0;
+  return Object.keys(digitalEmployees.cachedDisplayMetadata).length > 0
+    || Object.keys(digitalEmployees.retiredAgents ?? {}).length > 0;
+}
+
+function mergeDigitalEmployeesState(
+  disk: LyclawUiState['digitalEmployees'] | undefined,
+  local: LyclawUiState['digitalEmployees'],
+): LyclawUiState['digitalEmployees'] {
+  const diskHasMetadata = disk ? isNonEmptyDigitalEmployeesState(disk) : false;
+  const localHasMetadata = isNonEmptyDigitalEmployeesState(local);
+  const base = diskHasMetadata && !localHasMetadata
+    ? disk!
+    : localHasMetadata && !diskHasMetadata
+      ? local
+      : {
+          cachedDisplayMetadata: {
+            ...(disk?.cachedDisplayMetadata ?? {}),
+            ...local.cachedDisplayMetadata,
+          },
+          retiredAgents: {
+            ...(disk?.retiredAgents ?? {}),
+            ...local.retiredAgents,
+          },
+        };
+  return {
+    cachedDisplayMetadata: { ...base.cachedDisplayMetadata },
+    retiredAgents: { ...base.retiredAgents },
+  };
 }
 
 /** Pure merge used on startup; exported for unit tests. */
@@ -267,9 +303,7 @@ export function mergeHydratedUiState(
     skills: disk?.skills && isNonEmptySkillsState(disk.skills)
       ? disk.skills
       : local.skills,
-    digitalEmployees: disk?.digitalEmployees && isNonEmptyDigitalEmployeesState(disk.digitalEmployees)
-      ? disk.digitalEmployees
-      : local.digitalEmployees,
+    digitalEmployees: mergeDigitalEmployeesState(disk?.digitalEmployees, local.digitalEmployees),
   };
 }
 
@@ -319,7 +353,10 @@ function buildUiStateFromStores(): LyclawUiState {
       sessionCompressionState: chat.sessionCompressionState as unknown as Record<string, unknown>,
     },
     skills: getSkillDisplayCacheSnapshot(),
-    digitalEmployees: getDigitalEmployeeDisplayCacheSnapshot(),
+    digitalEmployees: {
+      ...getDigitalEmployeeDisplayCacheSnapshot(),
+      ...getRetiredDigitalEmployeesSnapshot(),
+    },
   };
 }
 
@@ -401,6 +438,12 @@ export async function hydrateUiStateFromDisk(): Promise<void> {
     const merged = mergeUiState(disk, local);
     loadSkillDisplayCacheLegacy(merged.skills.cachedDisplayMetadata, merged.skills.cachedDisplayVersions);
     loadDigitalEmployeeDisplayCache(merged.digitalEmployees);
+    loadRetiredDigitalEmployees(merged.digitalEmployees);
+    if (Object.keys(merged.digitalEmployees.retiredAgents ?? {}).length > 0) {
+      useDigitalEmployeesStore.setState((state) => ({
+        retiredSessionsRevision: state.retiredSessionsRevision + 1,
+      }));
+    }
     applyUiStateToStores(merged);
 
     startUiStateSync();

@@ -4,6 +4,7 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  inspectSessionTranscriptLock,
   recoverOrphanedSessionTranscriptLock,
   recoverStaleSessionAfterEmptyFinal,
 } from '@electron/gateway/session-lock-recovery';
@@ -98,6 +99,54 @@ describe('session transcript lock recovery', () => {
       details: expect.objectContaining({ lockPid: 1234, currentPid: 1234, lockBelongsToCurrentGateway: true }),
     });
     expect(await readFile(lockPath, 'utf8')).toContain('"pid":1234');
+  });
+
+  it('inspects an active transcript lock without removing it', async () => {
+    const { sessionKey, sessionFile, lockPath } = await writeSessionStore({ status: 'processing' });
+    await writeFile(
+      lockPath,
+      JSON.stringify({ pid: 1234, createdAt: '2026-06-08T01:23:40.000Z' }),
+      'utf8',
+    );
+
+    const snapshot = await inspectSessionTranscriptLock({
+      sessionKey,
+      openclawDir,
+      currentPid: 1234,
+      nowMs: Date.parse('2026-06-08T01:23:45.000Z'),
+    });
+
+    expect(snapshot).toMatchObject({
+      exists: true,
+      sessionKey,
+      sessionFile,
+      lockPath,
+      lockAgeMs: 5_000,
+      lockPid: 1234,
+      currentPid: 1234,
+      lockBelongsToCurrentGateway: true,
+      sessionStatus: 'processing',
+    });
+    expect(await readFile(lockPath, 'utf8')).toContain('"pid":1234');
+  });
+
+  it('reports lock-missing when a session transcript has no lock', async () => {
+    const { sessionKey, sessionFile, lockPath } = await writeSessionStore({ status: 'done' });
+
+    const snapshot = await inspectSessionTranscriptLock({
+      sessionKey,
+      openclawDir,
+      currentPid: 1234,
+      nowMs: Date.parse('2026-06-08T01:23:45.000Z'),
+    });
+
+    expect(snapshot).toEqual({
+      exists: false,
+      sessionKey,
+      reason: 'lock-missing',
+      sessionFile,
+      lockPath,
+    });
   });
 
   it('recovers an active session lock left by a dead previous gateway', async () => {

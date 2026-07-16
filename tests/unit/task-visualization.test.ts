@@ -910,6 +910,38 @@ describe('deriveTaskSteps', () => {
     expect(steps).toEqual([]);
   });
 
+  it('keeps explicit stop deliverables as the reply even when they mention wait wording', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'summarize the run' },
+      {
+        role: 'assistant',
+        id: 'wait-word-final',
+        content: [
+          {
+            type: 'thinking',
+            thinking: 'The final report includes the waiting notice wording.',
+          },
+          {
+            type: 'text',
+            text: 'Final report: the sub-agent waiting notes and expected completion notice wording are included for audit.',
+          },
+        ],
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(1);
+    expect(findCommittedReplyMessageIndex(messages)).toBe(1);
+
+    const steps = deriveTaskSteps({
+      messages,
+      streamingMessage: null,
+      streamingTools: [],
+    });
+
+    expect(steps).toEqual([]);
+  });
+
   it('strips folded process narration from the final reply text', () => {
     expect(stripProcessMessagePrefix(
       'Checked X. Checked Snowball. Here is the summary.',

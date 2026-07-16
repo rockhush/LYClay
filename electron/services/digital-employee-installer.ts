@@ -35,6 +35,8 @@ import { ensureClawXContext } from '../utils/openclaw-workspace';
 import { expandPath } from '../utils/paths';
 import { proxyAwareFetch } from '../utils/proxy-fetch';
 import { syncDigitalEmployeeSub2ApiModels } from './sub2api/model-sync-service';
+import { reactivateHistoricalDigitalEmployeeAgentsForActive } from '../utils/historical-digital-employee-agents';
+import * as logger from '../utils/logger';
 import { syncAgentModelOverrideToRuntime } from './providers/provider-runtime-sync';
 
 export const MANAGED_AGENT_WORKSPACE_FILES = [
@@ -415,6 +417,25 @@ export async function installDigitalEmployee(
         await dependencies.syncAgentRuntimeModel(createdAgent.id).catch(() => undefined);
       } else if (sub2ApiResult.status !== 'skipped-missing-subject') {
         warnings.push(`Sub2API model sync skipped: ${sub2ApiResult.errorCode ?? sub2ApiResult.status}`);
+      }
+
+      try {
+        const reactivatedHistoricalAgents = await reactivateHistoricalDigitalEmployeeAgentsForActive(
+          createdAgent.id,
+          agentName,
+        );
+        if (reactivatedHistoricalAgents.length > 0) {
+          logger.info('Reactivated historical digital employee session agents after install', {
+            activeAgentId: createdAgent.id,
+            reactivatedHistoricalAgents,
+          });
+        }
+      } catch (error) {
+        warnings.push(`Historical session reactivation skipped: ${String(error)}`);
+        logger.warn('Failed to reactivate historical digital employee session agents after install', {
+          activeAgentId: createdAgent.id,
+          error: String(error),
+        });
       }
 
       return {

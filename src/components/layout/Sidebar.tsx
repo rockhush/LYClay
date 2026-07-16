@@ -47,6 +47,8 @@ import { ensureSessionBackendPolling } from '@/stores/chat/session-backend-bridg
 import { isParentDelegationPhaseOpen } from '@/lib/delegation-turn-state';
 import { useGatewayStore } from '@/stores/gateway';
 import { useAgentsStore } from '@/stores/agents';
+import { useDigitalEmployeesStore } from '@/stores/digital-employees';
+import { resolveAgentDisplayName } from '@/lib/retired-digital-employees';
 import { useTokenUsageStore } from '@/stores/token-usage';
 import { useWorkspacesStore } from '@/stores/workspaces';
 import { useSkillsStore } from '@/stores/skills';
@@ -456,6 +458,7 @@ export function Sidebar() {
   }, [isGatewayReady, checkForUpdatesAfterGatewayReady]);
 
   const agents = useAgentsStore((s) => s.agents);
+  const digitalEmployees = useDigitalEmployeesStore((s) => s.employees);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const fetchTokenUsageHistory = useTokenUsageStore((s) => s.fetchTokenUsageHistory);
 
@@ -670,15 +673,10 @@ export function Sidebar() {
     }
   };
 
-  const agentNameById = useMemo(
-    () => Object.fromEntries((agents ?? []).map((agent) => [agent.id, agent.name])),
-    [agents],
-  );
-
   const renderChatSessionRow = (s: ChatSession, options?: { inWorkspace?: boolean }) => {
     const inWorkspace = options?.inWorkspace === true;
     const agentId = getAgentIdFromSessionKey(s.key);
-    const agentName = agentNameById[agentId] || agentId;
+    const agentName = resolveAgentDisplayName(agentId, { agents, digitalEmployees });
     const isCurrent = currentSessionKey === s.key;
     const isRunning = deriveSidebarSessionIsExecuting({
       sessionKey: s.key,

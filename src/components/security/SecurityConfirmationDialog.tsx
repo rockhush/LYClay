@@ -11,7 +11,7 @@ type SecurityConfirmationChoice = 'deny' | 'allow-once' | 'allow-session' | 'all
 
 type SecurityConfirmationRequest = {
   id: string;
-  kind: 'network' | 'command' | 'open-target' | 'model-secret' | 'mcp-server' | 'file';
+  kind: 'network' | 'command' | 'open-target' | 'model-secret' | 'mcp-server' | 'file' | 'skill-workshop';
   source: string;
   risk: 'low' | 'medium' | 'high' | 'critical';
   target: {
@@ -27,6 +27,10 @@ type SecurityConfirmationRequest = {
     transport?: string;
     path?: string;
     capability?: string;
+    action?: 'apply' | 'reject' | 'quarantine';
+    title?: string;
+    description?: string;
+    toolCallId?: string;
   };
   reasons: string[];
 };
@@ -100,10 +104,24 @@ function formatReason(reason: string, hostname: string): string {
   if (/Writing local files requires confirmation/i.test(reason)) {
     return '写入本地文件需要确认。';
   }
+  if (/Applying a Skill Workshop proposal changes the active workspace skill/i.test(reason)) {
+    return '应用 Skill Workshop 提案会修改当前工作区技能。';
+  }
+  if (/The Skill Workshop proposal will be rejected/i.test(reason)) {
+    return '该 Skill Workshop 提案将被拒绝。';
+  }
+  if (/The Skill Workshop proposal will be quarantined/i.test(reason)) {
+    return '该 Skill Workshop 提案将被隔离。';
+  }
   return reason;
 }
 
 function getTitle(request: SecurityConfirmationRequest): string {
+  if (request.kind === 'skill-workshop') {
+    if (request.target.action === 'reject') return 'Agent 想拒绝技能提案';
+    if (request.target.action === 'quarantine') return 'Agent 想隔离技能提案';
+    return 'Agent 想应用技能提案';
+  }
   if (request.kind === 'mcp-server') return 'Agent 想启用 MCP 服务';
   if (request.kind === 'file') {
     const cap = request.target.capability;
@@ -117,6 +135,9 @@ function getTitle(request: SecurityConfirmationRequest): string {
 }
 
 function getTargetLabel(request: SecurityConfirmationRequest): string {
+  if (request.kind === 'skill-workshop') {
+    return `${request.target.title ?? ''}\n${request.target.description ?? ''}`.trim();
+  }
   if (request.kind === 'mcp-server') {
     return `${request.target.serverName ?? ''} (${request.target.transport ?? 'unknown'})\n${request.target.summary ?? ''}`.trim();
   }
@@ -161,6 +182,7 @@ export function SecurityConfirmationDialog() {
   const isModelSecret = active.kind === 'model-secret';
   const isMcpServer = active.kind === 'mcp-server';
   const isFile = active.kind === 'file';
+  const isSkillWorkshop = active.kind === 'skill-workshop';
   const targetLabel = getTargetLabel(active);
 
   return (
@@ -190,7 +212,9 @@ export function SecurityConfirmationDialog() {
                 className={`flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2 ${isCommand ? 'max-h-56 overflow-y-auto' : ''}`}
                 data-testid="security-confirmation-target"
               >
-                {isCommand ? (
+                {isSkillWorkshop ? (
+                  <FilePen className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                ) : isCommand ? (
                   <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 ) : isMcpServer ? (
                   <PlugZap className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -251,10 +275,12 @@ export function SecurityConfirmationDialog() {
           <Button variant="outline" onClick={() => void choose('allow-once')}>
             允许一次
           </Button>
-          <Button variant="secondary" onClick={() => void choose('allow-session')}>
-            本次启动允许
-          </Button>
-          {!isCommand && !isOpenTarget && !isModelSecret && (
+          {!isSkillWorkshop && (
+            <Button variant="secondary" onClick={() => void choose('allow-session')}>
+              本次启动允许
+            </Button>
+          )}
+          {!isCommand && !isOpenTarget && !isModelSecret && !isSkillWorkshop && (
             <Button onClick={() => void choose('allow-persistent')}>
               永久允许
             </Button>

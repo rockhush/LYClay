@@ -225,7 +225,9 @@ export function auditConfirmationDecision(
           ? request.target.url
           : request.kind === 'file'
             ? request.target.path
-            : request.target.summary,
+            : request.kind === 'skill-workshop'
+              ? request.target.title
+              : request.target.summary,
     decision: response.choice === 'deny' ? 'deny' : 'confirm',
     risk: request.risk,
     reasons: request.reasons,

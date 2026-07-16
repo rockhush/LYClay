@@ -124,10 +124,9 @@ function isGeneratedTextPath(filePath) {
   return !!filePath && GENERATED_TEXT_EXTENSIONS.has(getExt(filePath));
 }
 
-function isSkillSourcePath(filePath) {
+function isApplicationManagedSkillSourcePath(filePath) {
   const path = normalizePath(filePath);
-  return path.includes('/.openclaw/skills/')
-    || path.includes('/openclaw/skills/')
+  return path.includes('/openclaw/skills/')
     || path.includes('/.codex/skills/')
     || path.includes('/codex/skills/')
     || (path.includes('/plugins/cache/') && path.includes('/skills/'));
@@ -151,7 +150,7 @@ function preflightGeneratedToolCall(toolName, params) {
   const filePath = readPath(params);
   const command = readString(params.command) || readString(params.cmd) || '';
 
-  if (MUTATING_TOOLS.has(lowerName) && isSkillSourcePath(filePath)) {
+  if (MUTATING_TOOLS.has(lowerName) && isApplicationManagedSkillSourcePath(filePath)) {
     return block('skill_source_readonly: installed skill source is read-only during ordinary tasks. Create a workspace runner/wrapper or report a skill defect.');
   }
 

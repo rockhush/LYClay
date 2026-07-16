@@ -5,12 +5,15 @@ export const DEFAULT_OPENCLAW_AGENT_CONTEXT_TOKENS = 200000;
 const LEGACY_OPENCLAW_AGENT_CONTEXT_TOKENS = 128000;
 const LEGACY_OPENCLAW_COMPACTION_RESERVE_TOKENS_FLOOR = 8192;
 const LEGACY_OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS = 40000;
+const PREVIOUS_OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS = 50000;
 const LEGACY_OPENCLAW_MEMORY_FLUSH_SOFT_THRESHOLD_TOKENS = 8000;
+const PREVIOUS_OPENCLAW_MEMORY_FLUSH_SOFT_THRESHOLD_TOKENS = 24000;
+const PREVIOUS_OPENCLAW_MEMORY_FLUSH_TRANSCRIPT_BYTES = '8mb';
 
 export const DEFAULT_OPENCLAW_COMPACTION_CONFIG: Record<string, unknown> = {
   mode: 'default',
   reserveTokensFloor: 32000,
-  keepRecentTokens: 50000,
+  keepRecentTokens: 20000,
   timeoutSeconds: 900,
   notifyUser: true,
   // midTurnPrecheck 默认必须关闭：当其为 true 时，OpenClaw 会在每次工具
@@ -29,8 +32,8 @@ export const DEFAULT_OPENCLAW_COMPACTION_CONFIG: Record<string, unknown> = {
   truncateAfterCompaction: false,
   memoryFlush: {
     enabled: true,
-    softThresholdTokens: 24000,
-    forceFlushTranscriptBytes: '8mb',
+    softThresholdTokens: 12000,
+    forceFlushTranscriptBytes: '2mb',
   },
 };
 
@@ -136,7 +139,8 @@ export function ensureOpenClawAgentDefaults(config: Record<string, unknown>): bo
 
   if (typeof compaction.keepRecentTokens !== 'number'
     || compaction.keepRecentTokens <= 0
-    || compaction.keepRecentTokens === LEGACY_OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS) {
+    || compaction.keepRecentTokens === LEGACY_OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS
+    || compaction.keepRecentTokens === PREVIOUS_OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS) {
     compaction.keepRecentTokens = DEFAULT_OPENCLAW_COMPACTION_CONFIG.keepRecentTokens;
     compactionChanged = true;
   }
@@ -158,13 +162,15 @@ export function ensureOpenClawAgentDefaults(config: Record<string, unknown>): bo
 
   if (typeof memoryFlush.softThresholdTokens !== 'number'
     || memoryFlush.softThresholdTokens < 0
-    || memoryFlush.softThresholdTokens === LEGACY_OPENCLAW_MEMORY_FLUSH_SOFT_THRESHOLD_TOKENS) {
+    || memoryFlush.softThresholdTokens === LEGACY_OPENCLAW_MEMORY_FLUSH_SOFT_THRESHOLD_TOKENS
+    || memoryFlush.softThresholdTokens === PREVIOUS_OPENCLAW_MEMORY_FLUSH_SOFT_THRESHOLD_TOKENS) {
     memoryFlush.softThresholdTokens = defaultMemoryFlush.softThresholdTokens;
     memoryFlushChanged = true;
   }
 
-  if (typeof memoryFlush.forceFlushTranscriptBytes !== 'string'
-    && typeof memoryFlush.forceFlushTranscriptBytes !== 'number') {
+  if ((typeof memoryFlush.forceFlushTranscriptBytes !== 'string'
+    && typeof memoryFlush.forceFlushTranscriptBytes !== 'number')
+    || memoryFlush.forceFlushTranscriptBytes === PREVIOUS_OPENCLAW_MEMORY_FLUSH_TRANSCRIPT_BYTES) {
     memoryFlush.forceFlushTranscriptBytes = defaultMemoryFlush.forceFlushTranscriptBytes;
     memoryFlushChanged = true;
   }

@@ -112,6 +112,7 @@ interface ChatInputProps {
   ) => void;
   onStop?: () => void;
   disabled?: boolean;
+  disabledReason?: 'gateway' | 'retiredDigitalEmployee';
   sending?: boolean;
   isEmpty?: boolean;
   initialText?: string;
@@ -186,7 +187,7 @@ function readFileAsBase64(file: globalThis.File): Promise<string> {
 
 // ── Component ────────────────────────────────────────────────────
 
-export function ChatInput({ onSend, onStop, disabled = false, sending = false, isEmpty = false, initialText, onTextChange }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, disabled = false, disabledReason, sending = false, isEmpty = false, initialText, onTextChange }: ChatInputProps) {
   const { t } = useTranslation('chat');
   const [input, setInput] = useState(initialText || '');
 
@@ -226,15 +227,17 @@ export function ChatInput({ onSend, onStop, disabled = false, sending = false, i
   const isComposingRef = useRef(false);
   const gatewayStatus = useGatewayStore((s) => s.status);
   const gatewayReady = gatewayStatus.state === 'running' && gatewayStatus.gatewayReady === true;
-  const composerPlaceholder = disabled
-    ? gatewayStatus.state !== 'running'
-      ? t('composer.gatewayDisconnectedPlaceholder')
-      : !gatewayReady
-        ? t('composer.gatewayInitializingPlaceholder')
-        : gatewayStatus.warmupStatus === 'warming'
-          ? t('composer.gatewayWarmingPlaceholder')
-          : t('composer.gatewayPreparingPlaceholder')
-    : '';
+  const composerPlaceholder = disabledReason === 'retiredDigitalEmployee'
+    ? t('composer.retiredDigitalEmployeePlaceholder')
+    : disabled
+      ? gatewayStatus.state !== 'running'
+        ? t('composer.gatewayDisconnectedPlaceholder')
+        : !gatewayReady
+          ? t('composer.gatewayInitializingPlaceholder')
+          : gatewayStatus.warmupStatus === 'warming'
+            ? t('composer.gatewayWarmingPlaceholder')
+            : t('composer.gatewayPreparingPlaceholder')
+      : '';
   const agents = useAgentsStore((s) => s.agents);
   const digitalEmployees = useDigitalEmployeesStore((s) => s.employees);
   const digitalEmployeesLoading = useDigitalEmployeesStore((s) => s.loading);

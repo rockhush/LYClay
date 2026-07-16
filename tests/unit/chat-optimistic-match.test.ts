@@ -245,4 +245,97 @@ describe('matchesOptimisticUserMessage', () => {
 
     expect(matchesOptimisticUserMessage(candidate, optimistic, 1_700_000_000_000)).toBe(false);
   });
+
+  it('keeps attachment-only turns with different files separated by an assistant reply', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: '(file attached)',
+        timestamp: 1_700_000_000,
+        _attachedFiles: [{
+          fileName: '谢皓杰-简历原件.pdf',
+          mimeType: 'application/pdf',
+          fileSize: 1,
+          preview: null,
+          filePath: 'C:\\Users\\test\\media\\谢皓杰-简历原件.pdf',
+        }],
+      },
+      {
+        role: 'assistant',
+        content: 'analysis for resume A',
+        timestamp: 1_700_000_030,
+      },
+      {
+        role: 'user',
+        content: '(file attached)',
+        timestamp: 1_700_000_120,
+        _attachedFiles: [{
+          fileName: '赵展-简历原件.pdf',
+          mimeType: 'application/pdf',
+          fileSize: 1,
+          preview: null,
+          filePath: 'C:\\Users\\test\\media\\赵展-简历原件.pdf',
+        }],
+      },
+    ] as const;
+
+    const deduped = dedupeEquivalentAttachmentUserMessages([...messages]);
+    expect(deduped).toHaveLength(3);
+    expect(deduped[0]?._attachedFiles?.[0]?.fileName).toBe('谢皓杰-简历原件.pdf');
+    expect(deduped[2]?._attachedFiles?.[0]?.fileName).toBe('赵展-简历原件.pdf');
+  });
+
+  it('keeps attachment-only gateway transcript turns when media paths differ', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: '/think medium Process the attached file(s).\n[media attached: C:\\Users\\test\\media\\resume-a.pdf (application/pdf) | C:\\Users\\test\\media\\resume-a.pdf]',
+        timestamp: 1_700_000_000,
+      },
+      {
+        role: 'assistant',
+        content: 'analysis for resume A',
+        timestamp: 1_700_000_030,
+      },
+      {
+        role: 'user',
+        content: '/think medium Process the attached file(s).\n[media attached: C:\\Users\\test\\media\\resume-b.pdf (application/pdf) | C:\\Users\\test\\media\\resume-b.pdf]',
+        timestamp: 1_700_000_120,
+      },
+    ] as const;
+
+    const deduped = dedupeEquivalentAttachmentUserMessages([...messages]);
+    expect(deduped).toHaveLength(3);
+    expect(deduped[0]?.content).toContain('resume-a.pdf');
+    expect(deduped[2]?.content).toContain('resume-b.pdf');
+  });
+
+  it('does not match attachment-only turns with different files even when text is equivalent', () => {
+    const first = {
+      role: 'user',
+      content: '(file attached)',
+      timestamp: 1_700_000_000,
+      _attachedFiles: [{
+        fileName: 'resume-a.pdf',
+        mimeType: 'application/pdf',
+        fileSize: 1,
+        preview: null,
+        filePath: 'C:\\Users\\test\\resume-a.pdf',
+      }],
+    } as const;
+    const second = {
+      role: 'user',
+      content: 'Process the attached file(s).',
+      timestamp: 1_700_000_120,
+      _attachedFiles: [{
+        fileName: 'resume-b.pdf',
+        mimeType: 'application/pdf',
+        fileSize: 1,
+        preview: null,
+        filePath: 'C:\\Users\\test\\resume-b.pdf',
+      }],
+    } as const;
+
+    expect(matchesOptimisticUserMessage(second, first, 1_700_000_000_000)).toBe(false);
+  });
 });

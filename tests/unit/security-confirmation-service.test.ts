@@ -1,13 +1,14 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assertCommandAllowedWithConfirmation,
   assertFileOperationAllowedWithConfirmation,
   assertNetworkAllowedWithConfirmation,
   assertMcpServerAllowedWithConfirmation,
   assertOpenTargetAllowedWithConfirmation,
+  assertSkillWorkshopActionAllowedWithConfirmation,
   registerSecurityConfirmationHandlers,
   resetSecurityConfirmationForTests,
 } from '@electron/security/confirmation-service';
@@ -21,6 +22,7 @@ import {
   listAllPathGrants,
   resetPermissionStoreForTests,
 } from '@electron/security/permission-store';
+import { setSecurityModeForTests } from '@electron/security/security-mode';
 
 async function useTempPermissionFile(): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'clawx-confirmation-'));
@@ -59,6 +61,46 @@ function setupConfirmationHarness() {
 describe('security confirmation service', () => {
   beforeEach(async () => {
     await useTempPermissionFile();
+    setSecurityModeForTests('standard');
+  });
+
+  afterEach(() => {
+    setSecurityModeForTests(null);
+  });
+
+  it('asks for one-time confirmation before applying a Skill Workshop proposal in standard mode', async () => {
+    setSecurityModeForTests('standard');
+    const harness = setupConfirmationHarness();
+    const pending = assertSkillWorkshopActionAllowedWithConfirmation({
+      action: 'apply',
+      title: 'Apply workspace skill proposal',
+      description: 'Update the weekly report output.',
+      toolCallId: 'tool-call-1',
+    });
+
+    await expect.poll(() => harness.sent.length).toBe(1);
+    expect(harness.sent[0]).toMatchObject({
+      kind: 'skill-workshop',
+      target: {
+        action: 'apply',
+        title: 'Apply workspace skill proposal',
+        toolCallId: 'tool-call-1',
+      },
+    });
+    await harness.respond('allow-once');
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it.each(['trusted', 'off'] as const)('allows Skill Workshop actions without prompting in %s mode', async (mode) => {
+    setSecurityModeForTests(mode);
+    const harness = setupConfirmationHarness();
+
+    await expect(assertSkillWorkshopActionAllowedWithConfirmation({
+      action: 'apply',
+      title: 'Apply workspace skill proposal',
+    })).resolves.toBeUndefined();
+    expect(harness.sent).toHaveLength(0);
   });
 
   it('allows one request after allow-once without writing a domain grant', async () => {

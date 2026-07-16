@@ -286,6 +286,8 @@ ClawX 采用 **双进程 + Host API 统一接入架构**。渲染进程只调用
 - **Skill 上传权限确认**：本地 ZIP 支持在压缩包根目录或唯一顶层文件夹中放置 `SKILL.md`；仅使用 Workspace 基础权限的 Skill 可直接安装，新增额外权限时会在写入文件前展示权限差异，并使用 Main 签发的短期确认令牌避免 Renderer 跳过确认
 - **Skill 授权记录**：本地 ZIP Skill 确认安装后会按 manifest 摘要持久化授权；manifest 变化会使旧授权失效，卸载会撤销有效授权，Settings 可查看和主动撤销 Skill 授权。运行时身份绑定仍属于后续治理边界
 - **Skill 运行时策略基础**：Main 已提供绑定 grant 的文件、网络和命令检查入口；运行时 exec 命令会先经过 LYClaw 注入的 OpenClaw hook 做执行前预检，并在命令路径可识别 Skill 时应用 Skill 命令门禁；旧的 Gateway exec approval bridge 保留为兼容兜底
+- **Skill 维护边界**：Agent 文件工具可以在用户维护的 `~/.openclaw/skills` 下创建和编辑 Skill；随应用发布的 Skill、Codex 系统 Skill 和插件缓存 Skill 仍作为只读依赖受到保护
+- **Skill Workshop 全局发布与审批桥接**：Skill Workshop 的创建和更新提案会把已安装 Skill 发布到托管根目录 `~/.openclaw/skills/<skill>/`，并返回实际写入的 `targetSkillFile`；Agent workspace 的 Skill 目录不再作为安装目标。应用、拒绝和隔离提案不再因无人处理而超时；标准模式显示一次性确认，可信模式和关闭确认模式无需等待 Renderer 即可处理受支持动作，未知插件审批默认拒绝
 - **可信内部命令边界**：Gateway 启动、端口清理、后台 doctor 修复等 LYClaw 固定维护命令会先经过 Main 进程的内部操作注册表校验并写入审计，不再误弹 Agent 命令确认；Agent、Skill、MCP 和 Renderer 的动态命令仍继续走普通命令策略与确认流程
 
 ### 进程模型与 Gateway 排障

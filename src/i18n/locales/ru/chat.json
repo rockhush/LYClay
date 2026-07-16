@@ -58,6 +58,7 @@
         "gatewayInitializingPlaceholder": "Шлюз инициализируется...",
         "gatewayWarmingPlaceholder": "AI-модель прогревается...",
         "gatewayPreparingPlaceholder": "Шлюз подготавливается...",
+        "retiredDigitalEmployeePlaceholder": "Этот цифровой сотрудник удалён. Сессия доступна только для просмотра истории.",
         "send": "Отправить",
         "stop": "Остановить",
         "gatewayConnected": "подключён",

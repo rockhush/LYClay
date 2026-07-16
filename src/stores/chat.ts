@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Chat State Store
  * Manages chat messages, sessions, and streaming state.
  * Communicates with OpenClaw Gateway via renderer WebSocket RPC.
@@ -6,9 +6,11 @@
 import { create } from 'zustand';
 import i18n from '@/i18n';
 import { getEmptyFinalDiagnostic, hostApiFetch, recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
+import { isRetiredDigitalEmployeeAgent, resolveActiveDigitalEmployeeExecutionAgent } from '@/lib/retired-digital-employees';
 import { toUserMessage, normalizeAppError } from '@/lib/api-client';
 import { useGatewayStore } from './gateway';
 import { useAgentsStore } from './agents';
+import { useDigitalEmployeesStore } from './digital-employees';
 import { useWorkspacesStore } from './workspaces';
 import { useSkillsStore } from './skills';
 import {
@@ -59,8 +61,8 @@ import {
   dedupeAssistantMessagesByContent,
   matchesOptimisticUserMessage,
   getLatestOptimisticUserMessage,
+  getUserMessageDedupeKey,
   normalizeComparableUserText,
-  getComparableAttachmentSignature,
   areEquivalentAttachmentOnlyUserTexts,
   stripGatewayUserMetadata,
   isSyntheticSessionLabelUserMessage,
@@ -1554,13 +1556,11 @@ function dedupeUserMessagesByContent(messages: RawMessage[]): RawMessage[] {
       result.push(message);
       continue;
     }
-    const key = normalizeComparableUserText(message.content);
-    if (!key) {
+    const dedupeKey = getUserMessageDedupeKey(message);
+    if (!dedupeKey) {
       result.push(message);
       continue;
     }
-    const attachmentSignature = getComparableAttachmentSignature(message);
-    const dedupeKey = attachmentSignature ? `${key}\0${attachmentSignature}` : key;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
     result.push(message);
@@ -4282,7 +4282,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // NOTE: We intentionally do NOT call sessions.reset on the old session.
     // sessions.reset archives (renames) the session JSONL file, making old
     // conversation history inaccessible when the user switches back to it.
-    const { currentSessionKey, messages, sessionLastActivity, sessionLabels, activeRunId, streamingText, streamingMessage, streamingTools, pendingFinal, lastUserMessageAt, pendingToolImages, runAborted, sending, reasoningMode, sessionReasoningModes } = get();
+    const { currentSessionKey, messages, sessionLastActivity, sessionLabels, activeRunId, streamingText, streamingMessage, streamingTools, pendingFinal, lastUserMessageAt, pendingToolImages, runAborted, sending, reasoningMode, sessionReasoningModes, sessionBackendActivity, gatewayBackgroundActivity, announcedChildSessionKeys } = get();
     // Only treat sessions with no history records and no activity timestamp as empty
     const leavingEmpty = !currentSessionKey.endsWith(':main')
       && messages.length === 0
@@ -4294,26 +4294,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
       : DEFAULT_CANONICAL_PREFIX;
     const newKey = `${prefix}:session-${Date.now()}`;
     const newSessionEntry: ChatSession = { key: newKey, displayName: newKey };
-    // Save messages snapshot if there's active streaming
+    // Save messages snapshot for completed sessions as well as active streams.
     const hasActiveStreaming = activeRunId || sending;
+    const shouldSnapshotMessages = hasActiveStreaming || messages.length > 0;
+    const leavingSnapshot = sanitizeLeavingSessionStreamingSnapshot(
+      {
+        activeRunId,
+        streamingText,
+        streamingMessage,
+        streamingTools,
+        pendingFinal,
+        lastUserMessageAt,
+        pendingToolImages,
+        runAborted,
+        runError: get().runError,
+        sending,
+        activeTool: get().activeTool,
+        messagesSnapshot: shouldSnapshotMessages
+          ? stripSyntheticSessionLabelUserMessages([...messages], currentSessionKey)
+          : [],
+      },
+      {
+        sessionKey: currentSessionKey,
+        backendActivity: backendActivityForSession(sessionBackendActivity, currentSessionKey),
+        gatewayBackground: gatewayBackgroundActivity,
+        announcedChildSessionKeys,
+      },
+    );
     set((s) => {
       // Save current session's streaming state
       const nextStreamingStates: Record<string, SessionStreamingState> = {
         ...s.sessionStreamingStates,
-        [currentSessionKey]: {
-          activeRunId,
-          streamingText,
-          streamingMessage,
-          streamingTools,
-          pendingFinal,
-          lastUserMessageAt,
-          pendingToolImages,
-          runAborted,
-          runError: s.runError,
-          sending,
-          activeTool: s.activeTool,
-          messagesSnapshot: hasActiveStreaming ? [...messages] : [],
-        },
+        [currentSessionKey]: leavingSnapshot,
       };
       // Remove streaming state if leaving an empty session
       const finalStreamingStates = leavingEmpty
@@ -4557,6 +4569,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // flight, discard the result to prevent overwriting the new session's
       // messages with stale data from the old session.
       if (!isCurrentSession()) return false;
+
+      if (
+        rawMessages.length === 0
+        && get().messages.length > 0
+        && isRetiredDigitalEmployeeAgent(getAgentIdFromSessionKey(currentSessionKey))
+      ) {
+        return true;
+      }
 
       // Before filtering: attach images/files from tool_result messages to the next assistant message
       const messagesWithToolImages = enrichWithToolResultFiles(rawMessages);
@@ -4837,6 +4857,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         }
       }
+      if (finalMessages.length > 0) {
+        set((s) => ({
+          sessionStreamingStates: {
+            ...s.sessionStreamingStates,
+            [currentSessionKey]: {
+              ...(s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState()),
+              messagesSnapshot: stripSyntheticSessionLabelUserMessages(finalMessages, currentSessionKey),
+            },
+          },
+        }));
+      }
       return true;
       };
 
@@ -5089,9 +5120,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     targetAgentId?: string | null,
     options?: import('./chat/send-options').SendMessageOptions,
   ) => {
+    if (isRetiredDigitalEmployeeAgent(get().currentAgentId)) {
+      return;
+    }
+    if (targetAgentId && isRetiredDigitalEmployeeAgent(targetAgentId)) {
+      return;
+    }
     let _deIsDigital = false;
     let _deAgentId = targetAgentId;
     let _deDisplayName: string | null = null;
+    let _deExecutionAgentId: string | null = null;
     if (targetAgentId) {
       // LYClaw rule: @agent in the chat composer is currently limited to
       // digital employees. The target executes in this session via chat.send
@@ -5104,6 +5142,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (targetAgentSummary?.isDigitalEmployee === true) {
         _deIsDigital = true;
         _deAgentId = null;
+        _deExecutionAgentId = targetAgentId;
         _deDisplayName = targetAgentSummary.name || targetAgentId;
         console.info('[digital-employee] resolved from agent snapshot', {
           agentId: targetAgentId,
@@ -5121,6 +5160,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (checkResult.success && checkResult.isDigitalEmployee) {
           _deIsDigital = true;
           _deAgentId = null;
+          _deExecutionAgentId = targetAgentId;
           _deDisplayName = (typeof checkResult.name === 'string' && checkResult.name.trim())
             ? checkResult.name.trim()
             : (_deDisplayName || targetAgentId);
@@ -5146,23 +5186,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!_deIsDigital) {
       const currentAgentId = get().currentAgentId;
       if (currentAgentId && currentAgentId !== 'main') {
-        const agentSummary = useAgentsStore.getState().agents.find(
-          (agent) => agent.id === currentAgentId && agent.isDigitalEmployee,
-        );
-        if (agentSummary) {
+        const resolved = resolveActiveDigitalEmployeeExecutionAgent(currentAgentId, {
+          agents: useAgentsStore.getState().agents,
+          digitalEmployees: useDigitalEmployeesStore.getState().employees,
+        });
+        if (resolved) {
           _deIsDigital = true;
           _deAgentId = null;
-          _deDisplayName = agentSummary.name || currentAgentId;
+          _deExecutionAgentId = resolved.agentId;
+          _deDisplayName = resolved.name;
           console.info('[digital-employee] auto-resolved from session agent', {
-            agentId: currentAgentId,
+            sessionAgentId: currentAgentId,
+            executionAgentId: resolved.agentId,
             sessionKey: get().currentSessionKey,
           });
         }
       }
     }
     // Resolve the effective target agent ID: prefer explicit @mention parameter,
-    // fall back to the current session's agent ID when auto-detected as digital employee.
-    const _resolvedTargetAgentId = targetAgentId ?? (_deIsDigital ? get().currentAgentId : null);
+    // fall back to the mapped execution agent when auto-detected as digital employee.
+    const _resolvedTargetAgentId = _deIsDigital
+      ? (_deExecutionAgentId ?? targetAgentId ?? get().currentAgentId)
+      : (targetAgentId ?? null);
     const trimmed = text.trim();
     if (!trimmed && (!attachments || attachments.length === 0)) return;
     const gatewayTrimmed = (options?.gatewayText ?? text).trim();

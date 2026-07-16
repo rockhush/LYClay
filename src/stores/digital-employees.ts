@@ -4,6 +4,13 @@ import {
   commitCachedDigitalEmployeeDisplayMetadata,
   seedCachedDigitalEmployeeDisplayMetadata,
 } from '@/lib/digital-employee-display-cache';
+import {
+  retireDigitalEmployee,
+  retireDigitalEmployeesByMarketId,
+  unretireDigitalEmployee,
+  unretireDigitalEmployeesByMarketId,
+  refreshRetiredDigitalEmployeeNamesForMarketId,
+} from '@/lib/retired-digital-employees';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import type {
   InstallDigitalEmployeeInput,
@@ -39,6 +46,8 @@ interface DigitalEmployeesState {
   uninstallingMarketEmployeeId: string | null;
   updatingInstanceId: string | null;
   error: string | null;
+  /** Bumped when retired-session registry changes so chat UI can re-evaluate read-only state. */
+  retiredSessionsRevision: number;
   fetchEmployees: () => Promise<void>;
   prefetchMarketplaceCatalog: () => Promise<void>;
   installMarketplaceEmployee: (
@@ -83,6 +92,7 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
   uninstallingMarketEmployeeId: null,
   updatingInstanceId: null,
   error: null,
+  retiredSessionsRevision: 0,
 
   fetchEmployees: async () => {
     set({ loading: true, error: null });
@@ -144,6 +154,19 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
           tags: marketplaceEntry.tags,
         });
       }
+      let reactivatedRetiredSessions = unretireDigitalEmployeesByMarketId(input.marketEmployeeId);
+      if (marketplaceEntry?.name) {
+        if (refreshRetiredDigitalEmployeeNamesForMarketId(input.marketEmployeeId, marketplaceEntry.name)) {
+          reactivatedRetiredSessions = true;
+        }
+      }
+      if (result.agentId && unretireDigitalEmployee(result.agentId)) {
+        reactivatedRetiredSessions = true;
+      }
+      if (reactivatedRetiredSessions) {
+        set((state) => ({ retiredSessionsRevision: state.retiredSessionsRevision + 1 }));
+        scheduleUiStateSync();
+      }
       await Promise.all([
         get().fetchEmployees(),
         useAgentsStore.getState().fetchAgents({ force: true }),
@@ -160,6 +183,15 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
     const marketEmployeeId = input.marketEmployeeId != null
       ? String(input.marketEmployeeId)
       : null;
+    const employeesBeforeUninstall = get().employees.filter((employee) => {
+      if (input.instanceId) {
+        return employee.instanceId === input.instanceId;
+      }
+      if (marketEmployeeId) {
+        return employee.marketEmployeeId === marketEmployeeId;
+      }
+      return false;
+    });
     set({
       uninstallingMarketEmployeeId: marketEmployeeId,
       error: null,
@@ -172,6 +204,49 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
           body: JSON.stringify(input),
         },
       );
+      let retiredChanged = false;
+      const retiredAt = new Date().toISOString();
+      const marketIdsToRetireAll = new Set<string>();
+      for (const employee of employeesBeforeUninstall) {
+        if (employee.marketEmployeeId) {
+          marketIdsToRetireAll.add(employee.marketEmployeeId);
+        }
+        if (retireDigitalEmployee({
+          agentId: employee.agentId,
+          name: employee.name,
+          marketEmployeeId: employee.marketEmployeeId,
+          retiredAt,
+        })) {
+          retiredChanged = true;
+        }
+      }
+      if (
+        employeesBeforeUninstall.length === 0
+        && result.agentId
+        && result.marketEmployeeId
+      ) {
+        marketIdsToRetireAll.add(String(result.marketEmployeeId));
+        const marketplaceEntry = get().marketplaceCatalog.find(
+          (entry) => entry.slug === result.marketEmployeeId,
+        );
+        if (retireDigitalEmployee({
+          agentId: result.agentId,
+          name: marketplaceEntry?.name || result.agentId,
+          marketEmployeeId: result.marketEmployeeId,
+          retiredAt,
+        })) {
+          retiredChanged = true;
+        }
+      }
+      for (const marketId of marketIdsToRetireAll) {
+        if (retireDigitalEmployeesByMarketId(marketId, { retiredAt })) {
+          retiredChanged = true;
+        }
+      }
+      if (retiredChanged) {
+        set((state) => ({ retiredSessionsRevision: state.retiredSessionsRevision + 1 }));
+        scheduleUiStateSync();
+      }
       await Promise.all([
         get().fetchEmployees(),
         useAgentsStore.getState().fetchAgents({ force: true }),

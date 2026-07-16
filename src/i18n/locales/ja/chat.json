@@ -58,6 +58,7 @@
         "gatewayInitializingPlaceholder": "ゲートウェイを初期化中...",
         "gatewayWarmingPlaceholder": "AI モデルをウォームアップ中...",
         "gatewayPreparingPlaceholder": "ゲートウェイを準備中...",
+        "retiredDigitalEmployeePlaceholder": "このデジタル社員はアンインストール済みです。現在のセッションは履歴の閲覧のみ可能です。",
         "send": "送信",
         "stop": "停止",
         "gatewayConnected": "接続済み",

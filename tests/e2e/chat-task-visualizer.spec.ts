@@ -173,6 +173,43 @@ const longRunHistory = [
 ];
 
 const errorRunPrompt = '你是什么模型？';
+const thinkingProcessPrompt = 'Summarize important messages';
+const thinkingProcessNarration = 'I checked the source messages and grouped the important items.';
+const thinkingProcessSummary = 'Here are the important items.';
+const thinkingProcessReplyText = `${thinkingProcessNarration} ${thinkingProcessSummary}`;
+const thinkingProcessHistory = [
+  {
+    role: 'user',
+    content: [{ type: 'text', text: thinkingProcessPrompt }],
+    timestamp: Date.now(),
+  },
+  {
+    role: 'assistant',
+    id: 'thinking-process-step',
+    content: [
+      { type: 'thinking', thinking: thinkingProcessNarration },
+      { type: 'toolCall', id: 'read-1', name: 'read', arguments: { path: 'messages.json' } },
+    ],
+    stopReason: 'toolUse',
+    timestamp: Date.now(),
+  },
+  {
+    role: 'toolResult',
+    toolCallId: 'read-1',
+    toolName: 'read',
+    content: [{ type: 'text', text: 'messages' }],
+    isError: false,
+    timestamp: Date.now(),
+  },
+  {
+    role: 'assistant',
+    id: 'thinking-process-final',
+    content: [{ type: 'text', text: thinkingProcessReplyText }],
+    stopReason: 'stop',
+    timestamp: Date.now(),
+  },
+];
+
 const errorRunHistory = [
   {
     role: 'user',
@@ -352,6 +389,74 @@ test.describe('ClawX chat execution graph', () => {
       await expect(page.getByTestId('chat-execution-graph')).toContainText('9 process messages');
       await expect(page.getByText(longRunSummary, { exact: true })).toBeVisible();
       await expect(page.getByText(longRunReplyText, { exact: true })).toHaveCount(0);
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
+
+  test('strips thinking-classified process text from the final reply bubble', async ({ launchElectronApp }) => {
+    const app = await launchElectronApp({ skipSetup: true });
+
+    try {
+      await installIpcMocks(app, {
+        gatewayStatus: { state: 'running', port: 18789, pid: 12345 },
+        gatewayRpc: {
+          [stableStringify(['sessions.list', {}])]: {
+            success: true,
+            result: {
+              sessions: [{ key: PROJECT_MANAGER_SESSION_KEY, displayName: 'main' }],
+            },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 200 }])]: {
+            success: true,
+            result: {
+              messages: thinkingProcessHistory,
+            },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 1000 }])]: {
+            success: true,
+            result: {
+              messages: thinkingProcessHistory,
+            },
+          },
+        },
+        hostApi: {
+          [stableStringify(['/api/gateway/status', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: { state: 'running', port: 18789, pid: 12345 },
+            },
+          },
+          [stableStringify(['/api/agents', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: {
+                success: true,
+                agents: [{ id: 'main', name: 'main' }],
+              },
+            },
+          },
+        },
+      });
+
+      const page = await getStableWindow(app);
+      try {
+        await page.reload();
+      } catch (error) {
+        if (!String(error).includes('ERR_FILE_NOT_FOUND')) {
+          throw error;
+        }
+      }
+
+      await expect(page.getByTestId('main-layout')).toBeVisible();
+      await expect(page.getByTestId('chat-execution-graph')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText(thinkingProcessSummary, { exact: true })).toBeVisible();
+      await expect(page.getByText(thinkingProcessReplyText, { exact: true })).toHaveCount(0);
+      await expect(page.getByTestId('chat-execution-graph')).toContainText('1 process message');
     } finally {
       await closeElectronApp(app);
     }

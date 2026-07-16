@@ -13,6 +13,7 @@ import { JsonRpcNotification, isNotification, isResponse } from './protocol';
 import { logger } from '../utils/logger';
 import { protectMemoryRpcOutput } from '../security/memory-content-policy';
 import { enrichChatSendParams } from '../utils/chat-send-enrichment';
+import { prepareHistoricalDigitalEmployeeChatSend } from '../utils/historical-digital-employee-agents';
 import { captureTelemetryEvent, trackMetric } from '../utils/telemetry';
 // Dev-only Langfuse chat tracing �?uncomment with electron/main/index.ts langfuse import.
 // import {
@@ -77,7 +78,9 @@ import { isInvalidConfigSignal } from './startup-recovery';
 import { ensureClawXContext } from '../utils/openclaw-workspace';
 import { inspectOpenClawDigitalEmployeeIsolation } from '../utils/openclaw-digital-employee-isolation';
 import { handleGatewayExecApprovalRequested } from './exec-approval-bridge';
+import { handleGatewayPluginApprovalRequested } from './plugin-approval-bridge';
 import {
+  inspectSessionTranscriptLock,
   recoverOrphanedSessionTranscriptLock,
   recoverStaleSessionAfterEmptyFinal,
   type SessionTranscriptLockRecoveryResult,
@@ -206,6 +209,17 @@ function isTransportRpcFailure(error: unknown): boolean {
     || message.includes('Failed to send RPC request:');
 }
 
+class SessionTranscriptLockBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionTranscriptLockBusyError';
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Gateway Manager Events
  */
@@ -267,6 +281,8 @@ export class GatewayManager extends EventEmitter {
   private static readonly GATEWAY_READY_FALLBACK_MS = 2_000;
   private static readonly GATEWAY_READY_PROBE_TIMEOUT_MS = 1_500;
   private static readonly TERMINAL_LOCK_AUDIT_DELAY_MS = 5_000;
+  private static readonly CHAT_SEND_LOCK_GATE_WAIT_MS = 15_000;
+  private static readonly CHAT_SEND_LOCK_GATE_POLL_MS = 500;
   private lastRestartAt = 0;
   /** Set by scheduleReconnect() before calling start() to signal auto-reconnect. */
   private isAutoReconnectStart = false;
@@ -2614,6 +2630,7 @@ export class GatewayManager extends EventEmitter {
     await this.supersedeTrackedUserRunsBeforeChatSend(params);
     await this.recoverStaleEmptyFinalBeforeChatSend(params);
     await this.recoverSessionTranscriptLockForChatSend(params, 'before-user-chat-send');
+    await this.waitForSessionTranscriptLockReleaseBeforeChatSend(params);
 
     if (this.warmupTimer) {
       this.clearWarmupTimer();
@@ -2747,6 +2764,52 @@ export class GatewayManager extends EventEmitter {
     await this.recoverSessionTranscriptLock(sessionKey, reason);
   }
 
+  private async waitForSessionTranscriptLockReleaseBeforeChatSend(params: unknown): Promise<void> {
+    const sessionKey = this.getChatSendSessionKey(params);
+    if (!sessionKey) return;
+
+    const openclawDir = path.join(homedir(), '.openclaw');
+    const currentPid = this.getGatewayProcessPid();
+    const startedAt = Date.now();
+    let snapshot = await inspectSessionTranscriptLock({ sessionKey, openclawDir, currentPid });
+    if (!snapshot.exists) return;
+
+    logger.warn('[gateway:session-lock-gate] waiting before user chat.send', {
+      sessionKey,
+      lockPath: snapshot.lockPath,
+      lockAgeMs: snapshot.lockAgeMs,
+      lockPid: snapshot.lockPid,
+      lockPidAlive: snapshot.lockPidAlive,
+      currentPid,
+      maxWaitMs: GatewayManager.CHAT_SEND_LOCK_GATE_WAIT_MS,
+    });
+
+    while (Date.now() - startedAt < GatewayManager.CHAT_SEND_LOCK_GATE_WAIT_MS) {
+      await delay(GatewayManager.CHAT_SEND_LOCK_GATE_POLL_MS);
+      snapshot = await inspectSessionTranscriptLock({ sessionKey, openclawDir, currentPid });
+      if (!snapshot.exists) {
+        logger.info('[gateway:session-lock-gate] released before user chat.send', {
+          sessionKey,
+          waitedMs: Date.now() - startedAt,
+        });
+        return;
+      }
+    }
+
+    logger.warn('[gateway:session-lock-gate] blocked user chat.send', {
+      sessionKey,
+      lockPath: snapshot.lockPath,
+      lockAgeMs: snapshot.lockAgeMs,
+      lockPid: snapshot.lockPid,
+      lockPidAlive: snapshot.lockPidAlive,
+      currentPid,
+      waitedMs: Date.now() - startedAt,
+    });
+    throw new SessionTranscriptLockBusyError(
+      `Previous session response is still settling; transcript lock is still active for ${sessionKey}. Please retry shortly.`,
+    );
+  }
+
   private async recoverSessionTranscriptLock(
     sessionKey: string | undefined,
     reason: string,
@@ -2806,9 +2869,15 @@ export class GatewayManager extends EventEmitter {
    * Uses OpenClaw protocol format: { type: "req", id: "...", method: "...", params: {...} }
    */
   async rpc<T>(method: string, params?: unknown, timeoutMs = 30000): Promise<T> {
-    const effectiveParams = method === 'chat.send'
-      ? await enrichChatSendParams(params)
-      : params;
+    let effectiveParams = params;
+    if (method === 'chat.send') {
+      effectiveParams = await prepareHistoricalDigitalEmployeeChatSend(params, {
+        reloadGateway: () => this.reload(),
+      });
+    }
+    effectiveParams = method === 'chat.send'
+      ? await enrichChatSendParams(effectiveParams)
+      : effectiveParams;
     await this.warnIfDigitalEmployeeIsolationMissing(method, effectiveParams);
     await this.prepareForUserChatSend(method, effectiveParams);
     const rpcStart = Date.now();
@@ -3161,6 +3230,13 @@ export class GatewayManager extends EventEmitter {
           request: this.rpc.bind(this),
         }).catch((error) => {
           logger.warn(`[security:gateway-exec] Approval bridge failed: ${String(error)}`);
+        });
+      }
+      if (msg.event === 'plugin.approval.requested') {
+        void handleGatewayPluginApprovalRequested(msg.payload, {
+          request: this.rpc.bind(this),
+        }).catch((error) => {
+          logger.warn(`[security:gateway-plugin] Approval bridge failed: ${String(error)}`);
         });
       }
       dispatchProtocolEvent(this, msg.event, msg.payload);

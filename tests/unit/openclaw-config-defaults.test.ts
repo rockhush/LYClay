@@ -47,11 +47,11 @@ describe('ensureOpenClawAgentDefaults', () => {
     mode: 'default',
     notifyUser: true,
     reserveTokensFloor: 32000,
-    keepRecentTokens: 50000,
+    keepRecentTokens: 20000,
     timeoutSeconds: 900,
     midTurnPrecheck: { enabled: false },
     truncateAfterCompaction: false,
-    memoryFlush: { enabled: true, softThresholdTokens: 24000, forceFlushTranscriptBytes: '8mb' },
+    memoryFlush: { enabled: true, softThresholdTokens: 12000, forceFlushTranscriptBytes: '2mb' },
   };
 
   it('sets maxConcurrent=30 and full compaction defaults when agents.defaults is missing', () => {
@@ -206,6 +206,31 @@ describe('ensureOpenClawAgentDefaults', () => {
     expect(compaction).toEqual(FULL_COMPACTION_DEFAULTS);
   });
 
+  it('migrates previous browser-heavy compaction defaults to tighter defaults', () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        defaults: {
+          maxConcurrent: 30,
+          contextTokens: 200000,
+          compaction: {
+            mode: 'default',
+            notifyUser: true,
+            reserveTokensFloor: 32000,
+            keepRecentTokens: 50000,
+            timeoutSeconds: 900,
+            midTurnPrecheck: { enabled: false },
+            truncateAfterCompaction: false,
+            memoryFlush: { enabled: true, softThresholdTokens: 24000, forceFlushTranscriptBytes: '8mb' },
+          },
+        },
+      },
+    };
+
+    expect(ensureOpenClawAgentDefaults(config)).toBe(true);
+    const compaction = (config.agents as { defaults: { compaction: Record<string, unknown> } })
+      .defaults.compaction;
+    expect(compaction).toEqual(FULL_COMPACTION_DEFAULTS);
+  });
   it('preserves custom positive compaction budgets while filling missing memory flush fields', () => {
     const config: Record<string, unknown> = {
       agents: {
@@ -236,7 +261,7 @@ describe('ensureOpenClawAgentDefaults', () => {
       memoryFlush: {
         enabled: true,
         softThresholdTokens: 30000,
-        forceFlushTranscriptBytes: '8mb',
+        forceFlushTranscriptBytes: '2mb',
       },
     });
   });

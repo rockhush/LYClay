@@ -34,6 +34,15 @@ export interface CachedDigitalEmployeeDisplayMetadata {
   tags?: string[];
 }
 
+export interface RetiredDigitalEmployeeRecord {
+  agentId: string;
+  name: string;
+  marketEmployeeId?: string;
+  retiredAt: string;
+  /** When false, the agent id is reactivated but the display name mapping is kept. */
+  readOnly?: boolean;
+}
+
 export interface LyclawUiState {
   version: 1;
   updatedAt: number;
@@ -54,6 +63,7 @@ export interface LyclawUiState {
   };
   digitalEmployees: {
     cachedDisplayMetadata: Record<string, CachedDigitalEmployeeDisplayMetadata>;
+    retiredAgents: Record<string, RetiredDigitalEmployeeRecord>;
   };
 }
 
@@ -84,6 +94,7 @@ export function createEmptyUiState(): LyclawUiState {
     },
     digitalEmployees: {
       cachedDisplayMetadata: {},
+      retiredAgents: {},
     },
   };
 }
@@ -122,6 +133,52 @@ function sanitizeCachedDigitalEmployeeDisplayMetadataRecord(
     if (typeof key !== 'string' || !key) continue;
     const metadata = sanitizeCachedDigitalEmployeeDisplayMetadata(value);
     if (metadata) out[key] = metadata;
+  }
+  return out;
+}
+
+function sanitizeRetiredDigitalEmployeeRecord(
+  agentId: string,
+  input: unknown,
+): RetiredDigitalEmployeeRecord | null {
+  if (!agentId.trim() || !input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const raw = input as Record<string, unknown>;
+  const normalizedAgentId = typeof raw.agentId === 'string' && raw.agentId.trim()
+    ? raw.agentId.trim()
+    : agentId.trim();
+  if (normalizedAgentId !== agentId.trim()) return null;
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  if (!name) return null;
+  const retiredAt = typeof raw.retiredAt === 'string' && raw.retiredAt.trim()
+    ? raw.retiredAt.trim()
+    : '';
+  if (!retiredAt) return null;
+
+  const record: RetiredDigitalEmployeeRecord = {
+    agentId: normalizedAgentId,
+    name,
+    retiredAt,
+  };
+  if (typeof raw.marketEmployeeId === 'string' && raw.marketEmployeeId.trim()) {
+    record.marketEmployeeId = raw.marketEmployeeId.trim();
+  } else if (typeof raw.marketEmployeeId === 'number' && Number.isFinite(raw.marketEmployeeId)) {
+    record.marketEmployeeId = String(raw.marketEmployeeId);
+  }
+  if (raw.readOnly === false) {
+    record.readOnly = false;
+  }
+  return record;
+}
+
+function sanitizeRetiredDigitalEmployeeRecordMap(
+  input: unknown,
+): Record<string, RetiredDigitalEmployeeRecord> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, RetiredDigitalEmployeeRecord> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof key !== 'string' || !key.trim()) continue;
+    const record = sanitizeRetiredDigitalEmployeeRecord(key, value);
+    if (record) out[key] = record;
   }
   return out;
 }
@@ -270,6 +327,7 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
       cachedDisplayMetadata: sanitizeCachedDigitalEmployeeDisplayMetadataRecord(
         digitalEmployeesObj.cachedDisplayMetadata,
       ),
+      retiredAgents: sanitizeRetiredDigitalEmployeeRecordMap(digitalEmployeesObj.retiredAgents),
     },
   };
 }
@@ -360,6 +418,12 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
         : {
             ...base.digitalEmployees.cachedDisplayMetadata,
             ...normalizedPatch.digitalEmployees.cachedDisplayMetadata,
+          },
+      retiredAgents: replaceDigitalEmployees
+        ? normalizedPatch.digitalEmployees.retiredAgents
+        : {
+            ...base.digitalEmployees.retiredAgents,
+            ...normalizedPatch.digitalEmployees.retiredAgents,
           },
     },
   };

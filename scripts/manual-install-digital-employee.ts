@@ -62,7 +62,7 @@ async function main(): Promise<void> {
   );
 
   const result = await installDigitalEmployee(
-    { marketEmployeeId: marketEmployeeId ?? '7' },
+    { marketEmployeeId: marketEmployeeId ?? '67' },
     dependencies,
   );
   const installPath = getDigitalEmployeeInstallPath(result.instanceId);

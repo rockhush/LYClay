@@ -18,6 +18,28 @@ type LockOwner = {
   createdAt?: unknown;
 };
 
+export type SessionTranscriptLockSnapshot =
+  | {
+      exists: true;
+      sessionKey: string;
+      sessionFile: string;
+      lockPath: string;
+      lockAgeMs: number;
+      lockPid?: unknown;
+      lockPidAlive: boolean | null;
+      currentPid: number;
+      lockBelongsToCurrentGateway: boolean;
+      sessionStatus: unknown;
+    }
+  | {
+      exists: false;
+      sessionKey: string;
+      reason: string;
+      sessionFile?: string;
+      lockPath?: string;
+      details?: Record<string, unknown>;
+    };
+
 export type SessionTranscriptLockRecoveryResult =
   | { recovered: true; lockPath: string; sessionFile: string; lockAgeMs: number; lockPid?: unknown; lockPidAlive?: boolean | null }
   | { recovered: false; reason: string; lockPath?: string; sessionFile?: string; lockAgeMs?: number; details?: Record<string, unknown> };
@@ -114,6 +136,69 @@ function getLockCreatedAtMs(lockOwner: LockOwner | null, lockMtimeMs: number, no
   const parsed = typeof lockOwner?.createdAt === 'string' ? Date.parse(lockOwner.createdAt) : NaN;
   if (Number.isFinite(parsed)) return parsed;
   return Number.isFinite(lockMtimeMs) ? lockMtimeMs : nowMs;
+}
+
+export async function inspectSessionTranscriptLock(params: {
+  sessionKey: string | null | undefined;
+  openclawDir: string;
+  currentPid?: number;
+  nowMs?: number;
+}): Promise<SessionTranscriptLockSnapshot> {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) return { exists: false, sessionKey: '', reason: 'missing-session-key' };
+
+  const agentId = parseAgentId(sessionKey);
+  if (!agentId) return { exists: false, sessionKey, reason: 'unsupported-session-key' };
+
+  const sessionsDir = path.join(params.openclawDir, 'agents', agentId, 'sessions');
+  const sessionsJsonPath = path.join(sessionsDir, 'sessions.json');
+  const sessionsJson = await readJsonFile<Record<string, SessionStoreEntry>>(sessionsJsonPath);
+  const entry = sessionsJson?.[sessionKey];
+  if (!entry) return { exists: false, sessionKey, reason: 'session-entry-missing' };
+
+  const rawSessionFile = typeof entry.sessionFile === 'string' ? entry.sessionFile : '';
+  if (!rawSessionFile) return { exists: false, sessionKey, reason: 'session-file-missing' };
+
+  const sessionFile = path.isAbsolute(rawSessionFile)
+    ? rawSessionFile
+    : path.join(sessionsDir, rawSessionFile);
+  if (!isJsonlSessionFile(sessionFile, sessionsDir)) {
+    return { exists: false, sessionKey, reason: 'session-file-outside-root', sessionFile };
+  }
+
+  const lockPath = `${sessionFile}.lock`;
+  let lockStat;
+  try {
+    lockStat = await stat(lockPath);
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'ENOENT') {
+      return { exists: false, sessionKey, reason: 'lock-missing', sessionFile, lockPath };
+    }
+    return { exists: false, sessionKey, reason: 'lock-stat-failed', sessionFile, lockPath };
+  }
+
+  const lockOwner = await readJsonFile<LockOwner>(lockPath);
+  if (!lockOwner || typeof lockOwner !== 'object') {
+    return { exists: false, sessionKey, reason: 'lock-owner-unreadable', sessionFile, lockPath };
+  }
+
+  const currentPid = params.currentPid ?? process.pid;
+  const nowMs = params.nowMs ?? Date.now();
+  const lockPid = lockOwner.pid;
+  const lockPidAlive = isPidAlive(lockPid);
+  const lockCreatedAtMs = getLockCreatedAtMs(lockOwner, lockStat.mtimeMs, nowMs);
+  return {
+    exists: true,
+    sessionKey,
+    sessionFile,
+    lockPath,
+    lockAgeMs: Math.max(0, nowMs - lockCreatedAtMs),
+    lockPid,
+    lockPidAlive,
+    currentPid,
+    lockBelongsToCurrentGateway: lockPid === currentPid,
+    sessionStatus: entry.status,
+  };
 }
 
 export async function recoverOrphanedSessionTranscriptLock(params: {

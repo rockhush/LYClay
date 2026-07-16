@@ -5,6 +5,8 @@ import { cn } from '@/lib/utils';
 import { useProviderStore } from '@/stores/providers';
 import { useChatStore } from '@/stores/chat';
 import { useAgentsStore } from '@/stores/agents';
+import { useDigitalEmployeesStore } from '@/stores/digital-employees';
+import { resolveActiveDigitalEmployeeExecutionAgent } from '@/lib/retired-digital-employees';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { buildProviderListItems, type ProviderListItem } from '@/lib/provider-accounts';
@@ -81,6 +83,10 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const { t } = useTranslation('chat');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [hoveredOptionId, setHoveredOptionId] = useState<string | null>(null);
+  const [optimisticSelection, setOptimisticSelection] = useState<{
+    sessionKey: string | null;
+    optionId: string;
+  } | null>(null);
   const [switchingSessionModel, setSwitchingSessionModel] = useState(false);
   const [digitalEmployeeModelScope, setDigitalEmployeeModelScope] = useState<DigitalEmployeeModelScope | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -92,8 +98,18 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const sessions = useChatStore((s) => s.sessions);
   const setCurrentSessionModel = useChatStore((s) => s.setCurrentSessionModel);
   const agents = useAgentsStore((s) => s.agents);
+  const digitalEmployees = useDigitalEmployeesStore((s) => s.employees);
   const defaultModelRef = useAgentsStore((s) => s.defaultModelRef);
-  const currentAgent = agents.find((agent) => agent.id === currentAgentId);
+  const digitalEmployeeExecutionAgent = useMemo(
+    () => resolveActiveDigitalEmployeeExecutionAgent(currentAgentId, { agents, digitalEmployees }),
+    [agents, currentAgentId, digitalEmployees],
+  );
+  const resolvedSessionAgent = useMemo(
+    () => (digitalEmployeeExecutionAgent
+      ? agents.find((agent) => agent.id === digitalEmployeeExecutionAgent.agentId)
+      : agents.find((agent) => agent.id === currentAgentId)),
+    [agents, currentAgentId, digitalEmployeeExecutionAgent],
+  );
 
   const providerItems = useMemo(() => {
     return buildProviderListItems(accounts, statuses, vendors, defaultAccountId);
@@ -102,7 +118,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
   useEffect(() => {
     let cancelled = false;
-    const agentId = currentAgent?.isDigitalEmployee ? currentAgent.id : null;
+    const agentId = digitalEmployeeExecutionAgent?.agentId ?? null;
     if (!agentId) {
       setDigitalEmployeeModelScope(null);
       return;
@@ -121,7 +137,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
     return () => {
       cancelled = true;
     };
-  }, [currentAgent?.id, currentAgent?.isDigitalEmployee]);
+  }, [digitalEmployeeExecutionAgent?.agentId]);
   const configuredProviders = useMemo(() => {
     return providerItems.filter(item => {
       if (item.account.vendorId === LY_AUTO_PROVIDER_ID) return true;
@@ -137,7 +153,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
 
   const digitalEmployeeProviderItem = useMemo<ProviderListItem | null>(() => {
-    if (!currentAgent?.isDigitalEmployee || !digitalEmployeeModelScope?.models.length) return null;
+    if (!digitalEmployeeExecutionAgent || !digitalEmployeeModelScope?.models.length) return null;
     const now = digitalEmployeeModelScope.lastSuccessAt ?? new Date(0).toISOString();
     const runtimeModels = digitalEmployeeModelScope.models.map((model) => {
       if (typeof model === 'string') {
@@ -191,7 +207,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
         keyMasked: '••••',
       },
     };
-  }, [currentAgent?.isDigitalEmployee, digitalEmployeeModelScope, vendors]);
+  }, [digitalEmployeeExecutionAgent, digitalEmployeeModelScope, vendors]);
   const configuredModelOptions = useMemo<ConfiguredModelOption[]>(() => {
     const sourceProviders = digitalEmployeeProviderItem
       ? [digitalEmployeeProviderItem, ...configuredProviders]
@@ -225,6 +241,13 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
     }
   }, [pickerOpen]);
 
+  useEffect(() => {
+    if (!optimisticSelection) return;
+    if (optimisticSelection.sessionKey !== currentSessionKey) {
+      setOptimisticSelection(null);
+    }
+  }, [currentSessionKey, optimisticSelection]);
+
   const handleSelectProvider = (item: ConfiguredModelOption) => {
     if (switchingSessionModel) {
       return;
@@ -247,6 +270,10 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
     setPickerOpen(false);
     setHoveredOptionId(null);
+    setOptimisticSelection({
+      sessionKey: currentSessionKey,
+      optionId: item.optionId,
+    });
     setSwitchingSessionModel(true);
     void (async () => {
       try {
@@ -254,6 +281,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
         toast.success(t('composer.modelSwitched', { name: item.model.label || item.vendor?.name || item.account.label }));
       } catch (error) {
         console.error('Failed to persist session model:', error);
+        setOptimisticSelection(null);
         toast.error(t('composer.modelSwitchFailed', { error: String(error) }));
       } finally {
         setSwitchingSessionModel(false);
@@ -267,7 +295,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
   const isDisabled = disabled || isStreaming || switchingSessionModel;
   const currentSessionModel = sessions.find((session) => session.key === currentSessionKey)?.model;
-  const effectiveModelRef = currentSessionModel || currentAgent?.modelRef || defaultModelRef || undefined;
+  const effectiveModelRef = currentSessionModel || resolvedSessionAgent?.modelRef || defaultModelRef || undefined;
   const currentItem = configuredModelOptions.find((item) => item.model.modelRef === effectiveModelRef)
     ?? configuredModelOptions.find((item) => item.account.id === defaultAccountId)
     ?? configuredModelOptions[0];
@@ -275,6 +303,10 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
   const matchedModelOption = configuredModelOptions.find((item) => item.model.modelRef === effectiveModelRef)
     ?? configuredModelOptions.find((item) => item.account.id === currentItem?.account.id && item.model.modelId === effectiveModelId)
     ?? configuredModelOptions.find((item) => item.model.modelId === effectiveModelId);
+  const hasOptimisticSelection = optimisticSelection?.sessionKey === currentSessionKey;
+  const selectedOptionId = hasOptimisticSelection
+    ? optimisticSelection.optionId
+    : matchedModelOption?.optionId ?? currentItem?.optionId;
   const matchedAccount = matchedModelOption ?? findProviderItemByModelRef(configuredProviders, effectiveModelRef);
   const currentLabel = matchedModelOption?.model.label
     || (matchedAccount?.account.metadata?.managedBy === 'sub2api' ? effectiveModelId : undefined)
@@ -285,7 +317,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
     || currentItem?.model.label
     || currentItem?.account.label
     || currentItem?.vendor?.name
-    || currentAgent?.modelDisplay
+    || resolvedSessionAgent?.modelDisplay
     || defaultModelRef?.split('/').pop()
     || t('composer.switchModel');
 
@@ -338,9 +370,9 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
 
               <div className="max-h-64 overflow-y-auto">
                 {configuredModelOptions.map((item) => {
-                  const isSelected = item.model.modelRef === effectiveModelRef
-                    || item.model.modelId === effectiveModelId
-                    || (!effectiveModelRef && item.optionId === currentItem?.optionId);
+                  const isSelected = hasOptimisticSelection
+                    ? item.optionId === selectedOptionId
+                    : item.model.modelRef === effectiveModelRef || item.optionId === selectedOptionId;
                   const isHovered = item.optionId === hoveredOptionId;
                   const vendorName = item.vendor?.name || item.account.label;
                   const modelId = item.model.modelId;
@@ -350,6 +382,7 @@ export function ModelPicker({ disabled = false }: ModelPickerProps) {
                       key={item.optionId}
                       type="button"
                       disabled={switchingSessionModel}
+                      aria-pressed={isSelected}
                       onMouseEnter={() => setHoveredOptionId(item.optionId)}
                       onFocus={() => setHoveredOptionId(item.optionId)}
                       onClick={() => handleSelectProvider(item)}
