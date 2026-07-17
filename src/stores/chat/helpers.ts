@@ -534,29 +534,12 @@ function normalizeComplexTaskControlUserMessages(messages: RawMessage[]): RawMes
   return visibleMessages;
 }
 
-export function getComparableAttachmentSignature(
-  message: Pick<RawMessage, '_attachedFiles' | 'content'>,
-): string {
+export function getComparableAttachmentSignature(message: Pick<RawMessage, '_attachedFiles'>): string {
   const files = (message._attachedFiles || [])
     .map((file) => file.filePath || `${file.fileName}|${file.mimeType}|${file.fileSize}`)
     .filter(Boolean)
     .sort();
-  if (files.length > 0) return files.join('::');
-
-  const mediaRefs = extractMediaRefs(getMessageText(message.content));
-  return mediaRefs
-    .map((ref) => ref.filePath)
-    .filter(Boolean)
-    .sort()
-    .join('::');
-}
-
-/** Stable dedupe key for user messages: normalized text plus attachment identity when present. */
-export function getUserMessageDedupeKey(message: RawMessage): string | null {
-  const text = normalizeComparableUserText(message.content);
-  if (!text) return null;
-  const attachmentSignature = getComparableAttachmentSignature(message);
-  return attachmentSignature ? `${text}\0${attachmentSignature}` : text;
+  return files.join('::');
 }
 
 /** Placeholder user bubble synthesized from a truncated sidebar label — not a real send. */
@@ -596,14 +579,7 @@ function matchesOptimisticUserMessage(
   if (sameText && sameAttachments) return true;
   if (sameText && (!optimisticAttachments || !candidateAttachments) && timestampCompatible) return true;
   if (sameAttachments && (!optimisticText || !candidateText) && timestampCompatible) return true;
-  if (equivalentAttachmentOnlyTexts) {
-    if (!timestampCompatible) return false;
-    if (optimisticAttachments && candidateAttachments) {
-      return optimisticAttachments === candidateAttachments;
-    }
-    // UI optimistic bubble vs gateway echo: one side may lack structured attachment metadata.
-    return true;
-  }
+  if (equivalentAttachmentOnlyTexts) return true;
   return false;
 }
 
@@ -618,9 +594,7 @@ export function areEquivalentUserMessageTexts(a: RawMessage, b: RawMessage): boo
   if (textA && textB && textA === textB) {
     return hasAttachmentSignature ? signatureA === signatureB : true;
   }
-  if (areEquivalentAttachmentOnlyUserTexts(textA, textB)) {
-    return signatureA === signatureB;
-  }
+  if (areEquivalentAttachmentOnlyUserTexts(textA, textB)) return true;
 
   if (!textA && !textB) {
     return signatureA.length > 0 && signatureA === signatureB;
@@ -651,39 +625,12 @@ export function dedupeConsecutiveEquivalentUserMessages(messages: RawMessage[]):
   return result.length === messages.length ? messages : result;
 }
 
-function dedupeEchoedUserMessages(messages: RawMessage[]): RawMessage[] {
-  if (messages.length < 2) return messages;
-
-  const result: RawMessage[] = [];
-  for (const message of messages) {
-    if (message.role !== 'user') {
-      result.push(message);
-      continue;
-    }
-
-    const existingTimestampMs = (existing: RawMessage) => (
-      existing.timestamp != null ? toMs(existing.timestamp as number) : Date.now()
-    );
-    const duplicateIndex = result.findIndex((existing) => (
-      existing.role === 'user'
-      && matchesOptimisticUserMessage(message, existing, existingTimestampMs(existing))
-    ));
-
-    if (duplicateIndex < 0) {
-      result.push(message);
-      continue;
-    }
-
-    result[duplicateIndex] = mergeAttachmentOnlyUserMessage(result[duplicateIndex]!, message);
-  }
-
-  return result.length === messages.length ? messages : result;
-}
-
 export function dedupeEquivalentAttachmentUserMessages(messages: RawMessage[]): RawMessage[] {
   if (messages.length < 2) return messages;
-  const echoed = dedupeEchoedUserMessages(messages);
-  return dedupeConsecutiveEquivalentUserMessages(echoed);
+  // Only adjacent equivalent user records can represent the optimistic/local
+  // message and its Gateway transcript echo. Matching the whole transcript by
+  // content incorrectly removes a later turn when the user repeats a question.
+  return dedupeConsecutiveEquivalentUserMessages(messages);
 }
 
 function isRealUserAuthoredMessage(msg: RawMessage): boolean {

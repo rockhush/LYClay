@@ -98,7 +98,10 @@ export const useDigitalEmployeesStore = create<DigitalEmployeesState>((set, get)
     set({ loading: true, error: null });
     try {
       const employees = await hostApiFetch<LocalDigitalEmployee[]>('/api/digital-employees');
-      set({ employees, loading: false });
+      set({
+        employees: Array.isArray(employees) ? employees : [],
+        loading: false,
+      });
     } catch (error) {
       set({ loading: false, error: String(error) });
     }

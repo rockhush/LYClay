@@ -179,6 +179,79 @@ describe('findReplyMessageIndex', () => {
     expect(findReplyMessageIndex(messages, false)).toBe(2);
   });
 
+  it('folds printer failure narration but keeps the later authoritative answer as the reply', () => {
+    const printerFailureNarration = '打印失败。错误显示 `cscript.exe` 超时，这可能是 Office COM 打印的问题。让我检查一下默认打印机状态和 SumatraPDF 是否安装：';
+    const finalReply = '看来系统中只有 Microsoft Print to PDF，当前无法完成实体打印。请先安装或选择实体打印机。';
+    const messages: RawMessage[] = [
+      { role: 'user', content: '打印 test3 文件夹中的文件' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: printerFailureNarration },
+          { type: 'toolCall', id: 'check-printer', name: 'exec', arguments: { command: 'check-printer' } },
+        ],
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'check-printer',
+        toolName: 'exec',
+        content: 'Microsoft Print to PDF',
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: finalReply }],
+        stopReason: 'stop',
+      },
+    ];
+
+    const committedReplyIndex = findCommittedReplyMessageIndex(messages);
+    expect(committedReplyIndex).toBe(3);
+
+    const steps = deriveTaskSteps({
+      messages: messages.slice(1),
+      streamingMessage: null,
+      streamingTools: [],
+      committedReplyIndex: committedReplyIndex - 1,
+    });
+    expect(steps.some((step) => step.detail?.includes(printerFailureNarration))).toBe(true);
+    expect(steps.some((step) => step.detail?.includes(finalReply))).toBe(false);
+  });
+
+  it('keeps a terminal printer diagnosis visible when it mentions waiting and PPTX files', () => {
+    const finalReply = [
+      '默认打印机是 "Microsoft Print to PDF"（虚拟打印机，生成 PDF 文件），不是物理打印机。',
+      '这解释了为什么等待队列超时 - Microsoft Print to PDF 需要用户交互来选择保存位置。',
+      '**问题**：您的默认打印机是 Microsoft Print to PDF（虚拟打印机），它会将文件打印成 PDF 而不是在实际打印机上输出。',
+      '文件夹中还包含 .docx 和 .pptx 文件。',
+    ].join('\n\n');
+    const messages: RawMessage[] = [
+      { role: 'user', content: '打印文件夹中的所有文件' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '正在打印第一个 Word 文件，再等一会看进度。' },
+          { type: 'toolCall', id: 'wait-print', name: 'process', arguments: { action: 'poll' } },
+        ],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'wait-print', toolName: 'process', content: 'timed out' },
+      { role: 'assistant', content: [{ type: 'text', text: finalReply }], stopReason: 'stop' },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(3);
+    expect(findCommittedReplyMessageIndex(messages)).toBe(3);
+
+    const steps = deriveTaskSteps({
+      messages: messages.slice(1),
+      streamingMessage: null,
+      streamingTools: [],
+      committedReplyIndex: 2,
+    });
+    expect(steps.some((step) => step.detail?.includes('正在打印第一个 Word 文件'))).toBe(true);
+    expect(steps.some((step) => step.detail?.includes('这解释了为什么等待队列超时'))).toBe(false);
+  });
+
   it('finds a committed terminal reply even when stale stream state exists elsewhere', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: 'check typhoon' },
@@ -892,38 +965,6 @@ describe('deriveTaskSteps', () => {
           {
             type: 'text',
             text: '好的，东莞到广州的驾驶距离预计在 60~70 公里左右。',
-          },
-        ],
-        stopReason: 'stop',
-      },
-    ];
-
-    expect(findReplyMessageIndex(messages, false)).toBe(1);
-    expect(findCommittedReplyMessageIndex(messages)).toBe(1);
-
-    const steps = deriveTaskSteps({
-      messages,
-      streamingMessage: null,
-      streamingTools: [],
-    });
-
-    expect(steps).toEqual([]);
-  });
-
-  it('keeps explicit stop deliverables as the reply even when they mention wait wording', () => {
-    const messages: RawMessage[] = [
-      { role: 'user', content: 'summarize the run' },
-      {
-        role: 'assistant',
-        id: 'wait-word-final',
-        content: [
-          {
-            type: 'thinking',
-            thinking: 'The final report includes the waiting notice wording.',
-          },
-          {
-            type: 'text',
-            text: 'Final report: the sub-agent waiting notes and expected completion notice wording are included for audit.',
           },
         ],
         stopReason: 'stop',

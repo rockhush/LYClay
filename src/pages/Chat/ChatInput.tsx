@@ -265,12 +265,14 @@ export function ChatInput({ onSend, onStop, disabled = false, disabledReason, se
   );
   const currentReasoning = reasoningOptions.find((option) => option.mode === reasoningMode) ?? reasoningOptions[1]!;
   const CurrentReasoningIcon = currentReasoning.icon;
+  const safeAgents = Array.isArray(agents) ? agents : [];
+  const safeDigitalEmployees = Array.isArray(digitalEmployees) ? digitalEmployees : [];
   const currentAgentName = useMemo(
-    () => (agents ?? []).find((agent) => agent.id === currentAgentId)?.name ?? currentAgentId,
-    [agents, currentAgentId],
+    () => safeAgents.find((agent) => agent.id === currentAgentId)?.name ?? currentAgentId,
+    [safeAgents, currentAgentId],
   );
   const mentionableAgents = useMemo(
-    (): MentionableDigitalEmployee[] => (digitalEmployees ?? [])
+    (): MentionableDigitalEmployee[] => safeDigitalEmployees
       .filter((employee) => employee.status === 'active' || employee.status === 'degraded')
       .map((employee) => ({
         id: employee.agentId,
@@ -278,7 +280,7 @@ export function ChatInput({ onSend, onStop, disabled = false, disabledReason, se
         description: employee.description,
         instanceId: employee.instanceId,
       })),
-    [digitalEmployees],
+    [safeDigitalEmployees],
   );
   const selectedTarget = useMemo(
     () => mentionableAgents.find((agent) => agent.id === targetAgentId) ?? null,

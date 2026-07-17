@@ -617,6 +617,43 @@ export function reconcileUserTurnAfterDelegationWrapUp(
   return true;
 }
 
+function hasAuthoritativeCommittedVisibleFinal(
+  state: ReturnType<ChatGet>,
+  context: {
+    terminalMessage?: RawMessage;
+  },
+  snapshot: {
+    background: import('./user-turn-lifecycle').GatewayBackgroundActivity;
+  },
+): boolean {
+  const terminal = context.terminalMessage;
+  if (!isVisibleAssistantTextWithoutToolUse(terminal)) return false;
+  if (isInterimSubagentWaitAssistantReply(terminal)) return false;
+  if (!transcriptHasCommittedConcludingReply(state.messages, state.lastUserMessageAt)) {
+    return false;
+  }
+
+  const completedChildSessionKeys = resolveCompletedChildSessionKeys(
+    state.messages,
+    state.announcedChildSessionKeys,
+  );
+  if (
+    hasDelegationSpawnForActiveTurn(state.messages, { lastUserMessageAt: state.lastUserMessageAt })
+    && !isDelegationWrapUpComplete(
+      state.messages,
+      snapshot.background.processingSessionKeys,
+      {
+        lastUserMessageAt: state.lastUserMessageAt,
+        completedChildSessionKeys,
+      },
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 export async function tryFinalizeUserTurnAfterAssistantFinal(
   get: ChatGet,
   set: ChatSet,
@@ -682,13 +719,21 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
       terminalMessage: context.terminalMessage,
     },
   );
-  if (canClearAnnounceWrapUp || (!isAnnounceWrapUpRun && canClearUserTurnNow(buildCanClearInput(next, context, snapshot)))) {
+  const canClearAuthoritativeFinal = !isAnnounceWrapUpRun
+    && hasAuthoritativeCommittedVisibleFinal(next, context, snapshot);
+  if (
+    canClearAnnounceWrapUp
+    || canClearAuthoritativeFinal
+    || (!isAnnounceWrapUpRun && canClearUserTurnNow(buildCanClearInput(next, context, snapshot)))
+  ) {
     clearFinalizeGraceTimer();
     clearHistoryPoll();
     clearErrorRecoveryTimer();
     applySettledActiveRunPatch(set, get);
     traceFinalizeOutcome(
-      canClearAnnounceWrapUp ? 'announce_cleared' : 'cleared',
+      canClearAnnounceWrapUp
+        ? 'announce_cleared'
+        : (canClearAuthoritativeFinal ? 'authoritative_visible_final_cleared' : 'cleared'),
       context,
       next,
       snapshot,

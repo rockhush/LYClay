@@ -15,6 +15,7 @@ vi.mock('@/stores/gateway', () => ({
       status: { state: 'running', port: 18789 },
       rpc: gatewayRpcMock,
     }),
+    subscribe: vi.fn(() => vi.fn()),
   },
 }));
 
@@ -40,6 +41,30 @@ const SESSION_KEY = 'agent:main:session-1782962028099';
 const PARENT_RUN_ID = '92fd60c7-0000-4000-8000-0000000037f3';
 const CHILD_SESSION_KEY = 'agent:main:subagent:49410220-b603-4eaf-86d0-8ca787d76574';
 const ANNOUNCE_RUN_ID = `announce:v1:${CHILD_SESSION_KEY}:child-run-1`;
+
+function buildBoundAnnounceMessages() {
+  return [
+    { role: 'user', id: 'user-1', content: 'make a ppt' },
+    {
+      role: 'assistant',
+      id: 'spawn-assistant',
+      content: [{ type: 'tool_use', id: 'spawn-1', name: 'sessions_spawn', input: { taskName: 'ppt' } }],
+      stopReason: 'toolUse',
+    },
+    {
+      role: 'toolResult',
+      toolCallId: 'spawn-1',
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          status: 'accepted',
+          childSessionKey: CHILD_SESSION_KEY,
+          runId: 'child-run-1',
+        }),
+      }],
+    },
+  ];
+}
 
 describe('chat announce run events', () => {
   beforeEach(() => {
@@ -74,7 +99,7 @@ describe('chat announce run events', () => {
       currentSessionKey: SESSION_KEY,
       currentAgentId: 'main',
       sessions: [{ key: SESSION_KEY }],
-      messages: [{ role: 'user', id: 'user-1', content: 'make a ppt' }],
+      messages: buildBoundAnnounceMessages(),
       sessionLabels: {},
       sessionLastActivity: {},
       sending: true,
@@ -119,7 +144,7 @@ describe('chat announce run events', () => {
       currentSessionKey: SESSION_KEY,
       currentAgentId: 'main',
       sessions: [{ key: SESSION_KEY }],
-      messages: [{ role: 'user', id: 'user-1', content: 'make a ppt' }],
+      messages: buildBoundAnnounceMessages(),
       sessionLabels: {},
       sessionLastActivity: {},
       sending: true,
@@ -332,7 +357,7 @@ describe('chat announce run events', () => {
     useChatStore.setState({
       currentSessionKey: SESSION_KEY,
       announcedChildSessionKeys: [],
-      messages: [{ role: 'user', id: 'user-1', content: 'make a ppt' }],
+      messages: buildBoundAnnounceMessages(),
       sending: true,
       activeRunId: PARENT_RUN_ID,
       pendingFinal: true,
@@ -359,7 +384,7 @@ describe('chat announce run events', () => {
     useChatStore.setState({
       currentSessionKey: SESSION_KEY,
       announcedChildSessionKeys: [],
-      messages: [{ role: 'user', id: 'user-1', content: 'make a ppt' }],
+      messages: buildBoundAnnounceMessages(),
       sending: true,
       activeRunId: PARENT_RUN_ID,
       pendingFinal: true,

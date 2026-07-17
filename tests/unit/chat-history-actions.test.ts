@@ -47,14 +47,22 @@ vi.mock('@/lib/host-api', () => ({
 vi.mock('@/stores/gateway', () => ({
   useGatewayStore: {
     getState: () => gatewayStoreGetStateMock(),
+    subscribe: vi.fn(() => () => {}),
   },
 }));
 
 vi.mock('@/stores/chat/helpers', () => ({
   clearHistoryPoll: (...args: unknown[]) => clearHistoryPoll(...args),
+  dedupeAssistantMessagesByContent: (messages: unknown) => messages,
   enrichWithCachedImages: (...args: unknown[]) => enrichWithCachedImages(...args),
   enrichWithToolResultFiles: (...args: unknown[]) => enrichWithToolResultFiles(...args),
   normalizeComplexTaskControlUserMessages: (messages: unknown) => messages,
+  dedupeEquivalentAttachmentUserMessages: (messages: Array<{ role?: string; content?: unknown }>) => messages.filter((message, index) => (
+    index === 0
+    || message.role !== 'user'
+    || messages[index - 1]?.role !== 'user'
+    || getMessageText(message.content) !== getMessageText(messages[index - 1]?.content)
+  )),
   getLatestOptimisticUserMessage: (messages: Array<{ role: string; timestamp?: number }>, userTimestampMs: number) =>
     [...messages].reverse().find(
       (message) => message.role === 'user'
@@ -66,6 +74,9 @@ vi.mock('@/stores/chat/helpers', () => ({
     : '',
   hasNonToolAssistantContent: (...args: unknown[]) => hasNonToolAssistantContent(...args),
   isInternalMessage: (...args: unknown[]) => isInternalMessage(...args),
+  isAbortErrorMessage: (message: unknown) => (
+    typeof message === 'string' && /abort|cancel/i.test(message)
+  ),
   isToolResultRole: (...args: unknown[]) => isToolResultRole(...args),
   isSuppressedRunError: (...args: unknown[]) => isSuppressedRunError(...args),
   shouldSuppressPartialSuccessRunError: (...args: unknown[]) => shouldSuppressPartialSuccessRunError(...args),
@@ -205,7 +216,7 @@ describe('chat history actions', () => {
     expect(h.read().loading).toBe(false);
   });
 
-  it('deduplicates retried user messages with different gateway timestamp prefixes', async () => {
+  it('keeps repeated user questions in separate turns', async () => {
     const { createHistoryActions } = await import('@/stores/chat/history-actions');
     const h = makeHarness({
       currentSessionKey: 'agent:main:main',
@@ -237,10 +248,11 @@ describe('chat history actions', () => {
 
     await actions.loadHistory();
 
-    expect(h.read().messages.filter((message) => message.role === 'user')).toHaveLength(1);
+    expect(h.read().messages.filter((message) => message.role === 'user')).toHaveLength(2);
     expect(h.read().messages.map((message) => message.content)).toEqual([
       '[Wed 2026-06-24 15:58 GMT+8] @testLYAI 请使用这个技能 [media attached: C:/tmp/workbook.xlsx]',
       'Now I have a clear picture.',
+      '[Wed 2026-06-24 16:05 GMT+8] @testLYAI 请使用这个技能 [media attached: C:/tmp/workbook.xlsx]',
     ]);
   });
 

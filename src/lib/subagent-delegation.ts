@@ -167,7 +167,11 @@ export function isInterimSubagentWaitAssistantReply(message: RawMessage): boolea
   if (shouldSilentlyFinalizeRunOnAssistantFinal(message)) return false;
 
   const normalized = text.replace(/\s+/g, ' ');
-  const hasSubagentContext = /(?:sub-?agent|子\s*(?:agent|任务|智能体|代理)|PPT|分支|并行|spawn|delegate|瀛愪唬鐞唡瀛愭櫤鑳戒綋)/i.test(normalized);
+  // A deliverable can mention PPT/PPTX files and ordinary waiting (for example,
+  // a printer queue timeout) without involving a delegated child. Require an
+  // actual orchestration signal instead of treating the document type itself
+  // as subagent context.
+  const hasSubagentContext = /(?:sub-?agent|子\s*(?:agent|任务|智能体|代理)|分支|并行|spawn|delegate|瀛愪唬鐞唡瀛愭櫤鑳戒綋)/i.test(normalized);
   const hasBroadInterimSignal = /(?:预计|等待|几分钟|稍等|完成后.{0,12}通知|已(?:启动|交给)|正在.{0,12}(?:构建|生成)|in progress|waiting|will notify|minutes?)/i.test(normalized);
   const hasPhaseWaitSignal = /(?:continue\s+waiting|waiting\s+(?:for\s+)?Phase|Phase\s*\d+.*(?:completed|完成).*(?:waiting|等待|继续))/i.test(normalized);
   if (!hasSubagentContext && hasBroadInterimSignal && !hasPhaseWaitSignal) return false;

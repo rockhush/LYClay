@@ -5,7 +5,6 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { listAgentsSnapshot } from '../../utils/agent-config';
 import { getOpenClawConfigDir } from '../../utils/paths';
-import { resolveAgentSessionsDir } from '../../utils/retired-agent-sessions';
 import { logger } from '../../utils/logger';
 import { redactSecrets, redactStructuredSecrets } from '../../security/secret-scanner';
 import { sanitizeTranscriptMessageForDisplay } from '../../utils/silent-reply-sanitize';
@@ -103,7 +102,7 @@ function getSessionEntryFileInfo(
   return { fileName, resolvedPath };
 }
 
-async function getSessionFileIndex(sessionsJsonPath: string): Promise<SessionFileIndexCache | null> {
+async function getSessionFileIndex(agentId: string, sessionsJsonPath: string): Promise<SessionFileIndexCache | null> {
   let signature: FileSignature;
   try {
     const fileStat = await stat(sessionsJsonPath);
@@ -112,11 +111,11 @@ async function getSessionFileIndex(sessionsJsonPath: string): Promise<SessionFil
     if (getErrorCode(error) !== 'ENOENT') {
       logger.warn('[sessions:history-local] Could not stat sessions.json:', error);
     }
-    sessionFileIndexCache.delete(sessionsJsonPath);
+    sessionFileIndexCache.delete(agentId);
     return null;
   }
 
-  const cached = sessionFileIndexCache.get(sessionsJsonPath);
+  const cached = sessionFileIndexCache.get(agentId);
   if (cached && sameSignature(cached, signature)) return cached;
 
   const sessionsJson = await readSessionsJsonSafe(sessionsJsonPath, {
@@ -124,7 +123,7 @@ async function getSessionFileIndex(sessionsJsonPath: string): Promise<SessionFil
     allowMissing: true,
   });
   if (!sessionsJson) {
-    sessionFileIndexCache.delete(sessionsJsonPath);
+    sessionFileIndexCache.delete(agentId);
     return null;
   }
   const filesBySessionKey = new Map<string, { fileName?: string; resolvedPath?: string }>();
@@ -148,8 +147,8 @@ async function getSessionFileIndex(sessionsJsonPath: string): Promise<SessionFil
   }
 
   const next = { ...signature, filesBySessionKey };
-  sessionFileIndexCache.set(sessionsJsonPath, next);
-  logger.debug(`[sessions:history-local] Parsed sessions.json at ${sessionsJsonPath}, entries=${filesBySessionKey.size}`);
+  sessionFileIndexCache.set(agentId, next);
+  logger.debug(`[sessions:history-local] Parsed sessions.json for ${agentId}, entries=${filesBySessionKey.size}`);
   return next;
 }
 
@@ -350,7 +349,7 @@ export async function handleSessionRoutes(
         return true;
       }
 
-      const sessionsDir = await resolveAgentSessionsDir(agentId);
+      const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
 
       try {
@@ -464,13 +463,13 @@ export async function handleSessionRoutes(
         return true;
       }
 
-      const sessionsDir = await resolveAgentSessionsDir(agentId);
+      const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
       const sessionSegment = parts.slice(2).join(':');
       const sessionKeyFallbackPath = sessionSegment.startsWith('session-')
         ? join(sessionsDir, `${sessionSegment}.jsonl`)
         : null;
-      const index = await getSessionFileIndex(sessionsJsonPath);
+      const index = await getSessionFileIndex(agentId, sessionsJsonPath);
       const fileInfo = index?.filesBySessionKey.get(sessionKey);
       let resolvedSrcPath = fileInfo?.resolvedPath;
       let uuidFileName = fileInfo?.fileName;

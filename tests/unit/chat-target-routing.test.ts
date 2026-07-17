@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { gatewayRpcMock, hostApiFetchMock, agentsState, digitalEmployeesState } = vi.hoisted(() => ({
+const { gatewayRpcMock, hostApiFetchMock, getSessionBackendActivityMock, agentsState, digitalEmployeesState } = vi.hoisted(() => ({
   gatewayRpcMock: vi.fn(),
   hostApiFetchMock: vi.fn(),
+  getSessionBackendActivityMock: vi.fn(),
   agentsState: {
     agents: [] as Array<Record<string, unknown>>,
   },
@@ -17,6 +18,7 @@ vi.mock('@/stores/gateway', () => ({
       rpc: gatewayRpcMock,
       status: { gatewayReady: true },
     }),
+    subscribe: vi.fn(() => vi.fn()),
   },
 }));
 
@@ -34,6 +36,7 @@ vi.mock('@/stores/digital-employees', () => ({
 
 vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
+  getSessionBackendActivity: (...args: unknown[]) => getSessionBackendActivityMock(...args),
 }));
 
 vi.mock('@/lib/ui-state-persistence', () => ({
@@ -99,6 +102,21 @@ describe('chat target routing', () => {
 
     hostApiFetchMock.mockReset();
     hostApiFetchMock.mockResolvedValue({ success: true, result: { runId: 'run-media' } });
+    getSessionBackendActivityMock.mockReset();
+    getSessionBackendActivityMock.mockImplementation(async (sessionKey: string) => ({
+      success: true,
+      session: {
+        sessionKey,
+        status: 'completed',
+        processing: false,
+        hasTrackedUserRun: false,
+        activeRunIds: [],
+      },
+      background: {
+        hasBackgroundProcessing: false,
+        processingSessionKeys: [],
+      },
+    }));
   });
 
   afterEach(() => {

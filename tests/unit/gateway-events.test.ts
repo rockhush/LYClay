@@ -334,6 +334,42 @@ describe('gateway store event wiring', () => {
     });
   });
 
+  it('reconciles duplicate final events instead of dropping terminal completion', async () => {
+    hostApiFetchMock.mockResolvedValueOnce({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    const finalEvent = {
+      state: 'final',
+      runId: 'run-duplicate-final',
+      sessionKey: 'agent:main:main',
+      seq: 9,
+      message: { role: 'assistant', content: 'Authoritative final answer' },
+    };
+    handlers.get('gateway:chat-message')?.(finalEvent);
+    await vi.waitFor(() => expect(chatHandleEventMock).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'final',
+      runId: 'run-duplicate-final',
+      message: finalEvent.message,
+    })));
+
+    handlers.get('gateway:chat-message')?.(finalEvent);
+    await vi.waitFor(() => {
+      expect(chatHandleGatewayRunCompletedMock).toHaveBeenCalledWith(
+        'run-duplicate-final',
+        'agent:main:main',
+      );
+    });
+    expect(chatHandleEventMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not build a generic dedupe key for delta events without seq', async () => {
     const { __test_buildGatewayEventDedupeKey } = await import('@/stores/gateway');
 

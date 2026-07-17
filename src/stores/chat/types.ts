@@ -59,7 +59,7 @@ export interface ChatSession {
   lastMessageAt?: number;
 }
 
-export type ReasoningMode = 'fast' | 'thinking';
+export type ReasoningMode = 'fast' | 'thinking' | 'expert';
 
 export interface ToolStatus {
   id?: string;

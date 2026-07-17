@@ -28,10 +28,15 @@ const FETCH_AGENTS_DEDUPE_MS = 5_000;
 
 function applySnapshot(snapshot: AgentsSnapshot | undefined) {
   return snapshot ? {
-    agents: snapshot.agents ?? [],
+    // Host responses and persisted data are runtime input despite the static
+    // type. Never let a malformed object reach ChatInput, where array methods
+    // such as find/filter would crash the entire renderer.
+    agents: Array.isArray(snapshot.agents) ? snapshot.agents : [],
     defaultAgentId: snapshot.defaultAgentId ?? 'main',
     defaultModelRef: snapshot.defaultModelRef ?? null,
-    configuredChannelTypes: snapshot.configuredChannelTypes ?? [],
+    configuredChannelTypes: Array.isArray(snapshot.configuredChannelTypes)
+      ? snapshot.configuredChannelTypes
+      : [],
     channelOwners: snapshot.channelOwners ?? {},
     channelAccountOwners: snapshot.channelAccountOwners ?? {},
   } : {};

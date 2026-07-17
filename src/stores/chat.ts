@@ -61,8 +61,8 @@ import {
   dedupeAssistantMessagesByContent,
   matchesOptimisticUserMessage,
   getLatestOptimisticUserMessage,
-  getUserMessageDedupeKey,
   normalizeComparableUserText,
+  getComparableAttachmentSignature,
   areEquivalentAttachmentOnlyUserTexts,
   stripGatewayUserMetadata,
   isSyntheticSessionLabelUserMessage,
@@ -122,6 +122,7 @@ import {
 } from './chat/user-aborted-sessions';
 import { abortPendingChildDelegations } from './chat/abort-child-delegations';
 import {
+  collectChildDelegationBindings,
   hasInFlightSubagentSignals,
   isSubagentDelegationAnnounceRun,
   inferTranscriptSettledChildSessionKeys,
@@ -372,7 +373,7 @@ const REASONING_MODE_STORAGE_KEY = 'LYClaw:chat:reasoning-mode';
 const SESSION_REASONING_MODES_STORAGE_KEY = 'LYClaw:chat:session-reasoning-modes';
 
 function isReasoningMode(value: unknown): value is ReasoningMode {
-  return value === 'fast' || value === 'thinking';
+  return value === 'fast' || value === 'thinking' || value === 'expert';
 }
 
 function loadStoredReasoningMode(): ReasoningMode {
@@ -527,8 +528,10 @@ function persistSessionPinnedAtIfChanged(pinnedAt: Record<string, number>): void
 
 _lastPersistedSessionPinnedAt = JSON.stringify(loadSessionPinnedAtFromStorage());
 
-function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' {
-  return mode === 'fast' ? 'off' : 'medium';
+function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' | 'high' {
+  if (mode === 'fast') return 'off';
+  if (mode === 'expert') return 'high';
+  return 'medium';
 }
 
 async function patchSessionThinkingLevel(sessionKey: string, mode: ReasoningMode): Promise<void> {
@@ -1537,38 +1540,6 @@ function applyBackgroundChatEvent(
   };
 }
 
-/**
- * Remove duplicate user messages that share the same normalized text content.
- * This is a content-based safety net that catches duplicates missed by the
- * timestamp-based `matchesOptimisticUserMessage` (which requires messages
- * to be within 5 seconds of each other). When loading history, the pipeline
- * (JSONL) and snapshot messages may have different timestamps yet identical
- * content — the same user question should never appear twice in the UI.
- */
-function dedupeUserMessagesByContent(messages: RawMessage[]): RawMessage[] {
-  if (messages.length < 2) return messages;
-
-  const seen = new Set<string>();
-  const result: RawMessage[] = [];
-
-  for (const message of messages) {
-    if (message.role !== 'user') {
-      result.push(message);
-      continue;
-    }
-    const dedupeKey = getUserMessageDedupeKey(message);
-    if (!dedupeKey) {
-      result.push(message);
-      continue;
-    }
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-    result.push(message);
-  }
-
-  return result.length === messages.length ? messages : result;
-}
-
 function resolveFinalMessagesWithLocalPreservation(
   sessionKey: string,
   pipelineMessages: RawMessage[],
@@ -1596,12 +1567,6 @@ function resolveFinalMessagesWithLocalPreservation(
 
   finalMessages = dedupeEquivalentAttachmentUserMessages(finalMessages);
 
-  // Content-based user-message dedup: when the same user message appears in both
-  // the pipeline (from JSONL) and the local snapshot, the timestamp-based
-  // `matchesOptimisticUserMessage` may fail if timestamps differ by >5s.
-  // This safety net catches those remaining duplicates by comparing normalized
-  // text content — the same message with the same text should only appear once.
-  finalMessages = dedupeUserMessagesByContent(finalMessages);
   finalMessages = dedupeAssistantMessagesByContent(finalMessages);
   finalMessages = stripSyntheticSessionLabelUserMessages(finalMessages, sessionKey);
 
@@ -2844,6 +2809,23 @@ function shouldProcessCurrentSessionRunEvent(activeRunId: string | null, runId: 
   return isSubagentDelegationAnnounceRun(runId);
 }
 
+function isAnnounceRunBoundToActiveTurn(
+  runId: string,
+  messages: RawMessage[],
+  announcedChildSessionKeys: readonly string[],
+): boolean {
+  const childSessionKey = parseChildSessionKeyFromAnnounceRun(runId);
+  if (!childSessionKey) return false;
+  const latestUserIndex = findLatestVisibleUserIndex(messages);
+  const turnMessages = latestUserIndex >= 0 ? messages.slice(latestUserIndex) : messages;
+  const completedChildSessionKeys = resolveCompletedChildSessionKeys(
+    turnMessages,
+    announcedChildSessionKeys,
+  );
+  return collectChildDelegationBindings(turnMessages, completedChildSessionKeys)
+    .some((binding) => binding.childSessionKey === childSessionKey);
+}
+
 function isDuplicateAssistantFinal(messages: RawMessage[], messageId: string, message: RawMessage): boolean {
   if (messages.some((existing) => existing.id === messageId)) return true;
 
@@ -3707,6 +3689,10 @@ function finalizeBackgroundSessionRunIfCompleted(
 
   const { completed, aborted } = classifyBackgroundTermination(get, eventSessionKey, event, resolvedState);
   if (!completed) return;
+  const terminalMessage = event.message && typeof event.message === 'object'
+    ? event.message as RawMessage
+    : undefined;
+  const preserveCommittedTerminalSnapshot = isRunTerminalAssistantMessage(terminalMessage);
 
   set((s) => ({
     sessionStreamingStates: {
@@ -3722,9 +3708,12 @@ function finalizeBackgroundSessionRunIfCompleted(
         lastUserMessageAt: null,
         pendingToolImages: [],
         runAborted: aborted,
-        // Drop the snapshot so switching back triggers a fresh loadHistory()
-        // that surfaces the authoritative, completed transcript.
-        messagesSnapshot: [],
+        // Keep an explicitly terminal pushed reply available immediately.
+        // Ambiguous finals still drop the snapshot so switching back forces
+        // authoritative history reconciliation.
+        messagesSnapshot: preserveCommittedTerminalSnapshot
+          ? (s.sessionStreamingStates[eventSessionKey]?.messagesSnapshot ?? prev.messagesSnapshot)
+          : [],
       },
     },
   }));
@@ -4282,7 +4271,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // NOTE: We intentionally do NOT call sessions.reset on the old session.
     // sessions.reset archives (renames) the session JSONL file, making old
     // conversation history inaccessible when the user switches back to it.
-    const { currentSessionKey, messages, sessionLastActivity, sessionLabels, activeRunId, streamingText, streamingMessage, streamingTools, pendingFinal, lastUserMessageAt, pendingToolImages, runAborted, sending, reasoningMode, sessionReasoningModes, sessionBackendActivity, gatewayBackgroundActivity, announcedChildSessionKeys } = get();
+    const { currentSessionKey, messages, sessionLastActivity, sessionLabels, activeRunId, streamingText, streamingMessage, streamingTools, pendingFinal, lastUserMessageAt, pendingToolImages, runAborted, sending, reasoningMode, sessionReasoningModes } = get();
     // Only treat sessions with no history records and no activity timestamp as empty
     const leavingEmpty = !currentSessionKey.endsWith(':main')
       && messages.length === 0
@@ -4294,38 +4283,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       : DEFAULT_CANONICAL_PREFIX;
     const newKey = `${prefix}:session-${Date.now()}`;
     const newSessionEntry: ChatSession = { key: newKey, displayName: newKey };
-    // Save messages snapshot for completed sessions as well as active streams.
+    // Save messages snapshot if there's active streaming
     const hasActiveStreaming = activeRunId || sending;
-    const shouldSnapshotMessages = hasActiveStreaming || messages.length > 0;
-    const leavingSnapshot = sanitizeLeavingSessionStreamingSnapshot(
-      {
-        activeRunId,
-        streamingText,
-        streamingMessage,
-        streamingTools,
-        pendingFinal,
-        lastUserMessageAt,
-        pendingToolImages,
-        runAborted,
-        runError: get().runError,
-        sending,
-        activeTool: get().activeTool,
-        messagesSnapshot: shouldSnapshotMessages
-          ? stripSyntheticSessionLabelUserMessages([...messages], currentSessionKey)
-          : [],
-      },
-      {
-        sessionKey: currentSessionKey,
-        backendActivity: backendActivityForSession(sessionBackendActivity, currentSessionKey),
-        gatewayBackground: gatewayBackgroundActivity,
-        announcedChildSessionKeys,
-      },
-    );
     set((s) => {
       // Save current session's streaming state
       const nextStreamingStates: Record<string, SessionStreamingState> = {
         ...s.sessionStreamingStates,
-        [currentSessionKey]: leavingSnapshot,
+        [currentSessionKey]: {
+          activeRunId,
+          streamingText,
+          streamingMessage,
+          streamingTools,
+          pendingFinal,
+          lastUserMessageAt,
+          pendingToolImages,
+          runAborted,
+          runError: s.runError,
+          sending,
+          activeTool: s.activeTool,
+          messagesSnapshot: hasActiveStreaming ? [...messages] : [],
+        },
       };
       // Remove streaming state if leaving an empty session
       const finalStreamingStates = leavingEmpty
@@ -4569,14 +4546,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // flight, discard the result to prevent overwriting the new session's
       // messages with stale data from the old session.
       if (!isCurrentSession()) return false;
-
-      if (
-        rawMessages.length === 0
-        && get().messages.length > 0
-        && isRetiredDigitalEmployeeAgent(getAgentIdFromSessionKey(currentSessionKey))
-      ) {
-        return true;
-      }
 
       // Before filtering: attach images/files from tool_result messages to the next assistant message
       const messagesWithToolImages = enrichWithToolResultFiles(rawMessages);
@@ -4856,17 +4825,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             });
           }
         }
-      }
-      if (finalMessages.length > 0) {
-        set((s) => ({
-          sessionStreamingStates: {
-            ...s.sessionStreamingStates,
-            [currentSessionKey]: {
-              ...(s.sessionStreamingStates[currentSessionKey] ?? createEmptySessionStreamingState()),
-              messagesSnapshot: stripSyntheticSessionLabelUserMessages(finalMessages, currentSessionKey),
-            },
-          },
-        }));
       }
       return true;
       };
@@ -5245,8 +5203,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const reasoningMode = get().reasoningMode;
     const hasMedia = Boolean(attachments && attachments.length > 0);
     const reasoningDecision = getReasoningDecision(trimmed, reasoningMode, hasMedia);
-    const effectiveReasoningMode = reasoningDecision.effectiveMode;
-    const { needsPatch } = applySessionThinkingLevelInBackground(currentSessionKey, reasoningMode, set);
+    // Digital employees run with fast reasoning regardless of the parent
+    // session's persisted mode. Ordinary one-shot fast decisions must still
+    // preserve the user's selected mode for the session.
+    const effectiveReasoningMode = _deIsDigital ? 'fast' : reasoningDecision.effectiveMode;
+    const persistedReasoningMode = _deIsDigital ? effectiveReasoningMode : reasoningMode;
+    const { needsPatch } = applySessionThinkingLevelInBackground(currentSessionKey, persistedReasoningMode, set);
     if (effectiveReasoningMode !== reasoningMode) {
       console.info('[chat.latency] using fast reasoning for input', {
         selectedReasoningMode: reasoningMode,
@@ -5652,7 +5614,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       console.log(`[sendMessage] RPC result: success=${result.success}, runId=${result.result?.runId || 'none'}`);
       if (needsPatch) {
-        deferSessionThinkingLevelPatch(currentSessionKey, reasoningMode);
+        deferSessionThinkingLevelPatch(currentSessionKey, persistedReasoningMode);
       }
       if (_pendingSessionModelPatches.has(currentSessionKey)) {
         void flushPendingSessionModelPatches(currentSessionKey);
@@ -5864,6 +5826,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })();
     const resolvedSessionKey = eventSessionKey ?? inferredSessionKey;
     const isCurrentSessionEvent = !resolvedSessionKey || resolvedSessionKey === currentSessionKey;
+    const isAnnounceEvent = isSubagentDelegationAnnounceRun(runId);
+    const isBoundAnnounceEvent = isAnnounceEvent && isAnnounceRunBoundToActiveTurn(
+      runId,
+      get().messages,
+      get().announcedChildSessionKeys,
+    );
 
     // The child that triggers a parent's auto-announce wrap-up never gets an
     // `[Internal task completion event]` written to the parent transcript — its
@@ -5871,7 +5839,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // the nested branch does not flip to "completed" while the wrap-up is still streaming.
     if (
       runId
-      && isSubagentDelegationAnnounceRun(runId)
+      && isBoundAnnounceEvent
       && (eventState === 'final' || eventState === 'error' || eventState === 'aborted')
     ) {
       const announcedChildKey = parseChildSessionKeyFromAnnounceRun(runId);
@@ -5948,7 +5916,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Approval followups resume the same user-visible run with a synthetic
     // runId. Let terminal events reconcile even if the active run snapshot is
     // stale, but keep non-terminal deltas isolated to the current run.
-    const matchesCurrentRun = shouldProcessCurrentSessionRunEvent(activeRunId, runId);
+    const matchesCurrentRun = shouldProcessCurrentSessionRunEvent(activeRunId, runId)
+      && (!isAnnounceEvent || isBoundAnnounceEvent);
     if (!isTerminalEvent && !matchesCurrentRun) return;
 
     // Events for a session the user isn't currently viewing must not mutate the
@@ -6011,7 +5980,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Adopt run started from another client (e.g. console at 127.0.0.1:18789):
       // show loading/streaming in the app when this session has an active run.
       const { sending, activeRunId: storedRunId, runAborted } = get();
-      if (isSubagentDelegationAnnounceRun(runId)) {
+      if (isBoundAnnounceEvent) {
         set({
           sending: true,
           activeRunId: runId,
@@ -6086,7 +6055,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
       case 'final': {
-        const isAnnounceWrapUpFinal = isSubagentDelegationAnnounceRun(runId);
+        const isAnnounceWrapUpFinal = isBoundAnnounceEvent;
         if (!matchesCurrentRun && !isAnnounceWrapUpFinal) {
           clearHistoryPoll();
           void get().loadHistory(true, { force: true }).finally(() => {
@@ -6168,20 +6137,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   error: null,
                 });
 
-                // Abort the failed run on gateway and wait before retrying once.
-                void (async () => {
-                  abortGatewayRun(currentSessionKey);
-                  await sleep(300);
-                  const activity = await refreshSessionBackendActivity(currentSessionKey);
-                  if (activity?.session.hasTrackedUserRun) {
-                    await sleep(500);
-                  }
-                  const state = get();
-                  if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
-                  const params = _lastSendParams!;
-                  _suppressNextOptimisticUserMessage = true;
-                  void state.sendMessage(params.text, params.attachments, params.targetAgentId, params.sendOptions);
-                })();
+                scheduleSilentToolStreamRetry(runId, currentSessionKey, _lastSendParams, get);
 
                 // Don't snapshot the failed message, don't set error, don't loadHistory
                 break;
@@ -6320,7 +6276,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             });
             break;
           }
-          const toolOnly = isToolOnlyMessage(normalizedFinalMessage);
           const hasOutput = hasNonToolAssistantContent(normalizedFinalMessage);
           const userIdx = findLatestVisibleUserIndex(get().messages);
           const turnMessages = userIdx >= 0 ? get().messages.slice(userIdx + 1) : get().messages;
@@ -6334,19 +6289,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const hasToolActivityInTurn = turnMessages.some((m) => {
             if (isToolResultRole(m.role)) return true;
             if (m.role !== 'assistant') return false;
-            return isToolOnlyMessage(m);
+            return hasToolInvocation(m);
           });
-          const currentHasToolActivity = toolOnly || updates.length > 0;
+          const currentHasToolActivity = hasToolInvocation(normalizedFinalMessage) || updates.length > 0;
           const isSimpleTextResponse = !hasToolActivityInTurn && !currentHasToolActivity && hasOutput;
           const keepRunActiveAfterFinal = isSubagentDelegationAnnounceRun(runId)
             ? false
             : !isExecApprovalFollowupRun(runId)
             && !isRunTerminalAssistantMessage(normalizedFinalMessage)
-            && !isConcluding
             && (
               currentHasToolActivity
-              || isSimpleTextResponse
-              || shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
+              || (
+                !isConcluding
+                && (
+                  isSimpleTextResponse
+                  || shouldKeepRunActiveAfterAssistantFinal(normalizedFinalMessage)
+                )
+              )
             );
           const msgId = normalizedFinalMessage.id || (keepRunActiveAfterFinal ? `run-${runId}-tool-${Date.now()}` : `run-${runId}`);
           const shouldClearOnFinalMessage = !keepRunActiveAfterFinal && !isAnnounceWrapUpFinal;
@@ -6354,7 +6313,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             && hasOutput
             && msgId === `run-${runId}`
             && isCumulativeRunFinalText(getMessageText(normalizedFinalMessage.content), turnMessages);
-          let skippedDuplicateFinal = false;
+          const finalTurnUserTimestamp = get().lastUserMessageAt;
           set((s) => {
             const nextTools = updates.length > 0 ? upsertToolStatuses(s.streamingTools, updates) : s.streamingTools;
             const streamingTools = hasOutput && !keepRunActiveAfterFinal ? [] : nextTools;
@@ -6374,7 +6333,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // Check if message already exists (prevent duplicates)
             const alreadyExists = isDuplicateAssistantFinal(s.messages, msgId, msgWithImages);
             if (alreadyExists || skipCumulativeOptimisticFinal) {
-              skippedDuplicateFinal = true;
               return keepRunActiveAfterFinal ? {
                 streamingText: '',
                 streamingMessage: null,
@@ -6459,18 +6417,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
             });
           }
 
-          if (!skippedDuplicateFinal) {
-            // After the final response, reload history to surface intermediate tool-use
-            // turns from the authoritative record. For announce wrap-up, settle first and
-            // defer the reload so lagging history-local cannot clobber the just-committed answer.
-            clearHistoryPoll();
-            if (isAnnounceFinal) {
-              window.setTimeout(() => {
-                void get().loadHistory(true, { force: true });
-              }, ANNOUNCE_HISTORY_RELOAD_DEFER_MS);
-            } else {
+          // Always reload after a terminal assistant event. A cumulative stream
+          // snapshot or an already-present optimistic message is intentionally
+          // not appended above, but authoritative history must still replace it;
+          // otherwise the real reply only appears after switching sessions.
+          // For announce wrap-up, settle first and defer the reload so lagging
+          // history-local cannot clobber the just-committed answer.
+          clearHistoryPoll();
+          if (isAnnounceFinal) {
+            window.setTimeout(() => {
               void get().loadHistory(true, { force: true });
-            }
+            }, ANNOUNCE_HISTORY_RELOAD_DEFER_MS);
+          } else {
+            const shouldRetryMissingTerminalHistory = skipCumulativeOptimisticFinal
+              || !transcriptHasCommittedConcludingReply(
+                get().messages,
+                finalTurnUserTimestamp,
+              );
+            const initialReload = get().loadHistory(true, { force: true });
+            // The pushed final may be represented by a renderer-only snapshot
+            // until JSONL catches up. This affects plain-text replies as well as
+            // cumulative tool runs: if the first forced read still ends at the
+            // user message, retry once instead of leaving the reply absent until
+            // the user switches sessions.
+            if (shouldRetryMissingTerminalHistory) void initialReload.then(() => {
+              const stateAfterReload = get();
+              if (
+                stateAfterReload.currentSessionKey !== currentSessionKey
+                || transcriptHasCommittedConcludingReply(
+                  stateAfterReload.messages,
+                  finalTurnUserTimestamp,
+                )
+              ) {
+                return;
+              }
+              void stateAfterReload.loadHistory(true, { force: true });
+            });
           }
         } else {
           const { activeRunId: currentActiveRunId } = get();
@@ -6576,20 +6558,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             error: null,
           });
 
-          // Abort failed run and wait before retrying once.
-          void (async () => {
-            abortGatewayRun(currentSessionKey);
-            await sleep(300);
-            const activity = await refreshSessionBackendActivity(currentSessionKey);
-            if (activity?.session.hasTrackedUserRun) {
-              await sleep(500);
-            }
-            const state = get();
-            if (!state.sending || state.currentSessionKey !== currentSessionKey) return;
-            const params = _lastSendParams!;
-            _suppressNextOptimisticUserMessage = true;
-            void state.sendMessage(params.text, params.attachments, params.targetAgentId, params.sendOptions);
-          })();
+          scheduleSilentToolStreamRetry(runId, currentSessionKey, _lastSendParams, get);
           break;
         }
         const errorMsg = getRuntimeEventErrorMessage(event);
@@ -6789,6 +6758,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
       case 'aborted': {
+        if (
+          runId
+          && _pendingSilentRetry?.failedRunId === runId
+          && _pendingSilentRetry.sessionKey === currentSessionKey
+        ) {
+          set({
+            sending: true,
+            activeRunId: null,
+            streamingText: '',
+            streamingMessage: null,
+            streamingTools: [],
+            pendingFinal: false,
+            pendingToolImages: [],
+            error: null,
+            runError: null,
+          });
+          break;
+        }
         clearHistoryPoll();
         clearErrorRecoveryTimer();
         // Recognize a user-initiated stop broadly. The run id is already

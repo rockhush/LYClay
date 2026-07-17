@@ -7,13 +7,13 @@ const REASONING_MODE_STORAGE_KEY = 'LYClaw:chat:reasoning-mode';
 const SESSION_REASONING_MODES_STORAGE_KEY = 'LYClaw:chat:session-reasoning-modes';
 
 function isReasoningMode(value: unknown): value is ReasoningMode {
-  return value === 'fast' || value === 'thinking';
+  return value === 'fast' || value === 'thinking' || value === 'expert';
 }
 
 function loadStoredReasoningMode(): ChatState['reasoningMode'] {
   try {
     const stored = window.localStorage.getItem(REASONING_MODE_STORAGE_KEY);
-    if (stored === 'fast' || stored === 'thinking') {
+    if (isReasoningMode(stored)) {
       return stored;
     }
   } catch {

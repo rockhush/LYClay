@@ -10,6 +10,7 @@ import {
   clearErrorRecoveryTimer,
   clearHistoryPoll,
   dedupeAssistantMessagesByContent,
+  dedupeEquivalentAttachmentUserMessages,
   enrichWithCachedImages,
   enrichWithToolResultFiles,
   getLatestOptimisticUserMessage,
@@ -92,7 +93,6 @@ export function createHistoryActions(
         if (shouldSuppressPartialSuccessRunError(errorMessage, latestAssistantMessage)) return null;
         return errorMessage;
       };
-      const getUserDedupKey = (message: RawMessage): string | null => getUserMessageDedupeKey(message);
       const mergeHydratedMessages = (
         currentMessages: RawMessage[],
         hydratedMessages: RawMessage[],
@@ -160,18 +160,9 @@ export function createHistoryActions(
           }
         }
 
-        // 在设置消息前进行去重，防止相同内容的用户/assistant 消息重复出现
-        const seenContent = new Set<string>();
-        const deduplicatedUserMessages = finalMessages.filter((msg) => {
-          if (msg.role === 'user') {
-            const content = getUserDedupKey(msg);
-            if (content && seenContent.has(content)) {
-              return false;
-            }
-            if (content) seenContent.add(content);
-          }
-          return true;
-        });
+        // Collapse only adjacent optimistic/Gateway echoes. Equal text in a
+        // later turn is a distinct user message and must remain visible.
+        const deduplicatedUserMessages = dedupeEquivalentAttachmentUserMessages(finalMessages);
         const deduplicatedMessages = dedupeAssistantMessagesByContent(deduplicatedUserMessages);
 
         const runErrorRaw = getRunErrorFromMessages(deduplicatedMessages);

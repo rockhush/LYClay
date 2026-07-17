@@ -261,10 +261,24 @@ function handleSessionUpdated(payload: SessionUpdatedPayload | undefined): void 
 function forwardAgentEventToChat(normalizedEvent: Record<string, unknown>): void {
   const normalizedSessionKey = normalizedEvent.sessionKey;
   if (typeof normalizedSessionKey === 'string' && normalizedSessionKey.includes('__warmup__')) return;
-  if (!shouldProcessGatewayEvent(normalizedEvent)) return;
+  const shouldProcess = shouldProcessGatewayEvent(normalizedEvent);
   loadChatStoreModule()
     .then(({ useChatStore }) => {
-      useChatStore.getState().handleChatEvent(normalizedEvent);
+      const state = useChatStore.getState();
+      if (shouldProcess) {
+        state.handleChatEvent(normalizedEvent);
+        return;
+      }
+
+      // Terminal events can arrive through both gateway:notification and
+      // gateway:chat-message. Their message payload is safe to dedupe, but the
+      // completion reconciliation must remain idempotent and run every time.
+      if (normalizedEvent.state === 'final') {
+        state.handleGatewayRunCompleted(
+          normalizedEvent.runId != null ? String(normalizedEvent.runId) : null,
+          normalizedEvent.sessionKey != null ? String(normalizedEvent.sessionKey) : null,
+        );
+      }
     })
     .catch(() => {});
 }
@@ -444,8 +458,15 @@ function handleGatewayChatMessage(data: unknown): void {
     if (typeof sessionKey === 'string' && sessionKey.includes('__warmup__')) return;
 
     if (payload.state) {
-      if (!shouldProcessGatewayEvent(payload)) return;
-      useChatStore.getState().handleChatEvent(payload);
+      const state = useChatStore.getState();
+      if (shouldProcessGatewayEvent(payload)) {
+        state.handleChatEvent(payload);
+      } else if (payload.state === 'final') {
+        state.handleGatewayRunCompleted(
+          payload.runId != null ? String(payload.runId) : null,
+          sessionKey != null ? String(sessionKey) : null,
+        );
+      }
       return;
     }
 
@@ -454,8 +475,15 @@ function handleGatewayChatMessage(data: unknown): void {
       message: payload,
       runId: chatData.runId ?? payload.runId,
     };
-    if (!shouldProcessGatewayEvent(normalized)) return;
-    useChatStore.getState().handleChatEvent(normalized);
+    const state = useChatStore.getState();
+    if (shouldProcessGatewayEvent(normalized)) {
+      state.handleChatEvent(normalized);
+    } else {
+      state.handleGatewayRunCompleted(
+        normalized.runId != null ? String(normalized.runId) : null,
+        sessionKey != null ? String(sessionKey) : null,
+      );
+    }
   }).catch(() => {});
 }
 

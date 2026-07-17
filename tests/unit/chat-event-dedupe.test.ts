@@ -26,6 +26,12 @@ vi.mock('@/stores/agents', () => ({
   },
 }));
 
+vi.mock('@/stores/digital-employees', () => ({
+  useDigitalEmployeesStore: {
+    getState: () => ({ employees: [] }),
+  },
+}));
+
 vi.mock('@/lib/host-api', () => ({
   hostApiFetch: (...args: unknown[]) => hostApiFetchMock(...args),
   getEmptyFinalDiagnostic: (...args: unknown[]) => hostApiFetchMock(...args),
@@ -754,6 +760,362 @@ describe('chat event dedupe', () => {
     expect(state.activeRunId).toBeNull();
     expect(state.pendingFinal).toBe(false);
     expect(extractText(state.messages.at(-1))).toContain('Installing it now');
+  });
+
+  it('commits a cumulative DingTalk final and settles despite lagging backend activity', async () => {
+    vi.useFakeTimers();
+    try {
+      const { useChatStore } = await import('@/stores/chat');
+      const userTimestamp = Date.now();
+      const sessionKey = 'agent:main:session-dingtalk-cumulative-final';
+      const runId = 'run-dingtalk-cumulative-final';
+      const firstNarration = '我需要先查找邓永坚的钉钉用户ID。';
+      const lastNarration = '还需要指定 --file-path 参数。';
+      const finalReply = '已成功将老虎图片发送给邓永坚（Yongjian Deng/邓永坚）。';
+
+      getSessionBackendActivityMock.mockResolvedValue({
+        success: true,
+        session: {
+          sessionKey,
+          status: 'running',
+          processing: true,
+          hasTrackedUserRun: true,
+          activeRunIds: [runId],
+        },
+        background: {
+          hasBackgroundProcessing: true,
+          processingSessionKeys: [sessionKey],
+        },
+      });
+
+      useChatStore.setState({
+        currentSessionKey: sessionKey,
+        currentAgentId: 'main',
+        sessions: [{ key: sessionKey }],
+        messages: [
+          {
+            role: 'user',
+            id: 'user-dingtalk-image',
+            timestamp: userTimestamp,
+            content: '把老虎图片发给邓永坚',
+          },
+          {
+            role: 'assistant',
+            id: 'tool-round-1',
+            timestamp: userTimestamp + 1,
+            stopReason: 'toolUse',
+            content: [
+              { type: 'text', text: firstNarration },
+              {
+                type: 'tool_use',
+                id: 'call-find-user',
+                name: 'exec',
+                input: { command: 'find-dingtalk-user' },
+              },
+            ],
+          },
+          {
+            role: 'toolResult',
+            id: 'tool-result-1',
+            timestamp: userTimestamp + 2,
+            toolCallId: 'call-find-user',
+            content: [{ type: 'text', text: 'user found' }],
+          },
+          {
+            role: 'assistant',
+            id: 'tool-round-2',
+            timestamp: userTimestamp + 3,
+            stopReason: 'toolUse',
+            content: [
+              { type: 'text', text: lastNarration },
+              {
+                type: 'tool_use',
+                id: 'call-send-image',
+                name: 'exec',
+                input: { command: 'send-dingtalk-image' },
+              },
+            ],
+          },
+          {
+            role: 'toolResult',
+            id: 'tool-result-2',
+            timestamp: userTimestamp + 4,
+            toolCallId: 'call-send-image',
+            content: [{ type: 'text', text: 'message sent' }],
+          },
+        ],
+        sessionLabels: {},
+        sessionLastActivity: {},
+        sessionStreamingStates: {},
+        sending: true,
+        activeRunId: runId,
+        streamingText: `${firstNarration}${lastNarration}${finalReply}`,
+        streamingMessage: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `${firstNarration}${lastNarration}${finalReply}` }],
+        },
+        streamingTools: [],
+        pendingFinal: true,
+        lastUserMessageAt: userTimestamp,
+        pendingToolImages: [],
+        error: null,
+        runError: null,
+        loading: false,
+        thinkingLevel: null,
+        sessionBackendActivity: {
+          sessionKey,
+          status: 'running',
+          processing: true,
+          hasTrackedUserRun: true,
+          activeRunIds: [runId],
+        },
+        gatewayBackgroundActivity: {
+          hasBackgroundProcessing: true,
+          processingSessionKeys: [sessionKey],
+        },
+      });
+
+      useChatStore.getState().handleChatEvent({
+        state: 'final',
+        runId,
+        sessionKey,
+        message: {
+          role: 'assistant',
+          timestamp: userTimestamp + 5,
+          content: [{
+            type: 'text',
+            text: `${firstNarration}${lastNarration}${finalReply}`,
+          }],
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      const state = useChatStore.getState();
+      expect(state.messages.some((message) => extractText(message).includes(finalReply))).toBe(true);
+      expect(state).toMatchObject({
+        sending: false,
+        activeRunId: null,
+        pendingFinal: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries authoritative history when the first printer-final reload is stale', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const userTimestamp = Date.now();
+    const sessionKey = 'agent:main:session-printer-cumulative-final';
+    const runId = 'run-printer-cumulative-final';
+    const printerFailureNarration = '打印失败。错误显示 `cscript.exe` 超时，这可能是 Office COM 打印的问题。让我检查一下默认打印机状态和 SumatraPDF 是否安装：';
+    const printerDiagnosisNarration = '问题找到了：当前默认打印机是 Microsoft Print to PDF，这是虚拟打印机。让我继续检查可用的实体打印机和文件格式：';
+    const finalReply = '打印失败了。错误信息显示 `cscript.exe` 命令超时。这可能是由于 Word 文件打印需要 Word COM 组件支持，而 CScript 超时表明 Word 没有正确响应。';
+    const authoritativeMessages = [
+      { role: 'user', id: 'printer-user', timestamp: userTimestamp, content: '打印 test3 文件夹中的文件' },
+      {
+        role: 'assistant',
+        id: 'printer-tool-round-1',
+        timestamp: userTimestamp + 1,
+        stopReason: 'toolUse',
+        content: [
+          { type: 'text', text: printerFailureNarration },
+          { type: 'tool_use', id: 'check-printer', name: 'exec', input: { command: 'check-printer' } },
+        ],
+      },
+      {
+        role: 'toolResult',
+        id: 'printer-tool-result-1',
+        timestamp: userTimestamp + 2,
+        toolCallId: 'check-printer',
+        content: [{ type: 'text', text: 'Microsoft Print to PDF' }],
+      },
+      {
+        role: 'assistant',
+        id: 'printer-tool-round-2',
+        timestamp: userTimestamp + 3,
+        stopReason: 'toolUse',
+        content: [
+          { type: 'text', text: printerDiagnosisNarration },
+          { type: 'tool_use', id: 'check-sumatra', name: 'exec', input: { command: 'check-sumatra' } },
+        ],
+      },
+      {
+        role: 'toolResult',
+        id: 'printer-tool-result-2',
+        timestamp: userTimestamp + 4,
+        toolCallId: 'check-sumatra',
+        content: [{ type: 'text', text: 'not installed' }],
+      },
+      {
+        role: 'assistant',
+        id: 'printer-authoritative-final',
+        timestamp: userTimestamp + 5,
+        stopReason: 'stop',
+        content: [{ type: 'text', text: finalReply }],
+      },
+    ];
+
+    hostApiFetchMock
+      .mockResolvedValueOnce({
+        success: true,
+        messages: authoritativeMessages.slice(0, -1),
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        messages: authoritativeMessages,
+      });
+
+    useChatStore.setState({
+      currentSessionKey: sessionKey,
+      currentAgentId: 'main',
+      sessions: [{ key: sessionKey }],
+      messages: authoritativeMessages.slice(0, -1),
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: runId,
+      streamingText: `${printerFailureNarration}${printerDiagnosisNarration}${finalReply}`,
+      streamingMessage: {
+        role: 'assistant',
+        content: [{
+          type: 'text',
+          text: `${printerFailureNarration}${printerDiagnosisNarration}${finalReply}`,
+        }],
+      },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTimestamp,
+      pendingToolImages: [],
+      error: null,
+      runError: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId,
+      sessionKey,
+      message: {
+        role: 'assistant',
+        timestamp: userTimestamp + 5,
+        content: [{
+          type: 'text',
+          text: `${printerFailureNarration}${printerDiagnosisNarration}${finalReply}`,
+        }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().messages.some(
+        (message) => message.id === 'printer-authoritative-final' && extractText(message) === finalReply,
+      )).toBe(true);
+    });
+
+    const state = useChatStore.getState();
+    expect(state.messages.some(
+      (message) => message.id === 'printer-tool-round-1' && message.stopReason === 'toolUse',
+    )).toBe(true);
+    expect(state.messages.at(-1)?.id).toBe('printer-authoritative-final');
+    expect(state.sending).toBe(false);
+    expect(state.activeRunId).toBeNull();
+    expect(state.pendingFinal).toBe(false);
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries authoritative history when a plain-text recruitment final briefly disappears', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    const userTimestamp = Date.now();
+    const sessionKey = 'agent:employee-recruitment-specialist:test-history-race';
+    const runId = '3bf3a75b-938d-419f-abed-0fbb25a140cd';
+    const finalReply = [
+      '收到！我先整理一下已有信息，并补充几个关键问题：',
+      '## 已收集信息',
+      '| 岗位名称 | 大模型算法工程师 |',
+      '| 工作经验 | 3-5 年 |',
+      '请确认岗位类型和岗位职责，或直接说“按这个生成”。',
+    ].join('\n\n');
+    const staleMessages = [
+      { role: 'user', id: 'recruit-user-1', timestamp: userTimestamp - 3, content: '我想要写岗位JD' },
+      {
+        role: 'assistant',
+        id: 'recruit-answer-1',
+        timestamp: userTimestamp - 2,
+        stopReason: 'stop',
+        content: '请提供岗位基本信息。',
+      },
+      {
+        role: 'user',
+        id: 'recruit-user-2',
+        timestamp: userTimestamp,
+        content: '大模型算法工程师，3-5年，硕士及以上，40-60K，深圳',
+      },
+    ];
+    const authoritativeMessages = [
+      ...staleMessages,
+      {
+        role: 'assistant',
+        id: 'recruit-authoritative-final',
+        timestamp: userTimestamp + 1,
+        stopReason: 'stop',
+        content: [{ type: 'text', text: finalReply }],
+      },
+    ];
+
+    hostApiFetchMock
+      .mockResolvedValueOnce({ success: true, messages: staleMessages })
+      .mockResolvedValueOnce({ success: true, messages: authoritativeMessages });
+
+    useChatStore.setState({
+      currentSessionKey: sessionKey,
+      currentAgentId: 'employee-recruitment-specialist',
+      sessions: [{ key: sessionKey }],
+      messages: staleMessages,
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: true,
+      activeRunId: runId,
+      streamingText: finalReply,
+      streamingMessage: {
+        role: 'assistant',
+        content: [{ type: 'text', text: finalReply }],
+      },
+      streamingTools: [],
+      pendingFinal: true,
+      lastUserMessageAt: userTimestamp,
+      pendingToolImages: [],
+      error: null,
+      runError: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId,
+      sessionKey,
+      message: {
+        role: 'assistant',
+        timestamp: userTimestamp + 1,
+        content: [{ type: 'text', text: finalReply }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().messages.some(
+        (message) => message.id === 'recruit-authoritative-final' && extractText(message) === finalReply,
+      )).toBe(true);
+    });
+
+    expect(useChatStore.getState()).toMatchObject({
+      sending: false,
+      activeRunId: null,
+      pendingFinal: false,
+    });
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('settles an ambiguous visible text final when backend is idle', async () => {

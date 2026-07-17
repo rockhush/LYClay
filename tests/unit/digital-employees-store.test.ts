@@ -37,6 +37,19 @@ describe('digital employees store', () => {
     });
   });
 
+  it('keeps employees array-shaped when the host returns a malformed payload', async () => {
+    hostApiFetchMock.mockResolvedValue({ success: false, error: 'route unavailable' });
+    const { useDigitalEmployeesStore } = await import('@/stores/digital-employees');
+
+    await useDigitalEmployeesStore.getState().fetchEmployees();
+
+    expect(useDigitalEmployeesStore.getState()).toMatchObject({
+      employees: [],
+      loading: false,
+      error: null,
+    });
+  });
+
   it('passes only the marketplace employee id to the install route', async () => {
     hostApiFetchMock.mockImplementation(async (path: string) => {
       if (path === '/api/digital-employees/install') {

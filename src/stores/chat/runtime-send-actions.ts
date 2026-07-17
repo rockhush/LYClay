@@ -48,8 +48,10 @@ function buildFallbackMainSessionKey(agentId: string): string {
   return `agent:${normalizeAgentId(agentId)}:main`;
 }
 
-function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' {
-  return mode === 'fast' ? 'off' : 'medium';
+function toThinkingLevel(mode: ReasoningMode): 'off' | 'medium' | 'high' {
+  if (mode === 'fast') return 'off';
+  if (mode === 'expert') return 'high';
+  return 'medium';
 }
 
 function isSlashCommand(message: string): boolean {

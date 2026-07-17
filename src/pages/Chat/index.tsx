@@ -12,10 +12,8 @@ import { refreshSessionBackendActivity } from '@/stores/chat/session-backend-bri
 import { useGatewayStore } from '@/stores/gateway';
 import { useProviderStore } from '@/stores/providers';
 import { useAgentsStore } from '@/stores/agents';
-import { useDigitalEmployeesStore } from '@/stores/digital-employees';
 import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
 import { hostApiFetch } from '@/lib/host-api';
-import { isRetiredDigitalEmployeeAgent } from '@/lib/retired-digital-employees';
 import { LoaderBadge } from '@/components/common/LoadingSpinner';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
@@ -98,12 +96,9 @@ type UserRunCard = {
   suppressThinking: boolean;
 };
 
-function getPrimaryProcessStepTexts(steps: TaskStep[]): string[] {
+function getPrimaryMessageStepTexts(steps: TaskStep[]): string[] {
   return steps
-    .filter((step) =>
-      (step.kind === 'message' || step.kind === 'thinking')
-      && step.parentId === 'agent-run'
-      && !!step.detail)
+    .filter((step) => step.kind === 'message' && step.parentId === 'agent-run' && !!step.detail)
     .map((step) => step.detail!);
 }
 
@@ -111,42 +106,21 @@ function normalizeGraphReplyText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-export function filterCommittedReplyDuplicateSteps(
+function filterCommittedReplyDuplicateSteps(
   steps: TaskStep[],
   replyMessage: RawMessage | null | undefined,
 ): TaskStep[] {
   if (!replyMessage || replyMessage.role !== 'assistant') return steps;
   const replyText = normalizeGraphReplyText(extractText(replyMessage));
-  const replyThinking = normalizeGraphReplyText(extractThinking(replyMessage) ?? '');
-  if (!replyText && !replyThinking) return steps;
+  if (!replyText) return steps;
 
   const filtered = steps.filter((step) => {
-    if (!step.detail) return true;
+    if (step.kind !== 'message' || !step.detail) return true;
     const stepText = normalizeGraphReplyText(step.detail);
     if (!stepText) return true;
-    const matchesReplyText = replyText
-      && step.kind === 'message'
-      && (
-        stepText === replyText
-        || (
-          stepText.length >= 80
-          && replyText.length >= 80
-          && (stepText.includes(replyText) || replyText.includes(stepText))
-        )
-      );
-    if (matchesReplyText) return false;
-
-    const matchesReplyThinking = replyThinking
-      && step.kind === 'thinking'
-      && (
-        stepText === replyThinking
-        || (
-          stepText.length >= 80
-          && replyThinking.length >= 80
-          && (stepText.includes(replyThinking) || replyThinking.includes(stepText))
-        )
-      );
-    return !matchesReplyThinking;
+    if (stepText === replyText) return false;
+    const longEnoughForContainment = stepText.length >= 80 && replyText.length >= 80;
+    return !longEnoughForContainment || (!stepText.includes(replyText) && !replyText.includes(stepText));
   });
 
   return filtered.length === steps.length ? steps : filtered;
@@ -1018,7 +992,7 @@ export function Chat() {
     let steps = buildSteps(rawStreamingReplyCandidate);
     let streamingReplyText: string | null = null;
     if (rawStreamingReplyCandidate) {
-      const trimmedReplyText = stripProcessMessagePrefix(streamText, getPrimaryProcessStepTexts(steps));
+      const trimmedReplyText = stripProcessMessagePrefix(streamText, getPrimaryMessageStepTexts(steps));
       const hasReplyText = trimmedReplyText.trim().length > 0;
       if (hasReplyText || hasStreamImages) {
         streamingReplyText = trimmedReplyText;
@@ -1052,7 +1026,7 @@ export function Chat() {
             sessionLabel: cached.sessionLabel,
             segmentEnd: nextUserIndex === -1 ? messages.length - 1 : nextUserIndex - 1,
             steps: cleanedSteps,
-            messageStepTexts: getPrimaryProcessStepTexts(cleanedSteps),
+            messageStepTexts: getPrimaryMessageStepTexts(cleanedSteps),
             streamingReplyText: null,
             suppressThinking: true,
             isMimo,
@@ -1101,7 +1075,7 @@ export function Chat() {
         sessionLabel: cached.sessionLabel,
         segmentEnd: nextUserIndex === -1 ? messages.length - 1 : nextUserIndex - 1,
         steps: cleanedSteps,
-        messageStepTexts: getPrimaryProcessStepTexts(cleanedSteps),
+        messageStepTexts: getPrimaryMessageStepTexts(cleanedSteps),
         streamingReplyText: null,
         suppressThinking: false,
         isMimo,
@@ -1141,7 +1115,7 @@ export function Chat() {
         sessionLabel: segmentSessionLabel,
         segmentEnd: nextUserIndex === -1 ? messages.length - 1 : nextUserIndex - 1,
         steps,
-        messageStepTexts: getPrimaryProcessStepTexts(steps),
+        messageStepTexts: getPrimaryMessageStepTexts(steps),
         streamingReplyText,
         suppressThinking,
         isMimo,
@@ -1396,24 +1370,13 @@ export function Chat() {
   }, [userRunCards, messages, currentSessionKey]);
 
   const isDefaultAccountSwitching = useProviderStore((s) => s.isDefaultAccountSwitching);
-  const retiredSessionsRevision = useDigitalEmployeesStore((s) => s.retiredSessionsRevision);
-
-  const isRetiredDigitalEmployeeSession = useMemo(
-    () => isRetiredDigitalEmployeeAgent(currentAgentId),
-    [currentAgentId, retiredSessionsRevision],
-  );
-  const composerDisabled = !isGatewayRunning || isRetiredDigitalEmployeeSession;
-  const composerDisabledReason = isRetiredDigitalEmployeeSession
-    ? 'retiredDigitalEmployee'
-    : (!isGatewayRunning ? 'gateway' : undefined);
 
   const chatInputElement = (
     <ChatInput
       key={currentSessionKey}
       onSend={sendMessage}
       onStop={abortRun}
-      disabled={composerDisabled}
-      disabledReason={composerDisabledReason}
+      disabled={!isGatewayRunning}
       sending={isUserTurnExecuting || hasActiveExecutionGraph}
       isEmpty={isEmpty}
       initialText={editingText || prefilledInput || undefined}

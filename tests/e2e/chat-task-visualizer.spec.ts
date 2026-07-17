@@ -210,6 +210,43 @@ const thinkingProcessHistory = [
   },
 ];
 
+const printerWaitFinalText = [
+  '默认打印机是 "Microsoft Print to PDF"（虚拟打印机，生成 PDF 文件），不是物理打印机。',
+  '这解释了为什么等待队列超时 - Microsoft Print to PDF 需要用户交互来选择保存位置。',
+  '**问题**：您的默认打印机是 Microsoft Print to PDF（虚拟打印机），它会将文件打印成 PDF 而不是在实际打印机上输出。',
+  '文件夹中还包含 .docx 和 .pptx 文件。',
+].join('\n\n');
+const printerWaitHistory = [
+  {
+    role: 'user',
+    content: [{ type: 'text', text: '打印文件夹中的所有文件' }],
+    timestamp: Date.now(),
+  },
+  {
+    role: 'assistant',
+    content: [
+      { type: 'text', text: '正在打印第一个 Word 文件，再等一会看进度。' },
+      { type: 'toolCall', id: 'wait-print', name: 'process', arguments: { action: 'poll' } },
+    ],
+    stopReason: 'toolUse',
+    timestamp: Date.now(),
+  },
+  {
+    role: 'toolResult',
+    toolCallId: 'wait-print',
+    toolName: 'process',
+    content: [{ type: 'text', text: 'timed out' }],
+    timestamp: Date.now(),
+  },
+  {
+    role: 'assistant',
+    id: 'printer-wait-final',
+    content: [{ type: 'text', text: printerWaitFinalText }],
+    stopReason: 'stop',
+    timestamp: Date.now(),
+  },
+];
+
 const errorRunHistory = [
   {
     role: 'user',
@@ -456,6 +493,76 @@ test.describe('ClawX chat execution graph', () => {
       await expect(page.getByTestId('chat-execution-graph')).toBeVisible({ timeout: 30_000 });
       await expect(page.getByText(thinkingProcessSummary, { exact: true })).toBeVisible();
       await expect(page.getByText(thinkingProcessReplyText, { exact: true })).toHaveCount(0);
+      await expect(page.getByTestId('chat-execution-graph')).toContainText('1 process message');
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
+
+  test('keeps a terminal printer diagnosis out of the graph when it mentions waiting and PPTX', async ({ launchElectronApp }) => {
+    const app = await launchElectronApp({ skipSetup: true });
+
+    try {
+      await installIpcMocks(app, {
+        gatewayStatus: { state: 'running', port: 18789, pid: 12345 },
+        gatewayRpc: {
+          [stableStringify(['sessions.list', {}])]: {
+            success: true,
+            result: {
+              sessions: [{ key: PROJECT_MANAGER_SESSION_KEY, displayName: 'main' }],
+            },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 200 }])]: {
+            success: true,
+            result: {
+              messages: printerWaitHistory,
+            },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 1000 }])]: {
+            success: true,
+            result: {
+              messages: printerWaitHistory,
+            },
+          },
+        },
+        hostApi: {
+          [stableStringify(['/api/gateway/status', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: { state: 'running', port: 18789, pid: 12345 },
+            },
+          },
+          [stableStringify(['/api/agents', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: {
+                success: true,
+                agents: [{ id: 'main', name: 'main' }],
+              },
+            },
+          },
+        },
+      });
+
+      const page = await getStableWindow(app);
+      try {
+        await page.reload();
+      } catch (error) {
+        if (!String(error).includes('ERR_FILE_NOT_FOUND')) {
+          throw error;
+        }
+      }
+
+      await expect(page.getByTestId('main-layout')).toBeVisible();
+      await expect(page.getByTestId('chat-message-3')).toContainText('默认打印机是 "Microsoft Print to PDF"', {
+        timeout: 30_000,
+      });
+      await expect(page.getByTestId('chat-execution-graph')).toBeVisible();
+      await expect(page.getByTestId('chat-execution-graph')).not.toContainText('这解释了为什么等待队列超时');
       await expect(page.getByTestId('chat-execution-graph')).toContainText('1 process message');
     } finally {
       await closeElectronApp(app);
