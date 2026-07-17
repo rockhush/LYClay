@@ -13,6 +13,8 @@ import { useGatewayStore } from '@/stores/gateway';
 import { useProviderStore } from '@/stores/providers';
 import { useAgentsStore } from '@/stores/agents';
 import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
+import { useDigitalEmployeesStore } from '@/stores/digital-employees';
+import { isRetiredDigitalEmployeeAgent } from '@/lib/retired-digital-employees';
 import { hostApiFetch } from '@/lib/host-api';
 import { LoaderBadge } from '@/components/common/LoadingSpinner';
 import { ChatMessage } from './ChatMessage';
@@ -1370,13 +1372,23 @@ export function Chat() {
   }, [userRunCards, messages, currentSessionKey]);
 
   const isDefaultAccountSwitching = useProviderStore((s) => s.isDefaultAccountSwitching);
+  const retiredSessionsRevision = useDigitalEmployeesStore((s) => s.retiredSessionsRevision);
+  const isRetiredDigitalEmployeeSession = useMemo(
+    () => isRetiredDigitalEmployeeAgent(currentAgentId),
+    [currentAgentId, retiredSessionsRevision],
+  );
+  const isComposerDisabled = !isGatewayRunning || isRetiredDigitalEmployeeSession;
+  const composerDisabledReason = isRetiredDigitalEmployeeSession
+    ? 'retiredDigitalEmployee'
+    : undefined;
 
   const chatInputElement = (
     <ChatInput
       key={currentSessionKey}
       onSend={sendMessage}
       onStop={abortRun}
-      disabled={!isGatewayRunning}
+      disabled={isComposerDisabled}
+      disabledReason={composerDisabledReason}
       sending={isUserTurnExecuting || hasActiveExecutionGraph}
       isEmpty={isEmpty}
       initialText={editingText || prefilledInput || undefined}
@@ -1640,7 +1652,7 @@ export function Chat() {
 
       {/* Error bar */}
       {error && !shouldHideRunError(error) && (
-        <div className="px-4 py-2 bg-destructive/10 border-t border-destructive/20">
+        <div data-testid="chat-error" className="px-4 py-2 bg-destructive/10 border-t border-destructive/20">
           <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
             <p className="text-sm text-destructive flex items-center gap-2 min-w-0">
               <AlertCircle className="h-4 w-4 flex-shrink-0" />

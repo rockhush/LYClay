@@ -1,63 +1,80 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handleGatewayPluginApprovalRequested } from '@electron/gateway/plugin-approval-bridge';
 
-describe('gateway plugin approval bridge', () => {
-  it('allows a plugin approval after Skill Workshop confirmation allows it', async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === 'plugin.approval.get') {
-        return {
-          request: {
-            action: 'apply',
-            title: 'Summarizer Skill',
-            description: 'Install a generated summarizer skill.',
-            toolCallId: 'tool-1',
-          },
-        };
-      }
-      return { success: true };
-    });
-    const approveSkillWorkshopAction = vi.fn(async () => undefined);
+function skillWorkshopPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'approval-1',
+    request: {
+      title: 'Apply workspace skill proposal',
+      description: 'Update the weekly report output.',
+      allowedDecisions: ['allow-once', 'deny'],
+      toolName: 'skill_workshop',
+      toolCallId: 'tool-call-1',
+      agentId: 'main',
+      sessionKey: 'agent:main:main',
+      ...overrides,
+    },
+  };
+}
 
-    await expect(handleGatewayPluginApprovalRequested({
-      id: 'plugin-approval-1',
-    }, { request, approveSkillWorkshopAction })).resolves.toBe(true);
+describe('Gateway plugin approval bridge', () => {
+  it('resolves a confirmed Skill Workshop action as allow-once', async () => {
+    const request = vi.fn(async () => ({}));
+    const approve = vi.fn(async () => undefined);
 
-    expect(approveSkillWorkshopAction).toHaveBeenCalledWith({
+    await expect(handleGatewayPluginApprovalRequested(skillWorkshopPayload(), {
+      request,
+      approve,
+    })).resolves.toBe(true);
+
+    expect(approve).toHaveBeenCalledWith(expect.objectContaining({
       action: 'apply',
-      title: 'Summarizer Skill',
-      description: 'Install a generated summarizer skill.',
-      toolCallId: 'tool-1',
-      source: 'gateway:plugin-approval:skill-workshop',
-    });
-    expect(request).toHaveBeenCalledWith('plugin.approval.resolve', {
-      id: 'plugin-approval-1',
-      decision: 'allow-once',
-    }, 10000);
+      title: 'Apply workspace skill proposal',
+      toolCallId: 'tool-call-1',
+    }));
+    expect(request).toHaveBeenCalledWith(
+      'plugin.approval.resolve',
+      { id: 'approval-1', decision: 'allow-once' },
+      10_000,
+    );
   });
 
-  it('denies a plugin approval when Skill Workshop confirmation rejects it', async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === 'plugin.approval.get') {
-        return {
-          request: {
-            action: 'apply',
-            title: 'Risky Skill',
-          },
-        };
-      }
-      return { success: true };
-    });
-    const approveSkillWorkshopAction = vi.fn(async () => {
-      throw new Error('Skill Workshop apply denied by user');
+  it('resolves a rejected confirmation as deny', async () => {
+    const request = vi.fn(async () => ({}));
+    const approve = vi.fn(async () => {
+      throw new Error('denied');
     });
 
-    await expect(handleGatewayPluginApprovalRequested({
-      id: 'plugin-approval-2',
-    }, { request, approveSkillWorkshopAction })).resolves.toBe(true);
+    await handleGatewayPluginApprovalRequested(skillWorkshopPayload(), { request, approve });
 
-    expect(request).toHaveBeenCalledWith('plugin.approval.resolve', {
-      id: 'plugin-approval-2',
-      decision: 'deny',
-    }, 10000);
+    expect(request).toHaveBeenCalledWith(
+      'plugin.approval.resolve',
+      { id: 'approval-1', decision: 'deny' },
+      10_000,
+    );
+  });
+
+  it('denies unsupported plugin approval requests without prompting', async () => {
+    const request = vi.fn(async () => ({}));
+    const approve = vi.fn(async () => undefined);
+
+    await expect(handleGatewayPluginApprovalRequested(
+      skillWorkshopPayload({ toolName: 'unknown_plugin' }),
+      { request, approve },
+    )).resolves.toBe(true);
+
+    expect(approve).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      'plugin.approval.resolve',
+      { id: 'approval-1', decision: 'deny' },
+      10_000,
+    );
+  });
+
+  it('ignores malformed events without an approval id', async () => {
+    const request = vi.fn(async () => ({}));
+
+    await expect(handleGatewayPluginApprovalRequested({ request: {} }, { request })).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
   });
 });

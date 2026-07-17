@@ -281,8 +281,9 @@ export class GatewayManager extends EventEmitter {
   private static readonly GATEWAY_READY_FALLBACK_MS = 2_000;
   private static readonly GATEWAY_READY_PROBE_TIMEOUT_MS = 1_500;
   private static readonly TERMINAL_LOCK_AUDIT_DELAY_MS = 5_000;
-  private static readonly CHAT_SEND_LOCK_GATE_WAIT_MS = 15_000;
+  private static readonly CHAT_SEND_LOCK_GATE_WAIT_MS = 90_000;
   private static readonly CHAT_SEND_LOCK_GATE_POLL_MS = 500;
+  private static readonly CHAT_SEND_LOCK_GATE_RECOVERY_POLL_MS = 10_000;
   private lastRestartAt = 0;
   /** Set by scheduleReconnect() before calling start() to signal auto-reconnect. */
   private isAutoReconnectStart = false;
@@ -2771,10 +2772,11 @@ export class GatewayManager extends EventEmitter {
     const openclawDir = path.join(homedir(), '.openclaw');
     const currentPid = this.getGatewayProcessPid();
     const startedAt = Date.now();
+    let nextRecoveryPollAt = startedAt + GatewayManager.CHAT_SEND_LOCK_GATE_RECOVERY_POLL_MS;
     let snapshot = await inspectSessionTranscriptLock({ sessionKey, openclawDir, currentPid });
     if (!snapshot.exists) return;
 
-    logger.warn('[gateway:session-lock-gate] waiting before user chat.send', {
+    logger.info('[gateway:session-lock-gate] queueing user chat.send until transcript lock releases', {
       sessionKey,
       lockPath: snapshot.lockPath,
       lockAgeMs: snapshot.lockAgeMs,
@@ -2794,6 +2796,23 @@ export class GatewayManager extends EventEmitter {
         });
         return;
       }
+      const now = Date.now();
+      if (now >= nextRecoveryPollAt) {
+        nextRecoveryPollAt = now + GatewayManager.CHAT_SEND_LOCK_GATE_RECOVERY_POLL_MS;
+        const result = await this.recoverSessionTranscriptLock(
+          sessionKey,
+          'during-user-chat-send-lock-wait',
+        );
+        if (result?.recovered) {
+          logger.info('[gateway:session-lock-gate] recovered orphaned lock while user chat.send was queued', {
+            sessionKey,
+            waitedMs: Date.now() - startedAt,
+            lockPath: result.lockPath,
+            lockAgeMs: result.lockAgeMs,
+          });
+          return;
+        }
+      }
     }
 
     logger.warn('[gateway:session-lock-gate] blocked user chat.send', {
@@ -2806,7 +2825,7 @@ export class GatewayManager extends EventEmitter {
       waitedMs: Date.now() - startedAt,
     });
     throw new SessionTranscriptLockBusyError(
-      `Previous session response is still settling; transcript lock is still active for ${sessionKey}. Please retry shortly.`,
+      `SESSION_TRANSCRIPT_LOCK_BUSY: The previous response is still being saved for this conversation. Please wait a moment and try again.`,
     );
   }
 

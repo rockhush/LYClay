@@ -12,6 +12,8 @@ import {
   markAbortHistoryQuietPeriod,
   markUserAbort,
   isUserSecurityDenialMessage,
+  isSessionTranscriptLockBusyError,
+  resolveSessionTranscriptLockBusyMessage,
   buildSecurityCancelNotice,
   setLastChatEventAt,
   upsertImageCacheEntry,
@@ -621,6 +623,14 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
               pendingToolImages: [],
               lastUserMessageAt: null,
             });
+          } else if (isSessionTranscriptLockBusyError(errorMessage)) {
+            set({
+              error: resolveSessionTranscriptLockBusyMessage(),
+              runError: null,
+              sending: false,
+              activeRunId: null,
+              lastUserMessageAt: null,
+            });
           } else {
             set({ error: errorMessage, sending: false });
           }
@@ -680,6 +690,15 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
             streamingTools: [],
             pendingFinal: false,
             pendingToolImages: [],
+            lastUserMessageAt: null,
+          });
+        } else if (isSessionTranscriptLockBusyError(errorMessage)) {
+          set({
+            error: resolveSessionTranscriptLockBusyMessage(),
+            runError: null,
+            sending: false,
+            activeRunId: null,
+            activeTool: null,
             lastUserMessageAt: null,
           });
         } else {

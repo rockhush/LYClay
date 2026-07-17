@@ -2,25 +2,34 @@ import { assertSkillWorkshopActionAllowedWithConfirmation } from '../security/co
 import { logger } from '../utils/logger';
 
 type GatewayRequest = (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
+type SkillWorkshopAction = 'apply' | 'reject' | 'quarantine';
 
 export interface GatewayPluginApprovalBridgeDeps {
   request: GatewayRequest;
-  approveSkillWorkshopAction?: (input: {
-    action: 'apply' | 'reject' | 'quarantine';
+  approve?: (input: {
+    action: SkillWorkshopAction;
     title: string;
     description?: string;
     toolCallId?: string;
-    source?: string;
+    source: string;
   }) => Promise<void>;
 }
 
-interface PluginApprovalRequest {
+interface SkillWorkshopApprovalRequest {
   id: string;
-  action: 'apply' | 'reject' | 'quarantine';
+  action: SkillWorkshopAction;
   title: string;
   description?: string;
   toolCallId?: string;
+  agentId?: string;
+  sessionKey?: string;
 }
+
+const ACTION_BY_TITLE: Readonly<Record<string, SkillWorkshopAction>> = {
+  'Apply workspace skill proposal': 'apply',
+  'Reject workspace skill proposal': 'reject',
+  'Quarantine workspace skill proposal': 'quarantine',
+};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -32,54 +41,34 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function readAction(value: unknown): PluginApprovalRequest['action'] | undefined {
-  const action = readString(value);
-  return action === 'apply' || action === 'reject' || action === 'quarantine'
-    ? action
-    : undefined;
-}
-
-function extractRequestPayload(payload: unknown): Partial<PluginApprovalRequest> | null {
+function extractSkillWorkshopApproval(payload: unknown): SkillWorkshopApprovalRequest | null {
   const record = asRecord(payload);
-  if (!record) return null;
+  const request = asRecord(record?.request);
+  const id = readString(record?.id) ?? readString(record?.approvalId);
+  if (!record || !request || !id) return null;
 
-  const id = readString(record.id) ?? readString(record.approvalId);
-  const request = asRecord(record.request) ?? asRecord(record.proposal) ?? record;
-  if (!id) return null;
+  const title = readString(request.title);
+  const toolName = readString(request.toolName);
+  const action = title ? ACTION_BY_TITLE[title] : undefined;
+  const allowedDecisions = Array.isArray(request.allowedDecisions)
+    ? request.allowedDecisions.filter((value): value is string => typeof value === 'string')
+    : [];
+  if (
+    toolName !== 'skill_workshop'
+    || !title
+    || !action
+    || !allowedDecisions.includes('allow-once')
+    || !allowedDecisions.includes('deny')
+  ) return null;
 
   return {
     id,
-    action: readAction(request.action) ?? readAction(record.action),
-    title: readString(request.title)
-      ?? readString(request.name)
-      ?? readString(request.skillName)
-      ?? readString(record.title),
-    description: readString(request.description)
-      ?? readString(request.summary)
-      ?? readString(record.description),
-    toolCallId: readString(request.toolCallId) ?? readString(record.toolCallId),
-  };
-}
-
-function mergeApprovalDetails(
-  base: Partial<PluginApprovalRequest>,
-  details: unknown,
-): Partial<PluginApprovalRequest> {
-  const detailsRecord = asRecord(details);
-  const request = asRecord(detailsRecord?.request) ?? asRecord(detailsRecord?.proposal) ?? detailsRecord;
-  if (!request) return base;
-
-  return {
-    id: base.id,
-    action: readAction(request.action) ?? base.action,
-    title: readString(request.title)
-      ?? readString(request.name)
-      ?? readString(request.skillName)
-      ?? base.title,
-    description: readString(request.description)
-      ?? readString(request.summary)
-      ?? base.description,
-    toolCallId: readString(request.toolCallId) ?? base.toolCallId,
+    action,
+    title,
+    ...(readString(request.description) ? { description: readString(request.description) } : {}),
+    ...(readString(request.toolCallId) ? { toolCallId: readString(request.toolCallId) } : {}),
+    ...(readString(request.agentId) ? { agentId: readString(request.agentId) } : {}),
+    ...(readString(request.sessionKey) ? { sessionKey: readString(request.sessionKey) } : {}),
   };
 }
 
@@ -88,59 +77,55 @@ async function resolveApproval(
   id: string,
   decision: 'allow-once' | 'deny',
 ): Promise<void> {
-  await request('plugin.approval.resolve', { id, decision }, 10000);
+  await request('plugin.approval.resolve', { id, decision }, 10_000);
 }
 
 export async function handleGatewayPluginApprovalRequested(
   payload: unknown,
   deps: GatewayPluginApprovalBridgeDeps,
 ): Promise<boolean> {
-  const initial = extractRequestPayload(payload);
-  if (!initial?.id) return false;
-
-  const details = await deps.request('plugin.approval.get', { id: initial.id }, 10000)
-    .catch((error) => {
-      logger.warn(`[security:gateway-plugin] Failed to load approval details for ${initial.id}: ${String(error)}`);
-      return null;
-    });
-  const approval = mergeApprovalDetails(initial, details);
-
-  if (!approval.action || !approval.title) {
-    logger.warn(`[security:gateway-plugin] Denying approval ${initial.id}: missing action or title`);
-    await resolveApproval(deps.request, initial.id, 'deny');
-    return true;
+  const record = asRecord(payload);
+  const id = readString(record?.id) ?? readString(record?.approvalId);
+  const approval = extractSkillWorkshopApproval(payload);
+  if (!approval) {
+    if (id) {
+      await resolveApproval(deps.request, id, 'deny').catch((error) => {
+        logger.warn(`[security:gateway-plugin] Failed to deny unsupported plugin approval ${id}: ${String(error)}`);
+      });
+      return true;
+    }
+    return false;
   }
 
-  const approveSkillWorkshopAction = deps.approveSkillWorkshopAction
-    ?? assertSkillWorkshopActionAllowedWithConfirmation;
-
+  const approve = deps.approve ?? assertSkillWorkshopActionAllowedWithConfirmation;
   try {
-    await approveSkillWorkshopAction({
+    await approve({
       action: approval.action,
       title: approval.title,
-      description: approval.description,
-      toolCallId: approval.toolCallId,
-      source: 'gateway:plugin-approval:skill-workshop',
+      ...(approval.description ? { description: approval.description } : {}),
+      ...(approval.toolCallId ? { toolCallId: approval.toolCallId } : {}),
+      source: approval.agentId
+        ? `gateway:plugin-approval:skill-workshop:${approval.agentId}`
+        : 'gateway:plugin-approval:skill-workshop',
     });
-    await resolveApproval(deps.request, initial.id, 'allow-once');
-    logger.info('[security:gateway-plugin] Plugin approval allowed', {
-      approvalId: initial.id,
+    await resolveApproval(deps.request, approval.id, 'allow-once');
+    logger.info('[security:gateway-plugin] Skill Workshop approval allowed', {
+      approvalId: approval.id,
       action: approval.action,
-      title: approval.title,
-      toolCallId: approval.toolCallId,
+      sessionKey: approval.sessionKey,
+      agentId: approval.agentId,
     });
   } catch (error) {
-    await resolveApproval(deps.request, initial.id, 'deny').catch((resolveError) => {
-      logger.warn(`[security:gateway-plugin] Failed to deny approval ${initial.id}: ${String(resolveError)}`);
+    await resolveApproval(deps.request, approval.id, 'deny').catch((resolveError) => {
+      logger.warn(`[security:gateway-plugin] Failed to deny approval ${approval.id}: ${String(resolveError)}`);
     });
-    logger.warn('[security:gateway-plugin] Plugin approval denied', {
-      approvalId: initial.id,
+    logger.warn('[security:gateway-plugin] Skill Workshop approval denied', {
+      approvalId: approval.id,
       action: approval.action,
-      title: approval.title,
-      toolCallId: approval.toolCallId,
+      sessionKey: approval.sessionKey,
+      agentId: approval.agentId,
       error: String(error),
     });
   }
-
   return true;
 }

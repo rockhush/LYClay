@@ -4,6 +4,7 @@ import {
   isBackendRunFailureError,
   isOutboundMediaPathFailedRunError,
   isSuppressedRunError,
+  isSessionTranscriptLockBusyError,
   markUserAbort,
   resolveRunFailureErrorMessage,
   shouldSuppressPartialSuccessRunError,
@@ -61,6 +62,16 @@ describe('isSuppressedRunError', () => {
     expect(isSuppressedRunError(
       'session file changed while embedded prompt lock was released: C:\\Users\\demo\\.openclaw\\agents\\main\\sessions\\abc.jsonl',
     )).toBe(true);
+  });
+
+  it('suppresses session transcript lock busy errors', () => {
+    const legacyMessage = 'SessionTranscriptLockBusyError: Previous session response is still settling; transcript lock is still active for agent:main:abc.';
+    const codedMessage = 'SESSION_TRANSCRIPT_LOCK_BUSY: The previous response is still being saved for this conversation.';
+
+    expect(isSessionTranscriptLockBusyError(legacyMessage)).toBe(true);
+    expect(isSessionTranscriptLockBusyError(codedMessage)).toBe(true);
+    expect(isSuppressedRunError(legacyMessage)).toBe(true);
+    expect(resolveRunFailureErrorMessage(codedMessage)).not.toContain('SESSION_TRANSCRIPT_LOCK_BUSY');
   });
 
   it('does not suppress actionable runtime errors', () => {

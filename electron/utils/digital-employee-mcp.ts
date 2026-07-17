@@ -187,6 +187,22 @@ function normalizeTemplateEntry(entry: McpServerEntry | undefined): McpServerEnt
   return { ...entry };
 }
 
+function validateSelectedMcpServers(
+  servers: Record<string, McpServerEntry>,
+  runtimeNames: string[],
+  label: string,
+): void {
+  const selected: Record<string, McpServerEntry> = Object.fromEntries(
+    runtimeNames
+      .filter((name) => servers[name] !== undefined)
+      .map((name) => [name, servers[name] as McpServerEntry]),
+  );
+  const validation = validateMcpConfig({ servers: selected });
+  if (!validation.valid) {
+    throw new Error(`${label}: ${validation.errors.join('; ')}`);
+  }
+}
+
 export function isDigitalEmployeeMcpServer(entry: McpServerEntry | undefined): boolean {
   if (!entry) return false;
   if (entry[DIGITAL_EMPLOYEE_MCP_HIDDEN_KEY] === true) return true;
@@ -335,11 +351,12 @@ export async function installEmployeeMcpServers(params: {
     installedServers.push({ sourceName, runtimeName });
   }
 
+  validateSelectedMcpServers(
+    nextServers,
+    installedServers.map((entry) => entry.runtimeName),
+    'Installed digital employee MCP configuration is invalid',
+  );
   const next: McpConfigFile = { servers: nextServers };
-  const validation = validateMcpConfig(next);
-  if (!validation.valid) {
-    throw new Error(`Installed MCP configuration is invalid: ${validation.errors.join('; ')}`);
-  }
   await writeMcpConfigAtomic(getMcpConfigPath(), next);
   return { installedServers, warnings };
 }
@@ -412,11 +429,12 @@ export async function updateEmployeeMcpServers(params: {
     installedServers.push({ sourceName, runtimeName });
   }
 
+  validateSelectedMcpServers(
+    nextServers,
+    installedServers.map((entry) => entry.runtimeName),
+    'Updated digital employee MCP configuration is invalid',
+  );
   const next: McpConfigFile = { servers: nextServers };
-  const validation = validateMcpConfig(next);
-  if (!validation.valid) {
-    throw new Error(`Updated MCP configuration is invalid: ${validation.errors.join('; ')}`);
-  }
   await writeMcpConfigAtomic(getMcpConfigPath(), next);
   return { installedServers, warnings, previousConfig: current };
 }

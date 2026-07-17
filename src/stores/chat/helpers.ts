@@ -113,6 +113,23 @@ export function isUserSecurityDenialMessage(message: unknown): boolean {
   return USER_SECURITY_DENIAL_PATTERNS.some((pattern) => pattern.test(message));
 }
 
+export function isSessionTranscriptLockBusyError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const normalized = error.toLowerCase();
+  return normalized.includes('sessiontranscriptlockbusyerror')
+    || normalized.includes('session_transcript_lock_busy')
+    || (
+      normalized.includes('previous session response is still')
+      && normalized.includes('transcript lock')
+    );
+}
+
+export function resolveSessionTranscriptLockBusyMessage(): string {
+  return i18n.t('chat:errors.sessionTranscriptLockBusy', {
+    defaultValue: 'The previous response is still being saved. Please wait a moment and try again.',
+  });
+}
+
 /**
  * True when the error bar already shows the dedicated backend-unresponsive copy.
  * Abort strings are handled separately and must not map here.
@@ -151,6 +168,7 @@ export function isSuppressedRunError(error: string | null | undefined): boolean 
   if (!error) return false;
   const normalized = error.toLowerCase();
   if (normalized.includes('session file changed while embedded prompt lock was released')) return true;
+  if (isSessionTranscriptLockBusyError(error)) return true;
   if (isAbortErrorMessage(error) && isWithinUserAbortWindow()) return true;
   return false;
 }
@@ -158,6 +176,9 @@ export function isSuppressedRunError(error: string | null | undefined): boolean 
 export function resolveRunFailureErrorMessage(error: string): string {
   if (isAbortErrorMessage(error)) {
     return i18n.t('chat:errors.runAbortedBySystem');
+  }
+  if (isSessionTranscriptLockBusyError(error)) {
+    return resolveSessionTranscriptLockBusyMessage();
   }
   return truncateRunErrorMessage(error);
 }

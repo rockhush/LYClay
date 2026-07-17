@@ -145,6 +145,11 @@ import {
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
 import {
+  appendLocalOnlySessionSummaries,
+  mergePreservedSessionsIntoGatewayList,
+} from '@/lib/session-list-preservation';
+import { listRetiredReadOnlyAgentIds } from '@/lib/retired-digital-employees';
+import {
   isSubagentSessionKey,
   filterUserFacingSessions,
   pickUserFacingSession,
@@ -3487,51 +3492,19 @@ function hasAssistantPrimaryReplyContent(message: RawMessage | undefined): boole
   return false;
 }
 
-/**
- * Gateway `sessions.list` can lag behind a session the user just messaged in.
- * Keep sidebar rows for in-flight / interrupted sessions and any session we already
- * labeled or stamped with activity locally.
- */
-function mergePreservedSessionsIntoGatewayList(
-  dedupedSessions: ChatSession[],
-  snapshot: Pick<ChatState, 'sessions' | 'sessionLabels' | 'sessionLastActivity' | 'sessionWorkspaceIds'>,
-  currentSessionKey?: string,
-): ChatSession[] {
-  const { sessions: prevSessions, sessionLabels, sessionLastActivity, sessionWorkspaceIds } = snapshot;
-  const keys = new Set(dedupedSessions.map((s) => s.key));
-  const out: ChatSession[] = [...dedupedSessions];
-
-  const addIfMissing = (key: string, displayName?: string) => {
-    if (!key || keys.has(key)) return;
-    keys.add(key);
-    out.push({
-      key,
-      displayName: displayName ?? sessionLabels[key] ?? key,
-    });
+function buildSessionPreservationSnapshot(
+  state: Pick<
+    ChatState,
+    'sessions' | 'sessionLabels' | 'customSessionLabels' | 'sessionLastActivity' | 'sessionWorkspaceIds'
+  >,
+) {
+  return {
+    sessions: state.sessions,
+    sessionLabels: state.sessionLabels,
+    customSessionLabels: state.customSessionLabels,
+    sessionLastActivity: state.sessionLastActivity,
+    sessionWorkspaceIds: state.sessionWorkspaceIds,
   };
-
-  if (_interruptedSendSession?.sessionKey) {
-    addIfMissing(_interruptedSendSession.sessionKey);
-  }
-
-  for (const s of prevSessions) {
-    if (keys.has(s.key)) continue;
-    if (sessionLabels[s.key] || sessionLastActivity[s.key] || sessionWorkspaceIds[s.key]) {
-      addIfMissing(s.key, s.displayName);
-    }
-  }
-
-  // Always preserve the session the user is currently viewing, even if it
-  // has no label, activity timestamp, or workspace binding. A newly-created
-  // digital-employee session enters the list as a minimal { key, displayName }
-  // entry and must not be dropped by subsequent loadSessions calls that run
-  // before the session is registered on the backend.
-  if (currentSessionKey && !keys.has(currentSessionKey)) {
-    const currentEntry = prevSessions.find((s) => s.key === currentSessionKey);
-    addIfMissing(currentSessionKey, currentEntry?.displayName);
-  }
-
-  return out;
 }
 
 function resolveInterruptedSendResume(
@@ -3872,12 +3845,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         if (gatewayReady !== true) {
           try {
-            const sessions = (await loadLocalSessionSummaries('main'))
+            const localAgentIds = ['main', ...listRetiredReadOnlyAgentIds()];
+            const sessions = (await loadLocalSessionSummariesForAgentIds(localAgentIds))
               .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills));
 
             if (sessions.length > 0) {
               const mergedLocal = filterUserFacingSessions(
-                mergePreservedSessionsIntoGatewayList(sessions, get(), get().currentSessionKey),
+                mergePreservedSessionsIntoGatewayList(
+                  sessions,
+                  buildSessionPreservationSnapshot(get()),
+                  {
+                    currentSessionKey: get().currentSessionKey,
+                    interruptedSendSessionKey: _interruptedSendSession?.sessionKey,
+                  },
+                ),
               );
               
               const { currentSessionKey } = get();
@@ -3913,7 +3894,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
               }));
 
               return;
-            } else {
+            }
+
+            const preservedOnly = filterUserFacingSessions(
+              mergePreservedSessionsIntoGatewayList(
+                [],
+                buildSessionPreservationSnapshot(get()),
+                {
+                  currentSessionKey: get().currentSessionKey,
+                  interruptedSendSessionKey: _interruptedSendSession?.sessionKey,
+                },
+              ),
+            );
+            if (preservedOnly.length > 0) {
+              const { currentSessionKey } = get();
+              set({
+                sessions: preservedOnly,
+                currentSessionKey: currentSessionKey || preservedOnly[0]?.key || DEFAULT_SESSION_KEY,
+                currentAgentId: getAgentIdFromSessionKey(currentSessionKey || preservedOnly[0]?.key || DEFAULT_SESSION_KEY),
+              });
+              return;
+            }
+
+            {
               console.warn('[Sessions] Local read returned no sessions');
             }
           } catch (err) {
@@ -3929,14 +3932,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
             .filter((session): session is ChatSession => session != null);
           let localPreviewSessions: ChatSession[] = [];
           try {
-            const previewAgentIds = collectAgentIdsFromSessionKeys(
-              gatewaySessions.map((session) => session.key),
-            );
-            localPreviewSessions = await loadLocalSessionSummariesForAgentIds(previewAgentIds);
+            const previewAgentIds = [
+              ...collectAgentIdsFromSessionKeys(gatewaySessions.map((session) => session.key)),
+              ...listRetiredReadOnlyAgentIds(),
+            ];
+            localPreviewSessions = await loadLocalSessionSummariesForAgentIds([...new Set(previewAgentIds)]);
           } catch (error) {
             console.warn('[Sessions] Failed to load local session previews for Gateway list:', error);
           }
-          const sessions = mergeSessionSummariesWithLocalPreviews(gatewaySessions, localPreviewSessions)
+          const sessions = appendLocalOnlySessionSummaries(
+            mergeSessionSummariesWithLocalPreviews(gatewaySessions, localPreviewSessions),
+            localPreviewSessions,
+          )
             .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills));
 
           const canonicalBySuffix = new Map<string, string>();
@@ -3959,7 +3966,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return true;
           });
 
-          const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(dedupedSessions, get(), get().currentSessionKey);
+          const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(
+            dedupedSessions,
+            buildSessionPreservationSnapshot(get()),
+            {
+              currentSessionKey: get().currentSessionKey,
+              interruptedSendSessionKey: _interruptedSendSession?.sessionKey,
+            },
+          );
           const userFacingSessions = filterUserFacingSessions(mergedWithPreserved);
 
           const { currentSessionKey, sessions: localSessions } = get();

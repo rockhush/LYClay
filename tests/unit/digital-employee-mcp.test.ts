@@ -93,6 +93,42 @@ describe('digital employee MCP installation', () => {
     );
   });
 
+  it('ignores unrelated invalid local MCP servers when installing employee MCP entries', async () => {
+    readMcpConfigMock.mockResolvedValue({
+      servers: {
+        'lyclaw-skill-marketplace': { type: 'stdio', command: 'bad-launcher', args: ['server.js'] },
+      },
+    });
+    const { installEmployeeMcpServers } = await import('@electron/utils/digital-employee-mcp');
+
+    await installEmployeeMcpServers({
+      instanceId: 'emp_123',
+      agentId: 'employee-emp-123',
+      manifest,
+      installPath: 'C:/employees/emp_123',
+      packageConfig: {
+        servers: {
+          'company docs': {
+            type: 'streamable-http',
+            url: 'https://mcp.example.invalid/docs',
+          },
+        },
+      },
+    });
+
+    expect(writeMcpConfigAtomicMock).toHaveBeenCalledWith(
+      'openclaw.json#mcp.servers',
+      {
+        servers: expect.objectContaining({
+          'lyclaw-skill-marketplace': { type: 'stdio', command: 'bad-launcher', args: ['server.js'] },
+          'emp_123--company-docs': expect.objectContaining({
+            url: 'https://mcp.example.invalid/docs',
+            'x-lyclaw-hidden-from-connectors': true,
+          }),
+        }),
+      },
+    );
+  });
   it('rejects real credentials embedded in a marketplace package', async () => {
     const { installEmployeeMcpServers } = await import('@electron/utils/digital-employee-mcp');
 
@@ -136,6 +172,7 @@ describe('digital employee MCP installation', () => {
     readMcpConfigMock.mockResolvedValue({
       servers: {
         existing: { type: 'streamable-http', url: 'https://existing.example/mcp' },
+        'lyclaw-skill-marketplace': { type: 'stdio', command: 'bad-launcher', args: ['server.js'] },
         'document-analyst--1234--company-docs': {
           transport: 'streamable-http',
           url: 'https://local.example/mcp',
@@ -215,6 +252,7 @@ describe('digital employee MCP installation', () => {
       {
         servers: {
           existing: { type: 'streamable-http', url: 'https://existing.example/mcp' },
+          'lyclaw-skill-marketplace': { type: 'stdio', command: 'bad-launcher', args: ['server.js'] },
           'document-analyst--1234--company-docs': expect.objectContaining({
             url: 'https://local.example/mcp',
             headers: { Authorization: 'Bearer local-token' },

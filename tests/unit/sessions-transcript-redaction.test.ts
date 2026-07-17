@@ -383,4 +383,43 @@ describe('session transcript redaction', () => {
     expect(serialized).not.toContain('tiny-but-private');
     expect(serialized).not.toContain(bearer);
   });
+
+  it('reads list-local and history-local from retired agent session archives', async () => {
+    const agentId = 'employee-recruitment-specialist-128348c9';
+    const sessionKey = `agent:${agentId}:session-retired`;
+    const retiredSessionsDir = join(
+      testOpenClawConfigDir,
+      'agents',
+      '_retired',
+      agentId,
+      'sessions',
+    );
+    mkdirSync(retiredSessionsDir, { recursive: true });
+    writeFileSync(
+      join(retiredSessionsDir, 'sessions.json'),
+      JSON.stringify({
+        [sessionKey]: {
+          id: 'retired-session',
+        },
+      }),
+    );
+    writeFileSync(
+      join(retiredSessionsDir, 'retired-session.jsonl'),
+      `${JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: 'retired archive history',
+        },
+      })}\n`,
+    );
+
+    const listPayload = await request(`/api/sessions/list-local?agentId=${encodeURIComponent(agentId)}&includePreviews=1`);
+    const sessions = listPayload.sessions as Array<{ key?: string; label?: string }>;
+    expect(sessions.some((session) => session.key === sessionKey)).toBe(true);
+
+    const historyPayload = await request(`/api/sessions/history-local?sessionKey=${encodeURIComponent(sessionKey)}`);
+    const messages = historyPayload.messages as Array<{ content?: string }>;
+    expect(messages[0]?.content).toBe('retired archive history');
+  });
 });

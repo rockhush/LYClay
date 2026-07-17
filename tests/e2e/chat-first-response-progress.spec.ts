@@ -423,5 +423,78 @@ test.describe('Chat first response progress', () => {
       await closeElectronApp(app);
     }
   });
+  test('does not expose session transcript lock busy internals after send', async ({ launchElectronApp }) => {
+    const app = await launchElectronApp({ skipSetup: true });
+
+    try {
+      const gatewayStatus = {
+        state: 'running',
+        port: 18789,
+        pid: 12345,
+        gatewayReady: true,
+        warmupStatus: 'ready',
+      };
+
+      await installIpcMocks(app, {
+        gatewayStatus,
+        gatewayRpc: {
+          [stableStringify(['sessions.list', {}])]: {
+            success: true,
+            result: {
+              sessions: [{ key: MAIN_SESSION_KEY, displayName: 'main' }],
+            },
+          },
+          [stableStringify(['chat.history', { sessionKey: MAIN_SESSION_KEY, limit: 200 }])]: {
+            success: true,
+            result: { messages: [] },
+          },
+          [stableStringify(['chat.send', null])]: {
+            success: false,
+            error: 'SESSION_TRANSCRIPT_LOCK_BUSY: The previous response is still being saved for this conversation.',
+          },
+        },
+        hostApi: {
+          [stableStringify(['/api/gateway/status', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: gatewayStatus,
+            },
+          },
+          [stableStringify(['/api/agents', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: {
+                success: true,
+                agents: [{ id: 'main', name: 'main' }],
+              },
+            },
+          },
+        },
+      });
+
+      const page = await getStableWindow(app);
+      try {
+        await page.reload();
+      } catch (error) {
+        if (!String(error).includes('ERR_FILE_NOT_FOUND')) {
+          throw error;
+        }
+      }
+
+      await expect(page.getByTestId('chat-composer-input')).toBeVisible({ timeout: 30_000 });
+      await page.getByTestId('chat-composer-input').fill('continue');
+      await page.getByTestId('chat-composer-send').click();
+
+      await expect(page.getByTestId('chat-message-0').getByText('continue')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText('SESSION_TRANSCRIPT_LOCK_BUSY')).toHaveCount(0);
+      await expect(page.getByText('SessionTranscriptLockBusyError')).toHaveCount(0);
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
 });
 
