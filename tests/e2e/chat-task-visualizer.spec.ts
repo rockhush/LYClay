@@ -642,4 +642,85 @@ test.describe('ClawX chat execution graph', () => {
     }
   });
 
+  test('keeps a cumulative final with a settled stale tool call outside the execution graph', async ({ launchElectronApp }) => {
+    const app = await launchElectronApp({ skipSetup: true });
+    const narration = 'I will gather the latest intelligence first.';
+    const finalReply = "Kimi model activity is included in today's summary.";
+    const history = [
+      { role: 'user', content: 'Generate LY intelligence', timestamp: Date.now() },
+      {
+        role: 'assistant',
+        id: 'settled-tool-round',
+        stopReason: 'toolUse',
+        content: [
+          { type: 'text', text: narration },
+          { type: 'toolCall', id: 'fetch-1', name: 'web_fetch', arguments: { url: 'https://example.com' } },
+        ],
+        timestamp: Date.now() + 1,
+      },
+      { role: 'toolResult', toolCallId: 'fetch-1', content: 'source fetched', timestamp: Date.now() + 2 },
+      {
+        role: 'assistant',
+        id: 'authoritative-cumulative-final',
+        stopReason: 'stop',
+        content: [
+          { type: 'text', text: `${narration} ${finalReply}` },
+          { type: 'toolCall', id: 'fetch-1', name: 'web_fetch', arguments: { url: 'https://example.com' } },
+        ],
+        timestamp: Date.now() + 3,
+      },
+    ];
+
+    try {
+      const gatewayStatus = { state: 'running', port: 18789, pid: 12345 };
+      await installIpcMocks(app, {
+        gatewayStatus,
+        gatewayRpc: {
+          [stableStringify(['sessions.list', {}])]: {
+            success: true,
+            result: { sessions: [{ key: PROJECT_MANAGER_SESSION_KEY, displayName: 'main' }] },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 200 }])]: {
+            success: true,
+            result: { messages: history },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 1000 }])]: {
+            success: true,
+            result: { messages: history },
+          },
+        },
+        hostApi: {
+          [stableStringify(['/api/gateway/status', 'GET'])]: {
+            ok: true,
+            data: { status: 200, ok: true, json: gatewayStatus },
+          },
+          [stableStringify(['/api/agents', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: { success: true, agents: [{ id: 'main', name: 'main' }] },
+            },
+          },
+        },
+      });
+
+      const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded', { timeout: 30_000 });
+      try {
+        await page.reload();
+      } catch (error) {
+        if (!String(error).includes('ERR_FILE_NOT_FOUND')) throw error;
+      }
+
+      await expect(page.getByText(finalReply, { exact: true })).toBeVisible({ timeout: 30_000 });
+      const graph = page.getByTestId('chat-execution-graph');
+      await expect(graph).toBeVisible();
+      if ((await graph.getAttribute('data-collapsed')) === 'true') await graph.click();
+      await expect(graph).not.toContainText(finalReply);
+      await expect(graph).toContainText(narration);
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
 });

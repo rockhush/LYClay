@@ -165,6 +165,7 @@ function modelScopeToProviderConfig(scope: DigitalEmployeeModelScope): ProviderC
     type: 'custom',
     baseUrl: scope.provider.baseUrl,
     apiProtocol: scope.provider.protocol,
+    headers: scope.provider.headers,
     model: firstModel,
     fallbackModels: modelIds,
     runtimeModels: scope.models

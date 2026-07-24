@@ -15,7 +15,7 @@ import {
   removeManagedCronJobState,
   resolveManagedCronJobEnabled,
 } from '../gateway/cron-supervisor';
-import { clearStaleInAppDeliveryErrorState, isUiInAppCronJob } from '../gateway/cron-stale-errors';
+import { clearStaleInAppDeliveryErrorState, isUiInAppCronJob, isUiManagedCronJob } from '../gateway/cron-stale-errors';
 import {
   type ProviderConfig,
 } from '../utils/secure-storage';
@@ -570,18 +570,15 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             if (gatewayInput.delivery.mode === 'announce' && unsupportedDeliveryError) {
               throw new Error(unsupportedDeliveryError);
             }
-            const managedInApp = gatewayInput.delivery.mode === 'none';
             const managedEnabled = input.enabled ?? true;
             const created = await gatewayManager.rpc('cron.add', {
               ...gatewayInput,
-              enabled: managedInApp ? false : managedEnabled,
+              enabled: false,
             });
             if (created && typeof created === 'object') {
               const job = created as GatewayCronJob;
-              if (managedInApp) {
-                await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
-              }
-              data = transformCronJob(job, managedInApp ? managedEnabled : undefined);
+              await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
+              data = transformCronJob(job, managedEnabled);
             } else {
               data = created;
             }
@@ -611,26 +608,18 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             }
             const existing = await findCronJobById(gatewayManager, id).catch(() => undefined);
             const requestedEnabled = typeof input.enabled === 'boolean' ? input.enabled : undefined;
-            const existingInApp = existing ? isUiInAppCronJob(existing) : false;
+            const existingManaged = existing ? isUiManagedCronJob(existing) : false;
             const switchingToInApp = deliveryMode === 'none';
             const switchingToExternal = Boolean(deliveryMode && deliveryMode !== 'none');
 
-            if (switchingToInApp || existingInApp) {
+            if (switchingToInApp || switchingToExternal || existingManaged) {
               patch.enabled = false;
-            }
-            if (switchingToExternal && existingInApp) {
-              const restoredEnabled = requestedEnabled
-                ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
-                ?? existing?.enabled
-                ?? true;
-              patch.enabled = restoredEnabled;
-              await removeManagedCronJobState(id);
             }
 
             const result = await gatewayManager.rpc('cron.update', { id, patch });
             if (result && typeof result === 'object') {
               const job = result as GatewayCronJob;
-              if (switchingToInApp || (existingInApp && !switchingToExternal)) {
+              if (isUiManagedCronJob(job)) {
                 const enabledOverride = requestedEnabled
                   ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
                   ?? existing?.enabled
@@ -659,7 +648,7 @@ function registerUnifiedRequestHandlers(gatewayManager: GatewayManager): void {
             const enabled = Array.isArray(payload) ? payload[1] : payload?.enabled;
             if (!id || typeof enabled !== 'boolean') throw new Error('Invalid cron.toggle payload');
             const existing = await findCronJobById(gatewayManager, id).catch(() => undefined);
-            if (existing && isUiInAppCronJob(existing)) {
+            if (existing && isUiManagedCronJob(existing)) {
               await setManagedCronJobEnabled(id, enabled);
               const result = await gatewayManager.rpc('cron.update', { id, patch: { enabled: false } });
               data = result && typeof result === 'object'
@@ -1003,7 +992,7 @@ function transformCronJob(job: GatewayCronJob, enabledOverride?: boolean) {
 }
 
 async function transformCronJobForResponse(job: GatewayCronJob): Promise<ReturnType<typeof transformCronJob>> {
-  const enabledOverride = isUiInAppCronJob(job)
+  const enabledOverride = isUiManagedCronJob(job)
     ? await resolveManagedCronJobEnabled(job)
     : undefined;
   return transformCronJob(job, enabledOverride);
@@ -1100,19 +1089,16 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
       if (gatewayInput.delivery.mode === 'announce' && unsupportedDeliveryError) {
         throw new Error(unsupportedDeliveryError);
       }
-      const managedInApp = gatewayInput.delivery.mode === 'none';
       const managedEnabled = input.enabled ?? true;
       const result = await gatewayManager.rpc('cron.add', {
         ...gatewayInput,
-        enabled: managedInApp ? false : managedEnabled,
+        enabled: false,
       });
       // Transform the returned job to frontend format
       if (result && typeof result === 'object') {
         const job = result as GatewayCronJob;
-        if (managedInApp) {
-          await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
-        }
-        return transformCronJob(job, managedInApp ? managedEnabled : undefined);
+        await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
+        return transformCronJob(job, managedEnabled);
       }
       return result;
     } catch (error) {
@@ -1140,26 +1126,18 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
       }
       const existing = await findCronJobById(gatewayManager, id).catch(() => undefined);
       const requestedEnabled = typeof input.enabled === 'boolean' ? input.enabled : undefined;
-      const existingInApp = existing ? isUiInAppCronJob(existing) : false;
+      const existingManaged = existing ? isUiManagedCronJob(existing) : false;
       const switchingToInApp = deliveryMode === 'none';
       const switchingToExternal = Boolean(deliveryMode && deliveryMode !== 'none');
 
-      if (switchingToInApp || existingInApp) {
+      if (switchingToInApp || switchingToExternal || existingManaged) {
         patch.enabled = false;
-      }
-      if (switchingToExternal && existingInApp) {
-        const restoredEnabled = requestedEnabled
-          ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
-          ?? existing?.enabled
-          ?? true;
-        patch.enabled = restoredEnabled;
-        await removeManagedCronJobState(id);
       }
 
       const result = await gatewayManager.rpc('cron.update', { id, patch });
       if (result && typeof result === 'object') {
         const job = result as GatewayCronJob;
-        if (switchingToInApp || (existingInApp && !switchingToExternal)) {
+        if (isUiManagedCronJob(job)) {
           const enabledOverride = requestedEnabled
             ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
             ?? existing?.enabled
@@ -1192,7 +1170,7 @@ function registerCronHandlers(gatewayManager: GatewayManager): void {
   ipcMain.handle('cron:toggle', async (_, id: string, enabled: boolean) => {
     try {
       const existing = await findCronJobById(gatewayManager, id).catch(() => undefined);
-      if (existing && isUiInAppCronJob(existing)) {
+      if (existing && isUiManagedCronJob(existing)) {
         await setManagedCronJobEnabled(id, enabled);
         const result = await gatewayManager.rpc('cron.update', { id, patch: { enabled: false } });
         return result && typeof result === 'object'

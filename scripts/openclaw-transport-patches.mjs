@@ -54,6 +54,46 @@ export const OPENAI_TRANSPORT_CLIENT_HEADER_PATCHES = [
   ],
 ];
 
+
+const OPENAI_TRANSPORT_HTML_MESSAGE_SANITIZER_MARKER = 'LYCLAW_OPENAI_TRANSPORT_HTML_MESSAGE_SANITIZER_PATCH';
+
+function openAITransportHtmlMessageSanitizerHelpers() {
+  return String.raw`
+//#region ${OPENAI_TRANSPORT_HTML_MESSAGE_SANITIZER_MARKER}
+function sanitizeOpenAICompletionsHtmlMessageText(value) {
+	if (typeof value !== "string" || value.length < 2048) return value;
+	const head = value.slice(0, 4096).toLowerCase();
+	if (!head.includes("<") || !/(<!doctype\s+html\b|<html\b|<head\b|<body\b|<script\b|<link\b|<noscript\b)/.test(head)) return value;
+	let text = value
+		.replace(/<script\b[\s\S]*?<\/script>/gi, "")
+		.replace(/<style\b[\s\S]*?<\/style>/gi, "")
+		.replace(/<noscript\b[\s\S]*?<\/noscript>/gi, "")
+		.replace(/<link\b[^>]*>/gi, "")
+		.replace(/<!--[\s\S]*?-->/g, "");
+	text = text.replace(/https?:\/\/(?:wwwjs\.)?cls\.cn\/[^\s"'<>]+/gi, "");
+	if (text.length > 12_000) text = text.slice(0, 12_000) + "\n[LYClaw: HTML-like tool result sanitized before model request]";
+	return text;
+}
+function sanitizeOpenAICompletionsHtmlMessageContent(content) {
+	if (typeof content === "string") return sanitizeOpenAICompletionsHtmlMessageText(content);
+	if (!Array.isArray(content)) return content;
+	return content.map((part) => {
+		if (!part || typeof part !== "object" || Array.isArray(part) || typeof part.text !== "string") return part;
+		const text = sanitizeOpenAICompletionsHtmlMessageText(part.text);
+		return text === part.text ? part : { ...part, text };
+	});
+}
+function sanitizeOpenAICompletionsHtmlMessages(messages) {
+	if (!Array.isArray(messages)) return messages;
+	return messages.map((message) => {
+		if (!message || typeof message !== "object" || Array.isArray(message) || !("content" in message)) return message;
+		const content = sanitizeOpenAICompletionsHtmlMessageContent(message.content);
+		return content === message.content ? message : { ...message, content };
+	});
+}
+//#endregion
+`;
+}
 const OPENAI_TRANSPORT_PARAMS_INJECT_PATTERN = /(const params = \{\s*\n\s*\.\.\.\(model\.params[\s\S]*?\),\s*\n)/;
 
 function injectSessionIdIntoParams(_source) {
@@ -87,6 +127,21 @@ export function applyOpenClawOpenAITransportPatches(source) {
     patched = true;
   }
 
+
+  if (!source.includes(OPENAI_TRANSPORT_HTML_MESSAGE_SANITIZER_MARKER)) {
+    const helperAnchor = 'function stripCompletionMessagesToRoleContent(messages) {\n\treturn messages.map((message) => {\n\t\tif (!message || typeof message !== "object" || Array.isArray(message)) return message;\n\t\tconst record = message;\n\t\tconst stripped = {};\n\t\tif (Object.hasOwn(record, "role")) stripped.role = record.role;\n\t\tif (Object.hasOwn(record, "content")) stripped.content = record.content;\n\t\treturn stripped;\n\t});\n}\n';
+    if (source.includes(helperAnchor)) {
+      source = source.replace(helperAnchor, `${helperAnchor}${openAITransportHtmlMessageSanitizerHelpers()}`);
+      patched = true;
+    }
+  }
+
+  const htmlMessageLineOld = '\t\tmessages: compat.requiresStringContent ? flattenCompletionMessagesToStringContent(messages) : messages,';
+  const htmlMessageLineNew = '\t\tmessages: sanitizeOpenAICompletionsHtmlMessages(compat.requiresStringContent ? flattenCompletionMessagesToStringContent(messages) : messages),';
+  if (source.includes(htmlMessageLineOld) && !source.includes(htmlMessageLineNew)) {
+    source = source.replace(htmlMessageLineOld, htmlMessageLineNew);
+    patched = true;
+  }
   const headerMergeOld = '\treturn {\n\t\t...headers,\n\t\t...optionHeaders\n\t};';
   const headerMergeNew = '\treturn {\n\t\t...headers,\n\t\t...optionHeaders,\n\t\t...(turnHeaders ?? {})\n\t};';
   if (source.includes('function buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders)')
@@ -100,7 +155,10 @@ export function applyOpenClawOpenAITransportPatches(source) {
 }
 
 export function hasOpenClawOpenAITransportPatches(source) {
-  return (source.includes('X-LYClaw-Session-Id')
+  const hasSessionPatch = (source.includes('X-LYClaw-Session-Id')
     && source.includes('options?.sessionKey || options?.sessionId'))
     || source.includes('session_id: String(options?.sessionKey');
+  const hasHtmlSanitizerPatch = source.includes(OPENAI_TRANSPORT_HTML_MESSAGE_SANITIZER_MARKER)
+    && source.includes('sanitizeOpenAICompletionsHtmlMessages(compat.requiresStringContent');
+  return hasSessionPatch && hasHtmlSanitizerPatch;
 }

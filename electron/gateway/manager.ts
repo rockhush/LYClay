@@ -13,6 +13,7 @@ import { JsonRpcNotification, isNotification, isResponse } from './protocol';
 import { logger } from '../utils/logger';
 import { protectMemoryRpcOutput } from '../security/memory-content-policy';
 import { enrichChatSendParams } from '../utils/chat-send-enrichment';
+import { handleExternalCronChatTerminal } from './cron-external-delivery';
 import { prepareHistoricalDigitalEmployeeChatSend } from '../utils/historical-digital-employee-agents';
 import { captureTelemetryEvent, trackMetric } from '../utils/telemetry';
 // Dev-only Langfuse chat tracing �?uncomment with electron/main/index.ts langfuse import.
@@ -2521,6 +2522,19 @@ export class GatewayManager extends EventEmitter {
 
     if (state === 'final' || state === 'error' || state === 'aborted') {
       const shouldRecoverEmptyFinal = state === 'final' && metrics.kind === 'user' && !event.message;
+      void handleExternalCronChatTerminal({
+        rpc: this.rpc.bind(this),
+        runId,
+        sessionKey: metrics.sessionKey ?? eventSessionKey,
+        state,
+        message: event.message,
+      }).catch((error) => {
+        logger.warn('[cron-external-delivery] terminal handler failed', {
+          runId,
+          sessionKey: metrics.sessionKey ?? eventSessionKey,
+          error: String(error),
+        });
+      });
       if (metrics.kind === 'warmup') {
         this.resolveWarmupCompletion(runId, state);
       }

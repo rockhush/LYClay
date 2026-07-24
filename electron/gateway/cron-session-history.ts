@@ -270,21 +270,86 @@ export async function buildSessionFileIndex(
   return filesBySessionKey;
 }
 
+type CronHistoryJobLike = {
+  name?: string;
+  payload?: { message?: string; text?: string };
+  state?: { runningAtMs?: number };
+  delivery?: { mode?: string };
+};
+
+/** External-channel per-run scheduled-task sessions must not merge other runs. */
+export function isExternalChannelScheduledTaskHistorySession(
+  sessionKey: string,
+  job?: CronHistoryJobLike,
+): boolean {
+  const parts = sessionKey.split(':');
+  if (parts.length < 5 || parts[2] !== 'scheduled-task' || !parts[4]?.trim()) {
+    return false;
+  }
+  const mode = job?.delivery?.mode;
+  return mode != null && mode !== 'none';
+}
+
+async function buildIsolatedScheduledTaskHistoryMessages(params: {
+  sessionKey: string;
+  sessionsDir: string;
+  filesBySessionKey: Map<string, SessionFileInfo>;
+  sessionEntry?: { updatedAt?: number };
+  limit?: number;
+}): Promise<CronHistoryMessage[]> {
+  const mainTranscriptPath = resolvePathFromFileInfo(
+    params.filesBySessionKey.get(params.sessionKey),
+    params.sessionsDir,
+  );
+
+  const messages: CronHistoryMessage[] = [];
+  if (mainTranscriptPath) {
+    try {
+      await stat(mainTranscriptPath);
+      const runMessages = await readTranscriptHistoryMessages(mainTranscriptPath, 'cron-isolated-run');
+      appendUniqueMessages(messages, runMessages);
+    } catch {
+      // Fall through to empty placeholder below.
+    }
+  }
+
+  if (messages.length === 0) {
+    messages.push({
+      id: `cron-empty-${params.sessionKey}`,
+      role: 'system',
+      content: 'No chat transcript is available for this scheduled task run yet.',
+      timestamp: params.sessionEntry?.updatedAt ?? Date.now(),
+    });
+  }
+
+  messages.sort((left, right) => left.timestamp - right.timestamp);
+  const limit = typeof params.limit === 'number' && Number.isFinite(params.limit)
+    ? Math.max(1, Math.floor(params.limit))
+    : messages.length;
+  return messages.slice(-limit);
+}
+
 export async function buildCronSessionHistoryMessages(params: {
   agentId: string;
   jobId: string;
   sessionKey: string;
   runs: CronRunLogEntry[];
-  job?: {
-    name?: string;
-    payload?: { message?: string; text?: string };
-    state?: { runningAtMs?: number };
-  };
+  job?: CronHistoryJobLike;
   sessionEntry?: { label?: string; updatedAt?: number };
   sessionsDir: string;
   filesBySessionKey: Map<string, SessionFileInfo>;
   limit?: number;
 }): Promise<CronHistoryMessage[]> {
+  if (isExternalChannelScheduledTaskHistorySession(params.sessionKey, params.job)) {
+    return buildIsolatedScheduledTaskHistoryMessages({
+      sessionKey: params.sessionKey,
+      sessionsDir: params.sessionsDir,
+      filesBySessionKey: params.filesBySessionKey,
+      sessionEntry: params.sessionEntry,
+      limit: params.limit,
+    });
+  }
+
   const matchingRuns = params.runs
     .filter((entry) => {
       const parts = params.sessionKey.split(':');

@@ -13,6 +13,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { applyOpenClawOpenAITransportPatches, hasOpenClawOpenAITransportPatches } from './openclaw-transport-patches.mjs';
 import { applyOpenClawUsageStreamingPatches, hasOpenClawUsageStreamingPatches } from './openclaw-usage-patches.mjs';
+import { applyOpenClawWebFetchHtmlSniffPatches, hasOpenClawWebFetchHtmlSniffPatches } from './openclaw-web-fetch-patches.mjs';
 
 const BROWSER_HINT_REPLACEMENTS = [
   [
@@ -160,6 +161,16 @@ try {
       writeFileSync(filePath, content, 'utf-8');
       console.log(`[patch-browser-hint] Patched: ${file}`);
       patchedCount++;
+    }
+
+    if (content.includes('function runWebFetch(params)')) {
+      const webFetchResult = applyOpenClawWebFetchHtmlSniffPatches(content);
+      if (webFetchResult.patched) {
+        content = webFetchResult.source;
+        writeFileSync(filePath, content, 'utf-8');
+        console.log(`[patch-browser-hint] Patched web_fetch HTML sniff (${file}): ${hasOpenClawWebFetchHtmlSniffPatches(content)}`);
+        patchedCount++;
+      }
     }
 
     if (file.startsWith('openai-transport-stream-')) {

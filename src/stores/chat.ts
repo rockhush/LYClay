@@ -17,7 +17,15 @@ import {
   rewriteRuntimeSkillMentionsToDisplayInText,
   rewriteUserMessageTextForSkillDisplay,
 } from '@/lib/skill-runtime-aliases';
-import { buildCronSessionHistoryPath, isCronSessionKey, mergeCronSessionHistory } from './chat/cron-session-utils';
+import {
+  buildCronSessionHistoryPath,
+  isCronSessionKey,
+  isExternalChannelCronSessionForJobs,
+  isScheduledTaskRunSessionKey,
+  mergeCronSessionHistory,
+  mergeMonotonicCronSessionHistory,
+  parseCronSessionKey,
+} from './chat/cron-session-utils';
 import { collectAgentIdsFromSessionKeys, isPlaceholderSessionTitle, normalizeSessionSummaryForDisplay } from '@/lib/session-label-utils';
 import {
   CHAT_HISTORY_STARTUP_RETRY_DELAYS_MS,
@@ -144,11 +152,6 @@ import {
 } from './chat/task-convergence-strategy';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
-import {
-  appendLocalOnlySessionSummaries,
-  mergePreservedSessionsIntoGatewayList,
-} from '@/lib/session-list-preservation';
-import { listRetiredReadOnlyAgentIds } from '@/lib/retired-digital-employees';
 import {
   isSubagentSessionKey,
   filterUserFacingSessions,
@@ -1551,7 +1554,11 @@ function resolveFinalMessagesWithLocalPreservation(
   get: () => ChatState,
 ): RawMessage[] {
   const state = get();
-  let finalMessages = mergeMissingLocalAssistantReplies(pipelineMessages, state.messages, sessionKey);
+  const parsedCron = parseCronSessionKey(sessionKey);
+  const pipelineForMerge = parsedCron?.runSessionId && sessionKey.includes(':scheduled-task:')
+    ? mergeMonotonicCronSessionHistory(state.messages, pipelineMessages)
+    : pipelineMessages;
+  let finalMessages = mergeMissingLocalAssistantReplies(pipelineForMerge, state.messages, sessionKey);
 
   const userMsgAt = state.lastUserMessageAt;
   if (state.sending && userMsgAt) {
@@ -2522,12 +2529,25 @@ async function loadCronFallbackMessages(sessionKey: string, limit = 200): Promis
   }
 }
 
+async function shouldSkipExternalCronJobHistoryMerge(sessionKey: string): Promise<boolean> {
+  if (!isScheduledTaskRunSessionKey(sessionKey)) return false;
+  try {
+    const { useCronStore } = await import('./cron');
+    return isExternalChannelCronSessionForJobs(sessionKey, useCronStore.getState().jobs);
+  } catch {
+    return false;
+  }
+}
+
 async function loadMergedCronSessionMessages(
   sessionKey: string,
   latestRunMessages: RawMessage[],
   limit = 200,
 ): Promise<RawMessage[]> {
   if (!isCronSessionKey(sessionKey)) return latestRunMessages;
+  if (await shouldSkipExternalCronJobHistoryMerge(sessionKey)) {
+    return latestRunMessages;
+  }
   const aggregated = await loadCronFallbackMessages(sessionKey, limit);
   return mergeCronSessionHistory(aggregated, latestRunMessages);
 }
@@ -3492,19 +3512,51 @@ function hasAssistantPrimaryReplyContent(message: RawMessage | undefined): boole
   return false;
 }
 
-function buildSessionPreservationSnapshot(
-  state: Pick<
-    ChatState,
-    'sessions' | 'sessionLabels' | 'customSessionLabels' | 'sessionLastActivity' | 'sessionWorkspaceIds'
-  >,
-) {
-  return {
-    sessions: state.sessions,
-    sessionLabels: state.sessionLabels,
-    customSessionLabels: state.customSessionLabels,
-    sessionLastActivity: state.sessionLastActivity,
-    sessionWorkspaceIds: state.sessionWorkspaceIds,
+/**
+ * Gateway `sessions.list` can lag behind a session the user just messaged in.
+ * Keep sidebar rows for in-flight / interrupted sessions and any session we already
+ * labeled or stamped with activity locally.
+ */
+function mergePreservedSessionsIntoGatewayList(
+  dedupedSessions: ChatSession[],
+  snapshot: Pick<ChatState, 'sessions' | 'sessionLabels' | 'sessionLastActivity' | 'sessionWorkspaceIds'>,
+  currentSessionKey?: string,
+): ChatSession[] {
+  const { sessions: prevSessions, sessionLabels, sessionLastActivity, sessionWorkspaceIds } = snapshot;
+  const keys = new Set(dedupedSessions.map((s) => s.key));
+  const out: ChatSession[] = [...dedupedSessions];
+
+  const addIfMissing = (key: string, displayName?: string) => {
+    if (!key || keys.has(key)) return;
+    keys.add(key);
+    out.push({
+      key,
+      displayName: displayName ?? sessionLabels[key] ?? key,
+    });
   };
+
+  if (_interruptedSendSession?.sessionKey) {
+    addIfMissing(_interruptedSendSession.sessionKey);
+  }
+
+  for (const s of prevSessions) {
+    if (keys.has(s.key)) continue;
+    if (sessionLabels[s.key] || sessionLastActivity[s.key] || sessionWorkspaceIds[s.key]) {
+      addIfMissing(s.key, s.displayName);
+    }
+  }
+
+  // Always preserve the session the user is currently viewing, even if it
+  // has no label, activity timestamp, or workspace binding. A newly-created
+  // digital-employee session enters the list as a minimal { key, displayName }
+  // entry and must not be dropped by subsequent loadSessions calls that run
+  // before the session is registered on the backend.
+  if (currentSessionKey && !keys.has(currentSessionKey)) {
+    const currentEntry = prevSessions.find((s) => s.key === currentSessionKey);
+    addIfMissing(currentSessionKey, currentEntry?.displayName);
+  }
+
+  return out;
 }
 
 function resolveInterruptedSendResume(
@@ -3845,20 +3897,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         if (gatewayReady !== true) {
           try {
-            const localAgentIds = ['main', ...listRetiredReadOnlyAgentIds()];
-            const sessions = (await loadLocalSessionSummariesForAgentIds(localAgentIds))
-              .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills));
+            const sessions: ChatSession[] = (await loadLocalSessionSummaries('main'))
+              .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills) as ChatSession);
 
             if (sessions.length > 0) {
               const mergedLocal = filterUserFacingSessions(
-                mergePreservedSessionsIntoGatewayList(
-                  sessions,
-                  buildSessionPreservationSnapshot(get()),
-                  {
-                    currentSessionKey: get().currentSessionKey,
-                    interruptedSendSessionKey: _interruptedSendSession?.sessionKey,
-                  },
-                ),
+                mergePreservedSessionsIntoGatewayList(sessions, get(), get().currentSessionKey),
               );
               
               const { currentSessionKey } = get();
@@ -3894,29 +3938,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               }));
 
               return;
-            }
-
-            const preservedOnly = filterUserFacingSessions(
-              mergePreservedSessionsIntoGatewayList(
-                [],
-                buildSessionPreservationSnapshot(get()),
-                {
-                  currentSessionKey: get().currentSessionKey,
-                  interruptedSendSessionKey: _interruptedSendSession?.sessionKey,
-                },
-              ),
-            );
-            if (preservedOnly.length > 0) {
-              const { currentSessionKey } = get();
-              set({
-                sessions: preservedOnly,
-                currentSessionKey: currentSessionKey || preservedOnly[0]?.key || DEFAULT_SESSION_KEY,
-                currentAgentId: getAgentIdFromSessionKey(currentSessionKey || preservedOnly[0]?.key || DEFAULT_SESSION_KEY),
-              });
-              return;
-            }
-
-            {
+            } else {
               console.warn('[Sessions] Local read returned no sessions');
             }
           } catch (err) {
@@ -3932,19 +3954,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
             .filter((session): session is ChatSession => session != null);
           let localPreviewSessions: ChatSession[] = [];
           try {
-            const previewAgentIds = [
-              ...collectAgentIdsFromSessionKeys(gatewaySessions.map((session) => session.key)),
-              ...listRetiredReadOnlyAgentIds(),
-            ];
-            localPreviewSessions = await loadLocalSessionSummariesForAgentIds([...new Set(previewAgentIds)]);
+            const previewAgentIds = collectAgentIdsFromSessionKeys(
+              gatewaySessions.map((session) => session.key),
+            );
+            localPreviewSessions = await loadLocalSessionSummariesForAgentIds(previewAgentIds);
           } catch (error) {
             console.warn('[Sessions] Failed to load local session previews for Gateway list:', error);
           }
-          const sessions = appendLocalOnlySessionSummaries(
-            mergeSessionSummariesWithLocalPreviews(gatewaySessions, localPreviewSessions),
-            localPreviewSessions,
-          )
-            .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills));
+          const sessions: ChatSession[] = mergeSessionSummariesWithLocalPreviews(gatewaySessions, localPreviewSessions)
+            .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills) as ChatSession);
 
           const canonicalBySuffix = new Map<string, string>();
           for (const session of sessions) {
@@ -3966,14 +3984,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return true;
           });
 
-          const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(
-            dedupedSessions,
-            buildSessionPreservationSnapshot(get()),
-            {
-              currentSessionKey: get().currentSessionKey,
-              interruptedSendSessionKey: _interruptedSendSession?.sessionKey,
-            },
-          );
+          const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(dedupedSessions, get(), get().currentSessionKey);
           const userFacingSessions = filterUserFacingSessions(mergedWithPreserved);
 
           const { currentSessionKey, sessions: localSessions } = get();
@@ -4609,7 +4620,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const firstUserMsg = finalMessages.find((m) => m.role === 'user');
       const lastMsg = finalMessages[finalMessages.length - 1];
       let discoveredLabel: string | undefined;
-      if (firstUserMsg) {
+      if (firstUserMsg && !isCronSessionKey(currentSessionKey)) {
         const rawText = getMessageText(firstUserMsg.content);
         const labelText = rewriteRuntimeSkillMentionsToDisplayInText(
           stripGatewayUserMetadata(rawText).trim(),

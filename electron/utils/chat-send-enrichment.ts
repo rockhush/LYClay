@@ -4,6 +4,10 @@ import {
   resolveSessionDeliveryContext,
 } from './session-delivery-context';
 
+function isScheduledTaskSessionKey(sessionKey: string): boolean {
+  return sessionKey.includes(':scheduled-task:');
+}
+
 function normalizeSkillFilter(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const names = value
@@ -21,6 +25,12 @@ export async function enrichChatSendParams(params: unknown): Promise<unknown> {
   const enriched: Record<string, unknown> = skillFilter ? { ...record, skillFilter } : { ...record };
 
   if (!sessionKey || sessionKey === 'agent:main:__warmup__') {
+    return enriched;
+  }
+
+  // External cron runs in scheduled-task sessions are delivered by the host after
+  // the first turn; follow-up chat in the same session must stay a normal webchat.
+  if (isScheduledTaskSessionKey(sessionKey)) {
     return enriched;
   }
 

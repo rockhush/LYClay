@@ -786,6 +786,35 @@ describe('provider-runtime-sync refresh strategy', () => {
       }),
     );
   });
+  it('does not invent 1M DeepSeek limits for Sub2API providers without runtime model metadata', async () => {
+    const sub2ApiProvider = createProvider({
+      id: 'sub2api-global-740eff8f-apiKey-21',
+      type: 'custom',
+      name: 'LY-SUB2API',
+      model: 'deepseek-v4-pro',
+      fallbackModels: ['deepseek-v4-pro'],
+      baseUrl: 'http://10.0.2.77:8090/v1',
+      apiProtocol: 'openai-completions',
+      metadata: { managedBy: 'sub2api', scope: 'global' },
+    });
+
+    mocks.getDefaultProvider.mockResolvedValue('sub2api-global-740eff8f-apiKey-21');
+    mocks.getProviderConfig.mockReturnValue(undefined);
+    mocks.getAllProviders.mockResolvedValue([sub2ApiProvider]);
+    mocks.getApiKey.mockResolvedValue('sk-sub2api');
+
+    await syncSavedProviderToRuntime(sub2ApiProvider, 'sk-sub2api', createGateway('stopped') as GatewayManager);
+
+    const providerEntry = mocks.updateAgentModelProvider.mock.calls.find(([providerKey]) => providerKey === 'custom-sub2g3e5cd874')?.[1];
+    expect(providerEntry).toEqual(expect.objectContaining({ preserveExplicitModelLimits: true }));
+    const model = providerEntry?.models?.[0] as Record<string, unknown> | undefined;
+    expect(model).toEqual(expect.objectContaining({ id: 'deepseek-v4-pro' }));
+    expect(model?.contextWindow).toBeUndefined();
+    expect(model?.contextTokens).toBeUndefined();
+    expect(model?.maxTokens).toBeUndefined();
+    expect((model?.compat as Record<string, unknown>)?.supportsPromptCacheKey).toBe(true);
+  });
+
   it('syncs Sub2API runtime model names and capabilities when it becomes the default custom provider', async () => {
     const sub2ApiProvider = createProvider({
       id: 'sub2api-global-740eff8f-apiKey-21',

@@ -31,6 +31,19 @@ export function isUiInAppCronJob(job: CronJobDeliveryStateLike): boolean {
   );
 }
 
+/** UI-created isolated agentTurn jobs managed by the LYClaw streaming supervisor. */
+export function isUiManagedCronJob(job: CronJobDeliveryStateLike): boolean {
+  return (
+    (job.sessionTarget === 'isolated' || !job.sessionTarget)
+    && job.payload?.kind === 'agentTurn'
+  );
+}
+
+/** External-channel UI cron jobs (e.g. DingTalk announce delivery). */
+export function isUiExternalChannelCronJob(job: CronJobDeliveryStateLike): boolean {
+  return isUiManagedCronJob(job) && job.delivery?.mode != null && job.delivery.mode !== 'none';
+}
+
 /** Optimistically clear a stale in-app delivery error on the job object. */
 export function clearStaleInAppDeliveryErrorState(job: CronJobDeliveryStateLike): boolean {
   if (!job.state?.lastError || !isStaleInAppDeliveryError(job.state.lastError)) return false;

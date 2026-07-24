@@ -258,6 +258,68 @@ export function shouldPromoteStreamingTextAsReply(input: {
   return input.streamToolUseCount === 0;
 }
 
+function collectResolvedStreamingToolCallIds(
+  messages: RawMessage[],
+  streamingMessage: RawMessage | null,
+  streamingTools: ToolStatus[],
+): Set<string> {
+  const settledIds = new Set<string>();
+
+  for (const message of messages) {
+    const role = typeof message.role === 'string' ? message.role.toLowerCase() : '';
+    if (role === 'toolresult' || role === 'tool_result') {
+      const toolCallId = typeof message.toolCallId === 'string' ? message.toolCallId : '';
+      if (toolCallId) settledIds.add(toolCallId);
+    }
+
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content as unknown as Array<Record<string, unknown>>) {
+      if (block.type !== 'tool_result' && block.type !== 'toolResult') continue;
+      const toolCallId = typeof block.tool_use_id === 'string'
+        ? block.tool_use_id
+        : typeof block.toolCallId === 'string'
+          ? block.toolCallId
+          : '';
+      if (toolCallId) settledIds.add(toolCallId);
+    }
+  }
+
+  for (const tool of streamingTools) {
+    if (tool.status !== 'completed' && tool.status !== 'error') continue;
+    const toolCallId = tool.toolCallId || tool.id || '';
+    if (toolCallId) settledIds.add(toolCallId);
+  }
+
+  const streamText = streamingMessage ? extractText(streamingMessage).replace(/\s+/g, ' ').trim() : '';
+  if (streamText) {
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue;
+      const historyText = extractText(message).replace(/\s+/g, ' ').trim();
+      if (!historyText || historyText === streamText || !streamText.includes(historyText)) continue;
+      for (const tool of extractToolUse(message)) {
+        if (tool.id) settledIds.add(tool.id);
+      }
+    }
+  }
+
+  return settledIds;
+}
+
+export function countUnresolvedStreamingToolUses(input: {
+  messages: RawMessage[];
+  streamingMessage: unknown | null;
+  streamingTools: ToolStatus[];
+}): number {
+  const streamMessage = input.streamingMessage && typeof input.streamingMessage === 'object'
+    ? input.streamingMessage as RawMessage
+    : null;
+  if (!streamMessage) return 0;
+  const settledIds = collectResolvedStreamingToolCallIds(input.messages, streamMessage, input.streamingTools);
+  return extractToolUse(streamMessage).filter((tool) =>
+    !tool.id || !settledIds.has(tool.id),
+  ).length;
+}
+
 interface DeriveTaskStepsInput {
   messages: RawMessage[];
   streamingMessage: unknown | null;
@@ -522,6 +584,7 @@ export function deriveTaskSteps({
   const streamMessage = streamingMessage && typeof streamingMessage === 'object'
     ? streamingMessage as RawMessage
     : null;
+  const settledToolCallIds = collectResolvedStreamingToolCallIds(messages, streamMessage, streamingTools);
 
   // The final answer the user sees as a chat bubble. We avoid folding it into
   // the graph to prevent duplication. When a run is still streaming, the
@@ -639,6 +702,7 @@ export function deriveTaskSteps({
   if (streamMessage) {
     extractToolUse(streamMessage).forEach((tool, index) => {
       const id = tool.id || makeToolId('stream-tool', tool.name, index);
+      if (tool.id && settledToolCallIds.has(tool.id)) return;
       if (activeToolIds.has(id) || activeToolNamesWithoutIds.has(tool.name)) return;
       const input = tool.input as Record<string, unknown>;
       const url = tool.name === 'web_fetch' && typeof input?.url === 'string' ? input.url : undefined;

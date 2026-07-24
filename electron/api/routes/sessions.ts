@@ -5,7 +5,6 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { listAgentsSnapshot } from '../../utils/agent-config';
 import { getOpenClawConfigDir } from '../../utils/paths';
-import { resolveAgentSessionsDir } from '../../utils/retired-agent-sessions';
 import { logger } from '../../utils/logger';
 import { redactSecrets, redactStructuredSecrets } from '../../security/secret-scanner';
 import { sanitizeTranscriptMessageForDisplay } from '../../utils/silent-reply-sanitize';
@@ -350,7 +349,7 @@ export async function handleSessionRoutes(
         return true;
       }
 
-      const sessionsDir = await resolveAgentSessionsDir(agentId);
+      const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
 
       try {
@@ -464,7 +463,7 @@ export async function handleSessionRoutes(
         return true;
       }
 
-      const sessionsDir = await resolveAgentSessionsDir(agentId);
+      const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
       const sessionSegment = parts.slice(2).join(':');
       const sessionKeyFallbackPath = sessionSegment.startsWith('session-')

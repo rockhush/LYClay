@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,14 +10,17 @@ vi.mock('../../electron/utils/paths', () => ({
 }));
 
 describe('cron supervisor delivery', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     rmSync(testOpenClawConfigDir, { recursive: true, force: true });
     mkdirSync(testOpenClawConfigDir, { recursive: true });
+    const { clearExternalCronDeliveryState } = await import('../../electron/gateway/cron-external-delivery');
+    clearExternalCronDeliveryState();
   });
 
-  it('inherits external delivery config for manual streaming triggers', async () => {
+  it('uses chat.send without persisting delivery context for external-channel manual triggers', async () => {
     const { triggerCronJobStreaming } = await import('../../electron/gateway/cron-supervisor');
-    const cronRunParams: Record<string, unknown>[] = [];
+    const chatSendParams: Record<string, unknown>[] = [];
+    const sessionsPath = join(testOpenClawConfigDir, 'agents', 'main', 'sessions', 'sessions.json');
     const rpc = vi.fn(async (method: string, params: unknown) => {
       if (method === 'cron.list') {
         return {
@@ -35,9 +38,10 @@ describe('cron supervisor delivery', () => {
           }],
         };
       }
-      if (method === 'cron.run') {
-        cronRunParams.push(params as Record<string, unknown>);
-        return { ok: true, enqueued: true, runId: 'run-dingtalk' };
+      if (method === 'chat.send') {
+        expect(existsSync(sessionsPath)).toBe(false);
+        chatSendParams.push(params as Record<string, unknown>);
+        return { runId: 'run-dingtalk' };
       }
       throw new Error(`unexpected rpc ${method}`);
     });
@@ -48,16 +52,26 @@ describe('cron supervisor delivery', () => {
     }, 'job-dingtalk');
 
     expect(result.runId).toBe('run-dingtalk');
-    expect(result.sessionKey).toBe('');
-    expect(rpc).not.toHaveBeenCalledWith('chat.send', expect.anything(), expect.anything());
-    expect(rpc).not.toHaveBeenCalledWith('agent', expect.anything(), expect.anything());
-    expect(cronRunParams).toHaveLength(1);
-    expect(cronRunParams[0]).toEqual({
-      jobId: 'job-dingtalk',
-      mode: 'force',
+    expect(result.sessionKey).toMatch(/^agent:main:scheduled-task:job-dingtalk:/);
+    expect(rpc).not.toHaveBeenCalledWith('cron.run', expect.anything(), expect.anything());
+    expect(chatSendParams).toHaveLength(1);
+    expect(chatSendParams[0]).toMatchObject({
+      agentId: 'main',
+      message: 'Summarize today',
+      deliver: false,
+      extraSystemPrompt: expect.stringContaining('Do NOT use the `message` tool'),
     });
+    expect(chatSendParams[0].extraSystemPrompt).not.toContain('target="cidDailyReport="');
 
-    expect(existsSync(join(testOpenClawConfigDir, 'agents', 'main', 'sessions', 'sessions.json'))).toBe(false);
+    const { getExternalCronDeliveryPending } = await import('../../electron/gateway/cron-external-delivery');
+    expect(getExternalCronDeliveryPending('run-dingtalk')).toMatchObject({
+      jobId: 'job-dingtalk',
+      deliveryContext: {
+        channel: 'dingtalk',
+        to: 'cidDailyReport=',
+        accountId: 'dingtalk-main',
+      },
+    });
   });
 
   it('keeps local delivery-none runs on chat.send', async () => {
@@ -95,5 +109,9 @@ describe('cron supervisor delivery', () => {
       message: 'Run locally',
       deliver: false,
     });
+    expect(chatSendParams[0]).not.toHaveProperty('extraSystemPrompt');
+
+    const { getExternalCronDeliveryPending } = await import('../../electron/gateway/cron-external-delivery');
+    expect(getExternalCronDeliveryPending('run-local')).toBeUndefined();
   });
 });

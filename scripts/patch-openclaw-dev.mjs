@@ -9,6 +9,7 @@ import { applyOpenClawOpenAITransportPatches, hasOpenClawOpenAITransportPatches 
 import { applyOpenClawSilentReplyPatches, hasOpenClawSilentReplyPatches } from './openclaw-silent-reply-patches.mjs';
 import { applyOpenClawUsageStreamingPatches, applyPiAiUsageStreamingPatches, hasOpenClawUsageStreamingPatches, hasPiAiUsageStreamingPatches } from './openclaw-usage-patches.mjs';
 import { inspectOpenClawDigitalEmployeeIsolation } from './openclaw-digital-employee-isolation-check.mjs';
+import { applyOpenClawWebFetchHtmlSniffPatches, hasOpenClawWebFetchHtmlSniffPatches } from './openclaw-web-fetch-patches.mjs';
 
 const ROOT = process.cwd();
 const openclawCandidates = [
@@ -153,6 +154,30 @@ function main() {
   }
   if (!piAiPatched) {
     console.warn('[patch-openclaw-dev] pi-ai openai-completions.js not found in openclaw or workspace node_modules');
+  }
+
+  let webFetchMatched = 0;
+  let webFetchPatched = 0;
+  for (const name of readdirSync(distDir)) {
+    if (!name.endsWith('.js')) continue;
+    const filePath = join(distDir, name);
+    const content = readFileSync(filePath, 'utf8');
+    if (!content.includes('function runWebFetch(params)')) continue;
+    webFetchMatched += 1;
+    const webFetchResult = applyOpenClawWebFetchHtmlSniffPatches(content);
+    if (!webFetchResult.patched) {
+      console.log(
+        `[patch-openclaw-dev] ${name}: web-fetch-html-sniff=${hasOpenClawWebFetchHtmlSniffPatches(content) ? 'already' : 'missing'}`,
+      );
+      continue;
+    }
+    writeFileSync(filePath, webFetchResult.source, 'utf8');
+    webFetchPatched += 1;
+    changedCount += 1;
+    console.log(`[patch-openclaw-dev] ${name}: web-fetch-html-sniff=applied (written)`);
+  }
+  if (webFetchMatched === 0) {
+    console.warn('[patch-openclaw-dev] WARN: no web_fetch bundle found for HTML sniff patch.');
   }
 
   let silentReplyPatched = 0;

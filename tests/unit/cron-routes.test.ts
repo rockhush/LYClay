@@ -61,13 +61,16 @@ describe('handleCronRoutes', () => {
 
     expect(handled).toBe(true);
     expect(rpc).toHaveBeenCalledWith('cron.add', expect.objectContaining({
+      enabled: false,
       delivery: { mode: 'announce', channel: 'feishu', to: 'user:ou_weather' },
     }));
+    expect(cronSupervisorMocks.setManagedCronJobEnabled).toHaveBeenCalledWith('job-1', true, 1);
     expect(sendJsonMock).toHaveBeenCalledWith(
       expect.anything(),
       200,
       expect.objectContaining({
         id: 'job-1',
+        enabled: true,
         delivery: { mode: 'announce', channel: 'feishu', to: 'user:ou_weather' },
       }),
     );
@@ -150,6 +153,7 @@ describe('handleCronRoutes', () => {
       patch: {
         payload: { kind: 'agentTurn', message: 'Updated prompt' },
         sessionTarget: 'isolated',
+        enabled: false,
         delivery: { mode: 'announce', channel: 'feishu', to: 'user:ou_next' },
       },
     });
@@ -199,6 +203,7 @@ describe('handleCronRoutes', () => {
     expect(rpc).toHaveBeenCalledWith('cron.update', {
       id: 'job-account',
       patch: {
+        enabled: false,
         delivery: {
           mode: 'announce',
           channel: 'feishu',
@@ -247,13 +252,16 @@ describe('handleCronRoutes', () => {
 
     expect(handled).toBe(true);
     expect(rpc).toHaveBeenCalledWith('cron.add', expect.objectContaining({
+      enabled: false,
       delivery: expect.objectContaining({ mode: 'announce', to: 'wechat:wxid_target' }),
     }));
+    expect(cronSupervisorMocks.setManagedCronJobEnabled).toHaveBeenCalledWith('job-wechat', true, 1);
     expect(sendJsonMock).toHaveBeenCalledWith(
       expect.anything(),
       200,
       expect.objectContaining({
         id: 'job-wechat',
+        enabled: true,
       }),
     );
   });

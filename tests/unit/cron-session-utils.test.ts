@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   formatCronSessionDisplayLabel,
   isCronSessionKey,
+  isExternalChannelCronSessionForJobs,
+  mergeMonotonicCronSessionHistory,
   parseCronSessionKey,
 } from '../../src/stores/chat/cron-session-utils';
 
@@ -78,5 +80,39 @@ describe('formatCronSessionDisplayLabel', () => {
         fallback: '定时任务',
       }),
     ).toBe('Cron: 看球了');
+  });
+});
+
+describe('isExternalChannelCronSessionForJobs', () => {
+  const sessionKey = 'agent:main:scheduled-task:job-123:run-456';
+  const jobs = [
+    { id: 'job-123', delivery: { mode: 'announce', channel: 'dingtalk' } },
+    { id: 'job-local', delivery: { mode: 'none' } },
+  ];
+
+  it('detects external scheduled-task sessions', () => {
+    expect(isExternalChannelCronSessionForJobs(sessionKey, jobs)).toBe(true);
+  });
+
+  it('returns false for in-app scheduled-task sessions', () => {
+    expect(isExternalChannelCronSessionForJobs(
+      'agent:main:scheduled-task:job-local:run-456',
+      jobs,
+    )).toBe(false);
+  });
+});
+
+describe('mergeMonotonicCronSessionHistory', () => {
+  it('keeps newer local messages when remote history is stale', () => {
+    const local = [
+      { role: 'user', content: 'hi', timestamp: 1_000 },
+      { role: 'assistant', content: 'streaming...', timestamp: 2_000 },
+    ];
+    const remote = [
+      { role: 'user', content: 'hi', timestamp: 1_000 },
+    ];
+    const merged = mergeMonotonicCronSessionHistory(local, remote);
+    expect(merged).toHaveLength(2);
+    expect(merged[1]).toMatchObject({ role: 'assistant', content: 'streaming...' });
   });
 });

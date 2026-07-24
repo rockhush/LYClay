@@ -87,6 +87,62 @@ describe('buildCronSessionHistoryMessages', () => {
     ).toEqual(['Scheduled prompt', 'Scheduled answer']);
   });
 
+  it('does not merge other runs for external-channel scheduled-task sessions', async () => {
+    const tempDir = join(tmpdir(), `cron-history-external-isolated-${Date.now()}`);
+    const sessionsDir = join(tempDir, 'agents', 'main', 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+
+    const runOnePath = join(sessionsDir, 'run-one.jsonl');
+    const runTwoPath = join(sessionsDir, 'run-two.jsonl');
+    await writeFile(runOnePath, [
+      JSON.stringify({
+        type: 'message',
+        timestamp: '2026-06-25T06:50:00.000Z',
+        message: { role: 'user', content: 'Run 1 only', timestamp: 1_750_828_200 },
+      }),
+    ].join('\n'), 'utf8');
+    await writeFile(runTwoPath, [
+      JSON.stringify({
+        type: 'message',
+        timestamp: '2026-06-26T06:50:00.000Z',
+        message: { role: 'user', content: 'NBA历史第一人是谁', timestamp: 1_750_914_600 },
+      }),
+    ].join('\n'), 'utf8');
+
+    const sessionKey = 'agent:main:scheduled-task:job-dingtalk:run-two';
+    await writeFile(join(sessionsDir, 'sessions.json'), JSON.stringify({
+      [sessionKey]: { sessionFile: 'run-two.jsonl', updatedAt: 1_750_914_610_000 },
+      'agent:main:cron:job-dingtalk:run:run-one': { sessionFile: 'run-one.jsonl' },
+    }), 'utf8');
+
+    const { buildCronSessionHistoryMessages: buildHistory, buildSessionFileIndex: buildIndex } =
+      await import('@electron/gateway/cron-session-history');
+
+    const filesBySessionKey = await buildIndex(join(sessionsDir, 'sessions.json'));
+    const messages = await buildHistory({
+      agentId: 'main',
+      jobId: 'job-dingtalk',
+      sessionKey,
+      runs: [
+        { action: 'finished', status: 'ok', runAtMs: 1_750_914_610_000, sessionId: 'run-two', sessionKey },
+        { action: 'finished', status: 'ok', runAtMs: 1_750_828_210_000, sessionId: 'run-one' },
+      ],
+      job: {
+        name: 'DingTalk task',
+        payload: { message: 'Send message' },
+        delivery: { mode: 'announce', channel: 'dingtalk' },
+      },
+      sessionsDir,
+      filesBySessionKey,
+    });
+
+    expect(
+      messages
+        .filter((message) => message.role === 'user' || message.role === 'assistant')
+        .map((message) => message.content),
+    ).toEqual(['NBA历史第一人是谁']);
+  });
+
   it('aggregates transcripts from multiple cron runs', async () => {
     const tempDir = join(tmpdir(), `cron-history-${Date.now()}`);
     const sessionsDir = join(tempDir, 'agents', 'main', 'sessions');

@@ -79,6 +79,20 @@ describe('open target security policy', () => {
     });
   });
 
+  it('allows DingTalk deep links to open in the registered client', async () => {
+    await expect(evaluateOpenTargetPolicy({
+      target: 'dingtalk://dingtalkclient/action/open_platform_link?pcLink=dingtalk%3A%2F%2Fhrssc.lingyiitech.com%252Fpt%252FleaveList%2526ddtab%253Dtrue',
+      capability: 'open-external',
+      source: 'renderer:shell.openExternal',
+    })).resolves.toMatchObject({
+      targetType: 'url',
+      action: 'open-url',
+      protocol: 'dingtalk:',
+      matchedRule: 'trusted-dingtalk-protocol',
+      decision: { action: 'allow' },
+    });
+  });
+
   it('allows the fixed internal HTTP host without confirmation', async () => {
     await expect(evaluateOpenTargetPolicy({
       target: 'http://10.120.52.2/report',

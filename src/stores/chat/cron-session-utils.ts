@@ -53,6 +53,50 @@ export function isCronSessionKey(sessionKey: string): boolean {
   return parseCronSessionKey(sessionKey) != null;
 }
 
+export interface CronJobDeliveryLike {
+  id?: string;
+  delivery?: { mode?: string };
+}
+
+/** Per-run scheduled-task session (not legacy aggregate cron:jobId). */
+export function isScheduledTaskRunSessionKey(sessionKey: string): boolean {
+  const parsed = parseCronSessionKey(sessionKey);
+  return parsed?.runSessionId != null && sessionKey.includes(':scheduled-task:');
+}
+
+/** External-channel scheduled-task run for a known cron job list. */
+export function isExternalChannelCronSessionForJobs(
+  sessionKey: string,
+  jobs: CronJobDeliveryLike[],
+): boolean {
+  const parsed = parseCronSessionKey(sessionKey);
+  if (!parsed?.runSessionId || !sessionKey.includes(':scheduled-task:')) return false;
+  const job = jobs.find((item) => item.id === parsed.jobId);
+  if (!job) return false;
+  const mode = job.delivery?.mode;
+  return mode != null && mode !== 'none';
+}
+
+/** Keep newer local streaming transcript when a stale history reload races the run. */
+export function mergeMonotonicCronSessionHistory<T extends { role?: unknown; content?: unknown; timestamp?: unknown }>(
+  local: T[],
+  remote: T[],
+): T[] {
+  if (local.length === 0) return remote;
+  if (remote.length === 0) return local;
+
+  const localMaxTs = local.reduce((max, message) => Math.max(max, cronMessageTimestampMs(message)), 0);
+  const remoteMaxTs = remote.reduce((max, message) => Math.max(max, cronMessageTimestampMs(message)), 0);
+
+  if (remoteMaxTs >= localMaxTs && remote.length >= local.length) {
+    return remote;
+  }
+  if (localMaxTs > remoteMaxTs) {
+    return mergeCronSessionHistory(local, remote);
+  }
+  return remote;
+}
+
 const CRON_BRACKET_LABEL = /^\[cron:[^\]]*\]$/i;
 const CRON_BRACKET_PREFIX = /^\[cron:[^\]]*\]\s*/i;
 const CRON_BRACKET_ANYWHERE = /\s*\[cron:[^\]]*\]\s*/gi;

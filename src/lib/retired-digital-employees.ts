@@ -56,12 +56,6 @@ export function getRetiredDigitalEmployeesSnapshot(): RetiredDigitalEmployeesSta
   return { retiredAgents: { ...retiredAgents } };
 }
 
-export function listRetiredReadOnlyAgentIds(): string[] {
-  return Object.entries(retiredAgents)
-    .filter(([, record]) => record.readOnly !== false)
-    .map(([agentId]) => agentId);
-}
-
 export function getRetiredDigitalEmployee(
   agentId: string | null | undefined,
 ): RetiredDigitalEmployeeRecord | undefined {

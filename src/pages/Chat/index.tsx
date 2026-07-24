@@ -22,7 +22,7 @@ import { ChatInput } from './ChatInput';
 import { ExecutionGraphCard, buildTurnRunAnchorId } from './ExecutionGraphCard';
 import { ChatToolbar } from './ChatToolbar';
 import { extractImages, extractText, extractThinking, extractToolUse, stripProcessMessagePrefix } from './message-utils';
-import { attachSubagentChildSteps, collectChildDelegationBindings, committedReplyShouldSettleExecutionGraph, deriveTaskSteps, filterHiddenExecutionGraphSteps, findCommittedReplyMessageIndex, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationNarration, isSubagentOrchestrationToolName, isSupersededRawMediaAssistantReply, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo, shouldPromoteStreamingTextAsReply, type TaskStep } from './task-visualization';
+import { attachSubagentChildSteps, collectChildDelegationBindings, committedReplyShouldSettleExecutionGraph, countUnresolvedStreamingToolUses, deriveTaskSteps, filterHiddenExecutionGraphSteps, findCommittedReplyMessageIndex, findInFlightChildDelegation, findReplyMessageIndex, isSubagentOrchestrationNarration, isSubagentOrchestrationToolName, isSupersededRawMediaAssistantReply, isWaitingOnSubagentDelegation, parseSubagentCompletionInfo, shouldPromoteStreamingTextAsReply, type TaskStep } from './task-visualization';
 import { resolveCompletedChildSessionKeys } from '@/lib/subagent-delegation';
 import { mergeDelegationBindingsWithLiveStream } from '@/lib/subagent-delegation';
 import { useTranslation } from 'react-i18next';
@@ -988,7 +988,11 @@ export function Chat() {
       && shouldPromoteStreamingTextAsReply({
         streamText,
         hasStreamImages,
-        streamToolUseCount: streamTools.length,
+        streamToolUseCount: countUnresolvedStreamingToolUses({
+          messages: segmentMessages,
+          streamingMessage,
+          streamingTools,
+        }),
       });
 
     let steps = buildSteps(rawStreamingReplyCandidate);

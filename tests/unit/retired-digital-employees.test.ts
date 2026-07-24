@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   isRetiredDigitalEmployeeAgent,
-  listRetiredReadOnlyAgentIds,
   loadRetiredDigitalEmployees,
   resolveActiveDigitalEmployeeExecutionAgent,
   resolveAgentDisplayName,
@@ -197,19 +196,5 @@ describe('retired-digital-employees', () => {
       agents: [],
       digitalEmployees: [],
     })).toBeNull();
-  });
-
-  it('lists only read-only retired agent ids', () => {
-    retireDigitalEmployee({
-      agentId: 'employee-recruitment-specialist-128348c9',
-      name: '招聘数字员工',
-    });
-    unretireDigitalEmployee('employee-recruitment-specialist-128348c9');
-    retireDigitalEmployee({
-      agentId: 'employee-other-specialist-99999999',
-      name: '其他岗位助理',
-    });
-
-    expect(listRetiredReadOnlyAgentIds()).toEqual(['employee-other-specialist-99999999']);
   });
 });

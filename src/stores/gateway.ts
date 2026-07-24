@@ -8,6 +8,7 @@ import { invokeIpc } from '@/lib/api-client';
 import { subscribeHostEvent } from '@/lib/host-events';
 import type { GatewayStatus } from '../types/gateway';
 import { isEmptyChatScratchpad } from '@/lib/chat-scratchpad';
+import { isExternalChannelCronSessionForJobs } from './chat/cron-session-utils';
 import { reabortPersistedUserSessions } from './chat/user-aborted-sessions';
 
 let gatewayInitPromise: Promise<void> | null = null;
@@ -235,6 +236,16 @@ function maybeLoadHistory(
   void state.loadHistory(true, force ? { force: true } : undefined);
 }
 
+function shouldSkipExternalCronHistoryReload(state: {
+  currentSessionKey: string;
+  sending: boolean;
+  pendingFinal?: boolean;
+  activeRunId: string | null;
+}, jobs: Array<{ id?: string; delivery?: { mode?: string } }>): boolean {
+  if (!isExternalChannelCronSessionForJobs(state.currentSessionKey, jobs)) return false;
+  return state.sending || state.pendingFinal === true || state.activeRunId != null;
+}
+
 function handleSessionUpdated(payload: SessionUpdatedPayload | undefined): void {
   if (!payload) return;
   const sessionKey = typeof payload.sessionKey === 'string' ? payload.sessionKey : '';
@@ -252,7 +263,17 @@ function handleSessionUpdated(payload: SessionUpdatedPayload | undefined): void 
       }
 
       if (sessionKey && sessionKey === state.currentSessionKey) {
-        maybeLoadHistory(state, true);
+        void import('./cron')
+          .then(({ useCronStore }) => {
+            const chatState = useChatStore.getState();
+            if (shouldSkipExternalCronHistoryReload(chatState, useCronStore.getState().jobs)) {
+              return;
+            }
+            maybeLoadHistory(chatState, true);
+          })
+          .catch(() => {
+            maybeLoadHistory(state, true);
+          });
       }
     })
     .catch(() => {});
@@ -678,9 +699,21 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
               .then(({ useChatStore }) => {
                 const state = useChatStore.getState();
                 void state.loadSessions(true);
-                if (!state.sending && !state.activeRunId) {
-                  void state.loadHistory(true, { force: true });
-                }
+                void import('./cron')
+                  .then(({ useCronStore }) => {
+                    const chatState = useChatStore.getState();
+                    if (shouldSkipExternalCronHistoryReload(chatState, useCronStore.getState().jobs)) {
+                      return;
+                    }
+                    if (!chatState.sending && !chatState.activeRunId) {
+                      void chatState.loadHistory(true, { force: true });
+                    }
+                  })
+                  .catch(() => {
+                    if (!state.sending && !state.activeRunId) {
+                      void state.loadHistory(true, { force: true });
+                    }
+                  });
               })
               .catch(() => {});
           }));

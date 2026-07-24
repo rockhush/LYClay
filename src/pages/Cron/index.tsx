@@ -845,6 +845,12 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
       const { sessionKey } = await onTrigger();
       toast.success(t('toast.triggered'));
       if (sessionKey) {
+        const jobName = job.name?.trim();
+        if (jobName) {
+          useChatStore.setState((state) => ({
+            sessionLabels: { ...state.sessionLabels, [sessionKey]: jobName },
+          }));
+        }
         // Navigate to the cron session to watch streaming execution live.
         useChatStore.getState().switchSession(sessionKey);
         navigate('/');

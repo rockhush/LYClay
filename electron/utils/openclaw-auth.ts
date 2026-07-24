@@ -988,6 +988,8 @@ function upsertOpenClawProviderEntry(
   }));
   console.log('[upsertOpenClawProviderEntry] runtimeModels for', provider, ':', JSON.stringify(runtimeModels));
 
+  const preserveExplicitLimits = options.preserveExplicitModelLimits
+    ?? shouldPreserveProviderExplicitModelLimits(provider, existingProvider);
   const nextProvider: Record<string, unknown> = {
     ...existingProvider,
     baseUrl: options.baseUrl,
@@ -996,7 +998,7 @@ function upsertOpenClawProviderEntry(
       const id = typeof model.id === 'string' ? model.id : '';
       return syncOpenClawModelCatalogEntry(id, model, {
         baseUrl: options.baseUrl,
-        preserveExplicitLimits: options.preserveExplicitModelLimits,
+        preserveExplicitLimits,
       });
     }),
   };
@@ -1434,6 +1436,7 @@ export async function setOpenClawDefaultModelWithOverride(
         modelIds: [modelId, ...fallbackModelIds],
         modelOverrides: override.modelOverrides,
         timeoutSeconds: override.timeoutSeconds,
+        preserveExplicitModelLimits: override.preserveExplicitModelLimits,
       });
     }
 

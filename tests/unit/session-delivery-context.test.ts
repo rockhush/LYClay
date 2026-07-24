@@ -13,6 +13,7 @@ import {
   buildChannelMessageTargetSystemPrompt,
   inferDeliveryContextFromSessionKey,
   resolveSessionDeliveryContext,
+  upsertSessionDeliveryContext,
 } from '../../electron/utils/session-delivery-context';
 import { enrichChatSendParams } from '../../electron/utils/chat-send-enrichment';
 
@@ -64,6 +65,22 @@ describe('session delivery context', () => {
     expect(prompt).toContain('target="cidResolvedTarget="');
     expect(prompt).toContain('channel="dingtalk"');
     expect(prompt).toContain('NEVER use target="self"');
+  });
+
+  it('does not enrich scheduled-task sessions so follow-up chat stays normal', async () => {
+    await upsertSessionDeliveryContext('agent:main:scheduled-task:job-1:run-1', {
+      channel: 'dingtalk',
+      to: '11427193',
+      accountId: 'default',
+    });
+
+    const enriched = await enrichChatSendParams({
+      sessionKey: 'agent:main:scheduled-task:job-1:run-1',
+      message: 'NBA历史第一人是谁',
+    }) as Record<string, unknown>;
+
+    expect(enriched.extraSystemPrompt).toBeUndefined();
+    expect(enriched.message).toBe('NBA历史第一人是谁');
   });
 
   it('enriches chat.send params with channel delivery prompt', async () => {

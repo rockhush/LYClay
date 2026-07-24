@@ -81,6 +81,7 @@ function buildCustomOpenAICompletionsModels(
   modelId: string,
   baseUrl?: string,
   registryModel?: Record<string, unknown>,
+  options: { preserveExplicitLimits?: boolean } = {},
 ): Array<Record<string, unknown> & { id: string; name: string }> {
   return [syncOpenClawModelCatalogEntry(
     modelId,
@@ -88,8 +89,8 @@ function buildCustomOpenAICompletionsModels(
       ...(registryModel ?? {}),
       id: modelId,
       name: typeof registryModel?.name === 'string' ? registryModel.name : modelId,
-    }),
-    { baseUrl },
+    }, { preservePromptCacheKey: options.preserveExplicitLimits }),
+    { baseUrl, preserveExplicitLimits: options.preserveExplicitLimits },
   ) as Record<string, unknown> & { id: string; name: string }];
 }
 
@@ -139,6 +140,10 @@ type RuntimeProviderSyncContext = {
 
 function isSub2ApiManagedProvider(config: ProviderConfig): boolean {
   return config.metadata?.managedBy === 'sub2api';
+}
+
+function resolveRuntimeHeaders(config: ProviderConfig, fallbackHeaders?: Record<string, string>): Record<string, string> | undefined {
+  return config.headers ?? fallbackHeaders;
 }
 
 function getModelCatalogSyncOptions(config: ProviderConfig, baseUrl?: string) {
@@ -497,7 +502,7 @@ function buildRuntimeModelsForProvider(
       getModelCatalogSyncOptions(config, baseUrl),
     ) as Record<string, unknown> & { id: string; name: string });
   }
-  return modelId ? buildCustomOpenAICompletionsModels(modelId, baseUrl, registryModel) : [];
+  return modelId ? buildCustomOpenAICompletionsModels(modelId, baseUrl, registryModel, getModelCatalogSyncOptions(config, baseUrl)) : [];
 }
 
 function buildCustomDefaultModelOverrides(config: ProviderConfig): Record<string, Record<string, unknown>> | undefined {
@@ -523,7 +528,7 @@ function buildCustomDefaultOverride(config: ProviderConfig): {
   return {
     baseUrl: normalizeProviderBaseUrl(config, config.baseUrl, api),
     api,
-    headers: config.headers,
+    headers: resolveRuntimeHeaders(config),
     modelOverrides: buildCustomDefaultModelOverrides(config),
     timeoutSeconds: resolveProviderRequestTimeoutSeconds(config.type),
     preserveExplicitModelLimits: isSub2ApiManagedProvider(config),
@@ -579,7 +584,7 @@ async function syncRuntimeProviderConfig(
   }
 
   // Build headers: merge static headers from registry/config with dynamic ly-auto headers
-  let headers = config.headers ?? context.meta?.headers;
+  let headers = resolveRuntimeHeaders(config, context.meta?.headers);
 
   // For ly-auto provider, add dynamic headers (session ID and job number)
   if (config.type === LY_AUTO_PROVIDER_ID) {
@@ -638,6 +643,7 @@ async function syncCustomProviderAgentModel(
     api: config.apiProtocol || 'openai-completions',
     models: buildRuntimeModelsForProvider(config, modelId, baseUrl),
     apiKey: resolvedKey,
+    headers: resolveRuntimeHeaders(config),
     preserveExplicitModelLimits: isSub2ApiManagedProvider(config),
   });
 }
@@ -780,6 +786,7 @@ async function buildAgentModelProviderEntry(
   api?: string;
   models?: Array<Record<string, unknown> & { id: string; name: string }>;
   apiKey?: string;
+  headers?: Record<string, string>;
   authHeader?: boolean;
   preserveExplicitModelLimits?: boolean;
 } | null> {
@@ -824,13 +831,14 @@ async function buildAgentModelProviderEntry(
           getModelCatalogSyncOptions(config, baseUrl),
         ) as Record<string, unknown> & { id: string; name: string }]
       : useOpenAICompletionsCompat
-        ? buildCustomOpenAICompletionsModels(modelId, baseUrl, registryModel)
+        ? buildCustomOpenAICompletionsModels(modelId, baseUrl, registryModel, getModelCatalogSyncOptions(config, baseUrl))
         : [{
             ...(registryModel ?? {}),
             id: modelId,
             name: typeof registryModel?.name === 'string' ? registryModel.name : modelId,
           } as Record<string, unknown> & { id: string; name: string }],
     apiKey,
+    headers: resolveRuntimeHeaders(config, meta?.headers),
     authHeader,
     preserveExplicitModelLimits: isSub2ApiManagedProvider(config),
   };
@@ -948,7 +956,7 @@ export async function syncUpdatedProviderToRuntime(
           baseUrl: normalizeProviderBaseUrl(config, config.baseUrl || context.meta?.baseUrl, context.api),
           api: context.api,
           apiKeyEnv: context.meta?.apiKeyEnv,
-          headers: config.headers ?? context.meta?.headers,
+          headers: resolveRuntimeHeaders(config, context.meta?.headers),
         }, fallbackModels);
       } else {
         await setOpenClawDefaultModel(ock, modelOverride, fallbackModels);

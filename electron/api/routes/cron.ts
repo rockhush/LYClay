@@ -15,7 +15,7 @@ import {
   removeManagedCronJobState,
   resolveManagedCronJobEnabled,
 } from '../../gateway/cron-supervisor';
-import { clearStaleInAppDeliveryErrorState, isUiInAppCronJob } from '../../gateway/cron-stale-errors';
+import { clearStaleInAppDeliveryErrorState, isUiInAppCronJob, isUiManagedCronJob } from '../../gateway/cron-stale-errors';
 import {
   readCronRunLog,
   resolveInAppCronLastRun,
@@ -301,10 +301,10 @@ function transformCronJob(
 
 async function enrichCronJobsForResponse(jobs: GatewayCronJob[]): Promise<ReturnType<typeof transformCronJob>[]> {
   return Promise.all(jobs.map(async (job) => {
-    const inAppJob = isUiInAppCronJob(job);
-    const runs = inAppJob ? await readCronRunLog(job.id) : [];
-    const lastRun = resolveInAppCronLastRun(job, runs);
-    const enabledOverride = inAppJob ? await resolveManagedCronJobEnabled(job) : undefined;
+    const managedJob = isUiManagedCronJob(job);
+    const runs = managedJob ? await readCronRunLog(job.id) : [];
+    const lastRun = managedJob ? resolveInAppCronLastRun(job, runs) : undefined;
+    const enabledOverride = managedJob ? await resolveManagedCronJobEnabled(job) : undefined;
     return transformCronJob(job, lastRun, enabledOverride);
   }));
 }
@@ -542,15 +542,14 @@ export async function handleCronRoutes(
         sendJson(res, 400, { success: false, error: unsupportedDeliveryError });
         return true;
       }
-      const managedInApp = delivery.mode === 'none';
       const managedEnabled = input.enabled ?? true;
       const result = await ctx.gatewayManager.rpc('cron.add', {
         name: input.name,
         schedule: { kind: 'cron', expr: input.schedule, tz: Intl.DateTimeFormat().resolvedOptions().timeZone },
         payload: { kind: 'agentTurn', message: input.message },
-        // LYClaw-managed in-app jobs are kept disabled in OpenClaw's own
-        // scheduler so they cannot fire via cron.run and bypass chat streaming.
-        enabled: managedInApp ? false : managedEnabled,
+        // LYClaw-managed UI jobs stay disabled in OpenClaw's scheduler so they
+        // cannot fire via cron.run and bypass per-run chat streaming sessions.
+        enabled: false,
         wakeMode: 'next-heartbeat',
         sessionTarget: 'isolated',
         agentId,
@@ -558,10 +557,8 @@ export async function handleCronRoutes(
       });
       if (result && typeof result === 'object') {
         const job = result as GatewayCronJob;
-        if (managedInApp) {
-          await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
-        }
-        sendJson(res, 200, transformCronJob(job, undefined, managedInApp ? managedEnabled : undefined));
+        await setManagedCronJobEnabled(job.id, managedEnabled, job.createdAtMs);
+        sendJson(res, 200, transformCronJob(job, undefined, managedEnabled));
       } else {
         sendJson(res, 200, result);
       }
@@ -592,30 +589,20 @@ export async function handleCronRoutes(
       }
       const existing = await findCronJobById(ctx, id).catch(() => undefined);
       const requestedEnabled = typeof input.enabled === 'boolean' ? input.enabled : undefined;
-      const existingInApp = existing ? isUiInAppCronJob(existing) : false;
+      const existingManaged = existing ? isUiManagedCronJob(existing) : false;
       const switchingToInApp = deliveryMode === 'none';
       const switchingToExternal = Boolean(deliveryMode && deliveryMode !== 'none');
 
-      if (switchingToInApp || existingInApp) {
-        // LYClaw owns in-app execution; keep OpenClaw's own scheduler disabled
-        // so only the chat.send streaming supervisor fires the task.
+      if (switchingToInApp || switchingToExternal || existingManaged) {
+        // LYClaw owns UI cron execution; keep OpenClaw's scheduler disabled.
         patch.enabled = false;
-      }
-      if (switchingToExternal && existingInApp) {
-        const restoredEnabled = requestedEnabled
-          ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
-          ?? existing?.enabled
-          ?? true;
-        patch.enabled = restoredEnabled;
-        await removeManagedCronJobState(id);
       }
 
       const result = await ctx.gatewayManager.rpc('cron.update', { id, patch });
       if (result && typeof result === 'object') {
         const job = result as GatewayCronJob;
-        const inAppJob = isUiInAppCronJob(job);
         let enabledOverride: boolean | undefined;
-        if (inAppJob) {
+        if (isUiManagedCronJob(job)) {
           enabledOverride = requestedEnabled
             ?? (existing ? await resolveManagedCronJobEnabled(existing) : undefined)
             ?? existing?.enabled
@@ -648,7 +635,7 @@ export async function handleCronRoutes(
     try {
       const body = await parseJsonBody<{ id: string; enabled: boolean }>(req);
       const existing = await findCronJobById(ctx, body.id).catch(() => undefined);
-      if (existing && isUiInAppCronJob(existing)) {
+      if (existing && isUiManagedCronJob(existing)) {
         await setManagedCronJobEnabled(body.id, body.enabled);
         const result = await ctx.gatewayManager.rpc('cron.update', { id: body.id, patch: { enabled: false } });
         sendJson(res, 200, result && typeof result === 'object'

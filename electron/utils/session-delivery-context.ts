@@ -39,14 +39,31 @@ function deliveryContextFromSessionEntry(entry: JsonRecord): SessionDeliveryCont
     ? entry.origin as JsonRecord
     : undefined;
 
-  const channel = readNonEmptyString(deliveryContext?.channel)
-    || readNonEmptyString(entry.lastChannel)
-    || readNonEmptyString(entry.channel)
-    || readNonEmptyString(origin?.provider)
-    || readNonEmptyString(origin?.surface);
-  const to = readNonEmptyString(deliveryContext?.to)
-    || readNonEmptyString(entry.lastTo)
-    || readNonEmptyString(origin?.to);
+  const deliveryContextChannel = readNonEmptyString(deliveryContext?.channel);
+  const deliveryContextTo = readNonEmptyString(deliveryContext?.to);
+  const lastChannel = readNonEmptyString(entry.lastChannel);
+  const lastTo = readNonEmptyString(entry.lastTo);
+
+  // Gateway may stamp webchat on scheduled-task sessions while LYClaw stores the
+  // real outbound target on lastChannel/lastTo after cron upsert.
+  const useStoredOutboundTarget = deliveryContextChannel === 'webchat'
+    && !deliveryContextTo
+    && lastChannel
+    && lastTo
+    && CHANNEL_SESSION_SEGMENTS.has(lastChannel.toLowerCase());
+
+  const channel = useStoredOutboundTarget
+    ? lastChannel
+    : deliveryContextChannel
+      || lastChannel
+      || readNonEmptyString(entry.channel)
+      || readNonEmptyString(origin?.provider)
+      || readNonEmptyString(origin?.surface);
+  const to = useStoredOutboundTarget
+    ? lastTo
+    : deliveryContextTo
+      || lastTo
+      || readNonEmptyString(origin?.to);
   if (!channel || !to) return null;
 
   const accountId = readNonEmptyString(deliveryContext?.accountId)
@@ -148,6 +165,9 @@ export async function upsertSessionDeliveryContext(
     key: readNonEmptyString(existing.key) ?? trimmedKey,
     sessionKey: readNonEmptyString(existing.sessionKey) ?? trimmedKey,
     deliveryContext,
+    lastChannel: deliveryContext.channel,
+    lastTo: deliveryContext.to,
+    ...(deliveryContext.accountId ? { lastAccountId: deliveryContext.accountId } : {}),
   };
 
   await mkdir(dirname(sessionsPath), { recursive: true });
@@ -170,6 +190,21 @@ export function buildChannelMessageTargetSystemPrompt(
     '- NEVER use target="self" (invalid for this channel).',
     '- Use the exact target value above, or rely on automatic delivery when deliver=true.',
   ].filter(Boolean).join('\n');
+}
+
+/** Stronger prompt for scheduled-task runs with a pre-configured external recipient. */
+export function buildScheduledTaskDeliverySystemPrompt(
+  deliveryContext: SessionDeliveryContext,
+): string {
+  const base = buildChannelMessageTargetSystemPrompt(deliveryContext);
+  return [
+    base,
+    '',
+    '## Scheduled task delivery (mandatory)',
+    'This is an automated scheduled task. The outbound recipient is already configured above.',
+    'Do NOT ask the user who to send to or request a recipient.',
+    'Send the result using the `message` tool with the exact channel and target above.',
+  ].join('\n');
 }
 
 export function mergeExtraSystemPrompt(

@@ -18,10 +18,10 @@
  *     startup the supervisor computes the most recent scheduled occurrence and,
  *     if the gateway has not run it, fires a single catch-up run.
  *
- * LYClaw in-app cron jobs with local delivery do not call `cron.run`; the
- * supervisor loads the job config and starts a WebChat-streamed agent turn.
- * Jobs with external delivery are handed back to OpenClaw's cron executor so
- * delivery is resolved by the same path as scheduled cron runs.
+ * UI-created isolated agentTurn jobs (in-app and external-channel delivery)
+ * are fired via `chat.send` into a fresh `scheduled-task` session so each run
+ * keeps its own transcript. Gateway-side cron scheduling stays disabled for
+ * those jobs; LYClaw owns scheduling and enable state.
  */
 
 import { powerMonitor } from 'electron';
@@ -30,18 +30,18 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../utils/logger';
 import { getOpenClawConfigDir } from '../utils/paths';
+import { mergeExtraSystemPrompt, type SessionDeliveryContext } from '../utils/session-delivery-context';
 import {
-  buildChannelMessageTargetSystemPrompt,
-  mergeExtraSystemPrompt,
-  type SessionDeliveryContext,
-} from '../utils/session-delivery-context';
+  buildScheduledTaskInAppSystemPrompt,
+  registerExternalCronDeliveryPending,
+} from './cron-external-delivery';
 import {
   inferScheduleIntervalMs,
   isTransientCronError,
   previousScheduleOccurrenceMs,
   type GatewayCronScheduleLike,
 } from './cron-schedule';
-import { isUiInAppCronJob } from './cron-stale-errors';
+import { isUiInAppCronJob, isUiManagedCronJob } from './cron-stale-errors';
 import { appendCronRunLogEntry, readCronRunLog, resolveEffectiveLastRunAtMs } from './cron-run-log';
 
 export type CronJobsUpdatedReason = 'supervisor-scheduled' | 'supervisor-catch-up' | 'supervisor-retry' | 'gateway-scheduled' | 'manual-trigger';
@@ -383,7 +383,7 @@ export async function resolveManagedCronJobEnabled(job: Pick<SupervisedCronJob, 
 }
 
 async function shouldRunManagedInAppCronJob(job: SupervisedCronJob, now: number): Promise<{ dueAtMs: number } | null> {
-  if (!isUiInAppCronJob(job)) return null;
+  if (!isUiManagedCronJob(job)) return null;
   const enabled = await resolveManagedCronJobEnabled(job);
   if (enabled === false) return null;
 
@@ -441,8 +441,8 @@ async function fireCronJobViaChatSend(
   const sessionKey = `agent:${info.agentId}:${sessionId}`;
   const idempotencyKey = `scheduled-task-${jobId}-${runSessionId}`;
   const startedAt = Date.now();
-  const deliveryPrompt = info.deliveryContext
-    ? buildChannelMessageTargetSystemPrompt(info.deliveryContext)
+  const inAppPrompt = info.deliveryContext
+    ? buildScheduledTaskInAppSystemPrompt()
     : undefined;
 
   const requestParams = {
@@ -451,7 +451,7 @@ async function fireCronJobViaChatSend(
     agentId: info.agentId,
     message: info.message,
     deliver: false,
-    ...(deliveryPrompt ? { extraSystemPrompt: mergeExtraSystemPrompt(undefined, deliveryPrompt) } : {}),
+    ...(inAppPrompt ? { extraSystemPrompt: mergeExtraSystemPrompt(undefined, inAppPrompt) } : {}),
     idempotencyKey,
   };
 
@@ -460,6 +460,19 @@ async function fireCronJobViaChatSend(
   const runId = chatResult?.runId;
   if (!runId) {
     throw new Error('chat.send did not return runId for cron trigger');
+  }
+
+  if (info.deliveryContext) {
+    registerExternalCronDeliveryPending({
+      jobId,
+      runSessionId,
+      sessionKey,
+      runId,
+      agentId: info.agentId,
+      taskMessage: info.message,
+      deliveryContext: info.deliveryContext,
+      registeredAtMs: startedAt,
+    });
   }
 
   await appendCronRunLogEntry(jobId, {
@@ -476,33 +489,12 @@ async function fireCronJobViaChatSend(
   return { sessionKey, runId };
 }
 
-async function fireCronJobViaCronRun(
-  jobId: string,
-  timeoutMs: number,
-): Promise<{ sessionKey: string; runId: string }> {
-  const result = await gateway!.rpc<unknown>('cron.run', { jobId, mode: 'force' }, timeoutMs);
-  const record = result && typeof result === 'object' ? result as Record<string, unknown> : {};
-  if (record.ok === false) {
-    throw new Error(typeof record.reason === 'string' ? record.reason : 'cron.run rejected cron trigger');
-  }
-  const runId = typeof record.runId === 'string' && record.runId.trim()
-    ? record.runId.trim()
-    : undefined;
-  if (!runId) {
-    throw new Error('cron.run did not return runId for cron trigger');
-  }
-  return { sessionKey: '', runId };
-}
-
 async function fireCronJob(
   info: ResolvedCronJobInfo,
   jobId: string,
   timeoutMs: number,
   source: CronJobsUpdatedReason,
 ): Promise<{ sessionKey: string; runId: string }> {
-  if (info.deliveryContext) {
-    return fireCronJobViaCronRun(jobId, timeoutMs);
-  }
   return fireCronJobViaChatSend(info, jobId, timeoutMs, source);
 }
 
@@ -586,9 +578,9 @@ async function fireQuietly(id: string, context: CronJobsUpdatedReason): Promise<
 
 /** Returns true when a catch-up run was fired for this job. */
 async function maybeCatchUp(job: SupervisedCronJob, now: number): Promise<boolean> {
-  // In-app jobs are scheduled via maybeRunManagedInAppCronJob (run log dedupe).
+  // LYClaw-managed jobs are scheduled via maybeRunManagedInAppCronJob (run log dedupe).
   // Catch-up uses Gateway lastRunAtMs which stays stale when Gateway scheduling is disabled.
-  if (isUiInAppCronJob(job)) return false;
+  if (isUiManagedCronJob(job)) return false;
 
   const prev = previousScheduleOccurrenceMs(job.schedule, now);
   if (prev == null) return false;
@@ -658,7 +650,7 @@ async function pollCronUiState(): Promise<void> {
   for (const job of jobs) {
     if (!job?.id) continue;
     let effectiveLastRunAtMs = job.state?.lastRunAtMs ?? 0;
-    if (isUiInAppCronJob(job)) {
+    if (isUiManagedCronJob(job)) {
       const runs = await readCronRunLog(job.id);
       effectiveLastRunAtMs = resolveEffectiveLastRunAtMs(job, runs);
     }
@@ -727,7 +719,7 @@ async function runPass(reason: string): Promise<void> {
       if (!job || !job.id) continue;
       // Only supervise agent-turn jobs (the kind the app schedules).
       if (job.payload?.kind && job.payload.kind !== 'agentTurn') continue;
-      const enabled = isUiInAppCronJob(job)
+      const enabled = isUiManagedCronJob(job)
         ? await resolveManagedCronJobEnabled(job)
         : job.enabled;
       if (enabled === false) continue;
@@ -857,10 +849,11 @@ export function startCronSupervisor(gw: GatewayLike): void {
 }
 
 /**
- * One-time migration: for every existing in-app cron job that the Gateway
- * still owns, disable Gateway-side scheduling and record the original
- * enabled state in the LYClaw sidecar.  Idempotent — safe to call on every
- * startup; already-migrated jobs are skipped.
+ * One-time migration: for every existing UI-managed cron job (in-app and
+ * external-channel) that the Gateway still owns, disable Gateway-side
+ * scheduling and record the original enabled state in the LYClaw sidecar.
+ * Idempotent — safe to call on every startup; already-migrated jobs are
+ * re-checked so Gateway cannot be re-enabled accidentally.
  *
  * Retries up to 3 times with increasing backoff because the Gateway may
  * still be initialising its cron store when the supervisor first starts.
@@ -898,7 +891,7 @@ async function migrateExistingInAppCronJobs(gw: GatewayLike): Promise<void> {
     let skipped = 0;
     for (const job of jobs) {
       if (!job?.id) continue;
-      if (!isUiInAppCronJob(job as SupervisedCronJob)) continue;
+      if (!isUiManagedCronJob(job as SupervisedCronJob)) continue;
       const jobId = String(job.id);
       const existingManaged = state.managed[jobId];
       if (existingManaged) {
@@ -908,6 +901,14 @@ async function migrateExistingInAppCronJobs(gw: GatewayLike): Promise<void> {
             : Date.now();
           state.managed[jobId] = { ...existingManaged, createdAtMs };
           await persistState();
+        }
+        if (job.enabled !== false) {
+          try {
+            await gw.rpc('cron.update', { id: job.id, patch: { enabled: false } }, 8000);
+            logger.info(`[cron-supervisor] re-disabled Gateway cron for managed job ${jobId}`);
+          } catch (e) {
+            logger.warn(`[cron-supervisor] failed to re-disable Gateway cron for managed job ${jobId}:`, e);
+          }
         }
         skipped += 1;
         continue;
@@ -925,7 +926,7 @@ async function migrateExistingInAppCronJobs(gw: GatewayLike): Promise<void> {
       if (wasEnabled) {
         try {
           await gw.rpc('cron.update', { id: job.id, patch: { enabled: false } }, 8000);
-          logger.info(`[cron-supervisor] migrated in-app job ${jobId}: Gateway enabled→false, LYClaw enabled→${wasEnabled}`);
+          logger.info(`[cron-supervisor] migrated managed job ${jobId}: Gateway enabled→false, LYClaw enabled→${wasEnabled}`);
         } catch (e) {
           logger.warn(`[cron-supervisor] failed to disable Gateway cron for ${jobId}, rolling back sidecar:`, e);
           delete state.managed[jobId];
@@ -933,7 +934,7 @@ async function migrateExistingInAppCronJobs(gw: GatewayLike): Promise<void> {
           continue;
         }
       } else {
-        logger.info(`[cron-supervisor] migrated in-app job ${jobId}: already disabled, LYClaw enabled→false`);
+        logger.info(`[cron-supervisor] migrated managed job ${jobId}: already disabled, LYClaw enabled→${wasEnabled}`);
       }
       migrated += 1;
     }

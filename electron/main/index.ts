@@ -43,6 +43,7 @@ import {
 import { createSignalQuitHandler } from './signal-quit';
 import { acquireProcessInstanceFileLock } from './process-instance-lock';
 import { ensurePreinstalledSkillsConfig } from '../utils/skill-config';
+import { isTrustedDingTalkProtocolUrl } from '../security/open-target-policy';
 import { migrateHomedirBuiltinSkills } from '../utils/skill-homedir-migration';
 import { ensureDwsEnvironmentInitialized } from '../utils/dws-env-setup';
 import { ensureDwsCliInstalled } from '../utils/dws-cli-installer';
@@ -242,7 +243,7 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url);
-      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:' || isTrustedDingTalkProtocolUrl(parsed)) {
         shell.openExternal(url);
       } else {
         logger.warn(`Blocked openExternal for disallowed protocol: ${parsed.protocol}`);

@@ -1228,6 +1228,75 @@ describe('syncProviderConfigToOpenClaw', () => {
     const defaults = agents?.defaults as Record<string, unknown> | undefined;
     expect(defaults?.models).toBeUndefined();
   });
+
+  it('preserves Sub2API DeepSeek limits by provider key even when caller omits the flag', async () => {
+    await writeOpenClawJson({
+      models: { providers: {} },
+    });
+
+    const { syncProviderConfigToOpenClaw } = await import('@electron/utils/openclaw-auth');
+
+    await syncProviderConfigToOpenClaw('custom-sub2g3e5cd874', 'deepseek-v4-pro', {
+      baseUrl: 'http://10.0.2.77:8090/v1',
+      api: 'openai-completions',
+      modelOverrides: {
+        'deepseek-v4-pro': {
+          id: 'deepseek-v4-pro',
+          name: 'LY-deepseek-v4-pro',
+          contextWindow: 200000,
+          contextTokens: 200000,
+          maxTokens: 16384,
+        },
+      },
+    });
+
+    const result = await readOpenClawJson();
+    const provider = ((result.models as Record<string, unknown>).providers as Record<string, { models: Array<Record<string, unknown>> }>)['custom-sub2g3e5cd874'];
+    expect(provider.models[0]).toEqual(expect.objectContaining({
+      id: 'deepseek-v4-pro',
+      contextWindow: 200000,
+      contextTokens: 200000,
+      maxTokens: 16384,
+    }));
+  });
+
+  it('preserves Sub2API DeepSeek limits when writing default provider override', async () => {
+    await writeOpenClawJson({
+      models: { providers: {} },
+    });
+
+    const { setOpenClawDefaultModelWithOverride } = await import('@electron/utils/openclaw-auth');
+
+    await setOpenClawDefaultModelWithOverride(
+      'custom-sub2g3e5cd874',
+      'custom-sub2g3e5cd874/deepseek-v4-pro',
+      {
+        baseUrl: 'http://10.0.2.77:8090/v1',
+        api: 'openai-completions',
+        preserveExplicitModelLimits: true,
+        modelOverrides: {
+          'deepseek-v4-pro': {
+            id: 'deepseek-v4-pro',
+            name: 'LY-deepseek-v4-pro',
+            input: ['text', 'image'],
+            contextWindow: 200000,
+            contextTokens: 200000,
+            maxTokens: 16384,
+          },
+        },
+      },
+      ['custom-sub2g3e5cd874/deepseek-v4-pro'],
+    );
+
+    const result = await readOpenClawJson();
+    const provider = ((result.models as Record<string, unknown>).providers as Record<string, { models: Array<Record<string, unknown>> }>)['custom-sub2g3e5cd874'];
+    expect(provider.models[0]).toEqual(expect.objectContaining({
+      id: 'deepseek-v4-pro',
+      contextWindow: 200000,
+      contextTokens: 200000,
+      maxTokens: 16384,
+    }));
+  });
 });
 
 describe('auth-backed provider discovery', () => {

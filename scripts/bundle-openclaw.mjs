@@ -33,6 +33,7 @@ import {
   hasOpenClawSilentReplyPatches,
 } from './openclaw-silent-reply-patches.mjs';
 import { inspectOpenClawDigitalEmployeeIsolation } from './openclaw-digital-employee-isolation-check.mjs';
+import { applyOpenClawWebFetchHtmlSniffPatches, hasOpenClawWebFetchHtmlSniffPatches } from './openclaw-web-fetch-patches.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
@@ -562,6 +563,38 @@ function patchBundledOpenClawOpenAITransport(outputDir) {
   return hasOpenClawOpenAITransportPatches(source);
 }
 
+function patchBundledOpenClawWebFetchHtmlSniff(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return false;
+
+  let patched = false;
+  let verified = false;
+  for (const name of fs.readdirSync(distDir)) {
+    if (!name.endsWith('.js')) continue;
+    const filePath = path.join(distDir, name);
+    let source = fs.readFileSync(filePath, 'utf8');
+    if (!source.includes('function runWebFetch(params)')) continue;
+    if (hasOpenClawWebFetchHtmlSniffPatches(source)) {
+      verified = true;
+      continue;
+    }
+
+    const result = applyOpenClawWebFetchHtmlSniffPatches(source);
+    if (!result.patched) continue;
+    source = result.source;
+    fs.writeFileSync(filePath, source, 'utf8');
+    patched = true;
+    verified = hasOpenClawWebFetchHtmlSniffPatches(source) || verified;
+    echo`   🩹 Patched ${name} to treat HTML-like octet-stream web_fetch bodies as HTML`;
+  }
+
+  if (!patched && verified) {
+    echo`   ✓ web_fetch files already patched for HTML sniffing`;
+  }
+
+  return verified;
+}
+
 function patchBundledOpenClawSilentReply(outputDir) {
   const distDir = path.join(outputDir, 'dist');
   if (!fs.existsSync(distDir)) return;
@@ -661,7 +694,14 @@ if (!patchBundledOpenClawAnthropicTransport(OUTPUT)) {
   echo`❌ Failed to patch Anthropic transport for model params`;
   process.exit(1);
 }
-patchBundledOpenClawOpenAITransport(OUTPUT);
+if (!patchBundledOpenClawOpenAITransport(OUTPUT)) {
+  echo`❌ Failed to patch OpenAI transport for LYClaw request hygiene`;
+  process.exit(1);
+}
+if (!patchBundledOpenClawWebFetchHtmlSniff(OUTPUT)) {
+  echo`❌ Failed to patch web_fetch HTML sniffing`;
+  process.exit(1);
+}
 patchBundledOpenClawSilentReply(OUTPUT);
 patchBundledOpenClawSessionId(OUTPUT);
 patchBundledOpenClawPromptCache(OUTPUT);

@@ -24,6 +24,10 @@ function parseUrl(input: string): URL | null {
   }
 }
 
+export function isTrustedDingTalkProtocolUrl(parsed: URL): boolean {
+  return parsed.protocol === 'dingtalk:';
+}
+
 function pathCapability(request: OpenTargetRequest): FileCapability {
   return request.capability === 'show-item' ? 'metadata' : 'open';
 }
@@ -91,6 +95,17 @@ export async function evaluateOpenTargetPolicy(request: OpenTargetRequest): Prom
       protocol: parsed.protocol,
       matchedRule: 'mailto-confirmation',
       decision: prompt(['Opening an email client requires confirmation'], 'medium'),
+    };
+  }
+
+  if (isTrustedDingTalkProtocolUrl(parsed)) {
+    return {
+      targetType: 'url',
+      action: 'open-url',
+      url: parsed.toString(),
+      protocol: parsed.protocol,
+      matchedRule: 'trusted-dingtalk-protocol',
+      decision: allow(['DingTalk deep links are allowed to open in the registered DingTalk client']),
     };
   }
 

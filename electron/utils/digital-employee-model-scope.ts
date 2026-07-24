@@ -24,6 +24,7 @@ export type DigitalEmployeeModelScope = {
     protocol: 'openai-completions';
     baseUrl: string;
     apiKeyRef: string;
+    headers?: Record<string, string>;
   };
   models: Array<string | Record<string, unknown>>;
   defaultModel: string | null;
