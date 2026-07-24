@@ -346,5 +346,123 @@
     "docs": "官网",
     "github": "GitHub",
     "faq": "常见问题"
+  },
+  "security": {
+    "title": "安全",
+    "open": "打开",
+    "grants": {
+      "title": "授权管理",
+      "description": "Workspace、文件和域名授权"
+    },
+    "pageTitle": "安全授权",
+    "actions": {
+      "refresh": "刷新",
+      "add": "添加",
+      "revoke": "撤销"
+    },
+    "mode": {
+      "title": "安全模式",
+      "summary": "全局控制安全确认。不可恢复风险的硬拦截始终保留。",
+      "loadError": "加载安全模式失败：{{error}}",
+      "updateSuccess": "安全模式已更新",
+      "updateError": "更新安全模式失败：{{error}}",
+      "offConfirm": "关闭普通安全确认后，LYClaw 会自动允许大部分文件、命令、网络和打开目标请求。不可恢复破坏、凭据泄露和远程代码执行等硬拦截仍会生效。",
+      "options": {
+        "standard": {
+          "label": "标准模式",
+          "description": "启用安全策略和弹窗确认。"
+        },
+        "trusted": {
+          "label": "信任模式",
+          "description": "自动允许需要确认的操作，拒绝项仍保持拦截。"
+        },
+        "off": {
+          "label": "关闭确认",
+          "description": "自动允许大部分检查，仅保留高危硬拦截。"
+        }
+      }
+    },
+    "domain": {
+      "title": "域名授权",
+      "label": "域名",
+      "includeSubdomains": "包含子域名",
+      "persistent": "永久",
+      "empty": "暂无域名授权"
+    },
+    "paths": {
+      "title": "文件与 Workspace 授权",
+      "empty": "暂无文件授权"
+    },
+    "labels": {
+      "created": "创建：{{date}}",
+      "realPath": "真实路径：{{path}}"
+    },
+    "values": {
+      "subdomains": "子域名",
+      "recursive": "递归",
+      "resourceTypes": {
+        "workspace": "Workspace",
+        "file": "文件",
+        "directory": "目录"
+      }
+    },
+    "audit": {
+      "title": "审计日志",
+      "capability": "能力",
+      "decision": "结果",
+      "perPage": "每页",
+      "items": "{{count}} 条",
+      "loading": "正在加载审计日志",
+      "empty": "暂无审计日志",
+      "source": "来源",
+      "target": "目标",
+      "code": "代码",
+      "reasons": "原因",
+      "reasonSeparator": "；",
+      "range": "显示第 {{start}}-{{end}} 条，共 {{total}} 条",
+      "previous": "上一页",
+      "next": "下一页",
+      "page": "第 {{page}} / {{totalPages}} 页",
+      "capabilities": {
+        "all": "全部能力",
+        "file": "文件",
+        "command": "命令",
+        "network": "网络",
+        "open-target": "打开目标",
+        "prompt-scan": "提示词扫描",
+        "permission": "授权",
+        "skill-runtime": "Skill 运行时",
+        "internal-command": "内部命令",
+        "confirmation": "用户确认"
+      },
+      "decisions": {
+        "all": "全部结果",
+        "allow": "允许",
+        "prompt": "确认",
+        "deny": "拒绝",
+        "grant": "授权",
+        "revoke": "撤销",
+        "invalidate": "已失效",
+        "confirm": "已确认",
+        "expire": "过期"
+      },
+      "risks": {
+        "low": "低风险",
+        "medium": "中风险",
+        "high": "高风险",
+        "critical": "严重风险",
+        "unknown": "风险"
+      }
+    },
+    "errors": {
+      "loadGrants": "加载安全授权失败：{{error}}",
+      "loadAudit": "加载审计日志失败：{{error}}",
+      "revoke": "撤销授权失败：{{error}}",
+      "addDomain": "添加域名授权失败：{{error}}"
+    },
+    "toasts": {
+      "revoked": "授权已撤销",
+      "domainAdded": "域名授权已添加"
+    }
   }
 }

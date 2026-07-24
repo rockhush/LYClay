@@ -85,6 +85,14 @@ import {
 import { useCronStore } from '@/stores/cron';
 import logoSvg from '@/assets/1.png';
 
+type HistorySectionKey = 'pinned' | SessionBucketKey;
+
+/** History buckets collapsed by default (Set membership = collapsed). */
+const DEFAULT_COLLAPSED_HISTORY_SECTIONS: HistorySectionKey[] = [
+  'withinWeek',
+  'withinTwoWeeks',
+];
+
 /** While Chat shows first-response preparing, block switching sessions (sidebar + workspace). */
 function blockSessionSwitchIfFirstResponsePreparing(): boolean {
   const chat = useChatStore.getState();
@@ -396,6 +404,10 @@ export function Sidebar() {
   const [workspaceChatsCollapsedIds, setWorkspaceChatsCollapsedIds] = useState<Set<string>>(
     () => new Set(),
   );
+  /** History section keys collapsed in the sidebar (default: withinWeek + withinTwoWeeks). */
+  const [historySectionsCollapsed, setHistorySectionsCollapsed] = useState<Set<HistorySectionKey>>(
+    () => new Set(DEFAULT_COLLAPSED_HISTORY_SECTIONS),
+  );
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const [openSessionMenuKey, setOpenSessionMenuKey] = useState<string | null>(null);
@@ -411,6 +423,17 @@ export function Sidebar() {
       const next = new Set(prev);
       if (next.has(workspaceId)) next.delete(workspaceId);
       else next.add(workspaceId);
+      return next;
+    });
+  };
+
+  const isHistorySectionExpanded = (key: HistorySectionKey) => !historySectionsCollapsed.has(key);
+
+  const toggleHistorySection = (key: HistorySectionKey) => {
+    setHistorySectionsCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -671,6 +694,38 @@ export function Sidebar() {
     } catch (error) {
       toast.error(`${t('settings:dingtalk.logoutFailed')}: ${toUserMessage(error)}`);
     }
+  };
+
+  const renderHistorySectionHeader = (key: HistorySectionKey, label: string) => {
+    const expanded = isHistorySectionExpanded(key);
+    return (
+      <div className="flex items-center justify-between gap-1 px-2.5 pb-1">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 cursor-pointer text-left"
+          onClick={() => toggleHistorySection(key)}
+          aria-expanded={expanded}
+        >
+          <span className="text-[11px] font-medium text-muted-foreground/60 tracking-tight">
+            {label}
+          </span>
+        </button>
+        <button
+          type="button"
+          data-testid={`sidebar-history-section-toggle-${key}`}
+          className="flex shrink-0 items-center justify-center cursor-pointer"
+          onClick={() => toggleHistorySection(key)}
+          aria-expanded={expanded}
+        >
+          <ChevronRight
+            className={cn(
+              'h-3 w-3 text-muted-foreground transition-transform',
+              expanded && 'rotate-90',
+            )}
+          />
+        </button>
+      </div>
+    );
   };
 
   const renderChatSessionRow = (s: ChatSession, options?: { inWorkspace?: boolean }) => {
@@ -1348,19 +1403,19 @@ export function Sidebar() {
             <div className="space-y-0.5">
               {pinnedHistorySessions.length > 0 ? (
                 <div className="pt-2">
-                  <div className="px-2.5 pb-1 text-[11px] font-medium text-muted-foreground/60 tracking-tight">
-                    {t('chat:historyBuckets.pinned')}
-                  </div>
-                  {pinnedHistorySessions.map((session) => renderChatSessionRow(session))}
+                  {renderHistorySectionHeader('pinned', t('chat:historyBuckets.pinned'))}
+                  {isHistorySectionExpanded('pinned')
+                    ? pinnedHistorySessions.map((session) => renderChatSessionRow(session))
+                    : null}
                 </div>
               ) : null}
               {sessionBuckets.map((bucket) => (
                 bucket.sessions.length > 0 ? (
                   <div key={bucket.key} className="pt-2">
-                    <div className="px-2.5 pb-1 text-[11px] font-medium text-muted-foreground/60 tracking-tight">
-                      {bucket.label}
-                    </div>
-                    {bucket.sessions.map((session) => renderChatSessionRow(session))}
+                    {renderHistorySectionHeader(bucket.key, bucket.label)}
+                    {isHistorySectionExpanded(bucket.key)
+                      ? bucket.sessions.map((session) => renderChatSessionRow(session))
+                      : null}
                   </div>
                 ) : null
               ))}

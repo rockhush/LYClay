@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentProps } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, Clock3, FolderLock, Globe2, Plus, RefreshCw, Shield, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -103,44 +104,15 @@ type SecurityAuditResponse = {
 };
 
 
-const SECURITY_MODE_COPY = {
-  title: '\u5b89\u5168\u6a21\u5f0f',
-  summary: '\u5168\u5c40\u63a7\u5236\u5b89\u5168\u786e\u8ba4\u3002\u4e0d\u53ef\u6062\u590d\u98ce\u9669\u7684\u786c\u62e6\u622a\u59cb\u7ec8\u4fdd\u7559\u3002',
-  loadError: '\u52a0\u8f7d\u5b89\u5168\u6a21\u5f0f\u5931\u8d25\uff1a',
-  updateSuccess: '\u5b89\u5168\u6a21\u5f0f\u5df2\u66f4\u65b0',
-  updateError: '\u66f4\u65b0\u5b89\u5168\u6a21\u5f0f\u5931\u8d25\uff1a',
-  offConfirm: '\u5173\u95ed\u666e\u901a\u5b89\u5168\u786e\u8ba4\u540e\uff0cLYClaw \u4f1a\u81ea\u52a8\u5141\u8bb8\u5927\u90e8\u5206\u6587\u4ef6\u3001\u547d\u4ee4\u3001\u7f51\u7edc\u548c\u6253\u5f00\u76ee\u6807\u8bf7\u6c42\u3002\u4e0d\u53ef\u6062\u590d\u7834\u574f\u3001\u51ed\u636e\u6cc4\u9732\u548c\u8fdc\u7a0b\u4ee3\u7801\u6267\u884c\u7b49\u786c\u62e6\u622a\u4ecd\u4f1a\u751f\u6548\u3002',
-} as const;
+const securityModeOptions: SecurityMode[] = ['standard', 'trusted', 'off'];
 
-const securityModeOptions: Array<{ value: SecurityMode; label: string; description: string }> = [
-  { value: 'standard', label: '\u6807\u51c6\u6a21\u5f0f', description: '\u542f\u7528\u5b89\u5168\u7b56\u7565\u548c\u5f39\u7a97\u786e\u8ba4\u3002' },
-  { value: 'trusted', label: '\u4fe1\u4efb\u6a21\u5f0f', description: '\u81ea\u52a8\u5141\u8bb8\u9700\u8981\u786e\u8ba4\u7684\u64cd\u4f5c\uff0c\u62d2\u7edd\u9879\u4ecd\u4fdd\u6301\u62e6\u622a\u3002' },
-  { value: 'off', label: '\u5173\u95ed\u786e\u8ba4', description: '\u81ea\u52a8\u5141\u8bb8\u5927\u90e8\u5206\u68c0\u67e5\uff0c\u4ec5\u4fdd\u7559\u9ad8\u5371\u786c\u62e6\u622a\u3002' },
+const capabilityOptions: Array<'all' | SecurityAuditCapability> = [
+  'all', 'file', 'command', 'network', 'open-target', 'prompt-scan',
+  'permission', 'skill-runtime', 'internal-command', 'confirmation',
 ];
 
-const capabilityOptions: Array<{ value: 'all' | SecurityAuditCapability; label: string }> = [
-  { value: 'all', label: '全部能力' },
-  { value: 'file', label: '文件' },
-  { value: 'command', label: '命令' },
-  { value: 'network', label: '网络' },
-  { value: 'open-target', label: '打开目标' },
-  { value: 'prompt-scan', label: '提示词扫描' },
-  { value: 'permission', label: '授权' },
-  { value: 'skill-runtime', label: 'Skill 运行时' },
-  { value: 'internal-command', label: '内部命令' },
-  { value: 'confirmation', label: '用户确认' },
-];
-
-const decisionOptions: Array<{ value: 'all' | SecurityAuditDecision; label: string }> = [
-  { value: 'all', label: '全部结果' },
-  { value: 'allow', label: '允许' },
-  { value: 'prompt', label: '确认' },
-  { value: 'deny', label: '拒绝' },
-  { value: 'grant', label: '授权' },
-  { value: 'revoke', label: '撤销' },
-  { value: 'invalidate', label: '已失效' },
-  { value: 'confirm', label: '已确认' },
-  { value: 'expire', label: '过期' },
+const decisionOptions: Array<'all' | SecurityAuditDecision> = [
+  'all', 'allow', 'prompt', 'deny', 'grant', 'revoke', 'invalidate', 'confirm', 'expire',
 ];
 
 function formatDate(timestamp?: number): string {
@@ -196,6 +168,7 @@ function riskClassName(risk?: SecurityRisk): string {
 }
 
 export function SecuritySettings() {
+  const { t } = useTranslation('settings');
   const [pathGrants, setPathGrants] = useState<PathGrant[]>([]);
   const [domainGrants, setDomainGrants] = useState<DomainGrant[]>([]);
   const [auditEvents, setAuditEvents] = useState<SecurityAuditEvent[]>([]);
@@ -231,14 +204,14 @@ export function SecuritySettings() {
         setSecurityMode(result.mode);
       }
     } catch (error) {
-      toast.error(`${SECURITY_MODE_COPY.loadError}${String(error)}`);
+      toast.error(t('security.mode.loadError', { error: String(error) }));
     }
   };
 
   const saveSecurityMode = async (mode: SecurityMode) => {
     if (mode === securityMode || savingSecurityMode) return;
     if (mode === 'off') {
-      const confirmed = window.confirm(SECURITY_MODE_COPY.offConfirm);
+      const confirmed = window.confirm(t('security.mode.offConfirm'));
       if (!confirmed) return;
     }
     const previous = securityMode;
@@ -249,10 +222,10 @@ export function SecuritySettings() {
         method: 'PUT',
         body: JSON.stringify({ mode }),
       });
-      toast.success(SECURITY_MODE_COPY.updateSuccess);
+      toast.success(t('security.mode.updateSuccess'));
     } catch (error) {
       setSecurityMode(previous);
-      toast.error(`${SECURITY_MODE_COPY.updateError}${String(error)}`);
+      toast.error(t('security.mode.updateError', { error: String(error) }));
     } finally {
       setSavingSecurityMode(false);
     }
@@ -265,7 +238,7 @@ export function SecuritySettings() {
       setPathGrants(result.pathGrants);
       setDomainGrants(result.domainGrants);
     } catch (error) {
-      toast.error(`加载安全授权失败：${String(error)}`);
+      toast.error(t('security.errors.loadGrants', { error: String(error) }));
     } finally {
       setLoading(false);
     }
@@ -288,7 +261,7 @@ export function SecuritySettings() {
         setAuditPage(result.page);
       }
     } catch (error) {
-      toast.error(`加载审计日志失败：${String(error)}`);
+      toast.error(t('security.errors.loadAudit', { error: String(error) }));
     } finally {
       setAuditLoading(false);
     }
@@ -311,10 +284,10 @@ export function SecuritySettings() {
       await hostApiFetch<{ success: boolean }>(`/api/security/grants/${kind}/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
-      toast.success('授权已撤销');
+      toast.success(t('security.toasts.revoked'));
       await loadGrants();
     } catch (error) {
-      toast.error(`撤销授权失败：${String(error)}`);
+      toast.error(t('security.errors.revoke', { error: String(error) }));
     }
   };
 
@@ -328,10 +301,10 @@ export function SecuritySettings() {
         body: JSON.stringify({ domain, includeSubdomains, persistent }),
       });
       setDomainDraft('');
-      toast.success('域名授权已添加');
+      toast.success(t('security.toasts.domainAdded'));
       await loadGrants();
     } catch (error) {
-      toast.error(`添加域名授权失败：${String(error)}`);
+      toast.error(t('security.errors.addDomain', { error: String(error) }));
     } finally {
       setSavingDomain(false);
     }
@@ -344,12 +317,12 @@ export function SecuritySettings() {
           <Button asChild variant="ghost" size="sm" className="mb-3 h-8 px-2">
             <Link to="/settings">
               <ArrowLeft className="mr-2 h-4 w-4" />
-              设置
+              {t('title')}
             </Link>
           </Button>
           <div className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-orange-500" />
-            <h1 className="text-2xl font-semibold text-foreground">安全授权</h1>
+            <h1 className="text-2xl font-semibold text-foreground">{t('security.pageTitle')}</h1>
           </div>
         </div>
         <Button
@@ -363,33 +336,33 @@ export function SecuritySettings() {
           disabled={loading || auditLoading}
         >
           <RefreshCw className={`mr-2 h-4 w-4${loading ? ' animate-spin' : ''}`} />
-          刷新
+          {t('security.actions.refresh')}
         </Button>
       </div>
 
 
       <section className="space-y-3 rounded-lg border bg-background p-4" data-testid="security-mode-section">
         <div className="flex flex-col gap-1">
-          <h2 className="text-base font-semibold">{SECURITY_MODE_COPY.title}</h2>
-          <p className="text-sm text-muted-foreground">{SECURITY_MODE_COPY.summary}</p>
+          <h2 className="text-base font-semibold">{t('security.mode.title')}</h2>
+          <p className="text-sm text-muted-foreground">{t('security.mode.summary')}</p>
         </div>
-        <div className="grid gap-2 md:grid-cols-3" role="group" aria-label={SECURITY_MODE_COPY.title}>
+        <div className="grid gap-2 md:grid-cols-3" role="group" aria-label={t('security.mode.title')}>
           {securityModeOptions.map((option) => {
-            const selected = securityMode === option.value;
+            const selected = securityMode === option;
             return (
               <Button
-                key={option.value}
+                key={option}
                 type="button"
                 variant={selected ? 'default' : 'outline'}
                 className="h-auto justify-start px-3 py-3 text-left"
-                data-testid={`security-mode-${option.value}`}
+                data-testid={`security-mode-${option}`}
                 aria-pressed={selected}
                 disabled={savingSecurityMode}
-                onClick={() => void saveSecurityMode(option.value)}
+                onClick={() => void saveSecurityMode(option)}
               >
                 <span className="flex min-w-0 flex-col gap-1">
-                  <span className="text-sm font-medium">{option.label}</span>
-                  <span className={`text-xs ${selected ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{option.description}</span>
+                  <span className="text-sm font-medium">{t(`security.mode.options.${option}.label`)}</span>
+                  <span className={`text-xs ${selected ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{t(`security.mode.options.${option}.description`)}</span>
                 </span>
               </Button>
             );
@@ -399,19 +372,19 @@ export function SecuritySettings() {
 
       <Tabs defaultValue="grants" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="grants">授权管理</TabsTrigger>
-          <TabsTrigger value="audit">审计日志</TabsTrigger>
+          <TabsTrigger value="grants">{t('security.grants.title')}</TabsTrigger>
+          <TabsTrigger value="audit">{t('security.audit.title')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="grants" className="space-y-6">
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <Globe2 className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-base font-semibold">域名授权</h2>
+          <h2 className="text-base font-semibold">{t('security.domain.title')}</h2>
         </div>
         <div className="grid gap-3 rounded-lg border bg-background p-4 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
           <div className="space-y-1.5">
-            <Label htmlFor="security-domain">域名</Label>
+            <Label htmlFor="security-domain">{t('security.domain.label')}</Label>
             <Input
               id="security-domain"
               value={domainDraft}
@@ -424,34 +397,34 @@ export function SecuritySettings() {
           </div>
           <div className="flex items-center gap-2 pb-2">
             <Switch size="sm" checked={includeSubdomains} onCheckedChange={setIncludeSubdomains} />
-            <Label className="text-sm">包含子域名</Label>
+            <Label className="text-sm">{t('security.domain.includeSubdomains')}</Label>
           </div>
           <div className="flex items-center gap-2 pb-2">
             <Switch size="sm" checked={persistent} onCheckedChange={setPersistent} />
-            <Label className="text-sm">永久</Label>
+            <Label className="text-sm">{t('security.domain.persistent')}</Label>
           </div>
           <Button onClick={addDomainGrant} disabled={savingDomain || !domainDraft.trim()} className="h-8">
             <Plus className="mr-2 h-4 w-4" />
-            添加
+            {t('security.actions.add')}
           </Button>
         </div>
 
         <div className="divide-y rounded-lg border bg-background">
           {sortedDomainGrants.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">暂无域名授权</p>
+            <p className="p-4 text-sm text-muted-foreground">{t('security.domain.empty')}</p>
           ) : sortedDomainGrants.map((grant) => (
             <div key={grant.id} className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
               <div className="min-w-0 space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-sm font-medium">{grant.domain}</span>
-                  {grant.includeSubdomains && <Badge variant="outline" className="rounded-md">subdomains</Badge>}
+                  {grant.includeSubdomains && <Badge variant="outline" className="rounded-md">{t('security.values.subdomains')}</Badge>}
                 </div>
                 <GrantBadges grant={grant} />
-                <p className="text-xs text-muted-foreground">创建：{formatDate(grant.createdAt)}</p>
+                <p className="text-xs text-muted-foreground">{t('security.labels.created', { date: formatDate(grant.createdAt) })}</p>
               </div>
               <Button variant="outline" size="sm" className="h-8" onClick={() => void revokeGrant('domain', grant.id)}>
                 <Trash2 className="mr-2 h-4 w-4" />
-                撤销
+                {t('security.actions.revoke')}
               </Button>
             </div>
           ))}
@@ -461,26 +434,26 @@ export function SecuritySettings() {
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <FolderLock className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-base font-semibold">文件与 Workspace 授权</h2>
+          <h2 className="text-base font-semibold">{t('security.paths.title')}</h2>
         </div>
         <div className="divide-y rounded-lg border bg-background">
           {sortedPathGrants.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">暂无文件授权</p>
+            <p className="p-4 text-sm text-muted-foreground">{t('security.paths.empty')}</p>
           ) : sortedPathGrants.map((grant) => (
             <div key={grant.id} className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
               <div className="min-w-0 space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="break-all font-mono text-sm font-medium">{grant.path}</span>
-                  <Badge variant="outline" className="rounded-md">{grant.resourceType}</Badge>
-                  {grant.recursive && <Badge variant="outline" className="rounded-md">recursive</Badge>}
+                  <Badge variant="outline" className="rounded-md">{t(`security.values.resourceTypes.${grant.resourceType}`)}</Badge>
+                  {grant.recursive && <Badge variant="outline" className="rounded-md">{t('security.values.recursive')}</Badge>}
                 </div>
                 <GrantBadges grant={grant} />
-                <p className="break-all text-xs text-muted-foreground">realpath：{grant.realPath}</p>
-                <p className="text-xs text-muted-foreground">创建：{formatDate(grant.createdAt)}</p>
+                <p className="break-all text-xs text-muted-foreground">{t('security.labels.realPath', { path: grant.realPath })}</p>
+                <p className="text-xs text-muted-foreground">{t('security.labels.created', { date: formatDate(grant.createdAt) })}</p>
               </div>
               <Button variant="outline" size="sm" className="h-8" onClick={() => void revokeGrant('path', grant.id)}>
                 <Trash2 className="mr-2 h-4 w-4" />
-                撤销
+                {t('security.actions.revoke')}
               </Button>
             </div>
           ))}
@@ -493,11 +466,11 @@ export function SecuritySettings() {
             <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
               <div className="flex items-center gap-2">
                 <Clock3 className="h-4 w-4 text-muted-foreground" />
-                <h2 className="text-base font-semibold">审计日志</h2>
+                <h2 className="text-base font-semibold">{t('security.audit.title')}</h2>
               </div>
               <div className="grid gap-2 sm:grid-cols-[140px_150px_130px_auto] sm:items-end">
                 <div className="space-y-1.5">
-                  <Label htmlFor="audit-capability">能力</Label>
+                  <Label htmlFor="audit-capability">{t('security.audit.capability')}</Label>
                   <AuditSelectField
                     id="audit-capability"
                     value={auditCapability}
@@ -507,12 +480,12 @@ export function SecuritySettings() {
                     }}
                   >
                     {capabilityOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
+                      <option key={option} value={option}>{t(`security.audit.capabilities.${option}`)}</option>
                     ))}
                   </AuditSelectField>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="audit-decision">结果</Label>
+                  <Label htmlFor="audit-decision">{t('security.audit.decision')}</Label>
                   <AuditSelectField
                     id="audit-decision"
                     value={auditDecision}
@@ -522,12 +495,12 @@ export function SecuritySettings() {
                     }}
                   >
                     {decisionOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
+                      <option key={option} value={option}>{t(`security.audit.decisions.${option}`)}</option>
                     ))}
                   </AuditSelectField>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="audit-page-size">每页</Label>
+                  <Label htmlFor="audit-page-size">{t('security.audit.perPage')}</Label>
                   <AuditSelectField
                     id="audit-page-size"
                     value={auditPageSize}
@@ -536,49 +509,49 @@ export function SecuritySettings() {
                       setAuditPageSize(event.target.value);
                     }}
                   >
-                    <option value="10">10 条</option>
-                    <option value="20">20 条</option>
-                    <option value="50">50 条</option>
+                    <option value="10">{t('security.audit.items', { count: 10 })}</option>
+                    <option value="20">{t('security.audit.items', { count: 20 })}</option>
+                    <option value="50">{t('security.audit.items', { count: 50 })}</option>
                   </AuditSelectField>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void loadAuditEvents()} disabled={auditLoading}>
                   <RefreshCw className={`mr-2 h-4 w-4${auditLoading ? ' animate-spin' : ''}`} />
-                  刷新
+                  {t('security.actions.refresh')}
                 </Button>
               </div>
             </div>
 
             <div className="divide-y rounded-lg border bg-background">
               {auditEvents.length === 0 ? (
-                <p className="p-4 text-sm text-muted-foreground">{auditLoading ? '正在加载审计日志' : '暂无审计日志'}</p>
+                <p className="p-4 text-sm text-muted-foreground">{auditLoading ? t('security.audit.loading') : t('security.audit.empty')}</p>
               ) : auditEvents.map((event) => (
                 <div key={event.id} className="space-y-2 p-4">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline" className={`rounded-md ${decisionClassName(event.decision)}`}>{event.decision}</Badge>
-                    <Badge variant="outline" className="rounded-md">{event.capability}</Badge>
+                    <Badge variant="outline" className={`rounded-md ${decisionClassName(event.decision)}`}>{t(`security.audit.decisions.${event.decision}`)}</Badge>
+                    <Badge variant="outline" className="rounded-md">{t(`security.audit.capabilities.${event.capability}`)}</Badge>
                     {event.operation && <Badge variant="secondary" className="rounded-md">{event.operation}</Badge>}
-                    <Badge variant="outline" className={`rounded-md ${riskClassName(event.risk)}`}>{event.risk ?? 'risk'}</Badge>
+                    <Badge variant="outline" className={`rounded-md ${riskClassName(event.risk)}`}>{t(`security.audit.risks.${event.risk ?? 'unknown'}`)}</Badge>
                     <span className="ml-auto text-xs text-muted-foreground">{formatDate(event.ts)}</span>
                   </div>
                   <div className="grid gap-1 text-sm md:grid-cols-[96px_1fr]">
-                    <span className="text-muted-foreground">来源</span>
+                    <span className="text-muted-foreground">{t('security.audit.source')}</span>
                     <span className="break-all font-mono">{event.source}</span>
                     {event.target && (
                       <>
-                        <span className="text-muted-foreground">目标</span>
+                        <span className="text-muted-foreground">{t('security.audit.target')}</span>
                         <span className="break-all font-mono">{event.target}</span>
                       </>
                     )}
                     {event.code && (
                       <>
-                        <span className="text-muted-foreground">代码</span>
+                        <span className="text-muted-foreground">{t('security.audit.code')}</span>
                         <span className="break-all font-mono">{event.code}</span>
                       </>
                     )}
                     {event.reasons && event.reasons.length > 0 && (
                       <>
-                        <span className="text-muted-foreground">原因</span>
-                        <span className="break-words">{event.reasons.join('；')}</span>
+                        <span className="text-muted-foreground">{t('security.audit.reasons')}</span>
+                        <span className="break-words">{event.reasons.join(t('security.audit.reasonSeparator'))}</span>
                       </>
                     )}
                   </div>
@@ -588,7 +561,7 @@ export function SecuritySettings() {
 
             <div className="flex flex-col gap-3 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted-foreground" aria-live="polite">
-                显示第 {auditRangeStart}-{auditRangeEnd} 条，共 {auditTotal} 条
+                {t('security.audit.range', { start: auditRangeStart, end: auditRangeEnd, total: auditTotal })}
               </p>
               <div className="flex items-center justify-between gap-2 sm:justify-end">
                 <Button
@@ -598,10 +571,10 @@ export function SecuritySettings() {
                   disabled={auditLoading || auditPage <= 1}
                 >
                   <ChevronLeft className="mr-1 h-4 w-4" />
-                  上一页
+                  {t('security.audit.previous')}
                 </Button>
                 <span className="min-w-20 text-center text-sm text-muted-foreground">
-                  第 {auditPage} / {auditTotalPages} 页
+                  {t('security.audit.page', { page: auditPage, totalPages: auditTotalPages })}
                 </span>
                 <Button
                   variant="outline"
@@ -609,7 +582,7 @@ export function SecuritySettings() {
                   onClick={() => setAuditPage((page) => Math.min(auditTotalPages, page + 1))}
                   disabled={auditLoading || auditPage >= auditTotalPages}
                 >
-                  下一页
+                  {t('security.audit.next')}
                   <ChevronRight className="ml-1 h-4 w-4" />
                 </Button>
               </div>

@@ -68,6 +68,30 @@ describe('findReplyMessageIndex', () => {
     expect(findReplyMessageIndex(messages, false)).toBe(4);
   });
 
+  it('does not promote a terminal interim sub-agent wait when no deliverable exists yet', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'build ppt' },
+      {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'spawn-1', name: 'sessions_spawn', input: { taskName: 'pptx' } }],
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'spawn-1',
+        content: [{ type: 'text', text: JSON.stringify({ status: 'accepted' }) }],
+      },
+      {
+        role: 'assistant',
+        content: 'PPT 正在生成中，我启动了一个子任务。生成完成后我会通知你，稍等一下。',
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(-1);
+    expect(findCommittedReplyMessageIndex(messages)).toBe(-1);
+  });
+
   it('prefers deliverable reply over trailing embedded agent failure notice', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: 'process excel' },
@@ -410,6 +434,39 @@ describe('findReplyMessageIndex', () => {
     ];
 
     expect(findReplyMessageIndex(messages, false)).toBe(1);
+  });
+
+  it('keeps a terminal meeting summary visible when document text mentions sub-agent execution', () => {
+    const finalReply = [
+      '# AI Coding 范式会议纪要',
+      '## SuperPower 核心技能体系',
+      '- **SDD**：将大任务拆分为多个子 Agent 协同完成',
+      '- **完成后验证**：检查是否按计划执行，进行回归测试与代码评审请求',
+      '## 会议结论',
+      '团队将逐步建立每个需求必有 spec 的开发文化。',
+    ].join('\n\n');
+    const messages: RawMessage[] = [
+      { role: 'user', content: '整理会议纪要' },
+      {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'read-1', name: 'read', arguments: {} }],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'read-1', toolName: 'read', content: '会议原文' },
+      { role: 'assistant', content: [{ type: 'text', text: finalReply }], stopReason: 'stop' },
+    ];
+
+    const committedReplyIndex = findCommittedReplyMessageIndex(messages);
+    expect(findReplyMessageIndex(messages, false)).toBe(3);
+    expect(committedReplyIndex).toBe(3);
+
+    const steps = deriveTaskSteps({
+      messages: messages.slice(1),
+      streamingMessage: null,
+      streamingTools: [],
+      committedReplyIndex: committedReplyIndex - 1,
+    });
+    expect(steps.some((step) => step.detail?.includes('AI Coding 范式会议纪要'))).toBe(false);
   });
 
   it('recovers the committed stop reply while the run is still open but stream has cleared', () => {

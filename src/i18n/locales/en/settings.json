@@ -337,7 +337,6 @@
       "warmupDesc": "Agent is preparing the workspace. Please wait..."
     }
   },
-
   "about": {
     "title": "About",
     "appName": "LYClaw",
@@ -347,5 +346,123 @@
     "docs": "Website",
     "github": "GitHub",
     "faq": "FAQ"
+  },
+  "security": {
+    "title": "Security",
+    "open": "Open",
+    "grants": {
+      "title": "Authorization management",
+      "description": "Workspace, file, and domain permissions"
+    },
+    "pageTitle": "Security permissions",
+    "actions": {
+      "refresh": "Refresh",
+      "add": "Add",
+      "revoke": "Revoke"
+    },
+    "mode": {
+      "title": "Security mode",
+      "summary": "Controls security confirmations globally. Hard blocks for irreversible risks always remain.",
+      "loadError": "Failed to load security mode: {{error}}",
+      "updateSuccess": "Security mode updated",
+      "updateError": "Failed to update security mode: {{error}}",
+      "offConfirm": "After normal security confirmations are disabled, LYClaw will automatically allow most file, command, network, and open-target requests. Hard blocks for irreversible damage, credential leaks, and remote code execution will remain active.",
+      "options": {
+        "standard": {
+          "label": "Standard mode",
+          "description": "Enable security policies and confirmation dialogs."
+        },
+        "trusted": {
+          "label": "Trusted mode",
+          "description": "Automatically allow operations that require confirmation; denied operations remain blocked."
+        },
+        "off": {
+          "label": "Disable confirmations",
+          "description": "Automatically allow most checks while retaining critical hard blocks."
+        }
+      }
+    },
+    "domain": {
+      "title": "Domain permissions",
+      "label": "Domain",
+      "includeSubdomains": "Include subdomains",
+      "persistent": "Permanent",
+      "empty": "No domain permissions"
+    },
+    "paths": {
+      "title": "File and Workspace permissions",
+      "empty": "No file permissions"
+    },
+    "labels": {
+      "created": "Created: {{date}}",
+      "realPath": "Real path: {{path}}"
+    },
+    "values": {
+      "subdomains": "subdomains",
+      "recursive": "recursive",
+      "resourceTypes": {
+        "workspace": "Workspace",
+        "file": "File",
+        "directory": "Directory"
+      }
+    },
+    "audit": {
+      "title": "Audit log",
+      "capability": "Capability",
+      "decision": "Result",
+      "perPage": "Per page",
+      "items": "{{count}} items",
+      "loading": "Loading audit log",
+      "empty": "No audit events",
+      "source": "Source",
+      "target": "Target",
+      "code": "Code",
+      "reasons": "Reasons",
+      "reasonSeparator": "; ",
+      "range": "Showing {{start}}–{{end}} of {{total}}",
+      "previous": "Previous",
+      "next": "Next",
+      "page": "Page {{page}} / {{totalPages}}",
+      "capabilities": {
+        "all": "All capabilities",
+        "file": "File",
+        "command": "Command",
+        "network": "Network",
+        "open-target": "Open target",
+        "prompt-scan": "Prompt scan",
+        "permission": "Permission",
+        "skill-runtime": "Skill runtime",
+        "internal-command": "Internal command",
+        "confirmation": "User confirmation"
+      },
+      "decisions": {
+        "all": "All results",
+        "allow": "Allowed",
+        "prompt": "Confirmation required",
+        "deny": "Denied",
+        "grant": "Granted",
+        "revoke": "Revoked",
+        "invalidate": "Invalidated",
+        "confirm": "Confirmed",
+        "expire": "Expired"
+      },
+      "risks": {
+        "low": "Low risk",
+        "medium": "Medium risk",
+        "high": "High risk",
+        "critical": "Critical risk",
+        "unknown": "Risk"
+      }
+    },
+    "errors": {
+      "loadGrants": "Failed to load security permissions: {{error}}",
+      "loadAudit": "Failed to load audit log: {{error}}",
+      "revoke": "Failed to revoke permission: {{error}}",
+      "addDomain": "Failed to add domain permission: {{error}}"
+    },
+    "toasts": {
+      "revoked": "Permission revoked",
+      "domainAdded": "Domain permission added"
+    }
   }
 }

@@ -159,19 +159,21 @@ export function findReplyMessageIndex(messages: RawMessage[], hasStreamingReply:
     // parent wrap-up reply would be folded into the graph and the completion
     // marker itself is not rendered — leaving only "subagent run 完成".
     if (parseSubagentCompletionInfo(message)) continue;
-    if (isInterimSubagentWaitAssistantReply(message)) continue;
-    const replyText = extractText(message).trim();
-    if (isSubagentOrchestrationNarration(replyText)) continue;
-    if (extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name))) continue;
     if (isFailedAssistantMessage(message) || isEmbeddedAgentFailureNoticeAssistantMessage(message)) {
       if (fallbackFailureIdx < 0) fallbackFailureIdx = idx;
       continue;
     }
     // Gateway tool rounds are intermediate narration, never the user-facing bubble.
     if (isToolUseStopReasonAssistantMessage(message)) continue;
+    // Explicit wait notices and real spawn calls remain process messages even
+    // when the runtime closes that assistant turn with stopReason "stop".
+    if (isInterimSubagentWaitAssistantReply(message)) continue;
+    if (extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name))) continue;
     if (isTerminalAssistantMessage(message)) {
       return idx;
     }
+    const replyText = extractText(message).trim();
+    if (isSubagentOrchestrationNarration(replyText)) continue;
     if (isConcludingAssistantReply(message, messages)) {
       // Pure-text concluding replies, or gateway bundled finals with explicit stop.
       if (extractToolUse(message).length === 0 || isRunTerminalAssistantMessage(message)) {
@@ -198,13 +200,13 @@ export function findCommittedReplyMessageIndex(messages: RawMessage[]): number {
     if (isSupersededRawMediaAssistantReply(messages, idx)) continue;
     if (extractText(message).trim().length === 0) continue;
     if (parseSubagentCompletionInfo(message)) continue;
-    if (isInterimSubagentWaitAssistantReply(message)) continue;
-    const replyText = extractText(message).trim();
-    if (isSubagentOrchestrationNarration(replyText)) continue;
-    if (extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name))) continue;
     if (isFailedAssistantMessage(message) || isEmbeddedAgentFailureNoticeAssistantMessage(message)) continue;
     if (isToolUseStopReasonAssistantMessage(message)) continue;
+    if (isInterimSubagentWaitAssistantReply(message)) continue;
+    if (extractToolUse(message).some((tool) => /sessions_spawn/i.test(tool.name))) continue;
     if (isTerminalAssistantMessage(message)) return idx;
+    const replyText = extractText(message).trim();
+    if (isSubagentOrchestrationNarration(replyText)) continue;
     if (isConcludingAssistantReply(message, messages)) {
       if (extractToolUse(message).length === 0 || isRunTerminalAssistantMessage(message)) {
         return idx;

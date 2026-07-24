@@ -330,5 +330,123 @@
     "docs": "公式サイト",
     "github": "GitHub",
     "faq": "よくある質問"
+  },
+  "security": {
+    "title": "セキュリティ",
+    "open": "開く",
+    "grants": {
+      "title": "権限管理",
+      "description": "Workspace、ファイル、ドメインの権限"
+    },
+    "pageTitle": "セキュリティ権限",
+    "actions": {
+      "refresh": "更新",
+      "add": "追加",
+      "revoke": "取り消す"
+    },
+    "mode": {
+      "title": "セキュリティモード",
+      "summary": "セキュリティ確認を全体で制御します。回復不能なリスクに対する強制ブロックは常に維持されます。",
+      "loadError": "セキュリティモードを読み込めませんでした：{{error}}",
+      "updateSuccess": "セキュリティモードを更新しました",
+      "updateError": "セキュリティモードを更新できませんでした：{{error}}",
+      "offConfirm": "通常のセキュリティ確認を無効にすると、LYClaw はほとんどのファイル、コマンド、ネットワーク、対象を開く要求を自動的に許可します。回復不能な破壊、認証情報の漏えい、リモートコード実行に対する強制ブロックは引き続き有効です。",
+      "options": {
+        "standard": {
+          "label": "標準モード",
+          "description": "セキュリティポリシーと確認ダイアログを有効にします。"
+        },
+        "trusted": {
+          "label": "信頼モード",
+          "description": "確認が必要な操作を自動許可し、拒否対象は引き続きブロックします。"
+        },
+        "off": {
+          "label": "確認を無効化",
+          "description": "ほとんどのチェックを自動許可し、重大な強制ブロックのみ維持します。"
+        }
+      }
+    },
+    "domain": {
+      "title": "ドメイン権限",
+      "label": "ドメイン",
+      "includeSubdomains": "サブドメインを含む",
+      "persistent": "永続",
+      "empty": "ドメイン権限はありません"
+    },
+    "paths": {
+      "title": "ファイルと Workspace の権限",
+      "empty": "ファイル権限はありません"
+    },
+    "labels": {
+      "created": "作成日時：{{date}}",
+      "realPath": "実パス：{{path}}"
+    },
+    "values": {
+      "subdomains": "サブドメイン",
+      "recursive": "再帰",
+      "resourceTypes": {
+        "workspace": "Workspace",
+        "file": "ファイル",
+        "directory": "ディレクトリ"
+      }
+    },
+    "audit": {
+      "title": "監査ログ",
+      "capability": "機能",
+      "decision": "結果",
+      "perPage": "1ページあたり",
+      "items": "{{count}} 件",
+      "loading": "監査ログを読み込んでいます",
+      "empty": "監査ログはありません",
+      "source": "ソース",
+      "target": "対象",
+      "code": "コード",
+      "reasons": "理由",
+      "reasonSeparator": "、",
+      "range": "{{total}} 件中 {{start}}～{{end}} 件を表示",
+      "previous": "前へ",
+      "next": "次へ",
+      "page": "{{page}} / {{totalPages}} ページ",
+      "capabilities": {
+        "all": "すべての機能",
+        "file": "ファイル",
+        "command": "コマンド",
+        "network": "ネットワーク",
+        "open-target": "対象を開く",
+        "prompt-scan": "プロンプトスキャン",
+        "permission": "権限",
+        "skill-runtime": "Skill ランタイム",
+        "internal-command": "内部コマンド",
+        "confirmation": "ユーザー確認"
+      },
+      "decisions": {
+        "all": "すべての結果",
+        "allow": "許可",
+        "prompt": "確認",
+        "deny": "拒否",
+        "grant": "付与",
+        "revoke": "取り消し",
+        "invalidate": "無効",
+        "confirm": "確認済み",
+        "expire": "期限切れ"
+      },
+      "risks": {
+        "low": "低リスク",
+        "medium": "中リスク",
+        "high": "高リスク",
+        "critical": "重大リスク",
+        "unknown": "リスク"
+      }
+    },
+    "errors": {
+      "loadGrants": "セキュリティ権限を読み込めませんでした：{{error}}",
+      "loadAudit": "監査ログを読み込めませんでした：{{error}}",
+      "revoke": "権限を取り消せませんでした：{{error}}",
+      "addDomain": "ドメイン権限を追加できませんでした：{{error}}"
+    },
+    "toasts": {
+      "revoked": "権限を取り消しました",
+      "domainAdded": "ドメイン権限を追加しました"
+    }
   }
 }

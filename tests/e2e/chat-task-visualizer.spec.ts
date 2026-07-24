@@ -247,6 +247,42 @@ const printerWaitHistory = [
   },
 ];
 
+const meetingSummaryFinalText = [
+  '# AI Coding 范式会议纪要',
+  '## SuperPower 核心技能体系',
+  '- **SDD**：将大任务拆分为多个子 Agent 协同完成',
+  '- **完成后验证**：检查是否按计划执行，进行回归测试与代码评审请求',
+  '## 会议结论',
+  '团队将逐步建立每个需求必有 spec 的开发文化。',
+].join('\n\n');
+const meetingSummaryHistory = [
+  {
+    role: 'user',
+    content: [{ type: 'text', text: '整理会议纪要' }],
+    timestamp: Date.now(),
+  },
+  {
+    role: 'assistant',
+    content: [{ type: 'toolCall', id: 'meeting-read', name: 'read', arguments: { path: 'meeting.txt' } }],
+    stopReason: 'toolUse',
+    timestamp: Date.now(),
+  },
+  {
+    role: 'toolResult',
+    toolCallId: 'meeting-read',
+    toolName: 'read',
+    content: [{ type: 'text', text: '会议原文' }],
+    timestamp: Date.now(),
+  },
+  {
+    role: 'assistant',
+    id: 'meeting-summary-final',
+    content: [{ type: 'text', text: meetingSummaryFinalText }],
+    stopReason: 'stop',
+    timestamp: Date.now(),
+  },
+];
+
 const errorRunHistory = [
   {
     role: 'user',
@@ -564,6 +600,69 @@ test.describe('ClawX chat execution graph', () => {
       await expect(page.getByTestId('chat-execution-graph')).toBeVisible();
       await expect(page.getByTestId('chat-execution-graph')).not.toContainText('这解释了为什么等待队列超时');
       await expect(page.getByTestId('chat-execution-graph')).toContainText('1 process message');
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
+
+  test('keeps a terminal meeting summary visible when it mentions sub-agent execution', async ({ launchElectronApp }) => {
+    const app = await launchElectronApp({ skipSetup: true });
+
+    try {
+      await installIpcMocks(app, {
+        gatewayStatus: { state: 'running', port: 18789, pid: 12345 },
+        gatewayRpc: {
+          [stableStringify(['sessions.list', {}])]: {
+            success: true,
+            result: {
+              sessions: [{ key: PROJECT_MANAGER_SESSION_KEY, displayName: 'main' }],
+            },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 200 }])]: {
+            success: true,
+            result: { messages: meetingSummaryHistory },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 1000 }])]: {
+            success: true,
+            result: { messages: meetingSummaryHistory },
+          },
+        },
+        hostApi: {
+          [stableStringify(['/api/gateway/status', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: { state: 'running', port: 18789, pid: 12345 },
+            },
+          },
+          [stableStringify(['/api/agents', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: {
+                success: true,
+                agents: [{ id: 'main', name: 'main' }],
+              },
+            },
+          },
+        },
+      });
+
+      const page = await getStableWindow(app);
+      try {
+        await page.reload();
+      } catch (error) {
+        if (!String(error).includes('ERR_FILE_NOT_FOUND')) throw error;
+      }
+
+      await expect(page.getByTestId('main-layout')).toBeVisible();
+      await expect(page.getByTestId('chat-message-3')).toContainText('AI Coding 范式会议纪要', {
+        timeout: 30_000,
+      });
+      await expect(page.getByTestId('chat-execution-graph')).toBeVisible();
+      await expect(page.getByTestId('chat-execution-graph')).not.toContainText('AI Coding 范式会议纪要');
     } finally {
       await closeElectronApp(app);
     }

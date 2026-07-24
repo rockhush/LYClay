@@ -68,6 +68,7 @@ docs/pr-session-notes-*.md
 .cursor/
 .claude/
 .pnpm-store/
+/.worktrees/
 package-lock.json
 
 # Generated extension bridges (created by scripts/generate-ext-bridge.mjs)

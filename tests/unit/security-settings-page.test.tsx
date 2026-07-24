@@ -8,6 +8,22 @@ vi.mock('@/lib/host-api', () => ({
   hostApiFetch: vi.fn(),
 }));
 
+vi.mock('react-i18next', async () => {
+  const translations = (await import('@/i18n/locales/zh/settings.json')).default as Record<string, unknown>;
+  return {
+    useTranslation: () => ({
+      t: (key: string, variables?: Record<string, unknown>) => {
+        const value = key.split('.').reduce<unknown>((current, part) => {
+          if (!current || typeof current !== 'object') return undefined;
+          return (current as Record<string, unknown>)[part];
+        }, translations);
+        if (typeof value !== 'string') return key;
+        return value.replace(/{{(\w+)}}/g, (_match, name: string) => String(variables?.[name] ?? ''));
+      },
+    }),
+  };
+});
+
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
@@ -148,7 +164,7 @@ describe('SecuritySettings', () => {
     expect(await screen.findByText('example.net')).toBeInTheDocument();
     expect(screen.getByText('D:\\code\\ClawX')).toBeInTheDocument();
     expect(screen.getByText('connect')).toBeInTheDocument();
-    expect(screen.getByText('recursive')).toBeInTheDocument();
+    expect(screen.getByText('递归')).toBeInTheDocument();
 
     // MCP / Skill / command grant sections were removed from the page even
     // though the API still returns them. They must not render in the grants panel.

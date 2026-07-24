@@ -552,21 +552,21 @@ export function Settings() {
             </div>
           </div>
           {/* Gateway */}
-          <div>
+          <div data-testid="security-settings-summary">
             <h2 className="text-base font-semibold text-foreground mb-2">
-              安全
+              {t('security.title')}
             </h2>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <Label className="text-sm font-medium text-foreground/70">授权管理</Label>
+                <Label className="text-sm font-medium text-foreground/70">{t('security.grants.title')}</Label>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  Workspace、文件和域名授权
+                  {t('security.grants.description')}
                 </p>
               </div>
               <Button asChild variant="outline" size="sm" className="rounded-full h-7 px-3 text-xs">
-                <Link to="/settings/security">
+                <Link to="/settings/security" data-testid="security-settings-open">
                   <Shield className="h-3.5 w-3.5 mr-1.5" />
-                  打开
+                  {t('security.open')}
                 </Link>
               </Button>
             </div>
