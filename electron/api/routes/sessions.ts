@@ -8,7 +8,7 @@ import { getOpenClawConfigDir } from '../../utils/paths';
 import { logger } from '../../utils/logger';
 import { redactSecrets, redactStructuredSecrets } from '../../security/secret-scanner';
 import { sanitizeTranscriptMessageForDisplay } from '../../utils/silent-reply-sanitize';
-import { listOrphanArchivedSessions } from '../../utils/orphan-session-recovery';
+import { listOrphanArchivedSessions, invalidateOrphanRecoveryCache } from '../../utils/orphan-session-recovery';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -677,8 +677,14 @@ export async function handleSessionRoutes(
         return true;
       }
       const agentId = parts[1];
+      if (!SAFE_SESSION_SEGMENT.test(agentId)) {
+        sendJson(res, 400, { success: false, error: 'Invalid agentId' });
+        return true;
+      }
+      const sessionSegment = parts.slice(2).join(':');
       const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
+      const sessionKeyFallbackPath = join(sessionsDir, `${sessionSegment}.jsonl`);
       const fsP = await import('node:fs/promises');
       const sessionsJson = await readSessionsJsonSafe(sessionsJsonPath, {
         label: 'sessions:delete',
@@ -721,19 +727,40 @@ export async function handleSessionRoutes(
         }
       }
       if (!uuidFileName && !resolvedSrcPath) {
-        sendJson(res, 404, { success: false, error: `Cannot resolve file for session: ${sessionKey}` });
-        return true;
+        try {
+          await fsP.access(sessionKeyFallbackPath);
+          resolvedSrcPath = sessionKeyFallbackPath;
+          uuidFileName = `${sessionSegment}.jsonl`;
+          logger.debug(`[sessions:delete] Using sessionKey fallback path: ${sessionKeyFallbackPath}`);
+        } catch {
+          sendJson(res, 404, { success: false, error: `Cannot resolve file for session: ${sessionKey}` });
+          return true;
+        }
       }
       if (!resolvedSrcPath) {
         if (!uuidFileName!.endsWith('.jsonl')) uuidFileName = `${uuidFileName}.jsonl`;
         resolvedSrcPath = join(sessionsDir, uuidFileName!);
       }
       const dstPath = resolvedSrcPath.replace(/\.jsonl$/, '.deleted.jsonl');
+      let renamedTranscript = false;
       try {
         await fsP.access(resolvedSrcPath);
         await fsP.rename(resolvedSrcPath, dstPath);
-      } catch {
-        // Non-fatal; still try to update sessions.json.
+        renamedTranscript = true;
+      } catch (error) {
+        const canUseSessionKeyFallback = getErrorCode(error) === 'ENOENT'
+          && sessionKeyFallbackPath
+          && sessionKeyFallbackPath !== resolvedSrcPath;
+        if (canUseSessionKeyFallback) {
+          try {
+            await fsP.access(sessionKeyFallbackPath);
+            await fsP.rename(sessionKeyFallbackPath, sessionKeyFallbackPath.replace(/\.jsonl$/, '.deleted.jsonl'));
+            renamedTranscript = true;
+          } catch {
+            // Non-fatal; still try to update sessions.json when indexed.
+          }
+        }
+        // Non-fatal when indexed path missing but sessions.json entry exists.
       }
       const json2 = await readSessionsJsonSafe(sessionsJsonPath, {
         label: 'sessions:delete',
@@ -751,6 +778,9 @@ export async function handleSessionRoutes(
       }
       await writeJsonAtomic(sessionsJsonPath, json2);
       sessionFileIndexCache.delete(agentId);
+      if (renamedTranscript) {
+        invalidateOrphanRecoveryCache(agentId);
+      }
       sendJson(res, 200, { success: true });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });

@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -53,6 +53,22 @@ async function request(path: string): Promise<Record<string, unknown>> {
   const { handleSessionRoutes } = await import('@electron/api/routes/sessions');
   const handled = await handleSessionRoutes(
     { method: 'GET' } as IncomingMessage,
+    {} as ServerResponse,
+    new URL(`http://127.0.0.1:13210${path}`),
+    {} as never,
+  );
+
+  expect(handled).toBe(true);
+  return sendJsonMock.mock.calls.at(-1)?.[2] as Record<string, unknown>;
+}
+
+async function postRequest(path: string, body: unknown): Promise<Record<string, unknown>> {
+  const { parseJsonBody } = await import('@electron/api/route-utils');
+  vi.mocked(parseJsonBody).mockResolvedValue(body);
+
+  const { handleSessionRoutes } = await import('@electron/api/routes/sessions');
+  const handled = await handleSessionRoutes(
+    { method: 'POST' } as IncomingMessage,
     {} as ServerResponse,
     new URL(`http://127.0.0.1:13210${path}`),
     {} as never,
@@ -202,5 +218,46 @@ describe('orphan session recovery', () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content?.[0]?.text).toBe('history from orphan transcript');
+  });
+
+  it('deletes orphan-only sessions via sessionKey transcript fallback and prevents re-recovery', async () => {
+    const sessionsDir = join(testOpenClawConfigDir, 'agents', 'main', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'sessions.json'), JSON.stringify({}));
+    writeTranscript('main', 'session-delete-orphan', [
+      {
+        type: 'message',
+        message: {
+          role: 'user',
+          content: 'delete me later',
+          timestamp: Date.parse('2026-05-01T12:00:00+08:00') / 1000,
+        },
+      },
+    ]);
+
+    const nowMs = Date.parse('2026-06-10T12:00:00+08:00');
+    const sessionKey = 'agent:main:session-delete-orphan';
+    const beforeDelete = await listOrphanArchivedSessions({
+      sessionsDir,
+      agentId: 'main',
+      sessionsJson: {},
+      minAgeDays: 14,
+      nowMs,
+    });
+    expect(beforeDelete.map((session) => session.key)).toEqual([sessionKey]);
+
+    const deletePayload = await postRequest('/api/sessions/delete', { sessionKey });
+    expect(deletePayload.success).toBe(true);
+    expect(existsSync(join(sessionsDir, 'session-delete-orphan.jsonl'))).toBe(false);
+    expect(existsSync(join(sessionsDir, 'session-delete-orphan.deleted.jsonl'))).toBe(true);
+
+    const afterDelete = await listOrphanArchivedSessions({
+      sessionsDir,
+      agentId: 'main',
+      sessionsJson: {},
+      minAgeDays: 14,
+      nowMs,
+    });
+    expect(afterDelete).toEqual([]);
   });
 });

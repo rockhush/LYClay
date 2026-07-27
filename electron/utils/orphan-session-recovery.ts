@@ -348,3 +348,16 @@ export async function listOrphanArchivedSessions(options: {
 export function clearOrphanRecoveryCacheForTests(): void {
   orphanRecoveryCache.clear();
 }
+
+/** Drop cached orphan scans after transcript files are deleted or renamed. */
+export function invalidateOrphanRecoveryCache(agentId?: string): void {
+  if (!agentId) {
+    orphanRecoveryCache.clear();
+    return;
+  }
+  for (const key of orphanRecoveryCache.keys()) {
+    if (key.startsWith(`${agentId}:`)) {
+      orphanRecoveryCache.delete(key);
+    }
+  }
+}
