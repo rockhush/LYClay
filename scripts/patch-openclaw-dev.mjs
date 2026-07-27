@@ -10,6 +10,10 @@ import { applyOpenClawSilentReplyPatches, hasOpenClawSilentReplyPatches } from '
 import { applyOpenClawUsageStreamingPatches, applyPiAiUsageStreamingPatches, hasOpenClawUsageStreamingPatches, hasPiAiUsageStreamingPatches } from './openclaw-usage-patches.mjs';
 import { inspectOpenClawDigitalEmployeeIsolation } from './openclaw-digital-employee-isolation-check.mjs';
 import { applyOpenClawWebFetchHtmlSniffPatches, hasOpenClawWebFetchHtmlSniffPatches } from './openclaw-web-fetch-patches.mjs';
+import {
+  applyOpenClawElectronShellSnapshotPatch,
+  isOpenClawShellSnapshotBundle,
+} from './openclaw-shell-snapshot-patches.mjs';
 
 const ROOT = process.cwd();
 const openclawCandidates = [
@@ -200,6 +204,33 @@ function main() {
   }
   if (silentReplyPatched === 0) {
     console.warn('[patch-openclaw-dev] WARN: no selection bundle received silent-reply patch.');
+  }
+
+  let shellSnapshotMatched = 0;
+  let shellSnapshotVerified = 0;
+  for (const name of readdirSync(distDir)) {
+    if (!name.endsWith('.js')) continue;
+    const filePath = join(distDir, name);
+    const content = readFileSync(filePath, 'utf8');
+    if (!isOpenClawShellSnapshotBundle(content)) continue;
+    shellSnapshotMatched += 1;
+    const result = applyOpenClawElectronShellSnapshotPatch(content);
+    if (!result.verified) {
+      console.error(`[patch-openclaw-dev] ${name}: electron-shell-snapshot=unverified`);
+      continue;
+    }
+    if (result.patched) {
+      writeFileSync(filePath, result.source, 'utf8');
+      changedCount += 1;
+    }
+    shellSnapshotVerified += 1;
+    console.log(
+      `[patch-openclaw-dev] ${name}: electron-shell-snapshot=${result.patched ? 'applied' : 'already'}`,
+    );
+  }
+  if (shellSnapshotMatched === 0 || shellSnapshotVerified !== shellSnapshotMatched) {
+    console.error('[patch-openclaw-dev] ERROR: Failed to patch Electron shell snapshot runtime');
+    process.exit(1);
   }
 
   const isolationStatus = inspectOpenClawDigitalEmployeeIsolation(openclawDir, { fs: { existsSync, readdirSync, readFileSync }, path: { join } });

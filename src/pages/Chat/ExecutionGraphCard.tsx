@@ -256,7 +256,15 @@ export function ExecutionGraphCard({
         <span className="truncate">{t('executionGraph.title')}</span>
       </button>
 
-      <div className="mt-0 px-0 py-0">
+      <div
+        data-testid="chat-execution-graph-body"
+        className={cn(
+          'mt-1 max-h-[180px] overflow-y-auto overflow-x-hidden',
+          'rounded-xl border border-black/10 bg-white/60 px-2 py-2',
+          'dark:border-white/10 dark:bg-white/[0.03]',
+          'execution-graph-scroll',
+        )}
+      >
         <div className="mt-0.5 flex items-center gap-0.5" style={{ marginLeft: `${TOOL_ROW_EXTRA_INDENT_PX}px` }}>
           <div className="flex w-6 shrink-0 justify-center">
             <div className="flex h-6 w-6 items-center justify-center text-muted-foreground">

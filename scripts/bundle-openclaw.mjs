@@ -34,6 +34,10 @@ import {
 } from './openclaw-silent-reply-patches.mjs';
 import { inspectOpenClawDigitalEmployeeIsolation } from './openclaw-digital-employee-isolation-check.mjs';
 import { applyOpenClawWebFetchHtmlSniffPatches, hasOpenClawWebFetchHtmlSniffPatches } from './openclaw-web-fetch-patches.mjs';
+import {
+  applyOpenClawElectronShellSnapshotPatch,
+  isOpenClawShellSnapshotBundle,
+} from './openclaw-shell-snapshot-patches.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
@@ -621,6 +625,35 @@ function patchBundledOpenClawSilentReply(outputDir) {
   }
 }
 
+function patchBundledOpenClawElectronShellSnapshot(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return false;
+
+  let matched = 0;
+  let verified = 0;
+  for (const name of fs.readdirSync(distDir)) {
+    if (!name.endsWith('.js')) continue;
+    const filePath = path.join(distDir, name);
+    const source = fs.readFileSync(filePath, 'utf8');
+    if (!isOpenClawShellSnapshotBundle(source)) continue;
+    matched += 1;
+    const result = applyOpenClawElectronShellSnapshotPatch(source);
+    if (!result.verified) {
+      echo`   ⚠️ ${name}: Electron shell snapshot runtime is unverified`;
+      continue;
+    }
+    if (result.patched) {
+      fs.writeFileSync(filePath, result.source, 'utf8');
+      echo`   🩹 Patched ${name} for Electron shell snapshot runtime`;
+    } else {
+      echo`   ✓ ${name} Electron shell snapshot runtime already safe`;
+    }
+    verified += 1;
+  }
+
+  return matched > 0 && verified === matched;
+}
+
 function patchBundledOpenClawSessionId(outputDir) {
   const distDir = path.join(outputDir, 'dist');
   if (!fs.existsSync(distDir)) return;
@@ -700,6 +733,10 @@ if (!patchBundledOpenClawOpenAITransport(OUTPUT)) {
 }
 if (!patchBundledOpenClawWebFetchHtmlSniff(OUTPUT)) {
   echo`❌ Failed to patch web_fetch HTML sniffing`;
+  process.exit(1);
+}
+if (!patchBundledOpenClawElectronShellSnapshot(OUTPUT)) {
+  echo`❌ Failed to patch Electron shell snapshot runtime`;
   process.exit(1);
 }
 patchBundledOpenClawSilentReply(OUTPUT);
