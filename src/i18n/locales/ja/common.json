@@ -36,7 +36,10 @@
         "batchDeleteDeselectAll": "選択解除",
         "batchDeleteNoSessions": "削除できる会話がありません",
         "batchDeleteSuccess": "{{count}} 件の会話を削除しました",
-        "batchDeleteWorkspaceGroup": "ワークスペース · {{name}}"
+        "batchDeleteWorkspaceGroup": "ワークスペース · {{name}}",
+        "searchSessions": "セッションを検索",
+        "clearSessionSearch": "検索をクリア",
+        "searchSessionsEmpty": "一致するセッションが見つかりません"
     },
     "actions": {
         "save": "保存",

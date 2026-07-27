@@ -151,7 +151,7 @@ import {
   shouldUpgradeConvergenceDirective,
 } from './chat/task-convergence-strategy';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
-import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs } from '@/lib/session-sidebar-order';
+import { mergeDiscoveredSessionActivity, resolveSessionListActivityMs, isSessionActivityOlderThanDays } from '@/lib/session-sidebar-order';
 import {
   isSubagentSessionKey,
   filterUserFacingSessions,
@@ -2473,6 +2473,84 @@ async function loadLocalSessionSummaries(agentId = 'main'): Promise<ChatSession[
     .filter((session): session is ChatSession => session != null);
 }
 
+const ORPHAN_RECOVERY_MIN_AGE_DAYS = 14;
+
+async function loadOrphanRecoverySessionSummaries(agentIds: string[]): Promise<ChatSession[]> {
+  const mergedByKey = new Map<string, ChatSession>();
+  const uniqueAgentIds = [...new Set(agentIds.map((agentId) => agentId.trim()).filter(Boolean))];
+
+  await Promise.all(uniqueAgentIds.map(async (agentId) => {
+    try {
+      const response = await hostApiFetch<{
+        success: boolean;
+        sessions?: Array<Record<string, unknown>>;
+        error?: string;
+      }>(
+        `/api/sessions/list-orphan-recovery?agentId=${encodeURIComponent(agentId)}&minAgeDays=${ORPHAN_RECOVERY_MIN_AGE_DAYS}`,
+      );
+      if (!response.success || !Array.isArray(response.sessions)) return;
+      for (const record of response.sessions) {
+        const session = parseSessionRecord(record);
+        if (session) mergedByKey.set(session.key, session);
+      }
+    } catch (error) {
+      console.warn(`[Sessions] Failed to load orphan recovery sessions for ${agentId}:`, error);
+    }
+  }));
+
+  return [...mergedByKey.values()];
+}
+
+/**
+ * Re-add archived sessions removed from Gateway/sessions.json while keeping the
+ * live Gateway list authoritative for sessions within the last two weeks.
+ */
+function mergeOrphanRecoverySessionsIntoList(
+  sessions: ChatSession[],
+  orphanSessions: ChatSession[],
+  nowMs: number,
+): ChatSession[] {
+  if (orphanSessions.length === 0) return sessions;
+
+  const keys = new Set(sessions.map((session) => session.key));
+  const out = [...sessions];
+
+  for (const orphan of orphanSessions) {
+    if (!orphan.key || keys.has(orphan.key)) continue;
+    const activity = resolveSessionListActivityMs(orphan);
+    if (!activity || !isSessionActivityOlderThanDays(activity, nowMs, ORPHAN_RECOVERY_MIN_AGE_DAYS)) {
+      continue;
+    }
+    keys.add(orphan.key);
+    out.push(orphan);
+  }
+
+  return out;
+}
+
+function collectAgentIdsForOrphanRecovery(sessionKeys: string[]): string[] {
+  const agentIds = collectAgentIdsFromSessionKeys(sessionKeys);
+  if (!agentIds.includes('main')) {
+    agentIds.push('main');
+  }
+  return agentIds;
+}
+
+async function appendOrphanRecoverySessions(
+  sessions: ChatSession[],
+  nowMs: number,
+): Promise<ChatSession[]> {
+  try {
+    const orphanSessions = await loadOrphanRecoverySessionSummaries(
+      collectAgentIdsForOrphanRecovery(sessions.map((session) => session.key)),
+    );
+    return mergeOrphanRecoverySessionsIntoList(sessions, orphanSessions, nowMs);
+  } catch (error) {
+    console.warn('[Sessions] Orphan recovery merge failed:', error);
+    return sessions;
+  }
+}
+
 async function loadLocalSessionSummariesForAgentIds(agentIds: string[]): Promise<ChatSession[]> {
   const mergedByKey = new Map<string, ChatSession>();
   const batches = await Promise.all(
@@ -3902,7 +3980,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
             if (sessions.length > 0) {
               const mergedLocal = filterUserFacingSessions(
-                mergePreservedSessionsIntoGatewayList(sessions, get(), get().currentSessionKey),
+                await appendOrphanRecoverySessions(
+                  mergePreservedSessionsIntoGatewayList(sessions, get(), get().currentSessionKey),
+                  Date.now(),
+                ),
               );
               
               const { currentSessionKey } = get();
@@ -3938,9 +4019,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
               }));
 
               return;
-            } else {
-              console.warn('[Sessions] Local read returned no sessions');
             }
+
+            const orphanOnlySessions = filterUserFacingSessions(
+              await appendOrphanRecoverySessions(
+                mergePreservedSessionsIntoGatewayList([], get(), get().currentSessionKey),
+                Date.now(),
+              ),
+            );
+            if (orphanOnlySessions.length > 0) {
+              const { currentSessionKey } = get();
+              let nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;
+              if (isSubagentSessionKey(nextSessionKey)) {
+                const redirected = pickUserFacingSession(orphanOnlySessions, currentSessionKey);
+                if (redirected) nextSessionKey = redirected.key;
+              }
+
+              const discoveredActivity = Object.fromEntries(
+                orphanOnlySessions
+                  .map((session) => {
+                    const activity = resolveSessionListActivityMs(session);
+                    return activity ? [session.key, activity] as const : null;
+                  })
+                  .filter((entry): entry is readonly [string, number] => entry != null),
+              );
+              const discoveredLabels = getSessionLabelsFromSessions(orphanOnlySessions);
+
+              set((state) => ({
+                sessions: orphanOnlySessions,
+                currentSessionKey: nextSessionKey,
+                currentAgentId: getAgentIdFromSessionKey(nextSessionKey),
+                sessionLabels: {
+                  ...state.sessionLabels,
+                  ...discoveredLabels,
+                },
+                sessionLastActivity: mergeDiscoveredSessionActivity(
+                  state.sessionLastActivity,
+                  discoveredActivity,
+                ),
+              }));
+              return;
+            }
+
+            console.warn('[Sessions] Local read returned no sessions');
           } catch (err) {
             console.warn('[Sessions] Local read failed with exception:', err);
           }
@@ -3985,7 +4106,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
 
           const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(dedupedSessions, get(), get().currentSessionKey);
-          const userFacingSessions = filterUserFacingSessions(mergedWithPreserved);
+          const mergedWithOrphanRecovery = await appendOrphanRecoverySessions(mergedWithPreserved, Date.now());
+          const userFacingSessions = filterUserFacingSessions(mergedWithOrphanRecovery);
 
           const { currentSessionKey, sessions: localSessions } = get();
           let nextSessionKey = currentSessionKey || DEFAULT_SESSION_KEY;

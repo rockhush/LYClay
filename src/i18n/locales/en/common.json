@@ -36,7 +36,10 @@
         "batchDeleteDeselectAll": "Deselect all",
         "batchDeleteNoSessions": "No conversations to delete",
         "batchDeleteSuccess": "Deleted {{count}} conversations",
-        "batchDeleteWorkspaceGroup": "Workspace · {{name}}"
+        "batchDeleteWorkspaceGroup": "Workspace · {{name}}",
+        "searchSessions": "Search sessions",
+        "clearSessionSearch": "Clear search",
+        "searchSessionsEmpty": "No matching sessions found"
     },
     "actions": {
         "save": "Save",

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildStableSessionOrder,
   getSessionBucket,
+  isSessionActivityOlderThanDays,
   mergeDiscoveredSessionActivity,
   resolveSessionActivityMs,
 } from '../../src/lib/session-sidebar-order';
@@ -41,6 +42,15 @@ describe('session-sidebar-order', () => {
     const activityMs = Date.parse('2026-06-02T18:37:00+08:00');
 
     expect(getSessionBucket(activityMs, nowMs)).toBe('withinTwoWeeks');
+  });
+
+  it('isSessionActivityOlderThanDays matches the two-week bucket boundary', () => {
+    const nowMs = Date.parse('2026-06-10T12:00:00+08:00');
+    const withinTwoWeeks = Date.parse('2026-06-02T18:37:00+08:00');
+    const olderThanTwoWeeks = Date.parse('2026-05-20T12:00:00+08:00');
+
+    expect(isSessionActivityOlderThanDays(withinTwoWeeks, nowMs, 14)).toBe(false);
+    expect(isSessionActivityOlderThanDays(olderThanTwoWeeks, nowMs, 14)).toBe(true);
   });
 
   it('buildStableSessionOrder keeps existing keys in place when activity changes', () => {

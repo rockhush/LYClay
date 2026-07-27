@@ -97,9 +97,21 @@ export function mergeMonotonicCronSessionHistory<T extends { role?: unknown; con
   return remote;
 }
 
-const CRON_BRACKET_LABEL = /^\[cron:[^\]]*\]$/i;
-const CRON_BRACKET_PREFIX = /^\[cron:[^\]]*\]\s*/i;
-const CRON_BRACKET_ANYWHERE = /\s*\[cron:[^\]]*\]\s*/gi;
+const CRON_BRACKET_LABEL = /^\[cron:[^\]]*\]?$/i;
+const CRON_BRACKET_PREFIX = /^\[cron:[^\]]*\]?\s*/i;
+const CRON_BRACKET_ANYWHERE = /\s*\[cron:[^\]]*\]?\s*/gi;
+const CRON_BRACKET_JOB_ID = /\[cron:([^\]]*)\]?/i;
+
+/** Extract cron job id embedded in `[cron:jobId]` transcript prefixes. */
+export function resolveCronBracketJobId(label: string): string | undefined {
+  const match = label.trim().match(CRON_BRACKET_JOB_ID);
+  const jobId = match?.[1]?.trim();
+  return jobId || undefined;
+}
+
+export function hasCronBracketLabel(label: string): boolean {
+  return /\[cron:/i.test(label.trim());
+}
 
 export interface CronSessionDisplayLabelOptions {
   jobName?: string;

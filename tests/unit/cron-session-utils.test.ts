@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatCronSessionDisplayLabel,
+  hasCronBracketLabel,
   isCronSessionKey,
   isExternalChannelCronSessionForJobs,
   mergeMonotonicCronSessionHistory,
   parseCronSessionKey,
+  resolveCronBracketJobId,
 } from '../../src/stores/chat/cron-session-utils';
 
 describe('parseCronSessionKey', () => {
@@ -80,6 +82,21 @@ describe('formatCronSessionDisplayLabel', () => {
         fallback: '定时任务',
       }),
     ).toBe('Cron: 看球了');
+  });
+
+  it('extracts cron job id from bracket labels', () => {
+    expect(resolveCronBracketJobId('[cron:job-123] hello')).toBe('job-123');
+    expect(hasCronBracketLabel('[cron:job-123]')).toBe(true);
+    expect(hasCronBracketLabel('hello')).toBe(false);
+  });
+
+  it('strips cron ids from truncated bracket-only previews', () => {
+    expect(
+      formatCronSessionDisplayLabel('[cron:98e2cd2f-fcbb-488f-8381-35cd1588a685', {
+        jobName: '每日英语',
+        fallback: '定时任务',
+      }),
+    ).toBe('Cron: 每日英语');
   });
 });
 

@@ -8,6 +8,7 @@ import { getOpenClawConfigDir } from '../../utils/paths';
 import { logger } from '../../utils/logger';
 import { redactSecrets, redactStructuredSecrets } from '../../security/secret-scanner';
 import { sanitizeTranscriptMessageForDisplay } from '../../utils/silent-reply-sanitize';
+import { listOrphanArchivedSessions } from '../../utils/orphan-session-recovery';
 import type { HostApiContext } from '../context';
 import { parseJsonBody, sendJson } from '../route-utils';
 
@@ -178,6 +179,8 @@ function getMessageText(content: unknown): string {
 function cleanUserPreview(text: string): string {
   if (isInternalUserPreviewText(text)) return '';
   return redactSecrets(text)
+    .replace(/^\[cron:[^\]]*\]?\s*/i, '')
+    .replace(/\s*\[cron:[^\]]*\]?\s*/gi, ' ')
     .replace(/\s*\[media attached:[^\]]*\]/g, '')
     .replace(/\s*\[message_id:\s*[^\]]+\]/g, '')
     .replace(/\s*\[Working Directory:[^\]]*\]/g, '')
@@ -437,6 +440,49 @@ export async function handleSessionRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/sessions/list-orphan-recovery' && req.method === 'GET') {
+    try {
+      const agentId = url.searchParams.get('agentId')?.trim() || 'main';
+      const minAgeDaysRaw = url.searchParams.get('minAgeDays')?.trim();
+      const minAgeDays = minAgeDaysRaw ? Number.parseInt(minAgeDaysRaw, 10) : 14;
+      if (!SAFE_SESSION_SEGMENT.test(agentId)) {
+        sendJson(res, 400, { success: false, error: 'Invalid agentId' });
+        return true;
+      }
+      if (!Number.isFinite(minAgeDays) || minAgeDays < 0) {
+        sendJson(res, 400, { success: false, error: 'Invalid minAgeDays' });
+        return true;
+      }
+
+      const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
+      const sessionsJsonPath = join(sessionsDir, 'sessions.json');
+      const sessionsJson = await readSessionsJsonSafe(sessionsJsonPath, {
+        label: 'sessions:list-orphan-recovery',
+        allowMissing: true,
+      });
+
+      const recovered = await listOrphanArchivedSessions({
+        sessionsDir,
+        agentId,
+        sessionsJson,
+        minAgeDays,
+      });
+      const agentsSnapshot = await listAgentsSnapshot();
+      const defaultSessionModel = agentsSnapshot.agents.find((agent) => agent.id === agentId)?.modelDisplay
+        || agentsSnapshot.defaultModelRef
+        || undefined;
+      const publicSessions = recovered
+        .map((session) => toPublicSessionListItem(session, defaultSessionModel))
+        .filter((session) => session.key);
+
+      logger.info(`[sessions:list-orphan-recovery] Returning ${publicSessions.length} recovered session(s) for ${agentId}`);
+      sendJson(res, 200, { success: true, sessions: publicSessions });
+    } catch (error) {
+      sendJson(res, 500, { success: false, error: String(error) });
+    }
+    return true;
+  }
+
   // 新增：直接从本地文件系统读取历史消息
   if (url.pathname === '/api/sessions/history-local' && req.method === 'GET') {
     const requestStart = Date.now();
@@ -466,27 +512,19 @@ export async function handleSessionRoutes(
       const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
       const sessionsJsonPath = join(sessionsDir, 'sessions.json');
       const sessionSegment = parts.slice(2).join(':');
-      const sessionKeyFallbackPath = sessionSegment.startsWith('session-')
-        ? join(sessionsDir, `${sessionSegment}.jsonl`)
-        : null;
+      const sessionKeyFallbackPath = join(sessionsDir, `${sessionSegment}.jsonl`);
       const index = await getSessionFileIndex(agentId, sessionsJsonPath);
       const fileInfo = index?.filesBySessionKey.get(sessionKey);
       let resolvedSrcPath = fileInfo?.resolvedPath;
       let uuidFileName = fileInfo?.fileName;
 
       if (!uuidFileName && !resolvedSrcPath) {
-        if (sessionKeyFallbackPath) {
-          try {
-            await fsP.access(sessionKeyFallbackPath);
-            resolvedSrcPath = sessionKeyFallbackPath;
-            uuidFileName = `${sessionSegment}.jsonl`;
-            logger.debug(`[sessions:history-local] Using sessionKey fallback path: ${sessionKeyFallbackPath}`);
-          } catch {
-            logger.warn(`[sessions:history-local] No UUID file found for ${sessionKey}`);
-            sendJson(res, 200, { success: true, messages: [] });
-            return true;
-          }
-        } else {
+        try {
+          await fsP.access(sessionKeyFallbackPath);
+          resolvedSrcPath = sessionKeyFallbackPath;
+          uuidFileName = `${sessionSegment}.jsonl`;
+          logger.debug(`[sessions:history-local] Using sessionKey fallback path: ${sessionKeyFallbackPath}`);
+        } catch {
           logger.warn(`[sessions:history-local] No UUID file found for ${sessionKey}`);
           sendJson(res, 200, { success: true, messages: [] });
           return true;

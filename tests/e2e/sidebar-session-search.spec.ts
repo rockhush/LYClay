@@ -1,0 +1,136 @@
+import { closeElectronApp, expect, getStableWindow, test } from './fixtures/electron';
+
+// Requires a fresh renderer build: pnpm run build:vite (or pnpm run test:e2e).
+test.describe('Sidebar session search', () => {
+  test('filters sessions locally and restores list on clear', async ({ launchElectronApp }) => {
+    const app = await launchElectronApp({ skipSetup: true });
+
+    try {
+      await app.evaluate(async () => {
+        const { ipcMain } = process.mainModule!.require('electron') as typeof import('electron');
+        const now = Date.now();
+
+        ipcMain.removeHandler('gateway:status');
+        ipcMain.handle('gateway:status', async () => ({
+          state: 'running',
+          port: 18789,
+          pid: 12345,
+          connectedAt: now,
+          gatewayReady: true,
+        }));
+
+        ipcMain.removeHandler('gateway:rpc');
+        ipcMain.handle('gateway:rpc', async (_event: unknown, method: string) => {
+          if (method === 'sessions.list') {
+            return {
+              success: true,
+              result: {
+                sessions: [
+                  {
+                    key: 'agent:main:alpha-session',
+                    displayName: 'Alpha football chat',
+                    updatedAt: now,
+                    lastMessageAt: now,
+                  },
+                  {
+                    key: 'agent:main:beta-session',
+                    displayName: 'Beta basketball chat',
+                    updatedAt: now - 60 * 60 * 1000,
+                    lastMessageAt: now - 60 * 60 * 1000,
+                  },
+                ],
+              },
+            };
+          }
+          if (method === 'chat.history') {
+            return { success: true, result: { messages: [{ role: 'user', content: 'hello' }] } };
+          }
+          return { success: true, result: {} };
+        });
+
+        ipcMain.removeHandler('hostapi:fetch');
+        ipcMain.handle('hostapi:fetch', async (_event: unknown, request: { path?: string; method?: string }) => {
+          const path = request?.path ?? '';
+          const method = request?.method ?? 'GET';
+
+          if (path === '/api/gateway/status' && method === 'GET') {
+            return {
+              ok: true,
+              data: {
+                status: 200,
+                ok: true,
+                json: {
+                  state: 'running',
+                  port: 18789,
+                  pid: 12345,
+                  connectedAt: now,
+                  gatewayReady: true,
+                },
+              },
+            };
+          }
+
+          if (path === '/api/agents' && method === 'GET') {
+            return {
+              ok: true,
+              data: {
+                status: 200,
+                ok: true,
+                json: { success: true, agents: [{ id: 'main', name: 'main' }] },
+              },
+            };
+          }
+
+          if (path.startsWith('/api/sessions/history-local')) {
+            return {
+              ok: true,
+              data: {
+                status: 200,
+                ok: true,
+                json: { success: true, messages: [{ role: 'user', content: 'hello' }] },
+              },
+            };
+          }
+
+          return {
+            ok: true,
+            data: { status: 200, ok: true, json: {} },
+          };
+        });
+      });
+
+      const page = await getStableWindow(app);
+      await page.evaluate(() => {
+        window.localStorage.setItem(
+          'LYClaw-settings',
+          JSON.stringify({
+            state: {
+              sidebarCollapsed: false,
+              setupComplete: true,
+            },
+            version: 0,
+          }),
+        );
+      });
+      await page.reload();
+      await expect(page.getByTestId('main-layout')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId('sidebar-session-search')).toBeVisible({ timeout: 15_000 });
+
+      const alphaRow = page.getByTestId('sidebar-session-agent:main:alpha-session');
+      const betaRow = page.getByTestId('sidebar-session-agent:main:beta-session');
+
+      await expect(alphaRow).toBeVisible({ timeout: 15_000 });
+      await expect(betaRow).toBeVisible();
+
+      await page.getByTestId('sidebar-session-search').fill('football');
+      await expect(alphaRow).toBeVisible();
+      await expect(betaRow).toHaveCount(0);
+
+      await page.getByTestId('sidebar-session-search-clear').click();
+      await expect(alphaRow).toBeVisible();
+      await expect(betaRow).toBeVisible();
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
+});

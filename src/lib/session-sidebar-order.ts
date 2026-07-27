@@ -50,6 +50,15 @@ export function getSessionBucket(activityMs: number, nowMs: number): SessionBuck
   return 'older';
 }
 
+/** True when activity falls strictly after the N-day sidebar bucket (e.g. >14 → not in 两周内). */
+export function isSessionActivityOlderThanDays(activityMs: number, nowMs: number, minAgeDays: number): boolean {
+  if (!activityMs || activityMs <= 0 || minAgeDays < 0) return false;
+  const now = new Date(nowMs);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const daysAgo = (startOfToday - activityMs) / (24 * 60 * 60 * 1000);
+  return daysAgo > minAgeDays;
+}
+
 export function compareSessionsByActivity(
   left: ChatSession,
   right: ChatSession,
