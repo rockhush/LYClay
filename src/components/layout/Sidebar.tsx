@@ -17,9 +17,6 @@ import {
   PanelLeft,
   Plus,
   ExternalLink,
-  Trash2,
-  Pencil,
-  FolderOutput,
   Cpu,
   Wrench,
   Folder,
@@ -30,9 +27,6 @@ import {
   Search,
   LogOut,
   User,
-  CheckCircle2,
-  Pin,
-  PinOff,
   MoreHorizontal,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -59,7 +53,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { flushUiStateSync } from '@/lib/ui-state-persistence';
 import { invokeIpc, toUserMessage } from '@/lib/api-client';
@@ -76,6 +69,8 @@ import {
 import { buildBatchDeleteSessionGroups } from '@/lib/session-batch-delete-groups';
 import { BatchDeleteSessionsDialog } from '@/components/chat/BatchDeleteSessionsDialog';
 import { SidebarMoreNavPanel } from '@/components/layout/SidebarMoreNavPanel';
+import { SidebarSessionRow } from '@/components/layout/SidebarSessionRow';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { isUserFacingSessionKey } from '@/lib/session-key-utils';
 import { resolveSessionDisplayLabel, isPlaceholderSessionTitle } from '@/lib/session-label-utils';
 import {
@@ -216,58 +211,54 @@ export function Sidebar() {
   const pendingFinal = useChatStore((s) => s.pendingFinal);
   const runAborted = useChatStore((s) => s.runAborted);
   const lastUserMessageAt = useChatStore((s) => s.lastUserMessageAt);
+  const messageCount = useChatStore((s) => s.messages.length);
   const messages = useChatStore((s) => s.messages);
+  const streamingMessage = useChatStore((s) => s.streamingMessage);
   const skills = useSkillsStore((s) => s.skills);
   const fetchSkills = useSkillsStore((s) => s.fetchSkills);
   const sessionBackendActivity = useChatStore((s) => s.sessionBackendActivity);
   const gatewayBackgroundActivity = useChatStore((s) => s.gatewayBackgroundActivity);
-  const streamingMessage = useChatStore((s) => s.streamingMessage);
-  const streamingText = useChatStore((s) => s.streamingText);
-  const streamingTools = useChatStore((s) => s.streamingTools);
+  const waitingOnSubagentDelegation = useChatStore((s) => isParentDelegationPhaseOpen(
+    s.messages,
+    s.gatewayBackgroundActivity?.processingSessionKeys ?? [],
+    {
+      lastUserMessageAt: s.lastUserMessageAt,
+      streamingMessage: s.streamingMessage,
+    },
+  ));
 
   const gatewayStatus = useGatewayStore((s) => s.status);
   const isGatewayRunning = gatewayStatus.state === 'running';
   const isGatewayReady = isGatewayRunning && gatewayStatus.gatewayReady === true;
   const updateStatus = useUpdateStore((s) => s.status);
   const checkForUpdatesAfterGatewayReady = useUpdateStore((s) => s.checkForUpdatesAfterGatewayReady);
-  const processingSessionKeys = gatewayBackgroundActivity?.processingSessionKeys ?? [];
-  const waitingOnSubagentDelegation = useMemo(
-    () => isParentDelegationPhaseOpen(messages, processingSessionKeys, {
-      lastUserMessageAt,
-      streamingMessage,
-    }),
-    [messages, processingSessionKeys, lastUserMessageAt, streamingMessage],
-  );
-  const isChatActive = deriveIsExecuting(
-    { sending: chatSending, activeRunId, pendingFinal, runAborted },
-    backendActivityForSession(sessionBackendActivity, currentSessionKey),
+  const isChatActive = useChatStore((s) => deriveIsExecuting(
+    { sending: s.sending, activeRunId: s.activeRunId, pendingFinal: s.pendingFinal, runAborted: s.runAborted },
+    backendActivityForSession(s.sessionBackendActivity, currentSessionKey),
     {
-      waitingOnSubagentDelegation,
-      gatewayBackground: gatewayBackgroundActivity,
-      messages,
-      lastUserMessageAt,
-      streamingMessage,
+      waitingOnSubagentDelegation: isParentDelegationPhaseOpen(
+        s.messages,
+        s.gatewayBackgroundActivity?.processingSessionKeys ?? [],
+        {
+          lastUserMessageAt: s.lastUserMessageAt,
+          streamingMessage: s.streamingMessage,
+        },
+      ),
+      gatewayBackground: s.gatewayBackgroundActivity,
+      messages: s.messages,
+      lastUserMessageAt: s.lastUserMessageAt,
+      streamingMessage: s.streamingMessage,
       sessionKey: currentSessionKey,
     },
-  );
+  ));
 
-  const firstResponsePreparingLocksSwitch = useMemo(
-    () => isFirstResponsePreparing({
-      gatewayStatus,
-      sending: chatSending,
-      streamingMessage,
-      streamingText,
-      streamingTools,
-    }),
-    [
-      gatewayStatus.state,
-      gatewayStatus.warmupStatus,
-      chatSending,
-      streamingMessage,
-      streamingText,
-      streamingTools,
-    ],
-  );
+  const firstResponsePreparingLocksSwitch = useChatStore((s) => isFirstResponsePreparing({
+    gatewayStatus,
+    sending: s.sending,
+    streamingMessage: s.streamingMessage,
+    streamingText: s.streamingText,
+    streamingTools: s.streamingTools,
+  }));
 
   useEffect(() => {
     if (!isGatewayRunning || !currentSessionKey) return;
@@ -297,7 +288,7 @@ export function Sidebar() {
    */
   const isPendingNewSession = (sessionKey: string): boolean => {
     if (sessionKey !== currentSessionKey) return false;
-    if (messages.length > 0) return false;
+    if (messageCount > 0) return false;
     if (sessionLastActivity[sessionKey]) return false;
     if (sessionLabels[sessionKey]) return false;
     if (customSessionLabels[sessionKey]) return false;
@@ -337,7 +328,7 @@ export function Sidebar() {
   const isEmptyGhostSession = (session: ChatSession): boolean => {
     if (sessionHasRealTitle(session)) return false;
     // Keep the active conversation visible while its label is still hydrating.
-    if (session.key === currentSessionKey && messages.length > 0) return false;
+    if (session.key === currentSessionKey && messageCount > 0) return false;
     // Respect explicit user intent to keep a pinned session around.
     if (Number.isFinite(sessionPinnedAt[session.key]) && sessionPinnedAt[session.key] > 0) return false;
     return true;
@@ -370,7 +361,7 @@ export function Sidebar() {
     // sessionLastActivity is read only when seeding/appending newcomers; omitting it
     // from deps keeps existing rows pinned while browsing history.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isPendingNewSession deps listed below
-  }, [sessions, sessionLabels, customSessionLabels, currentSessionKey, messages.length]);
+  }, [sessions, sessionLabels, customSessionLabels, currentSessionKey, messageCount]);
 
   const pinnedSidebarSessions = useMemo(() => {
     return orderedSidebarSessions
@@ -521,7 +512,7 @@ export function Sidebar() {
   // is on a fresh empty new-chat scratchpad and the "+ 新对话" item should be
   // the highlighted one — not any session row.
   const currentSessionHasContent =
-    messages.length > 0
+    messageCount > 0
     || !!sessionLastActivity[currentSessionKey]
     || !!sessionLabels[currentSessionKey]
     || !!customSessionLabels[currentSessionKey];
@@ -586,6 +577,7 @@ export function Sidebar() {
   const [nowMs, setNowMs] = useState(INITIAL_NOW_MS);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
+  const debouncedSessionSearchQuery = useDebouncedValue(sessionSearchQuery, 200);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -743,216 +735,6 @@ export function Sidebar() {
     );
   };
 
-  const renderChatSessionRow = (s: ChatSession, options?: { inWorkspace?: boolean }) => {
-    const inWorkspace = options?.inWorkspace === true;
-    const agentId = getAgentIdFromSessionKey(s.key);
-    const agentName = resolveAgentDisplayName(agentId, { agents, digitalEmployees });
-    const isCurrent = currentSessionKey === s.key;
-    const isRunning = deriveSidebarSessionIsExecuting({
-      sessionKey: s.key,
-      isCurrent,
-      currentUi: { sending: chatSending, activeRunId, pendingFinal, runAborted },
-      currentMessages: messages,
-      currentLastUserMessageAt: lastUserMessageAt,
-      currentStreamingMessage: streamingMessage,
-      waitingOnSubagentDelegation,
-      sessionBackendActivity,
-      gatewayBackground: gatewayBackgroundActivity,
-      snapshot: sessionStreamingStates[s.key],
-    });
-    const statusTitle = isRunning
-      ? t('chat:sidebar.statusRunning', { defaultValue: '问答进行中' })
-      : t('chat:sidebar.statusCompleted', { defaultValue: '已完成' });
-    const sessionLabel = getSessionLabel(s);
-    const isPinned = Number.isFinite(sessionPinnedAt[s.key]) && sessionPinnedAt[s.key] > 0;
-    const pinLabel = isPinned
-      ? t('common:sidebar.unpinSession')
-      : t('common:sidebar.pinSession');
-    return (
-      <div key={s.key} className="group relative flex items-center">
-        <button
-          type="button"
-          data-testid={`sidebar-session-${s.key}`}
-          onClick={(e) => {
-            e.stopPropagation(); // 阻止事件冒泡到工作空间
-            if (s.key === currentSessionKey) {
-              navigate('/');
-              return;
-            }
-            if (blockSessionSwitchIfFirstResponsePreparing()) return;
-            switchSession(s.key);
-            navigate('/');
-          }}
-          disabled={firstResponsePreparingLocksSwitch && s.key !== currentSessionKey}
-          title={
-            firstResponsePreparingLocksSwitch && s.key !== currentSessionKey
-              ? i18n.t('chat:sidebar.sessionSwitchBlockedWhilePreparing')
-              : undefined
-          }
-          className={cn(
-            'w-full text-left rounded-lg py-1.5 text-[13px] transition-[padding,colors]',
-            inWorkspace ? 'pl-1.5 pr-1.5 group-hover:pr-7' : 'px-2.5 group-hover:pr-7',
-            'hover:bg-white/60 dark:hover:bg-white/10',
-            isSessionViewActive && currentSessionKey === s.key
-              ? 'bg-white text-[#FF922B] font-medium shadow-sm shadow-black/[0.04] dark:bg-white/10 dark:text-blue-400'
-              : 'text-foreground/75',
-            firstResponsePreparingLocksSwitch && s.key !== currentSessionKey && 'opacity-50 cursor-not-allowed',
-          )}
-        >
-          <div className={cn('flex min-w-0 items-center', inWorkspace ? 'gap-1.5' : 'gap-2')}>
-            <span
-              className="flex h-3.5 w-3.5 shrink-0 items-center justify-center"
-              title={statusTitle}
-              aria-label={statusTitle}
-              data-testid={`sidebar-session-status-${s.key}`}
-              data-status={isRunning ? 'running' : 'completed'}
-            >
-              {isRunning ? (
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#FF922B] opacity-60" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-[#FF922B]" />
-                </span>
-              ) : (
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" strokeWidth={2.25} />
-              )}
-            </span>
-            <span className="shrink-0 rounded-full bg-black/[0.14] px-2 py-0.5 text-[10px] font-medium text-foreground/70 dark:bg-white/[0.12]">
-              {agentName}
-            </span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="min-w-0 flex-1 truncate text-left">{sessionLabel}</span>
-              </TooltipTrigger>
-              <TooltipContent
-                side="right"
-                align="center"
-                className="max-w-xs whitespace-normal break-words text-[13px]"
-              >
-                {sessionLabel}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </button>
-        <div
-          ref={openSessionMenuKey === s.key ? sessionMenuRef : undefined}
-          className={cn(
-            'absolute right-1 transition-opacity',
-            openSessionMenuKey === s.key
-              ? 'opacity-100'
-              : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
-          )}
-        >
-          <button
-            type="button"
-            aria-label={t('common:sidebar.sessionActions', { defaultValue: '会话操作' })}
-            aria-expanded={openSessionMenuKey === s.key}
-            data-testid={`sidebar-session-menu-${s.key}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (openSessionMenuKey === s.key) {
-                setOpenSessionMenuKey(null);
-                setSessionMenuAnchor(null);
-                return;
-              }
-              const rect = e.currentTarget.getBoundingClientRect();
-              setSessionMenuAnchor({
-                top: rect.top + rect.height / 2,
-                left: rect.right + 4,
-              });
-              setOpenSessionMenuKey(s.key);
-            }}
-            className="flex items-center justify-center rounded p-0.5 text-[#FE7B00] hover:text-[#FE7B00] hover:bg-[#FF922B]/10 dark:text-primary dark:hover:bg-primary/15 transition-colors"
-          >
-            <MoreHorizontal className="h-3.5 w-3.5" />
-          </button>
-          {openSessionMenuKey === s.key && sessionMenuAnchor ? (
-            <div
-              data-testid={`sidebar-session-menu-panel-${s.key}`}
-              style={{
-                top: sessionMenuAnchor.top,
-                left: sessionMenuAnchor.left,
-              }}
-              className="fixed z-50 w-40 -translate-y-1/2 rounded-xl border border-black/10 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-card"
-            >
-              <button
-                type="button"
-                aria-label={t('common:actions.delete')}
-                data-testid={`sidebar-session-delete-${s.key}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenSessionMenuKey(null);
-                  setSessionMenuAnchor(null);
-                  setSessionToDelete({
-                    key: s.key,
-                    label: getSessionLabel(s),
-                  });
-                }}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
-              >
-                <Trash2 className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
-                <span>{t('common:actions.delete')}</span>
-              </button>
-              {inWorkspace ? (
-                <button
-                  type="button"
-                  aria-label={t('common:sidebar.removeFromWorkspace')}
-                  data-testid={`sidebar-session-remove-workspace-${s.key}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpenSessionMenuKey(null);
-                    setSessionMenuAnchor(null);
-                    unbindSessionWorkspace(s.key);
-                    toast.success(t('common:sidebar.removeFromWorkspaceSuccess'));
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
-                >
-                  <FolderOutput className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
-                  <span>{t('common:sidebar.removeFromWorkspace')}</span>
-                </button>
-              ) : null}
-              <button
-                type="button"
-                aria-label={t('common:sidebar.renameSession')}
-                data-testid={`sidebar-session-rename-${s.key}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenSessionMenuKey(null);
-                  setSessionMenuAnchor(null);
-                  const currentLabel = getSessionLabel(s);
-                  setSessionToRename({ key: s.key, label: currentLabel });
-                  setRenameDraft(currentLabel);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
-              >
-                <Pencil className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
-                <span>{t('common:sidebar.renameSession')}</span>
-              </button>
-              <button
-                type="button"
-                aria-label={pinLabel}
-                data-testid={`sidebar-session-pin-${s.key}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenSessionMenuKey(null);
-                  setSessionMenuAnchor(null);
-                  toggleSessionPinned(s.key);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
-              >
-                {isPinned ? (
-                  <PinOff className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
-                ) : (
-                  <Pin className="h-3.5 w-3.5 shrink-0 text-[#FE7B00]" />
-                )}
-                <span>{pinLabel}</span>
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    );
-  };
-
   const sessionBuckets = useMemo(() => {
     const buckets: Array<{ key: SessionBucketKey; label: string; sessions: ChatSession[] }> = [
       { key: 'today', label: t('chat:historyBuckets.today'), sessions: [] },
@@ -986,8 +768,11 @@ export function Sidebar() {
     [pinnedSidebarSessions, sessionWorkspaceIds, workspaceIdsKnown],
   );
 
-  const normalizedSessionSearchQuery = sessionSearchQuery.trim().toLowerCase();
-  const isSessionSearchActive = normalizedSessionSearchQuery.length > 0;
+  const normalizedSessionSearchQuery = useMemo(() => {
+    if (sessionSearchQuery.trim() === '') return '';
+    return debouncedSessionSearchQuery.trim().toLowerCase();
+  }, [sessionSearchQuery, debouncedSessionSearchQuery]);
+  const isSessionSearchActive = sessionSearchQuery.trim().length > 0;
 
   const sessionMatchesSearch = useCallback((session: ChatSession) => {
     if (!isSessionSearchActive) return true;
@@ -1033,6 +818,141 @@ export function Sidebar() {
     filteredPinnedHistorySessions,
     filteredSessionBuckets,
   ]);
+
+  const sessionLabelByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const session of sessions) {
+      map.set(session.key, getSessionLabel(session));
+    }
+    return map;
+  }, [sessions, getSessionLabel]);
+
+  const sessionIsRunningByKey = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const session of sessions) {
+      const isCurrent = currentSessionKey === session.key;
+      map.set(session.key, deriveSidebarSessionIsExecuting({
+        sessionKey: session.key,
+        isCurrent,
+        currentUi: { sending: chatSending, activeRunId, pendingFinal, runAborted },
+        currentMessages: messages,
+        currentLastUserMessageAt: lastUserMessageAt,
+        currentStreamingMessage: streamingMessage,
+        waitingOnSubagentDelegation,
+        sessionBackendActivity,
+        gatewayBackground: gatewayBackgroundActivity,
+        snapshot: sessionStreamingStates[session.key],
+      }));
+    }
+    return map;
+  }, [
+    sessions,
+    currentSessionKey,
+    chatSending,
+    activeRunId,
+    pendingFinal,
+    runAborted,
+    messages,
+    lastUserMessageAt,
+    waitingOnSubagentDelegation,
+    sessionBackendActivity,
+    gatewayBackgroundActivity,
+    sessionStreamingStates,
+    streamingMessage,
+  ]);
+
+  const agentNameBySessionKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const session of sessions) {
+      const agentId = getAgentIdFromSessionKey(session.key);
+      map.set(session.key, resolveAgentDisplayName(agentId, { agents, digitalEmployees }));
+    }
+    return map;
+  }, [sessions, agents, digitalEmployees]);
+
+  const handleSessionSelect = useCallback((sessionKey: string) => {
+    if (sessionKey === currentSessionKey) {
+      navigate('/');
+      return;
+    }
+    if (blockSessionSwitchIfFirstResponsePreparing()) return;
+    switchSession(sessionKey);
+    navigate('/');
+  }, [currentSessionKey, navigate, switchSession]);
+
+  const handleSessionMenuClose = useCallback(() => {
+    setOpenSessionMenuKey(null);
+    setSessionMenuAnchor(null);
+  }, []);
+
+  const handleSessionMenuToggle = useCallback((
+    sessionKey: string,
+    anchor: { top: number; left: number },
+  ) => {
+    setOpenSessionMenuKey(sessionKey);
+    setSessionMenuAnchor(anchor);
+  }, []);
+
+  const handleSessionDelete = useCallback((sessionKey: string, label: string) => {
+    setSessionToDelete({ key: sessionKey, label });
+  }, []);
+
+  const handleSessionRename = useCallback((sessionKey: string, label: string) => {
+    setSessionToRename({ key: sessionKey, label });
+    setRenameDraft(label);
+  }, []);
+
+  const handleSessionTogglePin = useCallback((sessionKey: string) => {
+    toggleSessionPinned(sessionKey);
+  }, [toggleSessionPinned]);
+
+  const handleSessionRemoveFromWorkspace = useCallback((sessionKey: string) => {
+    unbindSessionWorkspace(sessionKey);
+    toast.success(t('common:sidebar.removeFromWorkspaceSuccess'));
+  }, [t, unbindSessionWorkspace]);
+
+  const renderChatSessionRow = (s: ChatSession, options?: { inWorkspace?: boolean }) => {
+    const inWorkspace = options?.inWorkspace === true;
+    const sessionKey = s.key;
+    const isCurrent = currentSessionKey === sessionKey;
+    const isRunning = sessionIsRunningByKey.get(sessionKey) ?? false;
+    const sessionLabel = sessionLabelByKey.get(sessionKey) ?? sessionKey;
+    const agentName = agentNameBySessionKey.get(sessionKey) ?? 'main';
+    const isPinned = Number.isFinite(sessionPinnedAt[sessionKey]) && sessionPinnedAt[sessionKey] > 0;
+
+    return (
+      <SidebarSessionRow
+        key={sessionKey}
+        sessionKey={sessionKey}
+        sessionLabel={sessionLabel}
+        agentName={agentName}
+        isCurrent={isCurrent}
+        isRunning={isRunning}
+        isPinned={isPinned}
+        isSessionViewActive={isSessionViewActive}
+        inWorkspace={inWorkspace}
+        firstResponsePreparingLocksSwitch={firstResponsePreparingLocksSwitch}
+        isMenuOpen={openSessionMenuKey === sessionKey}
+        menuAnchor={openSessionMenuKey === sessionKey ? sessionMenuAnchor : null}
+        menuRef={sessionMenuRef}
+        pinLabel={isPinned ? t('common:sidebar.unpinSession') : t('common:sidebar.pinSession')}
+        statusRunningLabel={t('chat:sidebar.statusRunning', { defaultValue: '问答进行中' })}
+        statusCompletedLabel={t('chat:sidebar.statusCompleted', { defaultValue: '已完成' })}
+        sessionActionsLabel={t('common:sidebar.sessionActions', { defaultValue: '会话操作' })}
+        deleteLabel={t('common:actions.delete')}
+        removeFromWorkspaceLabel={t('common:sidebar.removeFromWorkspace')}
+        renameLabel={t('common:sidebar.renameSession')}
+        sessionSwitchBlockedTitle={i18n.t('chat:sidebar.sessionSwitchBlockedWhilePreparing')}
+        onSelect={handleSessionSelect}
+        onMenuToggle={handleSessionMenuToggle}
+        onMenuClose={handleSessionMenuClose}
+        onDelete={handleSessionDelete}
+        onRename={handleSessionRename}
+        onTogglePin={handleSessionTogglePin}
+        onRemoveFromWorkspace={inWorkspace ? handleSessionRemoveFromWorkspace : undefined}
+      />
+    );
+  };
 
   const prevSessionSearchQueryRef = useRef('');
 
@@ -1278,9 +1198,9 @@ export function Sidebar() {
             }
             navigate('/');
           }}
-          disabled={firstResponsePreparingLocksSwitch && messages.length > 0}
+          disabled={firstResponsePreparingLocksSwitch && messageCount > 0}
           title={
-            firstResponsePreparingLocksSwitch && messages.length > 0
+            firstResponsePreparingLocksSwitch && messageCount > 0
               ? i18n.t('chat:sidebar.sessionSwitchBlockedWhilePreparing')
               : undefined
           }
@@ -1290,7 +1210,7 @@ export function Sidebar() {
               ? 'bg-white text-[#FF922B] shadow-sm shadow-black/[0.04] hover:bg-white/80 dark:bg-accent dark:text-foreground dark:shadow-none'
               : 'text-foreground/80 hover:bg-white/60 hover:shadow-sm dark:hover:bg-white/10',
             sidebarCollapsed && 'justify-center px-0',
-            firstResponsePreparingLocksSwitch && messages.length > 0 && 'opacity-50 cursor-not-allowed',
+            firstResponsePreparingLocksSwitch && messageCount > 0 && 'opacity-50 cursor-not-allowed',
           )}
         >
           <div
