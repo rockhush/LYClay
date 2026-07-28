@@ -77,4 +77,41 @@ describe('toExecutionUploadPayload', () => {
       errorMessage: 'timeout',
     });
   });
+
+  it('maps digital employee runtime agent ids for backend upload', () => {
+    const record: ExecutionRecord = {
+      execution_id: 'exec-de-1',
+      conversation_id: 'agent:employee-recruitment-specialist-8f6b71f4:session-1',
+      work_no: '11427193',
+      entry_source: 'digital_employee',
+      agent_type: 'digital_employee',
+      agent_id: 'employee-recruitment-specialist-8f6b71f4',
+      model_id: 'ly-auto/auto',
+      status: 'success',
+    };
+
+    expect(toExecutionUploadPayload(record)).toEqual({
+      executionId: 'exec-de-1',
+      conversationId: 'agent:employee-recruitment-specialist:session-1',
+      workNo: '11427193',
+      entrySource: 'digital_employee',
+      agentType: 'digital_employee',
+      agentId: 'employee-recruitment-specialist',
+      modelId: 'ly-auto/auto',
+      status: 'success',
+    });
+
+    expect(toExecutionUploadPayload(record, new Map([
+      ['employee-recruitment-specialist-8f6b71f4', '7'],
+    ]))).toEqual({
+      executionId: 'exec-de-1',
+      conversationId: 'agent:7:session-1',
+      workNo: '11427193',
+      entrySource: 'digital_employee',
+      agentType: 'digital_employee',
+      agentId: '7',
+      modelId: 'ly-auto/auto',
+      status: 'success',
+    });
+  });
 });

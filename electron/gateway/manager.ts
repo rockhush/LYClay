@@ -94,6 +94,7 @@ import {
 } from '../runtime/tool-run-registry';
 import { isSessionProcessingLiveOnDisk } from './session-processing-liveness';
 import { hasActiveExecInSessionTranscript } from './session-exec-liveness';
+import { captureLogErrorSnapshot, recordLogEvent } from '../utils/log-observability';
 
 
 export interface GatewayStatus {
@@ -1540,7 +1541,7 @@ export class GatewayManager extends EventEmitter {
       return;
     }
 
-    const usage = parsed.parsed && typeof parsed.parsed === 'object'
+    const _usage = parsed.parsed && typeof parsed.parsed === 'object'
       ? parsed.parsed as Record<string, unknown>
       : parsed;
     // recordGatewayModelUsage({
@@ -2927,6 +2928,19 @@ export class GatewayManager extends EventEmitter {
 
       const id = crypto.randomUUID();
       requestId = id;
+      recordLogEvent({
+        eventName: 'gateway.rpc',
+        component: 'gateway',
+        source: 'gateway',
+        requestId: id,
+        method,
+        status: 'started',
+        durationMs: 0,
+        metadata: {
+          timeoutMs,
+          sessionKey: this.getRpcSessionKey(method, effectiveParams),
+        },
+      });
       // void beginChatSendTrace({
       //   requestId: id,
       //   method,
@@ -2977,6 +2991,16 @@ export class GatewayManager extends EventEmitter {
     }).then((result) => {
       const duration = Date.now() - rpcStart;
       logger.info(`[rpc] ${method} completed in ${duration}ms`);
+      recordLogEvent({
+        eventName: 'gateway.rpc',
+        component: 'gateway',
+        source: 'gateway',
+        requestId: requestId ?? undefined,
+        runId: this.getRunIdFromRpcResult(result) ?? undefined,
+        method,
+        status: 'ok',
+        durationMs: duration,
+      });
       if (requestId) {
         // finishChatSendRpc({
         //   requestId,
@@ -3000,6 +3024,31 @@ export class GatewayManager extends EventEmitter {
     }).catch((error) => {
       const duration = Date.now() - rpcStart;
       logger.warn(`[rpc] ${method} failed after ${duration}ms: ${String(error)}`);
+      const status = String(error).toLowerCase().includes('timeout') ? 'timeout' : 'failed';
+      recordLogEvent({
+        eventName: 'gateway.rpc',
+        component: 'gateway',
+        source: 'gateway',
+        requestId: requestId ?? undefined,
+        method,
+        status,
+        durationMs: duration,
+      });
+      void captureLogErrorSnapshot({
+        level: 'error',
+        source: 'gateway',
+        eventName: 'gateway.rpc_failed',
+        component: 'gateway',
+        errorCode: status === 'timeout' ? 'GATEWAY_RPC_TIMEOUT' : 'GATEWAY_RPC_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+        requestId: requestId ?? undefined,
+        method,
+        status,
+        durationMs: duration,
+        metadata: {
+          transportFailure: isTransportRpcFailure(error),
+        },
+      });
       if (requestId) {
         // finishChatSendRpc({
         //   requestId,

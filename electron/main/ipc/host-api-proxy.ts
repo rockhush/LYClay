@@ -2,6 +2,7 @@ import { ipcMain } from 'electron';
 import { getPort } from '../../utils/config';
 import { getHostApiToken } from '../../api/server';
 import { secureProxyAwareFetch } from '../../security/network-fetch';
+import { captureLogErrorSnapshot, recordLogEvent } from '../../utils/log-observability';
 
 type HostApiFetchRequest = {
   path: string;
@@ -18,6 +19,7 @@ export function registerHostApiProxyHandlers(): void {
   ipcMain.handle('hostapi:token', () => getHostApiToken());
 
   ipcMain.handle('hostapi:fetch', async (_, request: HostApiFetchRequest) => {
+    const startedAt = Date.now();
     try {
       const path = typeof request?.path === 'string' ? request.path : '';
       if (!path || !path.startsWith('/')) {
@@ -57,6 +59,16 @@ export function registerHostApiProxyHandlers(): void {
           allowLocalhostPorts: [hostApiPort],
         },
       );
+      recordLogEvent({
+        eventName: 'hostapi.fetch',
+        component: 'hostapi-fetch',
+        source: 'host-api',
+        method,
+        route: path,
+        status: response.ok ? 'ok' : 'failed',
+        statusCode: response.status,
+        durationMs: Date.now() - startedAt,
+      });
 
       const data: { status: number; ok: boolean; json?: unknown; text?: string } = {
         status: response.status,
@@ -71,9 +83,45 @@ export function registerHostApiProxyHandlers(): void {
           data.text = await response.text().catch(() => '');
         }
       }
+      if (response.status >= 500) {
+        void captureLogErrorSnapshot({
+          level: 'error',
+          source: 'host-api',
+          eventName: 'hostapi.fetch_error',
+          component: 'hostapi-fetch',
+          errorCode: 'HOSTAPI_FETCH_FAILED',
+          message: `hostapi:fetch returned ${response.status}`,
+          method,
+          route: path,
+          status: 'failed',
+          statusCode: response.status,
+          durationMs: Date.now() - startedAt,
+        });
+      }
 
       return { ok: true, data };
     } catch (error) {
+      recordLogEvent({
+        eventName: 'hostapi.fetch',
+        component: 'hostapi-fetch',
+        source: 'host-api',
+        route: typeof request?.path === 'string' ? request.path : undefined,
+        method: request?.method,
+        status: 'failed',
+        durationMs: Date.now() - startedAt,
+      });
+      void captureLogErrorSnapshot({
+        level: 'error',
+        source: 'host-api',
+        eventName: 'hostapi.fetch_exception',
+        component: 'hostapi-fetch',
+        errorCode: 'HOSTAPI_FETCH_EXCEPTION',
+        message: error instanceof Error ? error.message : String(error),
+        route: typeof request?.path === 'string' ? request.path : undefined,
+        method: request?.method,
+        status: 'failed',
+        durationMs: Date.now() - startedAt,
+      });
       return {
         ok: false,
         error: {

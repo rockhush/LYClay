@@ -41,7 +41,7 @@ function listSkillSlugs(root) {
   return slugs;
 }
 
-function mergeSourceIntoTarget({ sourceRoot, targetSkillsRoot, label }) {
+function mergeSourceIntoTarget({ sourceRoot, targetSkillsRoot, label, overwriteExisting = false }) {
   if (!existsSync(sourceRoot)) {
     echo`   [merge-skills] Skip ${label}: source not found (${sourceRoot})`;
     return { copied: [], skipped: [] };
@@ -54,6 +54,11 @@ function mergeSourceIntoTarget({ sourceRoot, targetSkillsRoot, label }) {
     const targetDir = join(targetSkillsRoot, slug);
     const targetManifest = join(targetDir, 'SKILL.md');
     if (existsSync(targetManifest)) {
+      if (overwriteExisting) {
+        fs.cpSync(sourceDir, targetDir, { recursive: true, dereference: true, force: true });
+        copied.push(slug);
+        continue;
+      }
       skipped.push(slug);
       continue;
     }
@@ -103,6 +108,7 @@ const builtinResult = mergeSourceIntoTarget({
   sourceRoot: join(ROOT, 'resources', 'builtin-skills'),
   targetSkillsRoot,
   label: 'builtin-skills',
+  overwriteExisting: true,
 });
 const preinstalledResult = mergeSourceIntoTarget({
   sourceRoot: preinstalledRoot,

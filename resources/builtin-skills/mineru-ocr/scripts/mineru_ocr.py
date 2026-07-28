@@ -82,7 +82,7 @@ def call_mineru(
 
     # multipart/form-data：布尔值用小写字符串，数组用 JSON 字符串
     data = {
-        "backend": "vlm-vllm-async-engine",
+        "backend": "vlm-engine",
         "lang_list": json.dumps(lang_list),
         "parse_method": parse_method,
         "table_enable": "true" if table_enable else "false",

@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import path from 'node:path';
 import { logger } from '../utils/logger';
 import { getDataDir } from '../utils/paths';
+import { captureLogErrorSnapshot, recordLogEvent } from '../utils/log-observability';
 import { redactSecrets, redactUnknown } from './secret-scanner';
 import type {
   CommandGrant,
@@ -161,6 +162,38 @@ export function auditSecurityEvent(event: Omit<SecurityAuditEvent, 'id' | 'ts'> 
   }
   logEvent(normalized);
   persistAuditEvent(normalized);
+  recordLogEvent({
+    eventName: 'security.audit',
+    component: 'security',
+    source: 'security',
+    level: normalized.risk === 'critical' || normalized.risk === 'high' ? 'warn' : 'info',
+    status: normalized.decision,
+    errorCode: normalized.code,
+    metadata: {
+      capability: normalized.capability,
+      operation: normalized.operation,
+      risk: normalized.risk,
+      decision: normalized.decision,
+    },
+  });
+  if (normalized.decision === 'deny' || normalized.risk === 'critical' || normalized.risk === 'high') {
+    void captureLogErrorSnapshot({
+      priority: 'p1',
+      level: normalized.risk === 'critical' ? 'error' : 'warn',
+      source: 'security',
+      eventName: 'security.audit_denied',
+      component: 'security',
+      errorCode: normalized.code ?? 'SECURITY_AUDIT_ATTENTION',
+      message: `${normalized.capability} ${normalized.decision}`,
+      status: normalized.decision,
+      metadata: {
+        capability: normalized.capability,
+        operation: normalized.operation,
+        risk: normalized.risk,
+        reasons: normalized.reasons,
+      },
+    });
+  }
   return normalized;
 }
 

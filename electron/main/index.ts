@@ -49,6 +49,7 @@ import { ensureDwsEnvironmentInitialized } from '../utils/dws-env-setup';
 import { ensureDwsCliInstalled } from '../utils/dws-cli-installer';
 import { migrateLegacyUserDataIfNeeded } from '../utils/user-data-migration';
 import { startSessionTranscriptWatcher } from '../utils/session-transcript-watcher';
+import { initializeLogForwarding, observeGatewayNotificationForLog } from '../utils/log-observability';
 
 import { startHostApiServer } from '../api/server';
 import { HostEventBus } from '../api/event-bus';
@@ -520,6 +521,9 @@ async function initialize(): Promise<void> {
   });
 
   gatewayManager.on('notification', (notification) => {
+    void observeGatewayNotificationForLog(notification).catch((error) => {
+      logger.warn('[log.pipeline] Failed to capture Gateway notification snapshot:', error);
+    });
     hostEventBus.emit('gateway:notification', notification);
   });
 
@@ -693,6 +697,7 @@ if (gotTheLock) {
 
   // Application lifecycle
   app.whenReady().then(() => {
+    initializeLogForwarding();
     void initialize().catch((error) => {
       logger.error('Application initialization failed:', error);
     });

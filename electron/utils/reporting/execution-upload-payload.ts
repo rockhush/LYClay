@@ -1,4 +1,8 @@
 import type { ExecutionRecord } from './types';
+import {
+  resolveExecutionReportAgentId,
+  resolveExecutionReportConversationId,
+} from '../../../shared/reporting/execution-report-agent-id';
 
 /** Backend POST body for `/management/claw/report/execution` (camelCase). */
 export interface ExecutionUploadPayload {
@@ -26,14 +30,27 @@ export interface ExecutionUploadPayload {
   appVersion?: string;
 }
 
-export function toExecutionUploadPayload(record: ExecutionRecord): ExecutionUploadPayload {
+export function toExecutionUploadPayload(
+  record: ExecutionRecord,
+  agentIdLookup?: ReadonlyMap<string, string>,
+): ExecutionUploadPayload {
+  const runtimeAgentId = record.agent_id;
+  const reportAgentId = resolveExecutionReportAgentId(
+    runtimeAgentId,
+    record.agent_type,
+    agentIdLookup,
+  );
   const payload: ExecutionUploadPayload = {
     executionId: record.execution_id,
-    conversationId: record.conversation_id,
+    conversationId: resolveExecutionReportConversationId(
+      record.conversation_id,
+      runtimeAgentId,
+      reportAgentId,
+    ),
     workNo: record.work_no,
     entrySource: record.entry_source,
     agentType: record.agent_type,
-    agentId: record.agent_id,
+    agentId: reportAgentId,
     modelId: record.model_id,
     status: record.status,
   };
@@ -62,6 +79,9 @@ export function toExecutionUploadPayload(record: ExecutionRecord): ExecutionUplo
   return payload;
 }
 
-export function toExecutionUploadPayloads(records: ExecutionRecord[]): ExecutionUploadPayload[] {
-  return records.map(toExecutionUploadPayload);
+export function toExecutionUploadPayloads(
+  records: ExecutionRecord[],
+  agentIdLookup?: ReadonlyMap<string, string>,
+): ExecutionUploadPayload[] {
+  return records.map((record) => toExecutionUploadPayload(record, agentIdLookup));
 }

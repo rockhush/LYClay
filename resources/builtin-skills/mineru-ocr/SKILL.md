@@ -1,7 +1,7 @@
 ---
 name: mineru-ocr
 slug: mineru-ocr
-version: 1.0.0
+version: 1.0.1
 description: 使用内网 MinerU 服务对 PDF、扫描件或图片进行 OCR 文档解析，提取正文、标题、表格、公式等结构化内容；当用户要求 OCR、文字识别、PDF解析、扫描件识别、文档识别、提取文本或识别表格时使用。
 metadata: |
   {

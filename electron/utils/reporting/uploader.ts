@@ -23,6 +23,7 @@ import {
 } from './queue';
 import { scanTranscriptsForTokenConsume } from './transcript-scan';
 import { enrichExecutionRecordsFromTranscripts } from './execution-transcript-enrich';
+import { buildExecutionReportAgentIdLookup } from './execution-report-agent-id-lookup';
 import { toExecutionUploadPayloads } from './execution-upload-payload';
 import { enrichSkillInvokeRecordsForUpload } from './skill-invoke-enrich';
 import { toSkillInvokeUploadPayloads } from './skill-invoke-upload-payload';
@@ -48,9 +49,13 @@ function truncate(text: string, limit = RESPONSE_BODY_LOG_LIMIT): string {
 }
 
 /** Serialize channel records for the backend POST body. */
-function recordsForBackendUpload(channel: ReportingChannel, records: unknown[]): unknown[] {
+function recordsForBackendUpload(
+  channel: ReportingChannel,
+  records: unknown[],
+  executionAgentIdLookup?: ReadonlyMap<string, string>,
+): unknown[] {
   if (channel === 'execution') {
-    return toExecutionUploadPayloads(records as ExecutionRecord[]);
+    return toExecutionUploadPayloads(records as ExecutionRecord[], executionAgentIdLookup);
   }
   if (channel === 'skillInvoke') {
     return toSkillInvokeUploadPayloads(records as SkillInvokeRecord[]);
@@ -59,8 +64,12 @@ function recordsForBackendUpload(channel: ReportingChannel, records: unknown[]):
 }
 
 /** DevTools diagnostic payload: full POST body (same records as upload). */
-function diagnosticRequestBody(channel: ReportingChannel, records: unknown[]): string {
-  return JSON.stringify(recordsForBackendUpload(channel, records));
+function diagnosticRequestBody(
+  channel: ReportingChannel,
+  records: unknown[],
+  executionAgentIdLookup?: ReadonlyMap<string, string>,
+): string {
+  return JSON.stringify(recordsForBackendUpload(channel, records, executionAgentIdLookup));
 }
 
 let inFlight: Promise<ReportingFlushResult> | null = null;
@@ -82,8 +91,9 @@ async function postRecords(
   channel: ReportingChannel,
   url: string,
   records: unknown[],
+  executionAgentIdLookup?: ReadonlyMap<string, string>,
 ): Promise<ReportingChannelDiagnostic> {
-  const uploadRecords = recordsForBackendUpload(channel, records);
+  const uploadRecords = recordsForBackendUpload(channel, records, executionAgentIdLookup);
   const body = JSON.stringify(uploadRecords);
   logger.info(
     `[UsageReport][${channel}] >>> POST ${url} `
@@ -94,7 +104,7 @@ async function postRecords(
     url,
     method: 'POST',
     count: records.length,
-    requestBody: diagnosticRequestBody(channel, records),
+    requestBody: diagnosticRequestBody(channel, records, executionAgentIdLookup),
     status: null,
     statusText: null,
     durationMs: 0,
@@ -208,6 +218,16 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       logger.info(`[UsageReport] flush(${reason}) backfilled empty workNo with ${workNo}`);
     }
 
+    let executionAgentIdLookup: Map<string, string> | undefined;
+    if (detached.execution.length > 0) {
+      try {
+        executionAgentIdLookup = await buildExecutionReportAgentIdLookup();
+      } catch (error) {
+        logger.warn(`[UsageReport] flush(${reason}) execution agent-id lookup failed:`, error);
+        executionAgentIdLookup = new Map();
+      }
+    }
+
     // Only POST channels that actually have queued records. Empty `[]`
     // payloads were previously sent so the backend access log would show a
     // heartbeat per launch, but ops asked us to drop that — empty channels
@@ -245,7 +265,11 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       url: task.url,
       method: 'POST',
       count: task.records.length,
-      requestBody: diagnosticRequestBody(task.channel, task.records),
+      requestBody: diagnosticRequestBody(
+        task.channel,
+        task.records,
+        task.channel === 'execution' ? executionAgentIdLookup : undefined,
+      ),
       status: null,
       statusText: null,
       durationMs: 0,
@@ -256,7 +280,12 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       const stub = stubDiagnostic(task);
       channelDiags.set(task.channel, stub);
       try {
-        const diag = await postRecords(task.channel, task.url, task.records);
+        const diag = await postRecords(
+          task.channel,
+          task.url,
+          task.records,
+          task.channel === 'execution' ? executionAgentIdLookup : undefined,
+        );
         channelDiags.set(task.channel, diag);
         result.uploaded[task.channel] = task.records.length;
         await recordSuccessfulUpload(task.channel, new Date().toISOString());

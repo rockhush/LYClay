@@ -24,7 +24,6 @@ import { handleConnectorRoutes } from './routes/connectors';
 import { handleUiStateRoutes } from './routes/ui-state';
 import { handleSecurityRoutes } from './routes/security';
 import { handleDigitalEmployeeRoutes } from './routes/digital-employees';
-import { handleSecurityRoutes } from './routes/security';
 import { sendJson, setCorsHeaders, requireJsonContentType } from './route-utils';
 import {
   getCommandPolicyPreflightToken,
@@ -33,6 +32,7 @@ import {
   setHostApiToken,
 } from './auth-token';
 import { writeLyclawHostApiBridge } from '../utils/lyclaw-host-api-bridge';
+import { captureLogErrorSnapshot, recordLogEvent } from '../utils/log-observability';
 
 type RouteHandler = (
   req: IncomingMessage,
@@ -61,9 +61,7 @@ const coreRouteHandlers: RouteHandler[] = [
   handleConnectorRoutes,
   handleMcpRoutes,
   handleUiStateRoutes,
-  handleDigitalEmployeeRoutes,
   handleSecurityRoutes,
-
 ];
 
 function buildRouteHandlers(): RouteHandler[] {
@@ -90,8 +88,11 @@ export function startHostApiServer(ctx: HostApiContext, port = getPort('CLAWX_HO
   setCommandPolicyPreflightToken(randomBytes(32).toString('hex'));
 
   const server = createServer(async (req, res) => {
+    const requestStartedAt = Date.now();
+    const requestId = randomBytes(8).toString('hex');
+    let requestUrl: URL | null = null;
     try {
-      const requestUrl = new URL(req.url || '/', `http://127.0.0.1:${port}`);
+      requestUrl = new URL(req.url || '/', `http://127.0.0.1:${port}`);
       // ── CORS headers ─────────────────────────────────────────
       // Set origin-aware CORS headers early so every response
       // (including error responses) carries them consistently.
@@ -118,6 +119,17 @@ export function startHostApiServer(ctx: HostApiContext, port = getPort('CLAWX_HO
         || (isCommandPolicyPreflight && bearerToken === getCommandPolicyPreflightToken());
       if (!isAuthorized) {
         sendJson(res, 401, { success: false, error: 'Unauthorized' });
+        recordLogEvent({
+          eventName: 'hostapi.request',
+          component: 'host-api',
+          source: 'host-api',
+          requestId,
+          method: req.method,
+          route: requestUrl.pathname,
+          status: 'denied',
+          statusCode: 401,
+          durationMs: Date.now() - requestStartedAt,
+        });
         return;
       }
 
@@ -126,19 +138,93 @@ export function startHostApiServer(ctx: HostApiContext, port = getPort('CLAWX_HO
       // preflight, preventing "simple request" CSRF attacks.
       if (!requireJsonContentType(req)) {
         sendJson(res, 415, { success: false, error: 'Content-Type must be application/json' });
+        recordLogEvent({
+          eventName: 'hostapi.request',
+          component: 'host-api',
+          source: 'host-api',
+          requestId,
+          method: req.method,
+          route: requestUrl.pathname,
+          status: 'denied',
+          statusCode: 415,
+          durationMs: Date.now() - requestStartedAt,
+        });
         return;
       }
 
       const routeHandlers = buildRouteHandlers();
       for (const handler of routeHandlers) {
         if (await handler(req, res, requestUrl, ctx)) {
+          recordLogEvent({
+            eventName: 'hostapi.request',
+            component: 'host-api',
+            source: 'host-api',
+            requestId,
+            method: req.method,
+            route: requestUrl.pathname,
+            status: res.statusCode >= 400 ? 'failed' : 'ok',
+            statusCode: res.statusCode,
+            durationMs: Date.now() - requestStartedAt,
+          });
+          if (res.statusCode >= 500) {
+            void captureLogErrorSnapshot({
+              level: 'error',
+              source: 'host-api',
+              eventName: 'hostapi.request_error',
+              component: 'host-api',
+              errorCode: 'HOSTAPI_ROUTE_FAILED',
+              message: `Host API route failed with status ${res.statusCode}`,
+              requestId,
+              method: req.method,
+              route: requestUrl.pathname,
+              status: 'failed',
+              statusCode: res.statusCode,
+              durationMs: Date.now() - requestStartedAt,
+            });
+          }
           return;
         }
       }
       sendJson(res, 404, { success: false, error: `No route for ${req.method} ${requestUrl.pathname}` });
+      recordLogEvent({
+        eventName: 'hostapi.request',
+        component: 'host-api',
+        source: 'host-api',
+        requestId,
+        method: req.method,
+        route: requestUrl.pathname,
+        status: 'failed',
+        statusCode: 404,
+        durationMs: Date.now() - requestStartedAt,
+      });
     } catch (error) {
       logger.error('Host API request failed:', error);
       sendJson(res, 500, { success: false, error: String(error) });
+      recordLogEvent({
+        eventName: 'hostapi.request',
+        component: 'host-api',
+        source: 'host-api',
+        requestId,
+        method: req.method,
+        route: requestUrl?.pathname,
+        status: 'failed',
+        statusCode: 500,
+        durationMs: Date.now() - requestStartedAt,
+      });
+      void captureLogErrorSnapshot({
+        level: 'error',
+        source: 'host-api',
+        eventName: 'hostapi.request_exception',
+        component: 'host-api',
+        errorCode: 'HOSTAPI_ROUTE_EXCEPTION',
+        message: error instanceof Error ? error.message : String(error),
+        requestId,
+        method: req.method,
+        route: requestUrl?.pathname,
+        status: 'failed',
+        statusCode: 500,
+        durationMs: Date.now() - requestStartedAt,
+      });
     }
   });
 

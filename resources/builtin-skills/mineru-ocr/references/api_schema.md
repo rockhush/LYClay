@@ -23,7 +23,7 @@
 
 | 字段名 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `backend` | string | `vlm-vllm-async-engine` | 解析后端，固定值 |
+| `backend` | string | `vlm-engine` | 解析后端，固定值 |
 | `lang_list` | JSON array string | `["ch"]` | 语言列表，如 `["ch","en"]` |
 | `parse_method` | string | `auto` | 解析方式：`auto` / `txt` / `ocr` |
 | `table_enable` | bool string | `"true"` | 是否开启表格识别 |
