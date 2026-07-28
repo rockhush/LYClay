@@ -17,6 +17,7 @@ import {
 import {
   finalizeSkillInvokeReports,
   registerPendingUserSelectedSkills,
+  ensureSkillInvokeTurnTracking,
   reportUsageFromToolResult,
 } from '@/stores/chat/skill-invoke-usage';
 import { isRetiredDigitalEmployeeAgent, resolveActiveDigitalEmployeeExecutionAgent } from '@/lib/retired-digital-employees';
@@ -5571,19 +5572,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
         startedAtMs: nowMs,
         isDigitalEmployee: _deIsDigital,
       });
-      const userSelectedSkillIds = options?.userSelectedSkillIds
-        ?.map((skillId) => skillId.trim())
-        .filter(Boolean);
       const executionId = getActiveExecutionId();
-      if (executionId && userSelectedSkillIds?.length) {
+      if (executionId) {
         const audit = getActiveExecutionAuditContext();
-        registerPendingUserSelectedSkills({
+        ensureSkillInvokeTurnTracking({
           executionId,
           agentId,
-          skillIds: userSelectedSkillIds,
           sessionStartedAtMs: audit.sessionStartedAtMs,
           turnStartedAtMs: nowMs,
         });
+        const userSelectedSkillIds = options?.userSelectedSkillIds
+          ?.map((skillId) => skillId.trim())
+          .filter(Boolean);
+        if (userSelectedSkillIds?.length) {
+          registerPendingUserSelectedSkills({
+            executionId,
+            agentId,
+            skillIds: userSelectedSkillIds,
+            sessionStartedAtMs: audit.sessionStartedAtMs,
+            turnStartedAtMs: nowMs,
+          });
+        }
       }
     }
 

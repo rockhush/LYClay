@@ -99,6 +99,7 @@ function ensureActiveTurn(input: {
   turnStartedAtMs: number;
 }): ActiveSkillInvokeTurn {
   if (activeTurn && activeTurn.executionId === input.executionId && !activeTurn.finalized) {
+    if (input.runId?.trim()) activeTurn.runId = input.runId.trim();
     return activeTurn;
   }
   activeTurn = {
@@ -112,6 +113,37 @@ function ensureActiveTurn(input: {
     finalized: false,
   };
   return activeTurn;
+}
+
+/** Start tracking skill reads for the current execution turn (even without user-selected skills). */
+export function ensureSkillInvokeTurnTracking(input: {
+  executionId: string;
+  runId?: string;
+  agentId: string;
+  sessionStartedAtMs: number | null;
+  turnStartedAtMs: number;
+}): void {
+  const executionId = (input.executionId || '').trim();
+  if (!executionId) return;
+  ensureActiveTurn(input);
+}
+
+function bootstrapActiveTurnForExecution(
+  executionId: string,
+  get: ChatGet,
+  runId?: string,
+): ActiveSkillInvokeTurn | null {
+  const audit = getActiveExecutionAuditContext();
+  if (activeTurn && activeTurn.executionId === executionId && activeTurn.finalized) {
+    return null;
+  }
+  return ensureActiveTurn({
+    executionId,
+    runId,
+    agentId: audit.agentId ?? get().currentAgentId ?? 'main',
+    sessionStartedAtMs: audit.sessionStartedAtMs,
+    turnStartedAtMs: audit.startedAtMs ?? Date.now(),
+  });
 }
 
 export function registerPendingUserSelectedSkills(input: {
@@ -144,7 +176,19 @@ function recordObservedSkillRead(input: {
   runId: string;
 }): void {
   const executionId = (getActiveExecutionId() || '').trim();
-  if (!executionId || !activeTurn || activeTurn.executionId !== executionId || activeTurn.finalized) {
+  if (!executionId) return;
+  const audit = getActiveExecutionAuditContext();
+  if (!activeTurn || activeTurn.executionId !== executionId || activeTurn.finalized) {
+    if (activeTurn?.finalized) return;
+    ensureActiveTurn({
+      executionId,
+      runId: input.runId,
+      agentId: audit.agentId ?? 'main',
+      sessionStartedAtMs: audit.sessionStartedAtMs,
+      turnStartedAtMs: audit.startedAtMs ?? Date.now(),
+    });
+  }
+  if (!activeTurn || activeTurn.executionId !== executionId || activeTurn.finalized) {
     return;
   }
   const skills = useSkillsStore.getState().skills;
@@ -274,7 +318,10 @@ export function finalizeSkillInvokeReports(
 ): void {
   const audit = getActiveExecutionAuditContext();
   const executionId = (audit.executionId || getActiveExecutionId() || '').trim();
-  if (!executionId || !activeTurn || activeTurn.executionId !== executionId || activeTurn.finalized) {
+  if (!executionId) return;
+
+  bootstrapActiveTurnForExecution(executionId, get, runId);
+  if (!activeTurn || activeTurn.executionId !== executionId || activeTurn.finalized) {
     return;
   }
 

@@ -37,6 +37,7 @@ import { formatSkillInvokeDateTimeMs } from '@/lib/skill-invoke-report';
 import {
   finalizeSkillInvokeReports,
   registerPendingUserSelectedSkills,
+  ensureSkillInvokeTurnTracking,
   reportUsageFromToolResult,
   resetSkillInvokeTurnTracking,
 } from '@/stores/chat/skill-invoke-usage';
@@ -172,6 +173,53 @@ describe('skill-invoke-usage', () => {
       execution_id: 'exec-1',
       invoke_mode: 'user_selected',
       status: 'failed',
+      invoke_end_time: formatSkillInvokeDateTimeMs(turnEndMs),
+    });
+  });
+
+  it('reports model_selected when model reads SKILL.md without user selection', () => {
+    ensureSkillInvokeTurnTracking({
+      executionId: 'exec-1',
+      agentId: 'main',
+      sessionStartedAtMs: trackerState.sessionStartedAtMs,
+      turnStartedAtMs: trackerState.startedAtMs,
+    });
+
+    const readStartMs = Date.parse('2026-07-27T09:22:05');
+    const turnEndMs = Date.parse('2026-07-27T09:22:20');
+    const userMessage: RawMessage = {
+      role: 'user',
+      timestamp: trackerState.startedAtMs,
+      content: '帮我生成一个关于世界杯的PPT',
+    };
+    const assistant: RawMessage = {
+      role: 'assistant',
+      timestamp: readStartMs,
+      content: [
+        { type: 'tool_use', id: 'call-auto-1', name: 'read', input: { path: '~/.openclaw/skills/pptx/SKILL.md' } },
+      ],
+    };
+    const get = () => ({
+      messages: [userMessage, assistant],
+      streamingMessage: null,
+      currentAgentId: 'main',
+    }) as never;
+
+    finalizeSkillInvokeReports(get, 'run-1', {
+      role: 'assistant',
+      timestamp: turnEndMs,
+      content: 'PPT 已生成',
+    }, turnEndMs);
+
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(hostApiFetchMock.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({
+      skillId: 'pptx',
+      execution_id: 'exec-1',
+      agent_id: 'main',
+      invoke_mode: 'model_selected',
+      status: 'success',
+      invoke_time: formatSkillInvokeDateTimeMs(readStartMs),
       invoke_end_time: formatSkillInvokeDateTimeMs(turnEndMs),
     });
   });
