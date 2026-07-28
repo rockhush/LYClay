@@ -205,6 +205,24 @@ function isVisibleUserMessage(message: RawMessage): boolean {
   return !isInternalMessageText(getMessageText(message.content));
 }
 
+function isSyntheticSessionLabelUserMessage(message: RawMessage, sessionKey: string): boolean {
+  return message.role === 'user' && message.id === `local-${sessionKey}`;
+}
+
+/** Count real user Q&A rounds (1-based), excluding synthetic/internal user bubbles. */
+export function countVisibleUserTurns(
+  messages: RawMessage[],
+  sessionKey?: string,
+): number {
+  let count = 0;
+  for (const message of messages) {
+    if (sessionKey && isSyntheticSessionLabelUserMessage(message, sessionKey)) continue;
+    if (!isVisibleUserMessage(message)) continue;
+    count += 1;
+  }
+  return count;
+}
+
 export function findLatestVisibleUserIndex(messages: RawMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (isVisibleUserMessage(messages[i])) return i;

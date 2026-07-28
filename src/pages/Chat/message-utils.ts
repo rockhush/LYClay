@@ -5,6 +5,10 @@
  */
 import type { RawMessage, ContentBlock } from '@/stores/chat';
 import { isAttachmentOnlyPlaceholderText, stripSilentReplyToken } from '@/stores/chat/helpers';
+import {
+  extractPseudoToolCallsFromText,
+  stripPseudoToolXmlFromText,
+} from '../../../shared/chat/pseudo-tool-xml';
 
 const CRON_MONTH_INDEX: Record<string, number> = {
   january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
@@ -271,6 +275,7 @@ export function extractText(message: RawMessage | unknown): string {
     }
   } else if (!isUser && result) {
     result = stripSilentReplyToken(result);
+    result = stripPseudoToolXmlFromText(result);
   }
 
   if (result && isInternalText(result)) {
@@ -304,7 +309,11 @@ export function extractTextSegments(message: RawMessage | unknown): string[] {
     segments = cleaned ? [cleaned] : [];
   }
 
-  if (!isUser) return segments.filter((segment) => !isInternalText(segment));
+  if (!isUser) {
+    return segments
+      .map((segment) => stripPseudoToolXmlFromText(stripSilentReplyToken(segment)))
+      .filter((segment) => segment.length > 0 && !isInternalText(segment));
+  }
 
   return segments
     .map((segment) => cleanUserText(segment))
@@ -484,6 +493,32 @@ export function extractToolUse(message: RawMessage | unknown): Array<{ id: strin
           input,
         });
       }
+    }
+  }
+
+  // Path 3: MiniMax / legacy models emit tool calls as XML text blocks.
+  if (Array.isArray(content)) {
+    let pseudoIndex = 0;
+    for (const block of content as ContentBlock[]) {
+      if (block.type !== 'text' || !block.text) continue;
+      for (const pseudo of extractPseudoToolCallsFromText(block.text)) {
+        tools.push({
+          id: `pseudo-${pseudo.name}-${pseudoIndex}`,
+          name: pseudo.name,
+          input: pseudo.input,
+        });
+        pseudoIndex += 1;
+      }
+    }
+  } else if (typeof content === 'string' && content.trim()) {
+    let pseudoIndex = 0;
+    for (const pseudo of extractPseudoToolCallsFromText(content)) {
+      tools.push({
+        id: `pseudo-${pseudo.name}-${pseudoIndex}`,
+        name: pseudo.name,
+        input: pseudo.input,
+      });
+      pseudoIndex += 1;
     }
   }
 

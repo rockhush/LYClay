@@ -40,6 +40,11 @@ function getBundledPythonDir(): string | null {
   return join(process.resourcesPath, 'resources', 'python');
 }
 
+function isRuntimePythonDownloadAllowed(): boolean {
+  if (!app.isPackaged) return true;
+  return process.env.OPENCLAW_ALLOW_PYTHON_DOWNLOAD === '1';
+}
+
 /**
  * Resolve the best uv binary to use.
  *
@@ -49,7 +54,6 @@ function getBundledPythonDir(): string | null {
  */
 function resolveUvBin(): { bin: string; source: 'bundled' | 'path' | 'bundled-fallback' } {
   const bundledCandidates = getBundledUvPathCandidates();
-  const bundled = bundledCandidates[0];
   const existingBundled = bundledCandidates.find((candidate) => existsSync(candidate));
 
   if (app.isPackaged) {
@@ -234,9 +238,9 @@ export async function getManagedPythonEnv(
   const pythonPath = await findManagedPythonPath();
   if (!pythonPath) return baseEnv;
 
-  const pythonDir = dirname(pythonPath);
+  const pythonDir = process.platform === 'win32' ? win32.dirname(pythonPath) : dirname(pythonPath);
   const scriptsDir = process.platform === 'win32'
-    ? join(pythonDir, 'Scripts')
+    ? win32.join(pythonDir, 'Scripts')
     : pythonDir;
   const pythonBinDir = process.platform === 'win32'
     ? win32.normalize(pythonDir)
@@ -263,6 +267,13 @@ export async function setupManagedPython(): Promise<void> {
   if (existingPython) {
     logger.info(`Managed Python 3.12 is already available at: ${existingPython}`);
     return;
+  }
+
+  if (!isRuntimePythonDownloadAllowed()) {
+    throw new Error(
+      'Bundled Python 3.12 is missing or unusable. ' +
+      'The packaged app must include resources/python; runtime downloads are disabled by default.'
+    );
   }
 
   const { bin: uvBin, source } = resolveUvBin();

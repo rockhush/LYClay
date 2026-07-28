@@ -148,6 +148,8 @@ win:
   extraResources:
     - from: resources/bin/win32-${arch}
       to: bin
+    - from: resources/python/win32-${arch}
+      to: resources/python
     - from: resources/cli/win32/
       to: cli/
     - from: resources/device-guid/win32/

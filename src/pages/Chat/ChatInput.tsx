@@ -15,7 +15,6 @@ import { ModelPicker } from '@/components/workspace/ModelPicker';
 import { hostApiFetch } from '@/lib/host-api';
 import { invokeIpc } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { reportSkillInvoke } from '@/lib/usage-reporter';
 import { detectMentionedSkillIds } from '@/stores/chat/usage-report-extract';
 import { buildSkillMentionWithHint } from '@/pages/Chat/welcome-quick-actions';
 import {
@@ -666,13 +665,6 @@ export function ChatInput({ onSend, onStop, disabled = false, disabledReason, se
     for (const id of detectMentionedSkillIds(finalText, skills)) {
       skillInvocationIds.add(id);
     }
-    if (skillInvocationIds.size > 0) {
-      console.log('[handleSend] reporting skill invocations:', [...skillInvocationIds]);
-      // Fire-and-forget — telemetry must never block sending.
-      for (const id of skillInvocationIds) {
-        void reportSkillInvoke(id, 1);
-      }
-    }
     const skillFilter = resolveComposerForcedSkillFilter(
       finalText,
       skills,
@@ -694,12 +686,15 @@ export function ChatInput({ onSend, onStop, disabled = false, disabledReason, se
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    const sendOptions: SendMessageOptions | undefined = skillFilter?.length
-      ? {
-        skillFilter,
-        ...(gatewayText !== finalText ? { gatewayText } : {}),
+    const sendOptions: SendMessageOptions | undefined = (() => {
+      const base: SendMessageOptions = {};
+      if (skillFilter?.length) base.skillFilter = skillFilter;
+      if (gatewayText !== finalText) base.gatewayText = gatewayText;
+      if (skillInvocationIds.size > 0) {
+        base.userSelectedSkillIds = [...skillInvocationIds];
       }
-      : undefined;
+      return Object.keys(base).length > 0 ? base : undefined;
+    })();
     if (sendOptions) {
       onSend(finalText, attachmentsToSend, effectiveTargetAgentId, sendOptions);
     } else {

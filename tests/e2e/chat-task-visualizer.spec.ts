@@ -250,7 +250,7 @@ const printerWaitHistory = [
 const meetingSummaryFinalText = [
   '# AI Coding 范式会议纪要',
   '## SuperPower 核心技能体系',
-  '- **SDD**：将大任务拆分为多个子 Agent 协同完成',
+  '- **Agents**：`agents/xxx.md` 用于定义角色和子代理编排',
   '- **完成后验证**：检查是否按计划执行，进行回归测试与代码评审请求',
   '## 会议结论',
   '团队将逐步建立每个需求必有 spec 的开发文化。',
@@ -605,7 +605,7 @@ test.describe('ClawX chat execution graph', () => {
     }
   });
 
-  test('keeps a terminal meeting summary visible when it mentions sub-agent execution', async ({ launchElectronApp }) => {
+  test('keeps a terminal meeting summary visible when it discusses subagent orchestration', async ({ launchElectronApp }) => {
     const app = await launchElectronApp({ skipSetup: true });
 
     try {
@@ -736,6 +736,113 @@ test.describe('ClawX chat execution graph', () => {
       await expect(page.getByText('404 Resource not found')).toHaveCount(1);
       await page.getByTestId('chat-composer-input').fill('retry');
       await expect(page.getByTestId('chat-composer-send')).toBeEnabled();
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
+
+  test('keeps a cumulative final visible while authoritative history is delayed', async ({ launchElectronApp }) => {
+    const app = await launchElectronApp({ skipSetup: true });
+    const firstNarration = 'I will inspect the project first.';
+    const secondNarration = 'I will verify the orchestration files next.';
+    const finalReply = 'The project cannot directly schedule this runtime.';
+    const cumulativeFinal = `${firstNarration}${secondNarration}${finalReply}`;
+    const staleHistory = [
+      { role: 'user', content: 'Can this project schedule you?', timestamp: Date.now() },
+      {
+        role: 'assistant',
+        stopReason: 'toolUse',
+        content: [
+          { type: 'text', text: firstNarration },
+          { type: 'toolCall', id: 'read-1', name: 'read', arguments: {} },
+        ],
+        timestamp: Date.now() + 1,
+      },
+      { role: 'toolResult', toolCallId: 'read-1', content: 'done', timestamp: Date.now() + 2 },
+      {
+        role: 'assistant',
+        stopReason: 'toolUse',
+        content: [
+          { type: 'text', text: secondNarration },
+          { type: 'toolCall', id: 'read-2', name: 'read', arguments: {} },
+        ],
+        timestamp: Date.now() + 3,
+      },
+      { role: 'toolResult', toolCallId: 'read-2', content: 'done', timestamp: Date.now() + 4 },
+    ];
+
+    try {
+      const gatewayStatus = { state: 'running', port: 18789, pid: 12345 };
+      await installIpcMocks(app, {
+        gatewayStatus,
+        gatewayRpc: {
+          [stableStringify(['sessions.list', {}])]: {
+            success: true,
+            result: { sessions: [{ key: PROJECT_MANAGER_SESSION_KEY, displayName: 'main' }] },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 200 }])]: {
+            success: true,
+            result: { messages: staleHistory },
+          },
+          [stableStringify(['chat.history', { sessionKey: PROJECT_MANAGER_SESSION_KEY, limit: 1000 }])]: {
+            success: true,
+            result: { messages: staleHistory },
+          },
+        },
+        hostApi: {
+          [stableStringify(['/api/gateway/status', 'GET'])]: {
+            ok: true,
+            data: { status: 200, ok: true, json: gatewayStatus },
+          },
+          [stableStringify(['/api/agents', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: { success: true, agents: [{ id: 'main', name: 'main' }] },
+            },
+          },
+        },
+      });
+
+      const page = await getStableWindow(app);
+      try {
+        await page.reload();
+      } catch (error) {
+        if (!String(error).includes('ERR_FILE_NOT_FOUND')) throw error;
+      }
+      await expect(page.getByTestId('main-layout')).toBeVisible();
+      await expect(page.getByTestId('chat-execution-graph')).toBeVisible({ timeout: 30_000 });
+
+      const runId = '00000000-0000-4000-8000-000000000123';
+      await app.evaluate(async ({ BrowserWindow }, payload) => {
+        const window = BrowserWindow.getAllWindows().at(-1);
+        window?.webContents.send('gateway:chat-message', { message: payload });
+      }, {
+        state: 'started',
+        runId,
+        sessionKey: PROJECT_MANAGER_SESSION_KEY,
+      });
+      await app.evaluate(async ({ BrowserWindow }, payload) => {
+        const window = BrowserWindow.getAllWindows().at(-1);
+        window?.webContents.send('gateway:chat-message', { message: payload });
+      }, {
+        state: 'final',
+        runId,
+        sessionKey: PROJECT_MANAGER_SESSION_KEY,
+        message: {
+          role: 'assistant',
+          stopReason: 'stop',
+          content: [{ type: 'text', text: cumulativeFinal }],
+        },
+      });
+
+      await expect(page.getByText(finalReply, { exact: true })).toBeVisible({ timeout: 30_000 });
+      const graph = page.getByTestId('chat-execution-graph');
+      if ((await graph.getAttribute('data-collapsed')) === 'true') await graph.click();
+      await expect(graph).toContainText(firstNarration);
+      await expect(graph).toContainText(secondNarration);
+      await expect(graph).not.toContainText(finalReply);
     } finally {
       await closeElectronApp(app);
     }

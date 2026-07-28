@@ -131,6 +131,18 @@ describe('subagent-delegation transcript settle inference', () => {
     })).toBe(false);
   });
 
+  it('does not classify a completed framework comparison that mentions subagent orchestration as interim wait', () => {
+    expect(isInterimSubagentWaitAssistantReply({
+      role: 'assistant',
+      content: [
+        '## ECC 的 Skills 和 Agents 能改写到 OpenClaw 吗？',
+        '| Agent 定义 | `agents/xxx.md` 独立文件 | 通过 `agents` 配置段定义 |',
+        '这里面有很多好东西（agent 安全、持续学习、子代理编排、token 优化等）。',
+      ].join('\n'),
+      stopReason: 'stop',
+    })).toBe(false);
+  });
+
   it('settles multi-child yield/history wrap-up after all subagents returned', () => {
     const typhoon = 'agent:main:subagent:typhoon';
     const weather = 'agent:main:subagent:weather';

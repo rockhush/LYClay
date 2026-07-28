@@ -469,6 +469,35 @@ describe('findReplyMessageIndex', () => {
     expect(steps.some((step) => step.detail?.includes('AI Coding 范式会议纪要'))).toBe(false);
   });
 
+  it('keeps a terminal framework comparison visible when it discusses subagent orchestration', () => {
+    const finalReply = [
+      '对比了一下两者的格式，给你一个明确的答案：',
+      '## ECC 的 Skills 和 Agents 能改写到 OpenClaw 吗？',
+      '| Agent 定义 | `agents/xxx.md` 独立文件 | 通过 `agents` 配置段定义 |',
+      '这里面有很多好东西（agent 安全、持续学习、子代理编排、token 优化等）。',
+    ].join('\n');
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'ECC 的 skill 和 agents 能迁移到其他智能体框架吗？' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '我先读取 ECC 和 OpenClaw 的格式。' },
+          { type: 'toolCall', id: 'read-1', name: 'read', input: { path: 'agents/architect.md' } },
+        ],
+        stopReason: 'toolUse',
+      },
+      { role: 'toolResult', toolCallId: 'read-1', content: 'done' },
+      {
+        role: 'assistant',
+        content: finalReply,
+        stopReason: 'stop',
+      },
+    ];
+
+    expect(findReplyMessageIndex(messages, false)).toBe(3);
+    expect(findCommittedReplyMessageIndex(messages)).toBe(3);
+  });
+
   it('recovers the committed stop reply while the run is still open but stream has cleared', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: '帮我查下台风实时路径' },

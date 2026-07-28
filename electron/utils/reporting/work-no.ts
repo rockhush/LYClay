@@ -144,6 +144,17 @@ export function applyWorkNoToQueueSnapshot(
   return {
     tokenConsume: fill(snapshot.tokenConsume),
     skillDownload: fill(snapshot.skillDownload),
-    skillInvoke: fill(snapshot.skillInvoke),
+    skillInvoke: fill(snapshot.skillInvoke).map((record) => ({
+      ...record,
+      create_by: normalizeWorkNo(record.create_by) ? record.create_by : normalized,
+      update_by: normalizeWorkNo(record.update_by) ? record.update_by : normalized,
+    })),
+    execution: snapshot.execution.map((record) => (
+      normalizeWorkNo(record.work_no) ? record : { ...record, work_no: normalized }
+    )).map((record) => ({
+      ...record,
+      create_by: normalizeWorkNo(record.create_by) ? record.create_by : normalized,
+      update_by: normalizeWorkNo(record.update_by) ? record.update_by : normalized,
+    })),
   };
 }

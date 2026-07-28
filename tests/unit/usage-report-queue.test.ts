@@ -25,11 +25,13 @@ beforeEach(() => {
     tokenConsume: [],
     skillDownload: [],
     skillInvoke: [],
+    execution: [],
   };
   settingsStub.usageReportLastUploadAt = {
     tokenConsume: null,
     skillDownload: null,
     skillInvoke: null,
+    execution: null,
   };
 });
 
@@ -105,14 +107,16 @@ describe('appendSkill*Record', () => {
         downloadTime: '2026-05-20 23:20:45',
       },
     ]);
-    expect(snap.skillInvoke).toEqual([
-      {
-        workNo: 'EMP00123',
-        skillId: 'SKILL_008',
-        count: 5,
-        invokeTime: '2026-05-20 12:30:09',
-      },
-    ]);
+    expect(snap.skillInvoke[0]).toMatchObject({
+      workNo: 'EMP00123',
+      skillId: 'SKILL_008',
+      count: 5,
+      invokeTime: '2026-05-20 12:30:09',
+      invoke_time: '2026-05-20 12:30:09',
+      invoke_mode: 'user_selected',
+      status: 'unknown',
+      agent_id: 'main',
+    });
   });
 
   it('skill-download/invoke fall back to legacy `date` alias and pad :00', async () => {

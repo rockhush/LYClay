@@ -22,11 +22,16 @@ import {
   restoreFailedRecords,
 } from './queue';
 import { scanTranscriptsForTokenConsume } from './transcript-scan';
+import { enrichExecutionRecordsFromTranscripts } from './execution-transcript-enrich';
+import { toExecutionUploadPayloads } from './execution-upload-payload';
+import { enrichSkillInvokeRecordsForUpload } from './skill-invoke-enrich';
+import { toSkillInvokeUploadPayloads } from './skill-invoke-upload-payload';
 import {
   applyWorkNoToQueueSnapshot,
   ensureWorkNoReady,
 } from './work-no';
 import type {
+  ExecutionRecord,
   ReportingChannel,
   ReportingChannelDiagnostic,
   ReportingFlushResult,
@@ -40,6 +45,22 @@ const RESPONSE_BODY_LOG_LIMIT = 4000;
 function truncate(text: string, limit = RESPONSE_BODY_LOG_LIMIT): string {
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}…(${text.length} bytes)`;
+}
+
+/** Serialize channel records for the backend POST body. */
+function recordsForBackendUpload(channel: ReportingChannel, records: unknown[]): unknown[] {
+  if (channel === 'execution') {
+    return toExecutionUploadPayloads(records as ExecutionRecord[]);
+  }
+  if (channel === 'skillInvoke') {
+    return toSkillInvokeUploadPayloads(records as SkillInvokeRecord[]);
+  }
+  return records;
+}
+
+/** DevTools diagnostic payload: full POST body (same records as upload). */
+function diagnosticRequestBody(channel: ReportingChannel, records: unknown[]): string {
+  return JSON.stringify(recordsForBackendUpload(channel, records));
 }
 
 let inFlight: Promise<ReportingFlushResult> | null = null;
@@ -57,12 +78,13 @@ interface BackendResponse {
  * mirror it into DevTools — main-process logs aren't visible in the renderer
  * Chrome DevTools, which trips up dev workflows.
  */
-async function postRecords<T>(
+async function postRecords(
   channel: ReportingChannel,
   url: string,
-  records: T[],
+  records: unknown[],
 ): Promise<ReportingChannelDiagnostic> {
-  const body = JSON.stringify(records);
+  const uploadRecords = recordsForBackendUpload(channel, records);
+  const body = JSON.stringify(uploadRecords);
   logger.info(
     `[UsageReport][${channel}] >>> POST ${url} `
     + `Content-Type=application/json count=${records.length} body=${truncate(body)}`,
@@ -72,7 +94,7 @@ async function postRecords<T>(
     url,
     method: 'POST',
     count: records.length,
-    requestBody: truncate(body),
+    requestBody: diagnosticRequestBody(channel, records),
     status: null,
     statusText: null,
     durationMs: 0,
@@ -146,8 +168,8 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
   }
   const job = (async (): Promise<ReportingFlushResult> => {
     const result: ReportingFlushResult = {
-      uploaded: { tokenConsume: 0, skillDownload: 0, skillInvoke: 0 },
-      errors: { tokenConsume: null, skillDownload: null, skillInvoke: null },
+      uploaded: { tokenConsume: 0, skillDownload: 0, skillInvoke: 0, execution: 0 },
+      errors: { tokenConsume: null, skillDownload: null, skillInvoke: null, execution: null },
       diagnostics: [],
     };
 
@@ -167,6 +189,19 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
     }
 
     const detachedRaw = await detachAllRecords();
+    try {
+      detachedRaw.execution = await enrichExecutionRecordsFromTranscripts(detachedRaw.execution);
+    } catch (error) {
+      logger.warn(`[UsageReport] flush(${reason}) execution token enrich failed:`, error);
+    }
+    try {
+      detachedRaw.skillInvoke = enrichSkillInvokeRecordsForUpload(
+        detachedRaw.skillInvoke,
+        detachedRaw.execution,
+      );
+    } catch (error) {
+      logger.warn(`[UsageReport] flush(${reason}) skill-invoke enrich failed:`, error);
+    }
     const workNo = await ensureWorkNoReady();
     const detached = applyWorkNoToQueueSnapshot(detachedRaw, workNo);
     if (workNo && detachedRaw.tokenConsume.some((record) => !record.workNo?.trim())) {
@@ -178,24 +213,27 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
     // heartbeat per launch, but ops asked us to drop that — empty channels
     // skip the network round-trip entirely.
     const endpoints = getReportingEndpoints();
-    const allTasks: Array<ChannelTask<TokenConsumeRecord | SkillDownloadRecord | SkillInvokeRecord>> = [
+    const allTasks: Array<ChannelTask<TokenConsumeRecord | SkillDownloadRecord | SkillInvokeRecord | ExecutionRecord>> = [
       { channel: 'tokenConsume', url: endpoints.tokenConsume, records: detached.tokenConsume },
       { channel: 'skillDownload', url: endpoints.skillDownload, records: detached.skillDownload },
       { channel: 'skillInvoke', url: endpoints.skillInvoke, records: detached.skillInvoke },
+      { channel: 'execution', url: endpoints.execution, records: detached.execution },
     ];
     const tasks = allTasks.filter((t) => t.records.length > 0);
 
     logger.info(
       `[UsageReport] flush(${reason}) starting: `
       + `token=${detached.tokenConsume.length}, download=${detached.skillDownload.length}, `
-      + `invoke=${detached.skillInvoke.length}, posting=${tasks.length}/3 channel(s)`,
+      + `invoke=${detached.skillInvoke.length}, execution=${detached.execution.length}, `
+      + `posting=${tasks.length}/4 channel(s)`,
     );
 
     const failed: {
       tokenConsume: TokenConsumeRecord[];
       skillDownload: SkillDownloadRecord[];
       skillInvoke: SkillInvokeRecord[];
-    } = { tokenConsume: [], skillDownload: [], skillInvoke: [] };
+      execution: ExecutionRecord[];
+    } = { tokenConsume: [], skillDownload: [], skillInvoke: [], execution: [] };
 
     // Channels are independent — fire all uploads in parallel so a slow
     // skill-invoke endpoint does not block a token-consume retry.
@@ -207,7 +245,7 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       url: task.url,
       method: 'POST',
       count: task.records.length,
-      requestBody: truncate(JSON.stringify(task.records)),
+      requestBody: diagnosticRequestBody(task.channel, task.records),
       status: null,
       statusText: null,
       durationMs: 0,
@@ -234,8 +272,10 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
           failed.tokenConsume = task.records as TokenConsumeRecord[];
         } else if (task.channel === 'skillDownload') {
           failed.skillDownload = task.records as SkillDownloadRecord[];
-        } else {
+        } else if (task.channel === 'skillInvoke') {
           failed.skillInvoke = task.records as SkillInvokeRecord[];
+        } else {
+          failed.execution = task.records as ExecutionRecord[];
         }
         logger.warn(`[UsageReport] flush(${reason}) ${task.channel} failed:`, message);
       }
@@ -250,6 +290,7 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       failed.tokenConsume.length > 0
       || failed.skillDownload.length > 0
       || failed.skillInvoke.length > 0
+      || failed.execution.length > 0
     ) {
       await restoreFailedRecords(failed);
     }

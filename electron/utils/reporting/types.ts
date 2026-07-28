@@ -40,20 +40,58 @@ export interface SkillInvokeRecord {
   workNo: string;
   skillId: string;
   count: number;
-  /**
-   * "YYYY-MM-DD HH:MM:SS" in local time. The backend uses `invokeTime` as the
-   * field name and expects seconds-precision so coincident invocations from
-   * the same minute don't collide.
-   */
+  /** Legacy camelCase mirror kept in sync with `invoke_time` for older parsers. */
   invokeTime: string;
+  create_by?: string;
+  create_date?: string;
+  update_by?: string;
+  update_date?: string;
+  execution_id?: string;
+  agent_id?: string;
+  skill_source?: string;
+  invoke_mode?: SkillInvokeMode;
+  invoke_time?: string;
+  invoke_end_time?: string;
+  status?: SkillInvokeStatus;
+  error_message?: string;
 }
 
-export type ReportingChannel = 'tokenConsume' | 'skillDownload' | 'skillInvoke';
+export type SkillInvokeMode = 'user_selected' | 'model_selected';
+export type SkillInvokeStatus = 'success' | 'failed' | 'cancelled' | 'unknown';
+
+export interface ExecutionRecord {
+  /** Internal queue shape (snake_case). Converted to camelCase at upload time. */
+  execution_id: string;
+  conversation_id: string;
+  turn_index?: number;
+  work_no: string;
+  entry_source: 'chat' | 'digital_employee' | 'schedule';
+  agent_type: 'normal' | 'digital_employee';
+  agent_id: string;
+  model_id: string;
+  status: 'success' | 'failed' | 'cancelled';
+  started_at?: string;
+  ended_at?: string;
+  first_response_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  create_by?: string;
+  create_date?: string;
+  update_by?: string;
+  update_date?: string;
+  error_stage?: 'client' | 'gateway' | 'model';
+  error_message?: string;
+  app_version?: string;
+}
+
+export type ReportingChannel = 'tokenConsume' | 'skillDownload' | 'skillInvoke' | 'execution';
 
 export interface UsageReportQueueSnapshot {
   tokenConsume: TokenConsumeRecord[];
   skillDownload: SkillDownloadRecord[];
   skillInvoke: SkillInvokeRecord[];
+  execution: ExecutionRecord[];
 }
 
 export interface ReportingChannelDiagnostic {

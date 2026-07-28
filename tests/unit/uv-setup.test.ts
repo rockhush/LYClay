@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const originalPlatform = process.platform;
+const originalArch = process.arch;
 const originalResourcesPath = process.resourcesPath;
 
 const {
@@ -27,6 +28,14 @@ class MockChild extends EventEmitter {
 
 function setPlatform(platform: string): void {
   Object.defineProperty(process, 'platform', { value: platform, writable: true });
+}
+
+function setArch(arch: string): void {
+  Object.defineProperty(process, 'arch', { value: arch, writable: true });
+}
+
+function winPath(value: unknown): string {
+  return String(value).replaceAll('/', '\\');
 }
 
 function mockUvPythonFind(pythonPath: string, code = 0): void {
@@ -97,10 +106,12 @@ describe('uv setup managed Python environment', () => {
       writable: true,
     });
     setPlatform('win32');
+    setArch('x64');
   });
 
   afterEach(() => {
     Object.defineProperty(process, 'platform', { value: originalPlatform, writable: true });
+    Object.defineProperty(process, 'arch', { value: originalArch, writable: true });
     Object.defineProperty(process, 'resourcesPath', {
       value: originalResourcesPath,
       configurable: true,
@@ -131,11 +142,9 @@ describe('uv setup managed Python environment', () => {
     const { findManagedPythonPath } = await import('@electron/utils/uv-setup');
 
     await expect(findManagedPythonPath()).resolves.toBe('C:\\Users\\me\\AppData\\Roaming\\uv\\python\\cpython-3.12\\python.exe');
-    expect(mockSpawn).toHaveBeenCalledWith(
-      'D:\\code\\ClawX\\resources\\bin\\uv\\win32-x64\\uv.exe',
-      ['python', 'find', '3.12', '--managed-python', '--no-python-downloads'],
-      expect.objectContaining({ shell: false, windowsHide: true }),
-    );
+    expect(winPath(mockSpawn.mock.calls[0]?.[0])).toMatch(/\\resources\\bin\\uv\\win32-x64\\uv\.exe$/i);
+    expect(mockSpawn.mock.calls[0]?.[1]).toEqual(['python', 'find', '3.12', '--managed-python', '--no-python-downloads']);
+    expect(mockSpawn.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ shell: false, windowsHide: true }));
   });
 
   it('uses direct executable invocation for packaged bundled uv.exe', async () => {
@@ -146,11 +155,9 @@ describe('uv setup managed Python environment', () => {
     const { findManagedPythonPath } = await import('@electron/utils/uv-setup');
 
     await expect(findManagedPythonPath()).resolves.toBe('C:\\Users\\me\\AppData\\Roaming\\uv\\python\\cpython-3.12\\python.exe');
-    expect(mockSpawn).toHaveBeenCalledWith(
-      'C:\\Program Files\\LYClaw\\resources\\bin\\uv.exe',
-      ['python', 'find', '3.12', '--managed-python', '--no-python-downloads'],
-      expect.objectContaining({ shell: false, windowsHide: true }),
-    );
+    expect(winPath(mockSpawn.mock.calls[0]?.[0])).toBe('C:\\Program Files\\LYClaw\\resources\\bin\\uv.exe');
+    expect(mockSpawn.mock.calls[0]?.[1]).toEqual(['python', 'find', '3.12', '--managed-python', '--no-python-downloads']);
+    expect(mockSpawn.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ shell: false, windowsHide: true }));
   });
 
   it('prefers Python bundled in the installed app resources', async () => {
@@ -167,17 +174,12 @@ describe('uv setup managed Python environment', () => {
       'C:\\Program Files\\LYClaw\\resources\\resources\\python\\cpython-3.12\\python.exe',
     );
     expect(mockSpawn).toHaveBeenCalledOnce();
-    expect(mockSpawn).toHaveBeenCalledWith(
-      'C:\\Program Files\\LYClaw\\resources\\bin\\uv.exe',
-      ['python', 'find', '3.12', '--managed-python', '--no-python-downloads'],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          UV_PYTHON_INSTALL_DIR: 'C:\\Program Files\\LYClaw\\resources\\resources\\python',
-        }),
-        shell: false,
-        windowsHide: true,
-      }),
+    expect(winPath(mockSpawn.mock.calls[0]?.[0])).toBe('C:\\Program Files\\LYClaw\\resources\\bin\\uv.exe');
+    expect(mockSpawn.mock.calls[0]?.[1]).toEqual(['python', 'find', '3.12', '--managed-python', '--no-python-downloads']);
+    expect(winPath((mockSpawn.mock.calls[0]?.[2] as { env?: Record<string, string> })?.env?.UV_PYTHON_INSTALL_DIR)).toBe(
+      'C:\\Program Files\\LYClaw\\resources\\resources\\python',
     );
+    expect(mockSpawn.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ shell: false, windowsHide: true }));
   });
 
   it('falls back to the user-managed uv directory when bundled Python is unusable', async () => {
@@ -207,12 +209,29 @@ describe('uv setup managed Python environment', () => {
       'C:\\Users\\me\\AppData\\Roaming\\uv\\python\\cpython-3.12\\python.exe',
     );
     expect(mockSpawn).toHaveBeenCalledTimes(2);
-    expect(mockSpawn.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
-      env: expect.objectContaining({
-        UV_PYTHON_INSTALL_DIR: 'C:\\Program Files\\LYClaw\\resources\\resources\\python',
-      }),
-    }));
+    expect(winPath((mockSpawn.mock.calls[0]?.[2] as { env?: Record<string, string> })?.env?.UV_PYTHON_INSTALL_DIR)).toBe(
+      'C:\\Program Files\\LYClaw\\resources\\resources\\python',
+    );
     expect(mockSpawn.mock.calls[1]?.[2]).toEqual(expect.objectContaining({ env: undefined }));
+  });
+
+  it('does not download Python in packaged mode when bundled Python is missing', async () => {
+    mockIsPackaged.value = true;
+    mockExistsSync.mockImplementation((p: string) => /[\\/]bin[\\/]uv\.exe$/i.test(p));
+    mockSpawn.mockImplementation(() => {
+      const child = new MockChild();
+      queueMicrotask(() => child.emit('close', 1));
+      return child;
+    });
+
+    const { setupManagedPython } = await import('@electron/utils/uv-setup');
+
+    await expect(setupManagedPython()).rejects.toThrow('Bundled Python 3.12 is missing or unusable');
+    expect(mockAssertCommandAllowedWithConfirmation).not.toHaveBeenCalled();
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(winPath(mockSpawn.mock.calls[0]?.[0])).toBe('C:\\Program Files\\LYClaw\\resources\\bin\\uv.exe');
+    expect(mockSpawn.mock.calls[0]?.[1]).toEqual(['python', 'find', '3.12', '--managed-python', '--no-python-downloads']);
+    expect(mockSpawn.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ shell: false, windowsHide: true }));
   });
 
   it('does not install Python when a managed runtime is already available', async () => {

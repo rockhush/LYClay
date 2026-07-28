@@ -6,6 +6,19 @@
 import { create } from 'zustand';
 import i18n from '@/i18n';
 import { getEmptyFinalDiagnostic, hostApiFetch, recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
+import {
+  beginExecutionTurn,
+  finalizeExecutionTurn,
+  getActiveExecutionAuditContext,
+  getActiveExecutionId,
+  maybeMarkExecutionFirstToken,
+  noteExecutionFirstResponseFromMessage,
+} from '@/lib/execution-turn-tracker';
+import {
+  finalizeSkillInvokeReports,
+  registerPendingUserSelectedSkills,
+  reportUsageFromToolResult,
+} from '@/stores/chat/skill-invoke-usage';
 import { isRetiredDigitalEmployeeAgent, resolveActiveDigitalEmployeeExecutionAgent } from '@/lib/retired-digital-employees';
 import { toUserMessage, normalizeAppError } from '@/lib/api-client';
 import { useGatewayStore } from './gateway';
@@ -65,6 +78,8 @@ import {
   truncateRunErrorMessage,
   isWithinUserAbortWindow,
   shouldSuppressAssistantStreamingText,
+  hasAssistantFirstResponseActivity,
+  hasReasoningPayloadInMessage,
   dedupeEquivalentAttachmentUserMessages,
   dedupeAssistantMessagesByContent,
   matchesOptimisticUserMessage,
@@ -259,6 +274,18 @@ function isAbortedChatRun(runId: string): boolean {
 
 function forgetAbortedChatRun(runId: string): void {
   _abortedChatRunIds.delete(runId.trim());
+}
+
+function flushSkillInvokeReportsForTurn(
+  get: () => ChatState,
+  runId?: string | null,
+  terminalMessage?: RawMessage,
+): void {
+  finalizeSkillInvokeReports(
+    get,
+    (runId ?? get().activeRunId ?? '').trim(),
+    terminalMessage,
+  );
 }
 
 function clearAbortedChatRuns(): void {
@@ -1917,11 +1944,28 @@ function buildSendingUiPatchFromTranscript(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
+function maybeNoteFirstResponseFromTranscript(
+  rawMessages: RawMessage[],
+  lastUserMessageAt: number | null,
+): void {
+  if (lastUserMessageAt == null) return;
+  for (const message of rawMessages) {
+    if (!isMessageAfterUserTimestamp(message, lastUserMessageAt)) continue;
+    if (message.role !== 'assistant') continue;
+    if (isRendererSyntheticRunMessage(message)) continue;
+    const normalized = normalizeStreamingMessage(message) as RawMessage;
+    if (!hasAssistantFirstResponseActivity(normalized)) continue;
+    noteExecutionFirstResponseFromMessage(normalized);
+    return;
+  }
+}
+
 function applySendingUiPatchFromTranscript(
   rawMessages: RawMessage[],
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
   get: () => ChatState,
 ): void {
+  maybeNoteFirstResponseFromTranscript(rawMessages, get().lastUserMessageAt);
   const patch = buildSendingUiPatchFromTranscript(rawMessages, get());
   if (patch) {
     set(patch);
@@ -5513,6 +5557,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
     });
 
+    if (!isInternalStagedExecution && !suppressOptimisticUserMessage) {
+      const postSendState = get();
+      const agentId = _resolvedTargetAgentId ?? postSendState.currentAgentId ?? 'main';
+      const modelId = getSessionModel(postSendState.sessions, currentSessionKey)
+        ?? useAgentsStore.getState().defaultModelRef
+        ?? 'unknown';
+      beginExecutionTurn({
+        sessionKey: currentSessionKey,
+        agentId,
+        modelId,
+        messages: postSendState.messages,
+        startedAtMs: nowMs,
+        isDigitalEmployee: _deIsDigital,
+      });
+      const userSelectedSkillIds = options?.userSelectedSkillIds
+        ?.map((skillId) => skillId.trim())
+        .filter(Boolean);
+      const executionId = getActiveExecutionId();
+      if (executionId && userSelectedSkillIds?.length) {
+        const audit = getActiveExecutionAuditContext();
+        registerPendingUserSelectedSkills({
+          executionId,
+          agentId,
+          skillIds: userSelectedSkillIds,
+          sessionStartedAtMs: audit.sessionStartedAtMs,
+          turnStartedAtMs: nowMs,
+        });
+      }
+    }
+
     // Mark that first message has been sent (for the entire app lifecycle)
     if (_isFirstMessageEver && !isInternalStagedExecution) {
       markFirstMessageSent();
@@ -5778,6 +5852,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         } else {
           clearHistoryPoll();
           const normalizedError = normalizeAppError(new Error(errorMsg));
+          const failureState = get();
+          flushSkillInvokeReportsForTurn(get, failureState.activeRunId);
+          finalizeExecutionTurn({
+            status: 'failed',
+            messages: failureState.messages,
+            lastUserMessageAt: failureState.lastUserMessageAt,
+            errorMessage: toUserMessage(normalizedError),
+          });
           set({ error: toUserMessage(normalizedError), sending: false });
         }
       } else if (
@@ -6177,15 +6259,46 @@ export const useChatStore = create<ChatState>((set, get) => ({
           set({ error: null });
         }
         const updates = collectToolUpdates(event.message, resolvedState);
+        if (event.message && isToolResultRole((event.message as RawMessage).role)) {
+          reportUsageFromToolResult(
+            undefined,
+            normalizeStreamingMessage(event.message) as RawMessage,
+            runId,
+            get,
+          );
+        }
+        const visibleProgress = classifyVisibleProgress(event.message);
+        // Mark on the raw delta so reasoning-only chunks (content undefined) count
+        // before streaming merge — aligns first_response_ms with the first thinking token.
+        if (
+          visibleProgress.visible
+          || hasAssistantFirstResponseActivity(event.message as RawMessage | null)
+          || updates.length > 0
+        ) {
+          maybeMarkExecutionFirstToken();
+        }
         set((s) => ({
           streamingMessage: (() => {
             if (event.message && typeof event.message === 'object') {
               const msgObj = event.message as RawMessage;
               const msgRole = msgObj.role;
               if (isToolResultRole(msgRole)) return s.streamingMessage;
-              // During multi-model fallback, guard against empty/role-only deltas
+              // During multi-model fallback, guard against empty/role-only deltas.
+              // Reasoning-only increments still merge so the execution graph stays live.
               if (s.streamingMessage && msgObj.content === undefined) {
-                return s.streamingMessage;
+                if (!hasReasoningPayloadInMessage(msgObj)) {
+                  return s.streamingMessage;
+                }
+                const prev = s.streamingMessage as RawMessage;
+                const merged: Record<string, unknown> = {
+                  ...(prev as unknown as Record<string, unknown>),
+                  ...(msgObj as unknown as Record<string, unknown>),
+                  content: prev.content,
+                };
+                return annotateDigitalEmployeeMessage(
+                  normalizeStreamingMessage(merged) as RawMessage,
+                  runId,
+                );
               }
               const msgContent = getMessageText(msgObj.content);
               if (msgContent.trim() && shouldSuppressAssistantStreamingText(msgContent)) {
@@ -6375,6 +6488,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
           const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
           if (isToolResultRole(normalizedFinalMessage.role)) {
+            reportUsageFromToolResult(undefined, normalizedFinalMessage, runId, get);
             // Resolve file path from the streaming assistant message's matching tool call
             const currentStreamForPath = get().streamingMessage as RawMessage | null;
             const matchedPath = (currentStreamForPath && normalizedFinalMessage.toolCallId)
@@ -6479,7 +6593,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
             // Check if message already exists (prevent duplicates)
             const alreadyExists = isDuplicateAssistantFinal(s.messages, msgId, msgWithImages);
-            if (alreadyExists || skipCumulativeOptimisticFinal) {
+            if (alreadyExists) {
               return keepRunActiveAfterFinal ? {
                 streamingText: '',
                 streamingMessage: null,
@@ -6495,6 +6609,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 streamingTools,
                 ...clearPendingImages,
                 ...withClearedSessionStreamingState(s, currentSessionKey, s.messages),
+              };
+            }
+            if (skipCumulativeOptimisticFinal) {
+              // History will replace this cumulative payload with the clean stop
+              // final. Until that read completes, retain a transient reply so the
+              // renderer never sees a tool-only turn and folds the answer away.
+              return {
+                streamingText: getMessageText(msgWithImages.content),
+                streamingMessage: msgWithImages,
+                sending: s.sending,
+                activeRunId: s.activeRunId,
+                pendingFinal: true,
+                streamingTools,
+                ...clearPendingImages,
               };
             }
             const nextMessages = [...s.messages, msgWithImages];
@@ -6845,6 +6973,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
               error: rawErrorMsg,
               runId,
             });
+            const preErrorState = get();
+            flushSkillInvokeReportsForTurn(get, runId);
+            finalizeExecutionTurn({
+              status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
+              messages: preErrorState.messages,
+              lastUserMessageAt: preErrorState.lastUserMessageAt,
+              errorMessage: displayError,
+            });
             set({
               error: displayError,
               runError: displayError,
@@ -6861,6 +6997,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             break;
           }
           const displayError = resolveRunFailureErrorMessage(rawErrorMsg);
+          const preErrorState = get();
+          flushSkillInvokeReportsForTurn(get, runId);
+          finalizeExecutionTurn({
+            status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
+            messages: preErrorState.messages,
+            lastUserMessageAt: preErrorState.lastUserMessageAt,
+            errorMessage: displayError,
+          });
           set({
             error: displayError,
             runError: displayError,
@@ -6882,6 +7026,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             error: rawErrorMsg,
             displayError,
             runId,
+          });
+          const preErrorState = get();
+          flushSkillInvokeReportsForTurn(get, runId);
+          finalizeExecutionTurn({
+            status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
+            messages: preErrorState.messages,
+            lastUserMessageAt: preErrorState.lastUserMessageAt,
+            errorMessage: displayError,
           });
           set({
             error: displayError,
@@ -6942,6 +7094,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const lastUser = getLastRealUserSnapshot(get().messages);
           const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
           const keepAbortShield = isUserAbortedSession(foregroundSessionKey) || get().runAborted;
+          const preAbortState = get();
+          flushSkillInvokeReportsForTurn(get, runId);
+          finalizeExecutionTurn({
+            status: 'cancelled',
+            messages: preAbortState.messages,
+            lastUserMessageAt: preAbortState.lastUserMessageAt,
+          });
           set((s) => ({
             ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
             sending: false,
@@ -6978,6 +7137,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const displayError = i18n.t('chat:errors.runAbortedBySystem');
         const lastUser = getLastRealUserSnapshot(get().messages);
         const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
+        const preAbortState = get();
+        flushSkillInvokeReportsForTurn(get, runId);
+        finalizeExecutionTurn({
+          status: 'failed',
+          messages: preAbortState.messages,
+          lastUserMessageAt: preAbortState.lastUserMessageAt,
+          errorMessage: displayError,
+        });
         set((s) => ({
           ...buildSessionRegistrationPatch(s, currentSessionKey, lastUser, workspaceId),
           sending: false,

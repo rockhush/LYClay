@@ -56,6 +56,7 @@ describe('usage-report workNo', () => {
       }],
       skillDownload: [],
       skillInvoke: [],
+      execution: [],
     }, 'EMP00123');
 
     expect(next.tokenConsume[0]?.workNo).toBe('EMP00123');

@@ -184,7 +184,10 @@ export function isInterimSubagentWaitAssistantReply(message: RawMessage): boolea
   if (/(?:Phase\s*\d+).{0,40}(?:完成|completed).{0,48}(?:继续|等待|waiting)/i.test(text)) return true;
 
   if (/(?:稍等|等一下|启动了一个子任务)/i.test(text)) return true;
-  if (/(?:预计|等待|几分钟后|完成后.{0,12}通知|已启动|已交给|正在.{0,12}(?:构建|生成)|sub-?agent|子代理|子智能体)/i.test(text)) {
+  // Mentioning sub-agents can be part of a completed answer (for example, a
+  // framework comparison that discusses "子代理编排"). Context alone is not
+  // progress: require an explicit waiting/in-progress signal as well.
+  if (/(?:预计|等待|几分钟后|完成后.{0,12}通知|已启动|已交给|正在.{0,12}(?:构建|生成))/i.test(text)) {
     return true;
   }
 

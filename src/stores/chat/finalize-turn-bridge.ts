@@ -39,6 +39,8 @@ import {
   resolveCompletedChildSessionKeys,
 } from '@/lib/subagent-delegation';
 import { hasDelegationSpawnForActiveTurn, isDelegationWrapUpComplete } from '@/lib/delegation-turn-state';
+import { finalizeExecutionTurn } from '@/lib/execution-turn-tracker';
+import { finalizeSkillInvokeReports } from './skill-invoke-usage';
 import {
   summarizeAssistantMessage,
   summarizeBackendActivity,
@@ -310,24 +312,28 @@ function emptySessionStreamingSnapshot(lastUserMessageAt: number | null): Sessio
   };
 }
 
-function applySettledActiveRunPatch(set: ChatSet, get: ChatGet): void {
-  const state = get();
-  const sessionKey = state.currentSessionKey;
+function applySettledActiveRunPatch(
+  set: ChatSet,
+  get: ChatGet,
+  options?: { terminalMessage?: RawMessage },
+): void {
+  const stateBefore = get();
+  const sessionKey = stateBefore.currentSessionKey;
   const settled = buildSettledActiveRunPatch({
-    ...state,
+    ...stateBefore,
     currentSessionKey: sessionKey,
   });
   const cleared = buildClearedActiveRunPatch();
-  const prevSnapshot = state.sessionStreamingStates[sessionKey]
-    ?? emptySessionStreamingSnapshot(state.lastUserMessageAt);
-  const messagesSnapshot = state.messages.length > 0
-    ? [...state.messages]
+  const prevSnapshot = stateBefore.sessionStreamingStates[sessionKey]
+    ?? emptySessionStreamingSnapshot(stateBefore.lastUserMessageAt);
+  const messagesSnapshot = stateBefore.messages.length > 0
+    ? [...stateBefore.messages]
     : (prevSnapshot.messagesSnapshot.length > 0 ? prevSnapshot.messagesSnapshot : []);
 
   set({
     ...settled,
     sessionStreamingStates: {
-      ...state.sessionStreamingStates,
+      ...stateBefore.sessionStreamingStates,
       [sessionKey]: {
         ...prevSnapshot,
         ...cleared,
@@ -335,6 +341,24 @@ function applySettledActiveRunPatch(set: ChatSet, get: ChatGet): void {
       },
     },
   });
+
+  if (
+    !stateBefore.runError
+    && !stateBefore.runAborted
+    && stateBefore.lastUserMessageAt != null
+  ) {
+    finalizeSkillInvokeReports(
+      get,
+      stateBefore.activeRunId ?? '',
+      options?.terminalMessage,
+    );
+    finalizeExecutionTurn({
+      status: 'success',
+      messages: stateBefore.messages,
+      lastUserMessageAt: stateBefore.lastUserMessageAt,
+      terminalMessage: options?.terminalMessage,
+    });
+  }
 }
 
 function applyBackendSnapshot(
@@ -729,7 +753,7 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
     clearFinalizeGraceTimer();
     clearHistoryPoll();
     clearErrorRecoveryTimer();
-    applySettledActiveRunPatch(set, get);
+    applySettledActiveRunPatch(set, get, { terminalMessage: context.terminalMessage });
     traceFinalizeOutcome(
       canClearAnnounceWrapUp
         ? 'announce_cleared'
@@ -753,7 +777,7 @@ export async function tryFinalizeUserTurnAfterAssistantFinal(
     clearFinalizeGraceTimer();
     clearHistoryPoll();
     clearErrorRecoveryTimer();
-    applySettledActiveRunPatch(set, get);
+    applySettledActiveRunPatch(set, get, { terminalMessage: context.terminalMessage });
     traceFinalizeOutcome('announce_visible_answer_cleared', context, next, snapshot);
     ensureSessionBackendPolling(context.sessionKey, set, get);
     return;

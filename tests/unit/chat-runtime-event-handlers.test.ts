@@ -60,21 +60,15 @@ const snapshotStreamingAssistantMessage = vi.fn((currentStream: unknown) => curr
 const upsertToolStatuses = vi.fn((_current, updates) => updates);
 
 const confirmEmptyFinalWithHistory = vi.fn();
+const tryFinalizeUserTurnAfterAssistantFinal = vi.fn();
 
 vi.mock('@/stores/chat/finalize-turn-bridge', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/stores/chat/finalize-turn-bridge')>();
   return {
     ...actual,
     deferClearUserTurnForOpenDelegation: vi.fn(() => false),
-    tryFinalizeUserTurnAfterAssistantFinal: vi.fn((_get, set) => {
-      set({
-        sending: false,
-        activeRunId: null,
-        pendingFinal: false,
-        streamingText: '',
-        streamingMessage: null,
-      });
-    }),
+    tryFinalizeUserTurnAfterAssistantFinal: (...args: unknown[]) =>
+      tryFinalizeUserTurnAfterAssistantFinal(...args),
   };
 });
 
@@ -201,6 +195,15 @@ describe('chat runtime event handlers', () => {
       return [currentStream as Record<string, unknown>];
     });
     upsertToolStatuses.mockImplementation((_current, updates) => updates);
+    tryFinalizeUserTurnAfterAssistantFinal.mockImplementation((_get, set) => {
+      set({
+        sending: false,
+        activeRunId: null,
+        pendingFinal: false,
+        streamingText: '',
+        streamingMessage: null,
+      });
+    });
   });
 
   it('marks sending on started event', async () => {
@@ -272,6 +275,67 @@ describe('chat runtime event handlers', () => {
     }, 'final', 'run-mixed');
 
     expect(h.read().loadHistory).toHaveBeenCalledWith(true, { force: true });
+  });
+
+  it('preserves a cumulative final while authoritative history is delayed', async () => {
+    tryFinalizeUserTurnAfterAssistantFinal.mockImplementation(() => undefined);
+    const firstNarration = 'I will inspect the project first.';
+    const secondNarration = 'I will verify the orchestration files next.';
+    const finalReply = 'The project cannot directly schedule this runtime.';
+    const cumulativeFinal = `${firstNarration}${secondNarration}${finalReply}`;
+    const { handleRuntimeEventState } = await import('@/stores/chat/runtime-event-handlers');
+    const h = makeHarness({
+      sending: true,
+      activeRunId: 'run-cumulative',
+      currentSessionKey: 'agent:main:session-cumulative',
+      pendingFinal: true,
+      lastUserMessageAt: 100,
+      messages: [
+        { role: 'user', content: 'Can this project schedule you?', timestamp: 100 },
+        {
+          role: 'assistant',
+          stopReason: 'toolUse',
+          content: [
+            { type: 'text', text: firstNarration },
+            { type: 'toolCall', id: 'read-1', name: 'read', arguments: {} },
+          ],
+        },
+        { role: 'toolResult', toolCallId: 'read-1', content: 'done' },
+        {
+          role: 'assistant',
+          stopReason: 'toolUse',
+          content: [
+            { type: 'text', text: secondNarration },
+            { type: 'toolCall', id: 'read-2', name: 'read', arguments: {} },
+          ],
+        },
+        { role: 'toolResult', toolCallId: 'read-2', content: 'done' },
+      ],
+      streamingMessage: {
+        role: 'assistant',
+        content: [{ type: 'text', text: cumulativeFinal }],
+      },
+      streamingText: cumulativeFinal,
+    });
+
+    handleRuntimeEventState(h.set as never, h.get as never, {
+      sessionKey: 'agent:main:session-cumulative',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: cumulativeFinal }],
+        stopReason: 'stop',
+      },
+    }, 'final', 'run-cumulative');
+
+    const next = h.read();
+    expect(next.messages).toHaveLength(5);
+    expect(next.pendingFinal).toBe(true);
+    expect(next.streamingText).toBe(cumulativeFinal);
+    expect(next.streamingMessage).toEqual(expect.objectContaining({
+      role: 'assistant',
+      content: [{ type: 'text', text: cumulativeFinal }],
+    }));
+    expect(next.loadHistory).toHaveBeenCalledWith(true, { force: true });
   });
 
   it('marks tool-result attachments before appending them to the final assistant reply', async () => {

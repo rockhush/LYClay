@@ -23,6 +23,7 @@ import type { ChatSession, RawMessage, ReasoningMode } from './types';
 import { buildClearedActiveRunPatch } from './run-lifecycle';
 import { refreshSessionBackendActivity, clearSessionActivityPoll } from './session-backend-bridge';
 import { clearFinalizeGraceTimer } from './finalize-turn-bridge';
+import { finalizeExecutionTurn } from '@/lib/execution-turn-tracker';
 import { shouldForceAbortStuckRun } from './user-turn-lifecycle';
 import { abortPendingChildDelegations } from './abort-child-delegations';
 import { persistUserAbortedSession } from './user-aborted-sessions';
@@ -724,6 +725,12 @@ export function createRuntimeSendActions(set: ChatSet, get: ChatGet): Pick<Runti
       if (currentSessionKey) {
         persistUserAbortedSession(currentSessionKey, activeRunId);
       }
+
+      finalizeExecutionTurn({
+        status: 'cancelled',
+        messages,
+        lastUserMessageAt: get().lastUserMessageAt,
+      });
 
       set({
         sending: false,

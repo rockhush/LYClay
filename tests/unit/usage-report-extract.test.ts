@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   detectMentionedSkillIds,
   extractInvokedSkillIds,
+  extractSkillInvocationFromToolCall,
+  extractSkillSlugFromSkillMdPath,
   extractTokenConsumeFromAssistantMessage,
   extractTotalTokensFromUsage,
+  findAssistantMessageForToolCall,
+  resolveToolCallIdFromToolResultMessage,
 } from '@/stores/chat/usage-report-extract';
 import type { RawMessage } from '@/stores/chat/types';
 
@@ -72,6 +76,50 @@ describe('extractTokenConsumeFromAssistantMessage', () => {
       usage: { total_tokens: 50 },
     } as unknown as RawMessage;
     expect(extractTokenConsumeFromAssistantMessage(msg)).toBeNull();
+  });
+});
+
+describe('extractSkillSlugFromSkillMdPath', () => {
+  it('extracts slug from openclaw skill paths', () => {
+    expect(extractSkillSlugFromSkillMdPath('~/.openclaw/skills/pptx/SKILL.md')).toBe('pptx');
+    expect(extractSkillSlugFromSkillMdPath('C:\\Users\\me\\.openclaw\\skills\\pdf\\SKILL.md')).toBe('pdf');
+    expect(extractSkillSlugFromSkillMdPath('~/.openclaw/skills/AOI外观AI分析/SKILL.md')).toBe('AOI外观AI分析');
+  });
+});
+
+describe('extractSkillInvocationFromToolCall', () => {
+  it('maps read SKILL.md tool calls back to skill slug', () => {
+    expect(extractSkillInvocationFromToolCall('read', {
+      path: 'C:\\Users\\ken.yuan\\Desktop\\limit\\node_modules\\openclaw\\skills\\pptx\\SKILL.md',
+    })).toEqual({ skillId: 'pptx' });
+    expect(extractSkillInvocationFromToolCall('write', {
+      path: '~/.openclaw/skills/pptx/SKILL.md',
+    })).toBeNull();
+  });
+});
+
+describe('resolveToolCallIdFromToolResultMessage', () => {
+  it('reads toolCallId from top-level and content blocks', () => {
+    expect(resolveToolCallIdFromToolResultMessage({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+    } as RawMessage)).toBe('call-1');
+    expect(resolveToolCallIdFromToolResultMessage({
+      role: 'tool_result',
+      content: [{ type: 'tool_result', tool_use_id: 'call-2' }],
+    } as RawMessage)).toBe('call-2');
+  });
+});
+
+describe('findAssistantMessageForToolCall', () => {
+  it('finds snapshotted assistant messages after streaming is cleared', () => {
+    const assistant: RawMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 'call-1', name: 'read', input: { path: '~/.openclaw/skills/pptx/SKILL.md' } },
+      ],
+    };
+    expect(findAssistantMessageForToolCall([assistant], null, 'call-1')).toBe(assistant);
   });
 });
 

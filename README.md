@@ -383,8 +383,8 @@ pnpm run comms:compare    # Compare replay metrics against baseline thresholds
 pnpm run build:vite       # Build frontend only
 pnpm build                # Full production build (with packaging assets)
 pnpm package              # Package for current platform (includes bundled preinstalled skills)
-pnpm package:mac          # Package for macOS
-pnpm package:win          # Package for Windows
+pnpm package:mac          # Package for macOS, including bundled Python for offline first launch
+pnpm package:win          # Package for Windows, including bundled Python for offline first launch
 pnpm package:linux        # Package for Linux
 ```
 
@@ -507,4 +507,3 @@ ClawX is released under the [MIT License](LICENSE). You're free to use, modify, 
 <p align="center">
   <sub>Built with ❤️ by the ValueCell Team</sub>
 </p>
-

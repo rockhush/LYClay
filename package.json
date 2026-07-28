@@ -78,6 +78,10 @@
         "uv:download:win": "zx scripts/download-bundled-uv.mjs --platform=win",
         "uv:download:linux": "zx scripts/download-bundled-uv.mjs --platform=linux",
         "uv:download:all": "zx scripts/download-bundled-uv.mjs --all",
+        "python:download": "zx scripts/download-bundled-python.mjs",
+        "python:download:win": "zx scripts/download-bundled-python.mjs --platform=win",
+        "python:download:mac": "zx scripts/download-bundled-python.mjs --platform=mac",
+        "python:download:linux": "zx scripts/download-bundled-python.mjs --platform=linux",
         "dws:download": "node scripts/download-dws-cli.mjs",
         "dws:download:mac": "node scripts/download-dws-cli.mjs --platform=mac",
         "dws:download:win": "node scripts/download-dws-cli.mjs --platform=win",
@@ -89,7 +93,7 @@
         "node:download:win": "zx scripts/download-bundled-node.mjs --platform=win",
         "node:download:win:local": "zx scripts/download-bundled-node.mjs",
         "prep:win-gateway": "pnpm run uv:download:win && pnpm run node:download:win:local",
-        "prep:win-binaries": "pnpm run prep:win-gateway && pnpm run dws:verify:win",
+        "prep:win-binaries": "pnpm run prep:win-gateway && pnpm run python:download:win && pnpm run dws:verify:win",
         "icons": "zx scripts/generate-icons.mjs",
         "package": "node scripts/generate-ext-bridge.mjs && pnpm run build:vite && zx scripts/bundle-openclaw.mjs && zx scripts/bundle-openclaw-plugins.mjs && zx scripts/bundle-preinstalled-skills.mjs && zx scripts/merge-bundled-skills.mjs",
         "package:mac": "pnpm run prep:mac-binaries && pnpm run package && node scripts/run-electron-builder.mjs --config electron-builder.yml --mac dmg --x64 --arm64 --publish never",
@@ -110,7 +114,7 @@
         "node:download:mac": "zx scripts/download-bundled-node.mjs --platform=mac",
         "node:download:linux": "zx scripts/download-bundled-node.mjs --platform=linux",
         "node:download:all": "zx scripts/download-bundled-node.mjs --all",
-        "prep:mac-binaries": "pnpm run uv:download:mac && pnpm run node:download:mac && pnpm run dws:verify:mac",
+        "prep:mac-binaries": "pnpm run uv:download:mac && pnpm run node:download:mac && pnpm run python:download:mac && pnpm run dws:verify:mac",
         "prep:linux-binaries": "pnpm run uv:download:linux && pnpm run node:download:linux && pnpm run dws:verify:linux"
     },
     "dependencies": {

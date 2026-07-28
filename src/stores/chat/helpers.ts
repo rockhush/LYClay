@@ -1,4 +1,5 @@
 import i18n from '@/i18n';
+import { isPseudoToolOnlyText } from '../../../shared/chat/pseudo-tool-xml';
 import { invokeIpc } from '@/lib/api-client';
 import {
   displayNameFromStagedDiskFileName,
@@ -1391,6 +1392,10 @@ function isToolOnlyMessage(message: RawMessage | undefined): boolean {
       continue;
     }
     if (block.type === 'text' && block.text && block.text.trim()) {
+      if (isPseudoToolOnlyText(block.text)) {
+        hasTool = true;
+        continue;
+      }
       hasText = true;
       continue;
     }
@@ -1478,6 +1483,7 @@ function isAssistantTextHiddenFromUser(text: string): boolean {
 function shouldSuppressAssistantStreamingText(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return true;
+  if (isPseudoToolOnlyText(trimmed)) return true;
   if (/^(HEARTBEAT_OK|NO_REPLY)\s*$/i.test(trimmed)) return true;
   if (/^\[?OpenClaw heartbeat poll\]?\s*$/i.test(trimmed)) return true;
   if (containsSilentReplyToken(trimmed) && stripSilentReplyToken(trimmed).trim().length === 0) return true;
@@ -1815,6 +1821,50 @@ function hasNonToolAssistantContent(message: RawMessage | undefined): boolean {
   return false;
 }
 
+function hasReasoningPayloadInMessage(message: unknown): boolean {
+  if (!message || typeof message !== 'object') return false;
+  return collectReasoningFromMessage(message as Record<string, unknown>).length > 0;
+}
+
+/** First model output for execution timing: thinking, tools, or non-suppressed text. */
+function hasAssistantFirstResponseActivity(message: RawMessage | undefined | null): boolean {
+  if (!message) return false;
+  if (isToolResultRole(message.role)) return false;
+
+  if (typeof message.content === 'string') {
+    const text = message.content.trim();
+    return Boolean(text) && !shouldSuppressAssistantStreamingText(text);
+  }
+
+  const content = message.content;
+  if (Array.isArray(content)) {
+    for (const block of content as ContentBlock[]) {
+      if (block.type === 'thinking' && block.thinking?.trim()) return true;
+      if ((block.type === 'tool_use' || block.type === 'toolCall') && block.name) return true;
+      if (block.type === 'text' && block.text?.trim() && !shouldSuppressAssistantStreamingText(block.text)) {
+        return true;
+      }
+      if (block.type === 'image') return true;
+      if (block.type === 'reasoning' || block.type === 'reasoning_content') {
+        const blockRecord = block as unknown as Record<string, unknown>;
+        const reasoningText = typeof blockRecord.text === 'string' ? blockRecord.text.trim() : '';
+        const thinkingText = typeof blockRecord.thinking === 'string' ? blockRecord.thinking.trim() : '';
+        if (reasoningText || thinkingText) return true;
+      }
+    }
+  }
+
+  const msg = message as unknown as Record<string, unknown>;
+  const toolCalls = msg.tool_calls ?? msg.toolCalls;
+  if (Array.isArray(toolCalls) && toolCalls.length > 0) return true;
+  if (typeof msg.text === 'string') {
+    const text = msg.text.trim();
+    return Boolean(text) && !shouldSuppressAssistantStreamingText(text);
+  }
+
+  return hasReasoningPayloadInMessage(message);
+}
+
 /** User-visible assistant output (text/image). Excludes thinking-only turns. */
 function hasVisibleAssistantContent(message: RawMessage | undefined): boolean {
   if (!message) return false;
@@ -1887,6 +1937,8 @@ export {
   collectToolUpdates,
   upsertToolStatuses,
   hasNonToolAssistantContent,
+  hasAssistantFirstResponseActivity,
+  hasReasoningPayloadInMessage,
   hasVisibleAssistantContent,
   isToolOnlyMessage,
   normalizeStreamingMessage,

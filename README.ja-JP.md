@@ -376,8 +376,8 @@ pnpm run comms:compare    # リプレイ指標をベースライン閾値と比�
 pnpm run build:vite       # フロントエンドのみビルド
 pnpm build                # フルプロダクションビルド（パッケージアセット含む）
 pnpm package              # 現在のプラットフォーム向けにパッケージ化（同梱プリインストールスキルを含む）
-pnpm package:mac          # macOS向けにパッケージ化
-pnpm package:win          # Windows向けにパッケージ化
+pnpm package:mac          # macOS向けにパッケージ化（初回起動用の同梱 Python を含む）
+pnpm package:win          # Windows向けにパッケージ化（初回起動用の同梱 Python を含む）
 pnpm package:linux        # Linux向けにパッケージ化
 ```
 

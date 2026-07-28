@@ -204,3 +204,141 @@ export function extractInvokedSkillIds(message: RawMessage | undefined | null): 
 
   return out;
 }
+
+const SKILL_MD_PATH_PATTERN = /[/\\]skills[/\\]([^/\\]+)[/\\]SKILL\.md$/i;
+
+export function extractSkillSlugFromSkillMdPath(path: string | undefined | null): string | null {
+  const trimmed = (path ?? '').trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(/^~(?=$|[/\\])/, '').replace(/\\/g, '/');
+  const match = normalized.match(SKILL_MD_PATH_PATTERN);
+  return match?.[1]?.trim() || null;
+}
+
+function readToolCallInput(
+  block: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const raw = block.input ?? block.arguments;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+export function extractSkillInvocationFromToolCall(
+  name: string | undefined,
+  input?: Record<string, unknown>,
+): { skillId: string } | null {
+  const toolName = (name ?? '').trim().toLowerCase();
+  if (toolName !== 'read') return null;
+  const path = typeof input?.path === 'string' ? input.path : '';
+  const skillId = extractSkillSlugFromSkillMdPath(path);
+  if (!skillId) return null;
+  return { skillId };
+}
+
+export function isToolResultLikeRole(role: unknown): boolean {
+  if (!role) return false;
+  const normalized = String(role).toLowerCase();
+  return normalized === 'toolresult'
+    || normalized === 'tool_result'
+    || normalized === 'tool';
+}
+
+export function resolveToolCallIdFromToolResultMessage(
+  message: RawMessage | undefined | null,
+): string {
+  if (!message) return '';
+  const msg = message as unknown as Record<string, unknown>;
+  const direct = msg.toolCallId ?? msg.tool_call_id ?? msg.toolUseId ?? msg.tool_use_id;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const content = message.content;
+  if (Array.isArray(content)) {
+    for (const block of content as Array<Record<string, unknown>>) {
+      const nested = block.toolCallId ?? block.tool_call_id ?? block.toolUseId ?? block.tool_use_id;
+      if (typeof nested === 'string' && nested.trim()) return nested.trim();
+    }
+  }
+  return '';
+}
+
+export function findToolCallInAssistantMessage(
+  message: RawMessage | undefined | null,
+  toolCallId: string,
+): { name: string; input?: Record<string, unknown> } | null {
+  const trimmedId = toolCallId.trim();
+  if (!message || !trimmedId) return null;
+
+  const content = message.content;
+  if (Array.isArray(content)) {
+    for (const block of content as ContentBlock[]) {
+      if (block.type !== 'tool_use' && block.type !== 'toolCall') continue;
+      const raw = block as unknown as Record<string, unknown>;
+      const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+      if (id !== trimmedId) continue;
+      const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+      if (!name) return null;
+      return { name, input: readToolCallInput(raw) };
+    }
+  }
+
+  const msgAny = message as unknown as Record<string, unknown>;
+  const toolCallsRaw = msgAny.tool_calls ?? msgAny.toolCalls;
+  if (Array.isArray(toolCallsRaw)) {
+    for (const tc of toolCallsRaw as Array<Record<string, unknown>>) {
+      const idUnknown = tc.id;
+      const id = typeof idUnknown === 'string' ? idUnknown.trim() : '';
+      if (id !== trimmedId) continue;
+      const fn = (tc.function as Record<string, unknown> | undefined) ?? tc;
+      const nameUnknown = fn?.name ?? tc.name;
+      const name = typeof nameUnknown === 'string' ? nameUnknown.trim() : '';
+      if (!name) return null;
+      return { name, input: readToolCallInput(fn ?? tc) };
+    }
+  }
+
+  return null;
+}
+
+export function findAssistantMessageForToolCall(
+  messages: RawMessage[],
+  streamingMessage: RawMessage | null | undefined,
+  toolCallId: string,
+): RawMessage | null {
+  const trimmedId = toolCallId.trim();
+  if (!trimmedId) return null;
+  const candidates: RawMessage[] = [];
+  if (streamingMessage) candidates.push(streamingMessage);
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.role === 'assistant') candidates.push(msg);
+  }
+  for (const msg of candidates) {
+    if (findToolCallInAssistantMessage(msg, trimmedId)) return msg;
+  }
+  return null;
+}
+
+export function isSuccessfulToolResultMessage(message: RawMessage | undefined | null): boolean {
+  if (!message) return false;
+  const msg = message as unknown as Record<string, unknown>;
+  if (msg.isError === true || msg.is_error === true) return false;
+  const content = message.content;
+  if (Array.isArray(content)) {
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (block.is_error === true || block.isError === true) return false;
+    }
+  }
+  const text = typeof msg.error === 'string' ? msg.error.trim() : '';
+  return !text;
+}

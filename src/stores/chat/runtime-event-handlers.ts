@@ -42,8 +42,10 @@ import { hasInFlightSubagentSignals, isSubagentDelegationAnnounceRun, parseChild
 import { deferClearUserTurnForOpenDelegation, tryFinalizeUserTurnAfterAssistantFinal, trySyncClearAnnounceWrapUp } from './finalize-turn-bridge';
 import { hasOpenDelegatedBackendWork } from './user-turn-lifecycle';
 import { ensureSessionBackendPolling } from './session-backend-bridge';
-import { extractInvokedSkillIds } from './usage-report-extract';
-import { reportSkillInvoke } from '@/lib/usage-reporter';
+import {
+  finalizeSkillInvokeReports,
+  reportUsageFromToolResult,
+} from './skill-invoke-usage';
 import {
   summarizeAssistantMessage,
   summarizeStreamingTools,
@@ -64,17 +66,10 @@ import {
   getRunningToolSnapshotFromMessage,
   trackRunningTool,
 } from './tool-lifecycle-watchdog';
-// De-dup guard for the management/claw/report uploader. We may receive the
-// same `final` event twice during recovery (gateway resend, reconnect race);
-// without this guard a single tool_use turn could double-count skill
-// invocations in the persistent queue.
-//
 // Note: token-consume is intentionally NOT reported from the renderer.
 // The streaming `final` event payload doesn't reliably carry `usage`, so the
 // uploader scans OpenClaw session transcripts (the same source that powers
 // the dashboard's Token Usage History) at flush time instead.
-const reportedToolCallIds = new Set<string>();
-const REPORTED_DEDUPE_LIMIT = 1024;
 function isTerminalAssistantErrorMessage(message: RawMessage | undefined): boolean {
   if (!message || message.role !== 'assistant') return false;
   const msg = message as RawMessage & { stopReason?: unknown; stop_reason?: unknown };
@@ -86,62 +81,6 @@ function getMessageErrorMessage(message: RawMessage | undefined): string {
   const value = msg?.errorMessage ?? msg?.error_message;
   return typeof value === 'string' && value.trim() ? value : 'An error occurred';
 }
-function noteReported(set: Set<string>, key: string): boolean {
-  if (set.has(key)) return false;
-  set.add(key);
-  if (set.size > REPORTED_DEDUPE_LIMIT) {
-    // Trim the oldest entries via Set iteration order to keep memory bounded
-    // across long sessions.
-    const overflow = set.size - REPORTED_DEDUPE_LIMIT;
-    let removed = 0;
-    for (const v of set) {
-      if (removed >= overflow) break;
-      set.delete(v);
-      removed += 1;
-    }
-  }
-  return true;
-}
-
-function reportUsageFromFinalAssistant(message: RawMessage | undefined, runId: string): void {
-  if (!message) return;
-  const role = String(message.role || '').toLowerCase();
-  if (role !== 'assistant') return;
-  // Skill invoke — once per tool_use block id within a run. We dedup on
-  // `${runId}::${toolCallId}` rather than messageId+toolCallId because the
-  // same tool_use block may be observed twice: first on the streaming
-  // assistant message captured at toolResult-final time, then again on the
-  // final text-only assistant message (whose id differs). Using the run+tool
-  // pair guarantees a single report per actual tool invocation.
-  const invocations = extractInvokedSkillIds(message);
-  if (invocations.length === 0) {
-    // Diagnostic log: when an assistant message reaches us with no detected
-    // tool calls, dump the structural keys so we can spot a third format we
-    // haven't covered yet (e.g. some runtime emits `function_call` instead).
-    const msgAny = message as unknown as Record<string, unknown>;
-    const contentSummary = Array.isArray(msgAny.content)
-      ? `array(len=${(msgAny.content as unknown[]).length}, types=[${(msgAny.content as Array<Record<string, unknown>>)
-        .map((b) => String(b?.type ?? 'unknown')).join(',')}])`
-      : typeof msgAny.content;
-    // eslint-disable-next-line no-console -- intentional debug aid for skill-invoke wiring.
-    console.debug('[UsageReport] no skill invocations in message', {
-      role: msgAny.role,
-      hasToolCalls: Array.isArray(msgAny.tool_calls) || Array.isArray(msgAny.toolCalls),
-      content: contentSummary,
-      keys: Object.keys(msgAny),
-    });
-    return;
-  }
-  for (const { skillId, toolCallId } of invocations) {
-    const dedupeKey = `${runId}::${toolCallId}`;
-    if (noteReported(reportedToolCallIds, dedupeKey)) {
-      // eslint-disable-next-line no-console
-      console.debug(`[UsageReport] queueing skill-invoke ${skillId} (toolCallId=${toolCallId})`);
-      void reportSkillInvoke(skillId, 1);
-    }
-  }
-}
-
 function isExecApprovalFollowupRun(runId: string): boolean {
   return runId.startsWith('exec-approval-followup:');
 }
@@ -281,6 +220,14 @@ export function handleRuntimeEventState(
             set({ error: null });
           }
           const updates = collectToolUpdates(event.message, resolvedState);
+          if (event.message && isToolResultRole((event.message as RawMessage).role)) {
+            reportUsageFromToolResult(
+              undefined,
+              normalizeStreamingMessage(event.message) as RawMessage,
+              runId,
+              get,
+            );
+          }
           if (updates.length > 0) {
             traceTurnTransition('runtime-tool-update', {
               state: resolvedState,
@@ -396,6 +343,7 @@ export function handleRuntimeEventState(
 
             const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
             if (isToolResultRole(normalizedFinalMessage.role)) {
+              reportUsageFromToolResult(undefined, normalizedFinalMessage, runId, get);
               const runningTool = getRunningToolSnapshotFromMessage(normalizedFinalMessage, {
                 sessionKey: targetSessionKey,
                 runId,
@@ -509,6 +457,7 @@ export function handleRuntimeEventState(
             }
             const updates = collectToolUpdates(normalizedFinalMessage, resolvedState);
             if (isToolResultRole(normalizedFinalMessage.role)) {
+              reportUsageFromToolResult(undefined, normalizedFinalMessage, runId, get);
               const runningTool = getRunningToolSnapshotFromMessage(normalizedFinalMessage, {
                 sessionKey: targetSessionKey,
                 runId,
@@ -530,9 +479,6 @@ export function handleRuntimeEventState(
               // place; the final text-only assistant message arrives later
               // without tool_use blocks at all. Dedup by toolCallId protects
               // against multiple toolResults firing for the same turn.
-              if (currentStreamForPath) {
-                reportUsageFromFinalAssistant(currentStreamForPath, runId);
-              }
 
               // Mirror enrichWithToolResultFiles: collect images + file refs for next assistant msg
               const toolFiles: AttachedFileMeta[] = extractImagesAsAttachedFiles(normalizedFinalMessage.content)
@@ -605,7 +551,7 @@ export function handleRuntimeEventState(
 
               // Check if message already exists (prevent duplicates)
               const alreadyExists = s.messages.some(m => m.id === msgId);
-              if (alreadyExists || skipCumulativeOptimisticFinal) {
+              if (alreadyExists) {
                 return keepRunActiveAfterFinal ? {
                   streamingText: '',
                   streamingMessage: null,
@@ -615,6 +561,21 @@ export function handleRuntimeEventState(
                 } : {
                   streamingText: '',
                   streamingMessage: null,
+                  sending: s.sending,
+                  activeRunId: s.activeRunId,
+                  pendingFinal: true,
+                  streamingTools,
+                  ...clearPendingImages,
+                };
+              }
+              if (skipCumulativeOptimisticFinal) {
+                // The authoritative transcript normally replaces this cumulative
+                // payload with a clean stop final. Keep it renderable until that
+                // history refresh lands; clearing it here leaves only tool rounds,
+                // so the reply picker folds every assistant message into the graph.
+                return {
+                  streamingText: getMessageText(msgWithImages.content),
+                  streamingMessage: msgWithImages,
                   sending: s.sending,
                   activeRunId: s.activeRunId,
                   pendingFinal: true,
@@ -645,8 +606,6 @@ export function handleRuntimeEventState(
             // Queue management/claw/report records for token consume + skill invoke
             // before the message is shipped off to history reload — we operate on
             // the normalized payload so usage / tool_use blocks are stable.
-            reportUsageFromFinalAssistant(normalizedFinalMessage, runId);
-
             traceTurnTransition('runtime-assistant-final', {
               runId: runId || null,
               sessionKey: targetSessionKey,

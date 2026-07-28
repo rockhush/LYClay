@@ -30,6 +30,10 @@ vi.mock('@electron/utils/reporting/transcript-scan', () => ({
   })),
 }));
 
+vi.mock('@electron/utils/reporting/execution-transcript-enrich', () => ({
+  enrichExecutionRecordsFromTranscripts: vi.fn(async (records: unknown[]) => records),
+}));
+
 import {
   appendSkillDownloadRecord,
   appendSkillInvokeRecord,
@@ -44,11 +48,13 @@ beforeEach(() => {
     tokenConsume: [],
     skillDownload: [],
     skillInvoke: [],
+    execution: [],
   };
   settingsStub.usageReportLastUploadAt = {
     tokenConsume: null,
     skillDownload: null,
     skillInvoke: null,
+    execution: null,
   };
   fetchMock.mockReset();
 });
@@ -77,6 +83,7 @@ describe('flushUsageReports', () => {
     expect(result.uploaded.tokenConsume).toBe(0);
     expect(result.uploaded.skillDownload).toBe(0);
     expect(result.uploaded.skillInvoke).toBe(0);
+    expect(result.uploaded.execution).toBe(0);
     expect(result.diagnostics).toEqual([]);
   });
 
@@ -138,16 +145,17 @@ describe('flushUsageReports', () => {
     ]);
 
     expect(result.uploaded).toEqual({
-      tokenConsume: 1, skillDownload: 1, skillInvoke: 1,
+      tokenConsume: 1, skillDownload: 1, skillInvoke: 1, execution: 0,
     });
     expect(result.errors).toEqual({
-      tokenConsume: null, skillDownload: null, skillInvoke: null,
+      tokenConsume: null, skillDownload: null, skillInvoke: null, execution: null,
     });
 
     const after = await getUsageReportQueueSnapshot();
     expect(after.tokenConsume).toEqual([]);
     expect(after.skillDownload).toEqual([]);
     expect(after.skillInvoke).toEqual([]);
+    expect(after.execution).toEqual([]);
   });
 
   it('restores records back into the queue when upload fails', async () => {

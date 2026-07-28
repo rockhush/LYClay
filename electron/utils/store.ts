@@ -154,8 +154,32 @@ export interface AppSettings {
       workNo: string;
       skillId: string;
       count: number;
-      /** "YYYY-MM-DD HH:MM:SS" — backend field is `invokeTime`, not `date`. */
+      /** "YYYY-MM-DD HH:MM:SS" — backend field is `invokeTime`. */
       invokeTime: string;
+    }>;
+    execution: Array<{
+      execution_id: string;
+      conversation_id: string;
+      turn_index?: number;
+      work_no: string;
+      entry_source: 'chat' | 'digital_employee' | 'schedule';
+      agent_type: 'normal' | 'digital_employee';
+      agent_id: string;
+      model_id: string;
+      status: 'success' | 'failed' | 'cancelled';
+      started_at?: string;
+      ended_at?: string;
+      first_response_ms?: number;
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_tokens?: number;
+      create_by?: string;
+      create_date?: string;
+      update_by?: string;
+      update_date?: string;
+      error_stage?: 'client' | 'gateway' | 'model';
+      error_message?: string;
+      app_version?: string;
     }>;
   };
   /** Last successful uploads — used by the daily scheduler to detect missed slots. */
@@ -163,6 +187,7 @@ export interface AppSettings {
     tokenConsume: string | null;
     skillDownload: string | null;
     skillInvoke: string | null;
+    execution: string | null;
   };
   /**
    * ISO timestamp watermark for transcript-based token-consume scanning.
@@ -233,11 +258,13 @@ function createDefaultSettings(): AppSettings {
       tokenConsume: [],
       skillDownload: [],
       skillInvoke: [],
+      execution: [],
     },
     usageReportLastUploadAt: {
       tokenConsume: null,
       skillDownload: null,
       skillInvoke: null,
+      execution: null,
     },
     usageReportTokenScanCursor: null,
     usageReportCachedWorkNo: null,

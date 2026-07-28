@@ -78,7 +78,7 @@ function transition(
       return {
         state: 'final-event-with-stale-history',
         messages: current.messages,
-        streamingMessage: null,
+        streamingMessage: cumulativeFinalStream,
       };
     case 'history-catches-up':
       return {
@@ -141,6 +141,7 @@ describe('cumulative final folding state machine', () => {
     snapshot = transition(snapshot, 'receive-final-event');
     presentation = present(snapshot);
     expect(snapshot.state).toBe('final-event-with-stale-history');
+    expect(presentation.promoteStreamToReply).toBe(true);
     expect(presentation.replyIndex).toBe(-1);
     expect(presentation.steps.some((step) => step.detail?.includes(finalReply))).toBe(false);
 

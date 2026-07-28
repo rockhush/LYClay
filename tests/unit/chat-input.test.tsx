@@ -114,6 +114,10 @@ function translate(key: string, vars?: Record<string, unknown>): string {
 }
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: {
+    type: '3rdParty',
+    init: () => {},
+  },
   useTranslation: () => ({
     t: translate,
   }),
@@ -405,14 +409,11 @@ describe('ChatInput agent targeting', () => {
       'Draft @create-skill 请使用这个技能，帮我 a new helper',
       undefined,
       null,
-      { skillFilter: ['create-skill'] },
+      { skillFilter: ['create-skill'], userSelectedSkillIds: ['create-skill'] },
     );
-    expect(hostApiFetch).toHaveBeenCalledWith(
+    expect(hostApiFetch).not.toHaveBeenCalledWith(
       '/api/usage-report/skill-invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.any(String),
-      }),
+      expect.anything(),
     );
   });
 

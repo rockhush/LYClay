@@ -14,11 +14,13 @@ const DEFAULT_REPORT_BASE_URL = 'http://portal.srv.lstech.com';
 const TOKEN_CONSUME_PATH = '/management/claw/report/token-consume';
 const SKILL_DOWNLOAD_PATH = '/management/claw/report/skill-download';
 const SKILL_INVOKE_PATH = '/management/claw/report/skill-invoke';
+const EXECUTION_PATH = '/management/claw/report/execution';
 
 export interface ReportingEndpoints {
   tokenConsume: string;
   skillDownload: string;
   skillInvoke: string;
+  execution: string;
 }
 
 function readBaseUrl(): string {
@@ -35,6 +37,7 @@ export function getReportingEndpoints(): ReportingEndpoints {
     tokenConsume: `${base}${TOKEN_CONSUME_PATH}`,
     skillDownload: `${base}${SKILL_DOWNLOAD_PATH}`,
     skillInvoke: `${base}${SKILL_INVOKE_PATH}`,
+    execution: `${base}${EXECUTION_PATH}`,
   };
 }
 

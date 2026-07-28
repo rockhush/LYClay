@@ -98,6 +98,17 @@ export function isCustomSkill(
   return true;
 }
 
+export function isDigitalEmployeeSkill(
+  skill: Pick<Skill, 'baseDir' | 'source'>,
+): boolean {
+  const baseDir = (skill.baseDir || '').replace(/\\/g, '/').toLowerCase();
+  if (baseDir.includes('/digital-employees/') || baseDir.includes('/lyclaw/digital-employees/')) {
+    return true;
+  }
+  const source = (skill.source || '').trim().toLowerCase();
+  return source.includes('digital-employee') || source === 'digital_employee';
+}
+
 export function resolveSkillVersionForDisplay(
   version: string | undefined,
   options?: { treatAsBuiltin?: boolean },
