@@ -84,6 +84,35 @@ export function sessionHasUntrustedGatewayMetadataPreview(
   return candidates.some((candidate) => isUntrustedGatewayMetadataPreview(candidate));
 }
 
+const BOOTSTRAP_PENDING_PREVIEW = /\[Bootstrap pending\]/i;
+
+/** True when a session preview/label shows OpenClaw bootstrap-pending injection. */
+export function isBootstrapPendingPreview(value: string | undefined | null): boolean {
+  if (!value?.trim()) return false;
+  return BOOTSTRAP_PENDING_PREVIEW.test(value.trim());
+}
+
+export function sessionHasBootstrapPendingPreview(
+  session: {
+    firstUserMessagePreview?: string;
+    label?: string;
+    displayName?: string;
+  },
+  extra?: {
+    sessionLabel?: string;
+    customLabel?: string;
+  },
+): boolean {
+  const candidates = [
+    extra?.customLabel,
+    extra?.sessionLabel,
+    session.firstUserMessagePreview,
+    session.label,
+    session.displayName,
+  ];
+  return candidates.some((candidate) => isBootstrapPendingPreview(candidate));
+}
+
 export function isPlaceholderSessionTitle(value: string | undefined | null): boolean {
   if (!value?.trim()) return true;
   const trimmed = value.trim();

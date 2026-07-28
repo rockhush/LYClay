@@ -107,6 +107,27 @@ describe('session-sidebar-order', () => {
     })).toBe(false);
   });
 
+  it('shouldHideStaleSessionFromSidebar hides old bootstrap pending previews', () => {
+    const nowMs = Date.parse('2026-06-10T12:00:00+08:00');
+    const recent = Date.parse('2026-06-02T18:37:00+08:00');
+    const stale = Date.parse('2026-05-20T12:00:00+08:00');
+    const sessionKey = 'agent:main:session-bootstrap';
+
+    expect(shouldHideStaleSessionFromSidebar({
+      sessionKey,
+      activityMs: recent,
+      nowMs,
+      firstUserMessagePreview: '[Bootstrap pending] Please read BOOTSTRAP.md',
+    })).toBe(false);
+
+    expect(shouldHideStaleSessionFromSidebar({
+      sessionKey,
+      activityMs: stale,
+      nowMs,
+      firstUserMessagePreview: '[Bootstrap pending] Please read BOOTSTRAP.md',
+    })).toBe(true);
+  });
+
   it('buildStableSessionOrder keeps existing keys in place when activity changes', () => {
     const sessions = [
       session('agent:main:c', { lastMessageAt: 300 }),

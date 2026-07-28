@@ -1,4 +1,7 @@
-import { sessionHasUntrustedGatewayMetadataPreview } from '@/lib/session-label-utils';
+import {
+  sessionHasBootstrapPendingPreview,
+  sessionHasUntrustedGatewayMetadataPreview,
+} from '@/lib/session-label-utils';
 import type { ChatSession } from '@/stores/chat';
 import { isCronSessionKey } from '@/stores/chat/cron-session-utils';
 
@@ -52,14 +55,16 @@ export type StaleSidebarSessionHideInput = {
   customLabel?: string;
 };
 
-/** Hide stale cron runs and uncleaned Gateway metadata channel previews from the sidebar. */
+/** Hide stale cron runs and uncleaned Gateway-injected previews from the sidebar. */
 export function shouldHideStaleSessionFromSidebar(input: StaleSidebarSessionHideInput): boolean {
   if (!isSidebarSessionOlderThanTwoWeeks(input.activityMs, input.nowMs)) return false;
   if (isCronSessionKey(input.sessionKey)) return true;
-  return sessionHasUntrustedGatewayMetadataPreview(input, {
+  const labelExtra = {
     sessionLabel: input.sessionLabel,
     customLabel: input.customLabel,
-  });
+  };
+  return sessionHasUntrustedGatewayMetadataPreview(input, labelExtra)
+    || sessionHasBootstrapPendingPreview(input, labelExtra);
 }
 
 /** @deprecated Prefer shouldHideStaleSessionFromSidebar */

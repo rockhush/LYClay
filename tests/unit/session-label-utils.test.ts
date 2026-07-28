@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   collectAgentIdsFromSessionKeys,
+  isBootstrapPendingPreview,
   isPlaceholderSessionTitle,
   isUntrustedGatewayMetadataPreview,
+  sessionHasBootstrapPendingPreview,
   sessionHasUntrustedGatewayMetadataPreview,
   resolveSessionDisplayLabel,
 } from '../../src/lib/session-label-utils';
@@ -41,6 +43,14 @@ describe('session label utils', () => {
     expect(isUntrustedGatewayMetadataPreview('你好')).toBe(false);
     expect(sessionHasUntrustedGatewayMetadataPreview({
       firstUserMessagePreview: 'Sender (untrusted metadata)...',
+    })).toBe(true);
+  });
+
+  it('detects bootstrap pending previews', () => {
+    expect(isBootstrapPendingPreview('[Bootstrap pending] Please read BOOTSTRAP.md')).toBe(true);
+    expect(isBootstrapPendingPreview('提醒项目负责人填写日报')).toBe(false);
+    expect(sessionHasBootstrapPendingPreview({
+      firstUserMessagePreview: '[Bootstrap pending] Please r...',
     })).toBe(true);
   });
 
