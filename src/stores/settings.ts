@@ -101,7 +101,6 @@ export const useSettingsStore = create<SettingsState>()(
           set((state) => ({
             ...state,
             ...settings,
-            devModeUnlocked: false,
             ...(resolvedLanguage ? { language: resolvedLanguage } : {}),
           }));
           if (resolvedLanguage) {
@@ -168,12 +167,11 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoCheckUpdate: (autoCheckUpdate) => set({ autoCheckUpdate }),
       setAutoDownloadUpdate: (autoDownloadUpdate) => set({ autoDownloadUpdate }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
-      setDevModeUnlocked: (_devModeUnlocked) => {
-        // 开发者模式入口已隐藏，始终关闭
-        set({ devModeUnlocked: false });
+      setDevModeUnlocked: (devModeUnlocked) => {
+        set({ devModeUnlocked });
         void hostApiFetch('/api/settings/devModeUnlocked', {
           method: 'PUT',
-          body: JSON.stringify({ value: false }),
+          body: JSON.stringify({ value: devModeUnlocked }),
         }).catch(() => { });
       },
       markSetupComplete: () => set({ setupComplete: true }),
@@ -184,7 +182,6 @@ export const useSettingsStore = create<SettingsState>()(
       merge: (persistedState, currentState) => ({
         ...currentState,
         ...(typeof persistedState === 'object' && persistedState !== null ? persistedState : {}),
-        devModeUnlocked: false,
       }),
     }
   )

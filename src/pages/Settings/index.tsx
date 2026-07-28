@@ -13,6 +13,7 @@ import {
   Copy,
   FileText,
   Shield,
+  Terminal,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -40,7 +41,7 @@ import {
 } from '@/lib/telemetry';
 import { useTranslation } from 'react-i18next';
 import { SUPPORTED_LANGUAGES } from '@/i18n';
-import { hostApiFetch } from '@/lib/host-api';
+import { hostApiFetch, openChromeDevTools } from '@/lib/host-api';
 import { subscribeHostEvent } from '@/lib/host-events';
 import { cn } from '@/lib/utils';
 type ControlUiInfo = {
@@ -75,7 +76,7 @@ export function Settings() {
     autoDownloadUpdate,
     setAutoDownloadUpdate,
     devModeUnlocked,
-    // setDevModeUnlocked — 开发者模式入口已隐藏
+    setDevModeUnlocked,
   } = useSettingsStore();
 
   const { status: gatewayStatus, restart: restartGateway } = useGatewayStore();
@@ -204,6 +205,17 @@ export function Settings() {
   };
 
 
+
+  const handleOpenChromeDevTools = async () => {
+    try {
+      const result = await openChromeDevTools();
+      if (!result.success) {
+        toast.error(result.error || t('developer.chromeDevToolsFailed'));
+      }
+    } catch (error) {
+      toast.error(toUserMessage(error) || t('developer.chromeDevToolsFailed'));
+    }
+  };
 
   const refreshControlUiInfo = async () => {
     try {
@@ -632,7 +644,6 @@ export function Settings() {
             </div>
           </div>
 
-          {/* Advanced — 开发者模式入口暂时隐藏，始终关闭
           <div data-testid="settings-advanced-section">
             <h2 className="text-base font-semibold text-foreground mb-2">
               {t('advanced.title')}
@@ -654,7 +665,6 @@ export function Settings() {
               />
             </div>
           </div>
-          */}
 
           {/* Developer */}
           {devModeUnlocked && (
@@ -664,6 +674,29 @@ export function Settings() {
                   {t('developer.title')}
                 </h2>
                 <div className="space-y-8">
+                  <div className="space-y-4" data-testid="settings-chrome-devtools-section">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <Label className="text-[14px] font-medium text-foreground/80">
+                          {t('developer.chromeDevTools')}
+                        </Label>
+                        <p className="text-[13px] text-muted-foreground mt-1">
+                          {t('developer.chromeDevToolsDesc')}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handleOpenChromeDevTools()}
+                        data-testid="settings-open-chrome-devtools-button"
+                        className="rounded-xl h-10 px-4 bg-transparent border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5"
+                      >
+                        <Terminal className="h-4 w-4 mr-2" />
+                        {t('developer.openChromeDevTools')}
+                      </Button>
+                    </div>
+                  </div>
+
                   {/* Gateway Proxy */}
                   <div className="space-y-4" data-testid="settings-proxy-section">
                     <div className="flex items-center justify-between">

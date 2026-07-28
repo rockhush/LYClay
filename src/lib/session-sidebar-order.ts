@@ -1,4 +1,6 @@
+import { sessionHasUntrustedGatewayMetadataPreview } from '@/lib/session-label-utils';
 import type { ChatSession } from '@/stores/chat';
+import { isCronSessionKey } from '@/stores/chat/cron-session-utils';
 
 export type SessionBucketKey =
   | 'today'
@@ -31,6 +33,42 @@ export function resolveSessionActivityMs(
 
   if (typeof session.updatedAt === 'number' && session.updatedAt > 0) return session.updatedAt;
   return 0;
+}
+
+/** Sidebar buckets for sessions older than the two-week group (「一个月内」「一个月之前」). */
+export function isSidebarSessionOlderThanTwoWeeks(activityMs: number, nowMs: number): boolean {
+  const bucket = getSessionBucket(activityMs, nowMs);
+  return bucket === 'withinMonth' || bucket === 'older';
+}
+
+export type StaleSidebarSessionHideInput = {
+  sessionKey: string;
+  activityMs: number;
+  nowMs: number;
+  firstUserMessagePreview?: string;
+  label?: string;
+  displayName?: string;
+  sessionLabel?: string;
+  customLabel?: string;
+};
+
+/** Hide stale cron runs and uncleaned Gateway metadata channel previews from the sidebar. */
+export function shouldHideStaleSessionFromSidebar(input: StaleSidebarSessionHideInput): boolean {
+  if (!isSidebarSessionOlderThanTwoWeeks(input.activityMs, input.nowMs)) return false;
+  if (isCronSessionKey(input.sessionKey)) return true;
+  return sessionHasUntrustedGatewayMetadataPreview(input, {
+    sessionLabel: input.sessionLabel,
+    customLabel: input.customLabel,
+  });
+}
+
+/** @deprecated Prefer shouldHideStaleSessionFromSidebar */
+export function shouldHideStaleCronSessionFromSidebar(
+  sessionKey: string,
+  activityMs: number,
+  nowMs: number,
+): boolean {
+  return shouldHideStaleSessionFromSidebar({ sessionKey, activityMs, nowMs });
 }
 
 export function getSessionBucket(activityMs: number, nowMs: number): SessionBucketKey {

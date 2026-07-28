@@ -42,6 +42,17 @@ export async function handleAppRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/app/open-devtools' && req.method === 'POST') {
+    const win = ctx.mainWindow;
+    if (!win || win.isDestroyed()) {
+      sendJson(res, 503, { success: false, error: 'Main window is not available' });
+      return true;
+    }
+    win.webContents.openDevTools();
+    sendJson(res, 200, { success: true });
+    return true;
+  }
+
   if (url.pathname === '/api/app/openclaw-doctor' && req.method === 'POST') {
     const body = await parseJsonBody<{ mode?: 'diagnose' | 'fix' }>(req);
     const mode = body.mode === 'fix' ? 'fix' : 'diagnose';

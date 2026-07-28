@@ -46,4 +46,18 @@ test.describe('ClawX developer proxy settings', () => {
     await proxySaveButton.click();
     await expect.poll(async () => await readProxyEnabled(page)).toBe(false);
   });
+
+  test('shows chrome devtools action when developer mode is enabled', async ({ page }) => {
+    await completeSetup(page);
+
+    await page.getByTestId('sidebar-nav-settings').click();
+    await expect(page.getByTestId('settings-page')).toBeVisible();
+
+    const devModeToggle = page.getByTestId('settings-dev-mode-switch');
+    await ensureSwitchState(devModeToggle, true);
+
+    const devToolsButton = page.getByTestId('settings-open-chrome-devtools-button');
+    await expect(devToolsButton).toBeVisible();
+    await expect(devToolsButton).toBeEnabled();
+  });
 });

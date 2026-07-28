@@ -60,16 +60,9 @@ import { whatsAppLoginManager } from '../utils/whatsapp-login';
 import { syncAllProviderAuthToRuntime } from '../services/providers/provider-runtime-sync';
 import { bootstrapLyManagedProviders } from '../services/providers/default-provider-bootstrap';
 import { syncGlobalSub2ApiModels } from '../services/sub2api/model-sync-service';
-import { isTruthyEnvFlag } from '../utils/env-flag';
 
 const WINDOWS_APP_USER_MODEL_ID = 'app.LYClaw.desktop';
 const isE2EMode = process.env.CLAWX_E2E === '1';
-
-function shouldOpenDevToolsAtStartup(): boolean {
-  if (isE2EMode) return false;
-  if (process.env.VITE_DEV_SERVER_URL) return true;
-  return isTruthyEnvFlag(process.env.LYCLAW_OPEN_DEVTOOLS);
-}
 const requestedUserDataDir = process.env.CLAWX_USER_DATA_DIR?.trim();
 
 if (isE2EMode && requestedUserDataDir) {
@@ -268,19 +261,15 @@ function createWindow(): BrowserWindow {
       rendererUrl.searchParams.set('e2eSkipSetup', '1');
     }
     win.loadURL(rendererUrl.toString());
+    if (!isE2EMode) {
+      win.webContents.openDevTools();
+    }
   } else {
     win.loadFile(join(__dirname, '../../dist/index.html'), {
       query: shouldSkipSetupForE2E
         ? { e2eSkipSetup: '1' }
         : undefined,
     });
-  }
-
-  if (shouldOpenDevToolsAtStartup()) {
-    if (isTruthyEnvFlag(process.env.LYCLAW_OPEN_DEVTOOLS)) {
-      logger.info('[LYClaw] Opening DevTools at startup (LYCLAW_OPEN_DEVTOOLS)');
-    }
-    win.webContents.openDevTools();
   }
 
   return win;

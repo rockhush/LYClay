@@ -329,6 +329,12 @@ export interface DeviceAccessResult {
   error?: string;
 }
 
+export async function openChromeDevTools(): Promise<{ success: boolean; error?: string }> {
+  return hostApiFetch<{ success: boolean; error?: string }>('/api/app/open-devtools', {
+    method: 'POST',
+  });
+}
+
 export async function checkDeviceAccess(force = false): Promise<DeviceAccessResult> {
   return hostApiFetch<DeviceAccessResult>('/api/app/device-access', {
     method: force ? 'POST' : 'GET',

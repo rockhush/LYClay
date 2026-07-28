@@ -55,6 +55,35 @@ export function normalizeSessionSummaryForDisplay(
   };
 }
 
+const UNTRUSTED_GATEWAY_METADATA_PREVIEW = /(?:Sender|Conversation info)\s*\(\s*untrusted\s+metadata/i;
+
+/** True when a session preview/label still shows Gateway-injected channel metadata. */
+export function isUntrustedGatewayMetadataPreview(value: string | undefined | null): boolean {
+  if (!value?.trim()) return false;
+  return UNTRUSTED_GATEWAY_METADATA_PREVIEW.test(value.trim());
+}
+
+export function sessionHasUntrustedGatewayMetadataPreview(
+  session: {
+    firstUserMessagePreview?: string;
+    label?: string;
+    displayName?: string;
+  },
+  extra?: {
+    sessionLabel?: string;
+    customLabel?: string;
+  },
+): boolean {
+  const candidates = [
+    extra?.customLabel,
+    extra?.sessionLabel,
+    session.firstUserMessagePreview,
+    session.label,
+    session.displayName,
+  ];
+  return candidates.some((candidate) => isUntrustedGatewayMetadataPreview(candidate));
+}
+
 export function isPlaceholderSessionTitle(value: string | undefined | null): boolean {
   if (!value?.trim()) return true;
   const trimmed = value.trim();

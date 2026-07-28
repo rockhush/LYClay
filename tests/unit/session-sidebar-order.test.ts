@@ -3,8 +3,11 @@ import {
   buildStableSessionOrder,
   getSessionBucket,
   isSessionActivityOlderThanDays,
+  isSidebarSessionOlderThanTwoWeeks,
   mergeDiscoveredSessionActivity,
   resolveSessionActivityMs,
+  shouldHideStaleCronSessionFromSidebar,
+  shouldHideStaleSessionFromSidebar,
 } from '../../src/lib/session-sidebar-order';
 import type { ChatSession } from '../../src/stores/chat';
 
@@ -51,6 +54,57 @@ describe('session-sidebar-order', () => {
 
     expect(isSessionActivityOlderThanDays(withinTwoWeeks, nowMs, 14)).toBe(false);
     expect(isSessionActivityOlderThanDays(olderThanTwoWeeks, nowMs, 14)).toBe(true);
+  });
+
+  it('isSidebarSessionOlderThanTwoWeeks covers withinMonth and older buckets only', () => {
+    const nowMs = Date.parse('2026-06-10T12:00:00+08:00');
+    const withinTwoWeeks = Date.parse('2026-06-02T18:37:00+08:00');
+    const withinMonth = Date.parse('2026-05-20T12:00:00+08:00');
+    const older = Date.parse('2026-04-01T12:00:00+08:00');
+
+    expect(isSidebarSessionOlderThanTwoWeeks(withinTwoWeeks, nowMs)).toBe(false);
+    expect(isSidebarSessionOlderThanTwoWeeks(withinMonth, nowMs)).toBe(true);
+    expect(isSidebarSessionOlderThanTwoWeeks(older, nowMs)).toBe(true);
+  });
+
+  it('shouldHideStaleCronSessionFromSidebar hides only old cron sessions', () => {
+    const nowMs = Date.parse('2026-06-10T12:00:00+08:00');
+    const recent = Date.parse('2026-06-02T18:37:00+08:00');
+    const stale = Date.parse('2026-05-20T12:00:00+08:00');
+    const cronKey = 'agent:main:scheduled-task:job-a:run-1';
+    const chatKey = 'agent:main:session-123';
+
+    expect(shouldHideStaleCronSessionFromSidebar(cronKey, recent, nowMs)).toBe(false);
+    expect(shouldHideStaleCronSessionFromSidebar(cronKey, stale, nowMs)).toBe(true);
+    expect(shouldHideStaleCronSessionFromSidebar(chatKey, stale, nowMs)).toBe(false);
+  });
+
+  it('shouldHideStaleSessionFromSidebar hides old untrusted metadata channel previews', () => {
+    const nowMs = Date.parse('2026-06-10T12:00:00+08:00');
+    const recent = Date.parse('2026-06-02T18:37:00+08:00');
+    const stale = Date.parse('2026-05-20T12:00:00+08:00');
+    const channelKey = 'agent:main:dingtalk:direct:user-1';
+
+    expect(shouldHideStaleSessionFromSidebar({
+      sessionKey: channelKey,
+      activityMs: recent,
+      nowMs,
+      firstUserMessagePreview: 'Sender (untrusted metadata): ```json',
+    })).toBe(false);
+
+    expect(shouldHideStaleSessionFromSidebar({
+      sessionKey: channelKey,
+      activityMs: stale,
+      nowMs,
+      firstUserMessagePreview: 'Sender (untrusted metadata): ```json',
+    })).toBe(true);
+
+    expect(shouldHideStaleSessionFromSidebar({
+      sessionKey: channelKey,
+      activityMs: stale,
+      nowMs,
+      firstUserMessagePreview: '你好，请帮我查一下天气',
+    })).toBe(false);
   });
 
   it('buildStableSessionOrder keeps existing keys in place when activity changes', () => {

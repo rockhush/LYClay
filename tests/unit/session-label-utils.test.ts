@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   collectAgentIdsFromSessionKeys,
   isPlaceholderSessionTitle,
+  isUntrustedGatewayMetadataPreview,
+  sessionHasUntrustedGatewayMetadataPreview,
   resolveSessionDisplayLabel,
 } from '../../src/lib/session-label-utils';
 
@@ -31,6 +33,15 @@ describe('session label utils', () => {
         name: '大宗行情钉钉群简报',
       }],
     })).toBe('@大宗行情钉钉群简报 请使用这个技能，帮我看看');
+  });
+
+  it('detects untrusted Gateway metadata previews', () => {
+    expect(isUntrustedGatewayMetadataPreview('Sender (untrusted metadata): ```json')).toBe(true);
+    expect(isUntrustedGatewayMetadataPreview('Conversation info (untrusted metadata): {')).toBe(true);
+    expect(isUntrustedGatewayMetadataPreview('你好')).toBe(false);
+    expect(sessionHasUntrustedGatewayMetadataPreview({
+      firstUserMessagePreview: 'Sender (untrusted metadata)...',
+    })).toBe(true);
   });
 
   it('collects agent ids from session keys', () => {

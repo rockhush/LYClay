@@ -106,4 +106,42 @@ describe('handleAppRoutes', () => {
     expect(handled).toBe(true);
     expect(checkDeviceAccessMock).toHaveBeenCalledWith({ force: true });
   });
+
+  it('opens chrome devtools through the host api', async () => {
+    const openDevTools = vi.fn();
+    const { handleAppRoutes } = await import('@electron/api/routes/app');
+
+    const handled = await handleAppRoutes(
+      { method: 'POST' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/app/open-devtools'),
+      {
+        mainWindow: {
+          isDestroyed: () => false,
+          webContents: { openDevTools },
+        },
+      } as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(openDevTools).toHaveBeenCalledTimes(1);
+    expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, { success: true });
+  });
+
+  it('returns unavailable when main window is missing for devtools', async () => {
+    const { handleAppRoutes } = await import('@electron/api/routes/app');
+
+    const handled = await handleAppRoutes(
+      { method: 'POST' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/app/open-devtools'),
+      { mainWindow: null } as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 503, {
+      success: false,
+      error: 'Main window is not available',
+    });
+  });
 });

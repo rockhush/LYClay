@@ -64,6 +64,7 @@ import {
   buildStableSessionOrder,
   getSessionBucket,
   resolveSessionActivityMs,
+  shouldHideStaleSessionFromSidebar,
   type SessionBucketKey,
 } from '@/lib/session-sidebar-order';
 import { buildBatchDeleteSessionGroups } from '@/lib/session-batch-delete-groups';
@@ -339,6 +340,15 @@ export function Sidebar() {
     return Boolean(wid && workspaceIdsKnown.has(wid));
   };
 
+  const [nowMs, setNowMs] = useState(INITIAL_NOW_MS);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const stableSessionOrderRef = useRef<string[]>([]);
 
   const orderedSidebarSessions = useMemo(() => {
@@ -346,7 +356,17 @@ export function Sidebar() {
       (session) =>
         isUserFacingSessionKey(session.key)
         && !isPendingNewSession(session.key)
-        && !isEmptyGhostSession(session),
+        && !isEmptyGhostSession(session)
+        && !shouldHideStaleSessionFromSidebar({
+          sessionKey: session.key,
+          activityMs: resolveSessionActivityMs(session, sessionLastActivity),
+          nowMs,
+          firstUserMessagePreview: session.firstUserMessagePreview,
+          label: session.label,
+          displayName: session.displayName,
+          sessionLabel: sessionLabels[session.key],
+          customLabel: customSessionLabels[session.key],
+        }),
     );
     const nextOrder = buildStableSessionOrder(
       eligible,
@@ -361,7 +381,7 @@ export function Sidebar() {
     // sessionLastActivity is read only when seeding/appending newcomers; omitting it
     // from deps keeps existing rows pinned while browsing history.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isPendingNewSession deps listed below
-  }, [sessions, sessionLabels, customSessionLabels, currentSessionKey, messageCount]);
+  }, [sessions, sessionLabels, customSessionLabels, currentSessionKey, messageCount, sessionLastActivity, nowMs]);
 
   const pinnedSidebarSessions = useMemo(() => {
     return orderedSidebarSessions
@@ -574,17 +594,9 @@ export function Sidebar() {
   const [renameDraft, setRenameDraft] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
-  const [nowMs, setNowMs] = useState(INITIAL_NOW_MS);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const debouncedSessionSearchQuery = useDebouncedValue(sessionSearchQuery, 200);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 60 * 1000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (sessionToRename) {
