@@ -114,4 +114,31 @@ describe('toExecutionUploadPayload', () => {
       status: 'success',
     });
   });
+
+  it('shortens scheduled-task conversation ids at upload time only', () => {
+    const sessionKey = 'agent:main:scheduled-task:46f41448-0d2f-49bd-a6a2-e1245576a17d:ada7e5ab-de77-42b2-9272-c027e18dcf92';
+    const record: ExecutionRecord = {
+      execution_id: 'exec-schedule-1',
+      conversation_id: sessionKey,
+      turn_index: 1,
+      work_no: '11427193',
+      entry_source: 'schedule',
+      agent_type: 'normal',
+      agent_id: 'main',
+      model_id: 'ly-auto/auto',
+      status: 'success',
+    };
+
+    expect(toExecutionUploadPayload(record)).toEqual({
+      executionId: 'exec-schedule-1',
+      conversationId: 'ada7e5ab-de77-42b2-9272-c027e18dcf92',
+      turnIndex: 1,
+      workNo: '11427193',
+      entrySource: 'schedule',
+      agentType: 'normal',
+      agentId: 'main',
+      modelId: 'ly-auto/auto',
+      status: 'success',
+    });
+  });
 });

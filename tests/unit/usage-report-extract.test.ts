@@ -91,7 +91,10 @@ describe('extractSkillInvocationFromToolCall', () => {
   it('maps read SKILL.md tool calls back to skill slug', () => {
     expect(extractSkillInvocationFromToolCall('read', {
       path: 'C:\\Users\\ken.yuan\\Desktop\\limit\\node_modules\\openclaw\\skills\\pptx\\SKILL.md',
-    })).toEqual({ skillId: 'pptx' });
+    })).toEqual({
+      skillId: 'pptx',
+      skillPath: 'C:\\Users\\ken.yuan\\Desktop\\limit\\node_modules\\openclaw\\skills\\pptx\\SKILL.md',
+    });
     expect(extractSkillInvocationFromToolCall('write', {
       path: '~/.openclaw/skills/pptx/SKILL.md',
     })).toBeNull();

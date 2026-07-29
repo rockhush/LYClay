@@ -14,6 +14,7 @@ import { logger } from '../utils/logger';
 import { protectMemoryRpcOutput } from '../security/memory-content-policy';
 import { enrichChatSendParams } from '../utils/chat-send-enrichment';
 import { handleExternalCronChatTerminal } from './cron-external-delivery';
+import { reportCronExecutionOnRunTerminal } from '../utils/reporting/cron-execution-reporter';
 import { prepareHistoricalDigitalEmployeeChatSend } from '../utils/historical-digital-employee-agents';
 import { captureTelemetryEvent, trackMetric } from '../utils/telemetry';
 // Dev-only Langfuse chat tracing �?uncomment with electron/main/index.ts langfuse import.
@@ -94,7 +95,7 @@ import {
 } from '../runtime/tool-run-registry';
 import { isSessionProcessingLiveOnDisk } from './session-processing-liveness';
 import { hasActiveExecInSessionTranscript } from './session-exec-liveness';
-import { captureLogErrorSnapshot, recordLogEvent } from '../utils/log-observability';
+import { captureLogErrorSnapshot, isUserBlockingGatewayRpcMethod, recordLogEvent } from '../utils/log-observability';
 
 
 export interface GatewayStatus {
@@ -2536,6 +2537,21 @@ export class GatewayManager extends EventEmitter {
           error: String(error),
         });
       });
+      void reportCronExecutionOnRunTerminal({
+        runId,
+        sessionKey: metrics.sessionKey ?? eventSessionKey,
+        state: state as 'final' | 'error' | 'aborted',
+        acceptedAtMs: metrics.acceptedAt,
+        firstVisibleProgressAt: metrics.firstVisibleProgressAt,
+        firstDeltaAt: metrics.firstDeltaAt,
+        terminalMessage: event.message,
+      }).catch((error) => {
+        logger.warn('[UsageReport] cron execution terminal handler failed', {
+          runId,
+          sessionKey: metrics.sessionKey ?? eventSessionKey,
+          error: String(error),
+        });
+      });
       if (metrics.kind === 'warmup') {
         this.resolveWarmupCompletion(runId, state);
       }
@@ -2898,6 +2914,15 @@ export class GatewayManager extends EventEmitter {
     return this.isWarmedUp;
   }
 
+  isTrackedUserChatRun(runId?: string, sessionKey?: string): boolean {
+    const normalizedRunId = runId?.trim();
+    const normalizedSessionKey = sessionKey?.trim();
+    if (!normalizedRunId) return false;
+    const run = this.chatRunMetrics.get(normalizedRunId);
+    return run?.kind === 'user'
+      && (!normalizedSessionKey || run.sessionKey === normalizedSessionKey);
+  }
+
   /**
    * Make an RPC call to the Gateway
    * Uses OpenClaw protocol format: { type: "req", id: "...", method: "...", params: {...} }
@@ -2915,6 +2940,7 @@ export class GatewayManager extends EventEmitter {
     await this.warnIfDigitalEmployeeIsolationMissing(method, effectiveParams);
     await this.prepareForUserChatSend(method, effectiveParams);
     const rpcStart = Date.now();
+    const rpcSessionKey = this.getRpcSessionKey(method, effectiveParams);
     logger.info(`[rpc] ${method} started (timeout=${timeoutMs}ms)`);
 
     let requestId: string | null = null;
@@ -2933,12 +2959,13 @@ export class GatewayManager extends EventEmitter {
         component: 'gateway',
         source: 'gateway',
         requestId: id,
+        sessionId: rpcSessionKey,
         method,
         status: 'started',
         durationMs: 0,
         metadata: {
           timeoutMs,
-          sessionKey: this.getRpcSessionKey(method, effectiveParams),
+          sessionKey: rpcSessionKey,
         },
       });
       // void beginChatSendTrace({
@@ -2951,7 +2978,7 @@ export class GatewayManager extends EventEmitter {
         method,
         startedAt: rpcStart,
         timeoutMs,
-        sessionKey: this.getRpcSessionKey(method, effectiveParams),
+        sessionKey: rpcSessionKey,
       });
       chatSendWatchdogTimers = this.scheduleChatSendWatchdog({
         requestId: id,
@@ -2997,6 +3024,7 @@ export class GatewayManager extends EventEmitter {
         source: 'gateway',
         requestId: requestId ?? undefined,
         runId: this.getRunIdFromRpcResult(result) ?? undefined,
+        sessionId: rpcSessionKey,
         method,
         status: 'ok',
         durationMs: duration,
@@ -3030,25 +3058,34 @@ export class GatewayManager extends EventEmitter {
         component: 'gateway',
         source: 'gateway',
         requestId: requestId ?? undefined,
+        sessionId: rpcSessionKey,
         method,
         status,
         durationMs: duration,
       });
-      void captureLogErrorSnapshot({
-        level: 'error',
-        source: 'gateway',
-        eventName: 'gateway.rpc_failed',
-        component: 'gateway',
-        errorCode: status === 'timeout' ? 'GATEWAY_RPC_TIMEOUT' : 'GATEWAY_RPC_FAILED',
-        message: error instanceof Error ? error.message : String(error),
-        requestId: requestId ?? undefined,
-        method,
-        status,
-        durationMs: duration,
-        metadata: {
-          transportFailure: isTransportRpcFailure(error),
-        },
-      });
+      if (isUserBlockingGatewayRpcMethod(method)
+        && this.isUserChatSend(method, effectiveParams)
+        && status !== 'timeout') {
+        void captureLogErrorSnapshot({
+          userImpact: 'blocking',
+          operationKind: 'user_chat',
+          failureStage: 'gateway_rpc',
+          level: 'error',
+          source: 'gateway',
+          eventName: 'gateway.rpc_failed',
+          component: 'gateway',
+          errorCode: status === 'timeout' ? 'GATEWAY_RPC_TIMEOUT' : 'GATEWAY_RPC_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+          requestId: requestId ?? undefined,
+          sessionKey: rpcSessionKey,
+          method,
+          status,
+          durationMs: duration,
+          metadata: {
+            transportFailure: isTransportRpcFailure(error),
+          },
+        });
+      }
       if (requestId) {
         // finishChatSendRpc({
         //   requestId,

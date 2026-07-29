@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildErrorSnapshot,
   captureErrorSnapshot,
-  classifySnapshotPriority,
   createSnapshotWriteQueue,
+  isElkEligibleSnapshot,
   sanitizeBaseUrl,
 } from '@electron/utils/error-snapshot';
 import { createLogContextBuffer } from '@electron/utils/log-context-buffer';
@@ -12,21 +12,6 @@ const providerToken = 'sk-abcdefghijklmnopqrstuvwxyz1234567890';
 const bearerToken = 'Bearer abcdefghijklmnopqrstuvwxyz123456';
 
 describe('error snapshot', () => {
-  it('classifies fatal core communication failures as P0 and audit denials as P1', () => {
-    expect(classifySnapshotPriority({
-      source: 'gateway',
-      level: 'error',
-      errorCode: 'GATEWAY_RPC_TIMEOUT',
-      recovered: false,
-    })).toBe('p0');
-    expect(classifySnapshotPriority({
-      source: 'security',
-      level: 'warn',
-      status: 'denied',
-      errorCode: 'NETWORK_DENIED_BY_POLICY',
-    })).toBe('p1');
-  });
-
   it('sanitizes baseUrl down to protocol, host, and base path', () => {
     expect(sanitizeBaseUrl('https://user:pass@example.com/v1/chat/completions?api_key=secret#frag')).toBe('https://example.com/v1/chat/completions');
     expect(sanitizeBaseUrl('not a url')).toBeNull();
@@ -43,7 +28,7 @@ describe('error snapshot', () => {
       durationMs: 30_000,
       requestId: 'req-1',
       runId: 'run-1',
-      sessionId: 'session-1',
+      sessionId: 'agent:main:session-1',
       modelId: 'deepseek-chat',
       baseUrl: 'https://provider.example.com/v1?api_key=secret',
       metadata: {
@@ -62,6 +47,13 @@ describe('error snapshot', () => {
       contextBuffer,
       input: {
         priority: 'p0',
+        userImpact: 'blocking',
+        operationKind: 'user_chat',
+        failureStage: 'provider_request',
+        fingerprint: 'snapshot-fingerprint',
+        occurrenceCount: 2,
+        firstSeenAt: '2026-07-22T08:00:00.000Z',
+        lastSeenAt: '2026-07-22T08:00:02.000Z',
         level: 'error',
         source: 'chat',
         eventName: 'chat.run_unavailable',
@@ -70,7 +62,8 @@ describe('error snapshot', () => {
         message: `model failed with ${providerToken} and ${bearerToken}`,
         requestId: 'req-1',
         runId: 'run-1',
-        sessionId: 'session-1',
+        sessionKey: 'agent:main:session-1',
+        sessionId: '977e72a4-3784-488c-9919-2284dad5a1c3',
         modelId: 'deepseek-chat',
         baseUrl: 'https://user:pass@provider.example.com/v1?api_key=secret',
         method: 'chat.send',
@@ -95,6 +88,13 @@ describe('error snapshot', () => {
       snapshotId: expect.any(String),
       ts: '2026-07-22T08:00:02.000Z',
       priority: 'p0',
+      userImpact: 'blocking',
+      operationKind: 'user_chat',
+      failureStage: 'provider_request',
+      fingerprint: 'snapshot-fingerprint',
+      occurrenceCount: 2,
+      firstSeenAt: '2026-07-22T08:00:00.000Z',
+      lastSeenAt: '2026-07-22T08:00:02.000Z',
       level: 'error',
       source: 'chat',
       eventName: 'chat.run_unavailable',
@@ -105,7 +105,8 @@ describe('error snapshot', () => {
       identityMissingReason: null,
       requestId: 'req-1',
       runId: 'run-1',
-      sessionId: 'session-1',
+      sessionKey: 'agent:main:session-1',
+      sessionId: '977e72a4-3784-488c-9919-2284dad5a1c3',
       modelId: 'deepseek-chat',
       baseUrl: 'https://provider.example.com/v1',
       method: 'chat.send',
@@ -119,6 +120,8 @@ describe('error snapshot', () => {
       truncated: false,
     }));
     expect(snapshot.recentEvents).toHaveLength(1);
+    expect(isElkEligibleSnapshot(snapshot)).toBe(true);
+    expect(isElkEligibleSnapshot({ ...snapshot, sessionKey: 123 })).toBe(false);
     expect(JSON.stringify(snapshot)).not.toContain(providerToken);
     expect(JSON.stringify(snapshot)).not.toContain(bearerToken);
     expect(JSON.stringify(snapshot)).not.toContain('prompt body');
@@ -139,8 +142,15 @@ describe('error snapshot', () => {
       identity: async () => ({ workNo: '', userName: '', identityMissingReason: 'missing_dingtalk_user' }),
       now: () => '2026-07-22T08:00:02.000Z',
       input: {
-        priority: 'p1',
-        level: 'warn',
+        priority: 'p0',
+        userImpact: 'blocking',
+        operationKind: 'host_api_operation',
+        failureStage: 'host_api_route',
+        fingerprint: 'capture-fingerprint',
+        occurrenceCount: 1,
+        firstSeenAt: '2026-07-22T08:00:02.000Z',
+        lastSeenAt: '2026-07-22T08:00:02.000Z',
+        level: 'error',
         source: 'hostapi',
         eventName: 'hostapi.request_error',
         errorCode: 'HOSTAPI_ROUTE_FAILED',
@@ -150,6 +160,6 @@ describe('error snapshot', () => {
 
     expect(queue.size()).toBe(1);
     expect(scheduleWriter).toHaveBeenCalledTimes(1);
-    expect(scheduleWriter).toHaveBeenCalledWith('p1');
+    expect(scheduleWriter).toHaveBeenCalledWith('p0');
   });
 });

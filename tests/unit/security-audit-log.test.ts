@@ -18,6 +18,12 @@ import {
   revokeDomainGrant,
   revokePathGrant,
 } from '@electron/security/permission-store';
+import { captureLogErrorSnapshot } from '@electron/utils/log-observability';
+
+vi.mock('@electron/utils/log-observability', () => ({
+  captureLogErrorSnapshot: vi.fn(async () => undefined),
+  recordLogEvent: vi.fn(),
+}));
 
 vi.mock('@electron/utils/logger', () => ({
   logger: {
@@ -93,6 +99,24 @@ describe('security audit log', () => {
       capability: 'command',
       decision: 'deny',
       code: 'REMOTE_SCRIPT_PIPE',
+    }));
+  });
+
+  it('keeps deny and critical events out of the ELK snapshot pipeline', () => {
+    auditSecurityEvent({
+      source: 'test:security',
+      capability: 'file',
+      operation: 'read',
+      decision: 'deny',
+      risk: 'critical',
+      code: 'PATH_OUTSIDE_AUTHORIZED_ROOTS',
+    });
+
+    expect(captureLogErrorSnapshot).not.toHaveBeenCalled();
+    expect(listSecurityAuditEvents()).toContainEqual(expect.objectContaining({
+      decision: 'deny',
+      risk: 'critical',
+      code: 'PATH_OUTSIDE_AUTHORIZED_ROOTS',
     }));
   });
 

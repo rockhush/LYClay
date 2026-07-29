@@ -10,9 +10,18 @@ import {
 import type { LogIdentityContext } from './log-identity-context';
 
 export type SnapshotPriority = 'p0' | 'p1';
+export type SnapshotUserImpact = 'blocking';
+export type SnapshotOperationKind = 'user_chat' | 'host_api_operation' | 'app_runtime';
 
 export interface ErrorSnapshotInput {
   priority: SnapshotPriority;
+  userImpact: SnapshotUserImpact;
+  operationKind: SnapshotOperationKind;
+  failureStage: string;
+  fingerprint: string;
+  occurrenceCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
   level: string;
   source: string;
   eventName: string;
@@ -21,6 +30,7 @@ export interface ErrorSnapshotInput {
   message: string;
   requestId?: string;
   runId?: string;
+  sessionKey?: string;
   sessionId?: string;
   modelId?: string;
   baseUrl?: string;
@@ -35,20 +45,19 @@ export interface ErrorSnapshotInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface SnapshotPriorityClassificationInput {
-  source?: string;
-  level?: string;
-  status?: string;
-  errorCode?: string;
-  recovered?: boolean;
-}
-
 export interface ErrorSnapshotDocument {
   documentType: 'error_snapshot';
   schemaVersion: 1;
   snapshotId: string;
   ts: string;
   priority: SnapshotPriority;
+  userImpact: SnapshotUserImpact;
+  operationKind: SnapshotOperationKind;
+  failureStage: string;
+  fingerprint: string;
+  occurrenceCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
   level: string;
   source: string;
   eventName: string;
@@ -60,6 +69,7 @@ export interface ErrorSnapshotDocument {
   identityMissingReason: LogIdentityContext['identityMissingReason'];
   requestId?: string;
   runId?: string;
+  sessionKey?: string;
   sessionId?: string;
   modelId?: string;
   baseUrl?: string;
@@ -78,6 +88,7 @@ export interface ErrorSnapshotDocument {
 
 export interface SnapshotWriteQueue {
   enqueue(snapshot: ErrorSnapshotDocument): void;
+  restore(snapshots: ErrorSnapshotDocument[]): void;
   drain(priority?: SnapshotPriority): ErrorSnapshotDocument[];
   size(): number;
   bytes(): number;
@@ -111,36 +122,52 @@ export function sanitizeBaseUrl(input: string): string | null {
   }
 }
 
-export function classifySnapshotPriority(input: SnapshotPriorityClassificationInput): SnapshotPriority {
-  const source = (input.source ?? '').toLowerCase();
-  const level = (input.level ?? '').toLowerCase();
-  const status = (input.status ?? '').toLowerCase();
-  const errorCode = (input.errorCode ?? '').toUpperCase();
-
-  if (input.recovered === true) return 'p1';
-  if (source === 'security' || status === 'denied') return 'p1';
-  if (level === 'fatal') return 'p0';
-
-  const coreSources = new Set(['app', 'chat', 'gateway', 'model', 'provider', 'host-api']);
-  const coreFailure = coreSources.has(source)
-    && (level === 'error' || status === 'failed' || status === 'timeout' || errorCode.includes('TIMEOUT'));
-  if (coreFailure) return 'p0';
-
-  const diagnosticSources = new Set([
-    'channel',
-    'plugin',
-    'skill',
-    'usage',
-    'dependency',
-    'tool',
-    'sub2api',
-    'dws',
-    'dingtalk',
-    'oauth',
-  ]);
-  if (diagnosticSources.has(source)) return 'p1';
-
-  return 'p1';
+export function isElkEligibleSnapshot(snapshot: unknown): snapshot is ErrorSnapshotDocument {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false;
+  const value = snapshot as Record<string, unknown>;
+  return value.documentType === 'error_snapshot'
+    && value.schemaVersion === 1
+    && typeof value.snapshotId === 'string'
+    && value.snapshotId.length > 0
+    && typeof value.ts === 'string'
+    && value.ts.length > 0
+    && value.priority === 'p0'
+    && value.userImpact === 'blocking'
+    && (value.operationKind === 'user_chat'
+      || value.operationKind === 'host_api_operation'
+      || value.operationKind === 'app_runtime')
+    && typeof value.failureStage === 'string'
+    && value.failureStage.length > 0
+    && typeof value.fingerprint === 'string'
+    && value.fingerprint.length > 0
+    && typeof value.occurrenceCount === 'number'
+    && Number.isInteger(value.occurrenceCount)
+    && value.occurrenceCount >= 1
+    && typeof value.firstSeenAt === 'string'
+    && value.firstSeenAt.length > 0
+    && typeof value.lastSeenAt === 'string'
+    && value.lastSeenAt.length > 0
+    && typeof value.level === 'string'
+    && value.level.length > 0
+    && typeof value.source === 'string'
+    && value.source.length > 0
+    && typeof value.eventName === 'string'
+    && value.eventName.length > 0
+    && typeof value.component === 'string'
+    && value.component.length > 0
+    && typeof value.errorCode === 'string'
+    && value.errorCode.length > 0
+    && typeof value.message === 'string'
+    && typeof value.workNo === 'string'
+    && typeof value.userName === 'string'
+    && (value.identityMissingReason === null || typeof value.identityMissingReason === 'string')
+    && (value.sessionKey === undefined || typeof value.sessionKey === 'string')
+    && (value.sessionId === undefined || typeof value.sessionId === 'string')
+    && Array.isArray(value.recentEvents)
+    && Boolean(value.metadata)
+    && typeof value.metadata === 'object'
+    && !Array.isArray(value.metadata)
+    && typeof value.truncated === 'boolean';
 }
 
 function assignOptional<T extends keyof ErrorSnapshotDocument>(
@@ -181,7 +208,7 @@ export async function buildErrorSnapshot(options: {
     at: ts,
     requestId: input.requestId,
     runId: input.runId,
-    sessionId: input.sessionId,
+    sessionId: input.sessionKey,
     modelId: input.modelId,
     baseUrl,
     limit: MAX_RECENT_EVENTS,
@@ -193,6 +220,13 @@ export async function buildErrorSnapshot(options: {
     snapshotId: randomUUID(),
     ts,
     priority: input.priority,
+    userImpact: input.userImpact,
+    operationKind: input.operationKind,
+    failureStage: cleanString(input.failureStage) ?? 'unknown',
+    fingerprint: cleanString(input.fingerprint) ?? '',
+    occurrenceCount: Math.max(1, Math.trunc(cleanNumber(input.occurrenceCount) ?? 1)),
+    firstSeenAt: cleanString(input.firstSeenAt) ?? ts,
+    lastSeenAt: cleanString(input.lastSeenAt) ?? ts,
     level: cleanString(input.level) ?? 'error',
     source: cleanString(input.source) ?? 'unknown',
     eventName: cleanString(input.eventName) ?? 'unknown.error',
@@ -209,6 +243,7 @@ export async function buildErrorSnapshot(options: {
 
   assignOptional(snapshot, 'requestId', cleanString(input.requestId));
   assignOptional(snapshot, 'runId', cleanString(input.runId));
+  assignOptional(snapshot, 'sessionKey', cleanString(input.sessionKey));
   assignOptional(snapshot, 'sessionId', cleanString(input.sessionId));
   assignOptional(snapshot, 'modelId', cleanString(input.modelId));
   assignOptional(snapshot, 'baseUrl', baseUrl);
@@ -250,6 +285,11 @@ export function createSnapshotWriteQueue(options: { maxItems: number; maxBytes: 
     enqueue(snapshot) {
       items.push(snapshot);
       totalBytes += snapshotBytes(snapshot);
+      compact();
+    },
+    restore(snapshots) {
+      items = [...snapshots, ...items];
+      totalBytes = items.reduce((sum, snapshot) => sum + snapshotBytes(snapshot), 0);
       compact();
     },
     drain(priority) {

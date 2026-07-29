@@ -3,6 +3,8 @@ import {
   inferMarketEmployeeAgentIdFromInstanceId,
   resolveExecutionReportAgentId,
   resolveExecutionReportConversationId,
+  resolveExecutionReportConversationIdForUpload,
+  resolveScheduleReportConversationId,
 } from '../../shared/reporting/execution-report-agent-id';
 
 describe('execution report agent id mapping', () => {
@@ -49,5 +51,17 @@ describe('execution report agent id mapping', () => {
       'main',
       'main',
     )).toBe('agent:main:session-1');
+  });
+
+  it('shortens scheduled-task session keys to per-run id for upload', () => {
+    const sessionKey = 'agent:main:scheduled-task:46f41448-0d2f-49bd-a6a2-e1245576a17d:ada7e5ab-de77-42b2-9272-c027e18dcf92';
+    expect(resolveScheduleReportConversationId(sessionKey))
+      .toBe('ada7e5ab-de77-42b2-9272-c027e18dcf92');
+    expect(resolveExecutionReportConversationIdForUpload(
+      sessionKey,
+      'schedule',
+      'main',
+      'main',
+    )).toBe('ada7e5ab-de77-42b2-9272-c027e18dcf92');
   });
 });

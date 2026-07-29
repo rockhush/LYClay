@@ -2,7 +2,7 @@
 
 ## 概览
 
-本日志管线只采集 P0/P1 排障快照，不做普通日志上传。一次快照必须帮助研发确认：谁遇到问题、哪个请求/运行/会话/模型/baseUrl 相关、发生了什么归一化错误、错误附近有哪些已脱敏事件。
+本日志管线只采集阻碍用户当前使用的 P0 排障快照，不做普通日志或安全审计上传。一次快照必须帮助研发确认：谁遇到问题、哪个请求/运行/会话/模型/baseUrl 相关、哪个用户操作被阻断、失败发生在哪个阶段、错误附近有哪些已脱敏事件。
 
 Electron Main 进程负责完整链路：capture、脱敏、上下文缓冲、入队、磁盘 spool、ack、网络可达性和转发。Renderer 只能通过已有 Main-owned route 报告 crash 或 ErrorBoundary 错误。
 
@@ -19,6 +19,13 @@ ELK 只接收 `documentType = "error_snapshot"` 的文档。
 - `snapshotId`
 - `ts`
 - `priority`：`p0` 或 `p1`
+- `userImpact`：ELK-bound 快照固定为 `blocking`
+- `operationKind`：被阻断的用户操作类型
+- `failureStage`：失败阶段
+- `fingerprint`：用于合并同类严重错误的稳定标识
+- `occurrenceCount`：当前进程内该 fingerprint 的累计次数
+- `firstSeenAt`
+- `lastSeenAt`
 - `level`：`error` 或 `warn`
 - `errorCode`
 - `message`
@@ -30,7 +37,6 @@ ELK 只接收 `documentType = "error_snapshot"` 的文档。
 - `identityMissingReason`
 - `requestId`
 - `runId`
-- `sessionId`
 - `modelId`
 - `baseUrl`
 - `method`
@@ -45,7 +51,20 @@ ELK 只接收 `documentType = "error_snapshot"` 的文档。
 - `metadata`
 - `truncated`
 
-聊天、Gateway RPC、Provider、模型调用链路快照必须包含当前失败路径可获得的 `sessionId`、`modelId` 和 `baseUrl`。身份字段始终以字符串存在；无法获取时使用空字符串，并在脱敏 metadata 或本地 pipeline 诊断中记录身份缺失原因。
+会话关联字段按可用性输出：
+
+- `sessionKey`：原始 OpenClaw runtime session key，例如 `agent:main:session-1785285317125`。失败入口能获得 runtime session key 时必须保留该字段。
+- `sessionId`：对应 transcript 文件名中的标准 UUID，例如 `977e72a4-3784-488c-9919-2284dad5a1c3`。该字段不得保存 runtime session key。
+
+聊天、Gateway RPC、Provider、模型调用链路快照必须包含当前失败路径可获得的 `sessionKey`、`modelId` 和 `baseUrl`，并尽力解析 transcript UUID。身份字段始终以字符串存在；无法获取时使用空字符串，并在脱敏 metadata 或本地 pipeline 诊断中记录身份缺失原因。
+
+Main 在快照组装阶段解析会话上下文。它从 `sessionKey` 的 `agent:<agentId>:` 前缀提取 agentId，读取当前 OpenClaw 配置目录下 `agents/<agentId>/sessions/sessions.json` 的同 key 条目，按以下顺序选择 UUID：
+
+1. 从 `sessionFile` basename 解析普通、`.deleted.jsonl` 或 `.jsonl.reset.*` transcript 文件名中的 UUID；
+2. 若未得到 UUID，读取条目的 `sessionId`；
+3. 若仍未得到 UUID，读取条目的 `id`。
+
+候选值必须是合法、标准的 UUID；解析成功后写入顶层 `sessionId`。session key 不合法、索引不存在、文件不可读、条目缺失或候选值不是 UUID 时，快照仍可生成和发送，但只能保留顶层 `sessionKey` 并省略 `sessionId`，不得用 session key 兜底填充 `sessionId`。映射失败不得阻塞用户流程或 ELK 管线。
 
 `recentEvents` 的每条事件只能包含 `ts`、`eventName`、`component`、`method`、`route`、`status`、`statusCode`、`durationMs`、`errorCode`、`result`、`requestId`、`runId`、`sessionId`、`modelId`、`baseUrl`、`metadata`。`metadata` 只能是小型、已脱敏、白名单结构化字段。
 
@@ -57,21 +76,25 @@ ELK 只接收 `documentType = "error_snapshot"` 的文档。
 
 ## Recent Events
 
-`recentEventsBuffer` 保存最近 30 秒的已脱敏事件摘要。每条事件可包含时间、事件名、组件、route/path/method、状态、耗时、错误码、结果、`requestId`、`runId`、`sessionId`、`modelId`、`baseUrl`。
+`recentEventsBuffer` 保存最近 30 秒的已脱敏事件摘要。每条事件可包含时间、事件名、组件、route/path/method、状态、耗时、错误码、结果、`requestId`、`runId`、`sessionId`、`modelId`、`baseUrl`。为保持现有事件关联能力，recent event 的 `sessionId` 继续保存 runtime session key；transcript UUID 只用于快照顶层 `sessionId`。
 
-快照组装时最多保留 50 条事件，序列化总大小最多 64KB。优先保留相同 `requestId`、`runId`、`sessionId`、`modelId/baseUrl` 的事件。P0 可额外等待最多 5 秒收集错误后的恢复或失败事件。超过大小上限时先截断 recent events，并设置 `truncated = true`。
+快照组装时最多保留 50 条事件，序列化总大小最多 64KB。优先保留相同 `requestId`、`runId`、runtime session key、`modelId/baseUrl` 的事件；收集事件时使用快照输入的 `sessionKey`，不得改用解析后的 transcript UUID。P0 可额外等待最多 5 秒收集错误后的恢复或失败事件。超过大小上限时先截断 recent events，并设置 `truncated = true`。
 
-## P0 和 P1
+## ELK 准入和优先级
 
-P0 只用于当前不可用故障：程序不可用、当前聊天会话不可用、当前选中模型不可用、Gateway 传输阻断当前会话、工具运行阻断当前会话、当前模型下游不可用。
+ELK-bound 快照必须同时满足 `priority = "p0"` 和 `userImpact = "blocking"`。采集入口必须显式声明用户影响；缺失该字段时默认拒绝生成、落盘和发送，避免新增入口意外扩大日志量。
 
-P1 用于可恢复、局部、后台、非当前链路或安全审计问题：Chat/Gateway 恢复类异常、单个 Host API route 错误、security deny/high/critical 审计、channel/agent/plugin/skill/provider/OAuth/Sub2API/DWS/钉钉/用量/依赖/tool 等不阻断当前程序、会话或选中模型的问题。
+P0 只用于当前程序或当前用户操作不可用，且自动恢复、fallback 或重试未恢复的故障。本阶段允许进入 ELK 的入口为：Gateway 明确返回失败的当前用户 `chat.send`、Main 通过 `runId` 精确跟踪的当前用户 Chat run 最终失败，以及 Host API 服务端最终返回 5xx 或抛出异常导致当前请求失败。`chat.send` ack timeout 只表示 RPC 结果未知，timeout 当下只记录 recent event，不生成快照；后续若收到已跟踪 run 的 lifecycle error，再由最终失败入口生成快照。
 
-debug/info、成功轮询、普通刷新和 P2 类型运行噪声不生成快照。
+`sessions.abort`、`skills.status`、warmup、cron、后台 agent、后台恢复、普通轮询、重复的 Host API proxy 5xx、security deny/high/critical 和其他本地安全审计均不生成快照。非阻断事件仍可进入本地 regular log、recent-events buffer 或独立安全审计日志，但不得进入 snapshot spool 或 ELK。
+
+## 严重错误合并
+
+Main 进程按 `eventName + errorCode + method + route + session identity` 生成稳定 `fingerprint`。session identity 优先使用解析后的 transcript UUID；无法解析时使用原始 `sessionKey`，两者都不存在时使用空值。同一 fingerprint 首次出现时立即生成快照；随后 5 分钟内只累计次数，不生成、落盘或发送重复快照。窗口结束后的下一次发生重新生成快照，并携带该进程内累计 `occurrenceCount`、`firstSeenAt` 和 `lastSeenAt`。聚合状态必须有界，最多保留 1000 个 fingerprint。
 
 ## 队列和 Spool
 
-`snapshotWriteQueue` 上限为 1000 条或 8MB。P0 走高优先级队列；P1 走普通队列，入队前可以按 fingerprint 限频、采样或合并。只要 P1 已经入队，就必须按确定规则落盘。
+`snapshotWriteQueue` 上限为 1000 条或 8MB。通过 ELK 准入的 P0 走高优先级队列。未通过准入的事件不得进入队列。
 
 `SnapshotSpoolWriter` 是唯一 writer。业务流程不得同步写 snapshot 文件。快照文件按天追加写入：
 
@@ -89,17 +112,15 @@ logs/snapshots/LYClaw-YYYY-MM-DD.snapshot.ack.json
 
 ## 落盘规则
 
-P0 入队后 0-50ms 内调度 writer，P0 先于 P1 drain，允许单条 append。应用退出时最多等待 1500ms drain P0 和已开始批次。Main fatal 或即将崩溃时，仅允许对当前 P0 使用 emergency sync append。
+P0 入队后 0-50ms 内调度 writer，允许单条 append。应用退出时最多等待 1500ms drain P0 和已开始批次。Main fatal 或即将崩溃时，仅允许对当前 P0 使用 emergency sync append。
 
-P1 在以下情况 drain：主流程空闲且距最近 P1 入队超过 5000ms；P1 队列达到 50 条或 256KB；最旧 P1 等待超过 60 秒。只要有 P0 等待，P1 延后。
-
-空闲判断指：没有当前用户 `chat.send` RPC in-flight；没有当前 Chat run 处于 streaming、pending final、工具执行、abort 或 recovery；Gateway 不处于 starting、reconnecting、restart/reload 关键阶段；没有用户触发的 Host API mutation 正在执行；最近 1s Main event loop lag 不超过 100ms。
+历史版本留下的 P1、缺少 `userImpact = "blocking"` 或不满足完整 schema 的 spool 记录不得发送到 ELK；`LogForwarder` 必须按文件字节 offset 和行号将这些记录在本地标记为已处理，避免每次启动重复扫描。旧版 `sentSnapshotIds` ack 必须按连续已确认前缀一次性迁移，不得重发已确认 P0。
 
 ## 转发规则
 
 `LogForwarder` 只读取磁盘 spool，不直接消费内存队列。
 
-P0 落盘成功后立即调度 flush，且发送顺序先 P0 后 P1。P1 在主流程空闲且网络可达时批量发送；未发送 P1 达到 50 条或 256KB 时批量发送；最旧未发送 P1 超过 60 秒时发送小批次。若 Chat/Gateway 用户关键流程活跃，P1 最多延后 120 秒，之后只发送 10 条或 64KB 小批次。
+P0 落盘成功后立即调度 flush。历史 P1 或缺少 blocking 标记的记录只更新本地 ack，不进入发送批次。
 
 本阶段 TCP client 使用 `unknown`、`reachable`、`unreachable` 可达性状态。网络失败按 1min、5min、15min、30min 退避，并在退避到期后自动调度重试；失败期间只保留本地 spool 并限频记录 pipeline 诊断。`rejected` 仅作为未来认证协议扩展的保留类型，不是本阶段 TCP client 可产生的状态。
 
@@ -109,8 +130,8 @@ P0 落盘成功后立即调度 flush，且发送顺序先 P0 后 P1。P1 在主�
 
 连接拒绝、timeout、写入失败或异常关闭统一视为 `network` 失败，不更新 ack，完整快照继续保留在磁盘 spool，并沿用 1min、5min、15min、30min 退避。TCP client 不保持长连接，不实现应用层心跳、TLS 或认证。并发 flush 必须合并或串行化，避免同一未确认批次被并发重复发送。
 
-P0 成功 append 到 spool 后立即异步调度远端 flush；P1 完成 spool drain 后异步调度 flush。默认管线首次创建时异步尝试补发历史 spool。所有网络任务都不得被 capture、Chat、Gateway、Host API、Provider 或安全主流程等待。
+P0 成功 append 到 spool 后立即异步调度远端 flush。默认管线首次创建时异步尝试补发历史 spool，但只发送满足当前 ELK 准入规则的记录。所有网络任务都不得被 capture、Chat、Gateway、Host API、Provider 或安全主流程等待。
 
 ## 验证策略
 
-验证必须证明：P0/P1 触发快照；P2/debug/info/成功轮询不触发；`captureErrorSnapshot(...)` 不阻塞；P1 按确定阈值落盘和发送；模型链路快照包含身份、session、model、baseUrl；快照不包含敏感内容或正文；本地 TCP server 收到逐行 NDJSON；连接或写入失败不更新 ack；并发 flush 不重复发送；ELK 失败不影响 Chat、Gateway、Host API、Provider 主流程。最后向 `10.0.1.62:5213` 发送三条带唯一测试标识的模拟快照，只将客户端连接和写入成功作为本地验证结果。
+验证必须证明：只有显式 blocking 的 P0 触发快照；security、`sessions.abort`、`skills.status`、后台 agent、debug/info、成功轮询和普通状态刷新不触发；同 fingerprint 5 分钟内只生成一次；历史非 blocking spool 不发送；当前用户 Chat 严重失败、Host API 最终 5xx/exception 正常生成；`captureErrorSnapshot(...)` 不阻塞；模型链路快照包含身份、session、model、baseUrl；`sessionFile`、`sessionId` 和 `id` 映射按既定优先级得到 transcript UUID；非法或缺失映射时只保留 `sessionKey`；recent events 仍按 runtime session key 关联；fingerprint 优先使用 UUID、失败时回退 session key；快照不包含敏感内容或正文；本地 TCP server 收到逐行 NDJSON；连接或写入失败不更新 ack；并发 flush 不重复发送；ELK 失败不影响 Chat、Gateway、Host API、Provider 主流程。

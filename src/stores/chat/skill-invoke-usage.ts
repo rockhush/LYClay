@@ -3,12 +3,15 @@ import {
   buildFailedSkillInvokeReport,
   buildReadSkillInvokeReport,
 } from '@/lib/skill-invoke-report';
+import { resolveAgentDisplayName } from '@/lib/retired-digital-employees';
 import {
   getActiveExecutionAuditContext,
   getActiveExecutionId,
 } from '@/lib/execution-turn-tracker';
 import { normalizeTimestampToMs } from '@/pages/Chat/message-utils';
 import { useSkillsStore } from '@/stores/skills';
+import { useAgentsStore } from '@/stores/agents';
+import { useDigitalEmployeesStore } from '@/stores/digital-employees';
 import type { RawMessage } from './types';
 import {
   extractSkillInvocationFromToolCall,
@@ -25,6 +28,7 @@ type SkillInvokeMode = 'user_selected' | 'model_selected';
 
 type ObservedSkillRead = {
   skillId: string;
+  skillPath?: string;
   invokeMode: SkillInvokeMode;
   invokeTimeMs: number;
   toolCallId: string;
@@ -168,8 +172,16 @@ export function registerPendingUserSelectedSkills(input: {
   }
 }
 
+function resolveSkillInvokeAgentId(rawAgentId: string): string {
+  return resolveAgentDisplayName(rawAgentId, {
+    agents: useAgentsStore.getState().agents,
+    digitalEmployees: useDigitalEmployeesStore.getState().employees,
+  });
+}
+
 function recordObservedSkillRead(input: {
   skillId: string;
+  skillPath?: string;
   invokeMode: SkillInvokeMode;
   invokeTimeMs: number;
   toolCallId: string;
@@ -199,6 +211,7 @@ function recordObservedSkillRead(input: {
   if (activeTurn.reads.has(readKey)) return;
   activeTurn.reads.set(readKey, {
     skillId: input.skillId,
+    skillPath: input.skillPath,
     invokeMode: isUserSelected ? 'user_selected' : input.invokeMode,
     invokeTimeMs: input.invokeTimeMs,
     toolCallId: input.toolCallId,
@@ -221,6 +234,7 @@ function observeReadFromAssistantMessage(
     if (!invocation) continue;
     recordObservedSkillRead({
       skillId: invocation.skillId,
+      skillPath: invocation.skillPath,
       invokeMode: 'model_selected',
       invokeTimeMs,
       toolCallId: tool.id || `read-${invocation.skillId}`,
@@ -259,6 +273,7 @@ function observeReadFromToolResult(
 
   recordObservedSkillRead({
     skillId: invocation.skillId,
+    skillPath: invocation.skillPath,
     invokeMode: activeTurn.userSelectedSkillIds.some((pending) =>
       skillsReferToSame(pending, invocation.skillId, useSkillsStore.getState().skills),
     ) ? 'user_selected' : 'model_selected',
@@ -329,7 +344,9 @@ export function finalizeSkillInvokeReports(
   activeTurn.finalized = true;
 
   const skills = useSkillsStore.getState().skills;
-  const agentId = audit.agentId ?? get().currentAgentId ?? activeTurn.agentId ?? 'main';
+  const agentId = resolveSkillInvokeAgentId(
+    audit.agentId ?? get().currentAgentId ?? activeTurn.agentId ?? 'main',
+  );
   const invokeEndTimeMs = resolveTurnEndTimeMs(terminalMessage, endMs);
   const reportedSkillIds = new Set<string>();
 
@@ -346,6 +363,7 @@ export function finalizeSkillInvokeReports(
       queueSkillInvokeReport(executionId, buildReadSkillInvokeReport({
         skillId: canonicalSkillId,
         skills,
+        skillPath: read?.skillPath,
         executionId,
         agentId,
         sessionStartedAtMs: activeTurn.sessionStartedAtMs,
@@ -375,6 +393,7 @@ export function finalizeSkillInvokeReports(
     queueSkillInvokeReport(executionId, buildReadSkillInvokeReport({
       skillId: read.skillId,
       skills,
+      skillPath: read.skillPath,
       executionId,
       agentId,
       sessionStartedAtMs: activeTurn.sessionStartedAtMs,

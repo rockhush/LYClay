@@ -11,6 +11,16 @@ const MARKETPLACE_HINTS = new Set([
   'registry',
 ]);
 
+export function isDigitalEmployeeSkillPath(path: string | undefined | null): boolean {
+  const trimmed = (path ?? '').trim();
+  if (!trimmed) return false;
+  const normalized = trimmed
+    .replace(/^~(?=$|[/\\])/, '')
+    .replace(/\\/g, '/')
+    .toLowerCase();
+  return normalized.includes('/digital-employees/');
+}
+
 export function normalizeSkillInvokeReportSource(
   raw: string | undefined,
   hints?: {

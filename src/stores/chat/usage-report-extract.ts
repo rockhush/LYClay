@@ -238,13 +238,13 @@ function readToolCallInput(
 export function extractSkillInvocationFromToolCall(
   name: string | undefined,
   input?: Record<string, unknown>,
-): { skillId: string } | null {
+): { skillId: string; skillPath: string } | null {
   const toolName = (name ?? '').trim().toLowerCase();
   if (toolName !== 'read') return null;
   const path = typeof input?.path === 'string' ? input.path : '';
   const skillId = extractSkillSlugFromSkillMdPath(path);
   if (!skillId) return null;
-  return { skillId };
+  return { skillId, skillPath: path };
 }
 
 export function isToolResultLikeRole(role: unknown): boolean {

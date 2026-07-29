@@ -168,6 +168,9 @@ export function startHostApiServer(ctx: HostApiContext, port = getPort('CLAWX_HO
           });
           if (res.statusCode >= 500) {
             void captureLogErrorSnapshot({
+              userImpact: 'blocking',
+              operationKind: 'host_api_operation',
+              failureStage: 'host_api_route',
               level: 'error',
               source: 'host-api',
               eventName: 'hostapi.request_error',
@@ -212,6 +215,9 @@ export function startHostApiServer(ctx: HostApiContext, port = getPort('CLAWX_HO
         durationMs: Date.now() - requestStartedAt,
       });
       void captureLogErrorSnapshot({
+        userImpact: 'blocking',
+        operationKind: 'host_api_operation',
+        failureStage: 'host_api_exception',
         level: 'error',
         source: 'host-api',
         eventName: 'hostapi.request_exception',

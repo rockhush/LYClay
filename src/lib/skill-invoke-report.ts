@@ -17,9 +17,19 @@ type SkillLike = {
   downloads?: number;
 };
 
-export function resolveSkillSource(skillId: string, skills: SkillLike[]): SkillInvokeReportSource {
+export function resolveSkillSource(
+  skillId: string,
+  skills: SkillLike[],
+  hints?: { skillPath?: string },
+): SkillInvokeReportSource {
   const trimmed = skillId.trim();
   if (!trimmed) return 'local';
+  if (hints?.skillPath) {
+    const fromPath = normalizeSkillInvokeReportSource(undefined, {
+      baseDir: hints.skillPath,
+    });
+    if (fromPath === 'digital_employee') return 'digital_employee';
+  }
   const match = skills.find((skill) =>
     skill.id === trimmed || skill.slug === trimmed || skill.name === trimmed,
   );
@@ -56,6 +66,7 @@ export function resolveMessageDateTime(message: RawMessage | undefined): string 
 export function buildReadSkillInvokeReport(input: {
   skillId: string;
   skills: SkillLike[];
+  skillPath?: string;
   executionId: string;
   agentId: string;
   sessionStartedAtMs: number | null;
@@ -75,7 +86,9 @@ export function buildReadSkillInvokeReport(input: {
     count: 1,
     execution_id: input.executionId,
     agent_id: input.agentId,
-    skill_source: resolveSkillSource(input.skillId, input.skills),
+    skill_source: resolveSkillSource(input.skillId, input.skills, {
+      skillPath: input.skillPath,
+    }),
     invoke_mode: input.invokeMode,
     invoke_time: invokeTime,
     invoke_end_time: invokeEndTime,
@@ -89,6 +102,7 @@ export function buildReadSkillInvokeReport(input: {
 export function buildFailedSkillInvokeReport(input: {
   skillId: string;
   skills: SkillLike[];
+  skillPath?: string;
   executionId: string;
   agentId: string;
   sessionStartedAtMs: number | null;

@@ -1,4 +1,6 @@
 import { parseReportDateTimeMs } from '../../../shared/reporting/diagnostic-pick';
+import { normalizeSkillInvokeReportSource } from '../../../shared/reporting/skill-invoke-source';
+import { buildSkillInvokeAgentNameLookup } from './skill-invoke-agent-id-lookup';
 import { finalizeSkillInvokeRecord } from './queue';
 import type { ExecutionRecord, SkillInvokeRecord } from './types';
 
@@ -94,16 +96,30 @@ export function dedupeSkillInvokeRecordsForUpload(records: SkillInvokeRecord[]):
   });
 }
 
-export function enrichSkillInvokeRecordsForUpload(
+export async function enrichSkillInvokeRecordsForUpload(
   records: SkillInvokeRecord[],
   executions: ExecutionRecord[],
-): SkillInvokeRecord[] {
+): Promise<SkillInvokeRecord[]> {
+  const agentNameLookup = records.length > 0
+    ? await buildSkillInvokeAgentNameLookup()
+    : new Map<string, string>();
   const deduped = dedupeSkillInvokeRecordsForUpload(records);
   return deduped.map((record) => {
     let finalized = finalizeSkillInvokeRecord(record);
     if (!finalized.execution_id?.trim()) {
       const linked = linkExecutionId(finalized, executions);
       if (linked) finalized = { ...finalized, execution_id: linked };
+    }
+    const rawAgentId = (finalized.agent_id ?? '').trim();
+    const displayName = agentNameLookup.get(rawAgentId);
+    if (displayName) {
+      finalized = { ...finalized, agent_id: displayName };
+      if (finalized.skill_source === 'local') {
+        finalized = {
+          ...finalized,
+          skill_source: normalizeSkillInvokeReportSource('digital_employee'),
+        };
+      }
     }
     return finalized;
   });

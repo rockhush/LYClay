@@ -35,6 +35,7 @@ import {
   buildScheduledTaskInAppSystemPrompt,
   registerExternalCronDeliveryPending,
 } from './cron-external-delivery';
+import { registerCronExecutionPending } from '../utils/reporting/cron-execution-pending';
 import {
   inferScheduleIntervalMs,
   isTransientCronError,
@@ -474,6 +475,13 @@ async function fireCronJobViaChatSend(
       registeredAtMs: startedAt,
     });
   }
+
+  registerCronExecutionPending({
+    runId,
+    sessionKey,
+    agentId: info.agentId,
+    registeredAtMs: startedAt,
+  });
 
   await appendCronRunLogEntry(jobId, {
     status: 'ok',

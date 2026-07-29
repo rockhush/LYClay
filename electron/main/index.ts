@@ -521,7 +521,9 @@ async function initialize(): Promise<void> {
   });
 
   gatewayManager.on('notification', (notification) => {
-    void observeGatewayNotificationForLog(notification).catch((error) => {
+    void observeGatewayNotificationForLog(notification, {
+      isTrackedUserRun: ({ runId, sessionKey }) => gatewayManager.isTrackedUserChatRun(runId, sessionKey),
+    }).catch((error) => {
       logger.warn('[log.pipeline] Failed to capture Gateway notification snapshot:', error);
     });
     hostEventBus.emit('gateway:notification', notification);

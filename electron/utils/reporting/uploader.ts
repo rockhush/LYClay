@@ -205,7 +205,7 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       logger.warn(`[UsageReport] flush(${reason}) execution token enrich failed:`, error);
     }
     try {
-      detachedRaw.skillInvoke = enrichSkillInvokeRecordsForUpload(
+      detachedRaw.skillInvoke = await enrichSkillInvokeRecordsForUpload(
         detachedRaw.skillInvoke,
         detachedRaw.execution,
       );

@@ -18,7 +18,7 @@
 
 - [x] 3.1 新增 `electron/utils/log-context-buffer.ts`，维护 30 秒 Main 进程内存环形缓冲。
 - [x] 3.2 实现 P0/P1 分级辅助逻辑，覆盖 app、chat、gateway、model、provider、host-api、security、channel、plugin、skill、usage、dependency、tool 等失败来源。
-- [x] 3.3 按 `requestId`、`runId`、`sessionId`、`modelId/baseUrl` 关联 recent events，每条快照最多 50 条、最大 64KB。
+- [x] 3.3 按 `requestId`、`runId`、recent-event runtime `sessionId`、`modelId/baseUrl` 关联 recent events，每条快照最多 50 条、最大 64KB。
 
 ## 4. 磁盘 Spool
 
@@ -53,8 +53,8 @@
 
 ## 6. 埋点接入
 
-- [ ] 6.1 在 Host API route、`hostapi:fetch`、Gateway RPC、Gateway HTTP proxy 路径记录 Main 进程 recent events。
-  - 已接入 Host API route、`hostapi:fetch`、Gateway RPC；Gateway HTTP proxy 路径待补充。
+- [x] 6.1 在 Host API route、`hostapi:fetch`、Gateway RPC、Gateway HTTP proxy 路径记录 Main 进程 recent events。
+  - 已接入 Host API route、`hostapi:fetch`、Gateway RPC 和 Gateway HTTP proxy；代理日志只保留脱敏摘要，不记录 header、token、请求正文或响应正文。
 - [ ] 6.2 记录 Gateway lifecycle、transport、heartbeat、chat run、stale/empty-final recovery、restart/reload fallback 事件。
   - 已覆盖 Gateway RPC transport 成功/失败，以及 `agent/lifecycle/error` 运行失败通知；完整 heartbeat、chat run recovery、restart/reload fallback 待补充。
 - [x] 6.3 记录 security deny/high/critical/user refusal 等 P1 审计事件。
@@ -75,3 +75,31 @@
 - [x] 7.8 使用本地临时 TCP server 验证 NDJSON framing、无 ACK 成功、失败保留 spool 和并发 flush 去重。
 - [x] 7.9 向 `10.0.1.62:5213` 发送三条带唯一测试标识的模拟 `error_snapshot`，记录 TCP 连接和写入结果，不将其表述为服务端已索引确认。
   - 最终 TCP client 探针返回 `{ ok: true }`，耗时约 42ms；快照 ID 为 `lyclaw_tcp_probe_20260728_140600_1`、`lyclaw_tcp_probe_20260728_140600_2`、`lyclaw_tcp_probe_20260728_140600_3`。
+
+## 8. ELK 严重错误收敛
+
+- [x] 8.1 先添加失败测试，证明缺少 `userImpact = "blocking"`、security、`sessions.abort`、`skills.status` 和后台 agent 不生成快照。
+- [x] 8.2 实现中央 blocking 准入，ELK-bound 快照固定为 P0，并补充 `operationKind`、`failureStage`、`fingerprint`、`occurrenceCount`、`firstSeenAt`、`lastSeenAt`。
+- [x] 8.3 先添加失败测试，证明同 fingerprint 5 分钟内只生成一次，窗口结束后携带累计次数重新生成，聚合状态最多 1000 项。
+- [x] 8.4 收敛 Gateway RPC：只为阻断用户的 `chat.send` 显式失败创建快照；当前实现将可获得的 session key 写入顶层 `sessionId`，由任务 9 迁移为 `sessionKey`；ack timeout、warmup、cron 和内部反馈只记录 recent event。
+- [x] 8.5 收敛 lifecycle：只有携带 `runId` 且 Main 已精确跟踪的当前用户 Chat run error 才创建快照；warmup、cron、后台或无法关联的 run 只记录 recent event。
+- [x] 8.6 移除 security audit 快照接入，保留本地安全审计和 recent event。
+- [x] 8.7 移除 `hostapi:fetch` 对服务端 HTTP 5xx 的重复快照，只保留 Host API 服务端最终 5xx/exception 快照。
+- [x] 8.8 过滤并以字节 offset/行号本地 ack 历史 P1、缺少 blocking 标记或 schema 不完整的 spool 记录，禁止发送到 ELK；旧 `sentSnapshotIds` ack 连续前缀一次性迁移且不重发，spool append 失败恢复队列并自动重试。
+- [x] 8.9 运行 ELK 定向 Vitest、定向 ESLint、harness validate、`comms:replay`、`comms:compare` 和 `build:vite`。
+  - ELK 核心 Vitest 40/40 通过，security 不上传定向用例 1/1 通过；定向 ESLint、`git diff --check`、OpenSpec strict、Harness `--no-diff` 结构校验和 `build:vite` 通过。
+  - `comms:replay` 成功生成指标，`comms:compare` 结果为 PASS；全量 typecheck 仍被当前分支既有前端/共享类型错误阻断，本次修改文件未出现在 typecheck 错误输出中。
+  - Harness 不带 `--no-diff` 时因当前分支相对基线存在数百个无关 changed files 失败，未将该基线差异误报为本任务实现失败。
+
+## 9. Transcript 会话 UUID 关联
+
+- [x] 9.1 先添加 resolver 失败测试，覆盖 `sessionFile` 普通、deleted、reset 文件名、`sessionId`/`id` 回退、非法 UUID、索引缺失和不同 agent 隔离。
+- [x] 9.2 新增独立 Main 工具模块，根据 runtime `sessionKey` 读取对应 agent 的 `sessions/sessions.json`，复用 transcript 文件名解析能力并只接受合法 UUID。
+- [x] 9.3 扩展快照输入和文档 schema：顶层 `sessionKey` 保存 runtime key，顶层 `sessionId` 只保存 transcript UUID；解析失败时省略 `sessionId`，不得回填 session key。
+- [x] 9.4 调整 Gateway RPC 和 lifecycle 接入，向快照管线传递 `sessionKey`；recent events 继续按 runtime session key 收集和关联。
+- [x] 9.5 调整严重错误 fingerprint，优先使用 transcript UUID，解析失败时使用 `sessionKey`。
+- [x] 9.6 添加管线集成测试，证明映射成功、失败降级、recent-events 关联、fingerprint 回退以及最终 spool/NDJSON 字段语义正确。
+- [x] 9.7 运行 ELK 定向 Vitest、定向 ESLint、`openspec validate lyclaw-elk-log --strict`、harness validate、`comms:replay`、`comms:compare`、typecheck 和 `build:vite`。
+  - ELK 定向 Vitest 54/54、定向 ESLint、OpenSpec strict、Harness `--no-diff`、`comms:replay`、`comms:compare` 和 `build:vite` 通过。
+  - 全量 typecheck 仍被当前 `dev` 分支既有前端/共享类型错误阻断，本次修改文件未出现在错误输出中。
+  - 真实 TCP 探针成功写入 `10.0.1.62:5213`：`snapshotId = a411f993-4e67-4417-84ba-4d37b9978e68`，顶层 `sessionKey = agent:main:session-1785285317125`，顶层 `sessionId = 977e72a4-3784-488c-9919-2284dad5a1c3`；该结果只证明客户端写入成功，不代表 ELK 已索引。

@@ -54,3 +54,61 @@ export function resolveExecutionReportConversationId(
   }
   return trimmedConversationId;
 }
+
+/**
+ * Shorten scheduled-task session keys for backend upload.
+ * Local queue/storage keeps the full `agent:{agentId}:scheduled-task:...` key;
+ * the backend rejects overlong conversation ids for `entrySource=schedule`.
+ */
+export function resolveScheduleReportConversationId(conversationId: string): string | undefined {
+  const trimmed = conversationId.trim();
+  if (!trimmed.startsWith('agent:')) return undefined;
+
+  const parts = trimmed.split(':');
+  if (parts.length < 4) return undefined;
+
+  const namespace = parts[2];
+  if (namespace === 'scheduled-task' && parts.length >= 5) {
+    const runSessionId = parts[4]?.trim();
+    return runSessionId || undefined;
+  }
+
+  if (namespace === 'cron-run' && parts.length >= 5) {
+    const runSessionId = parts[4]?.trim();
+    return runSessionId || undefined;
+  }
+
+  if (namespace === 'cron') {
+    if (parts.length >= 6 && parts[4] === 'run') {
+      const runSessionId = parts[5]?.trim();
+      return runSessionId || undefined;
+    }
+    if (parts.length >= 5) {
+      const runSessionId = parts[4]?.trim();
+      return runSessionId || undefined;
+    }
+    const jobId = parts[3]?.trim();
+    return jobId || undefined;
+  }
+
+  return undefined;
+}
+
+/** Final conversation id sent to `/management/claw/report/execution`. */
+export function resolveExecutionReportConversationIdForUpload(
+  conversationId: string,
+  entrySource: 'chat' | 'digital_employee' | 'schedule',
+  runtimeAgentId: string,
+  reportAgentId: string,
+): string {
+  if (entrySource === 'schedule') {
+    const scheduleConversationId = resolveScheduleReportConversationId(conversationId);
+    if (scheduleConversationId) return scheduleConversationId;
+  }
+
+  return resolveExecutionReportConversationId(
+    conversationId,
+    runtimeAgentId,
+    reportAgentId,
+  );
+}

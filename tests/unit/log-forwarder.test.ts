@@ -22,6 +22,13 @@ function snapshot(id: string, priority: 'p0' | 'p1', ts = '2026-07-22T08:00:00.0
     snapshotId: id,
     ts,
     priority,
+    userImpact: 'blocking',
+    operationKind: 'host_api_operation',
+    failureStage: 'host_api_route',
+    fingerprint: `fingerprint-${id}`,
+    occurrenceCount: 1,
+    firstSeenAt: ts,
+    lastSeenAt: ts,
     level: priority === 'p0' ? 'error' : 'warn',
     source: 'hostapi',
     eventName: 'hostapi.request_error',
@@ -46,6 +53,101 @@ afterEach(async () => {
 });
 
 describe('log forwarder spool', () => {
+  it('locally acknowledges historical non-blocking snapshots without sending them', async () => {
+    const legacy = snapshot('legacy-p1', 'p1');
+    const incompleteBlocking = {
+      ...snapshot('incomplete-blocking', 'p0'),
+      fingerprint: '',
+    } as ErrorSnapshotDocument;
+    const eligible = {
+      ...snapshot('blocking-p0', 'p0'),
+      userImpact: 'blocking',
+      operationKind: 'user_chat',
+      failureStage: 'gateway_rpc',
+      fingerprint: 'blocking-fingerprint',
+      occurrenceCount: 1,
+      firstSeenAt: '2026-07-22T08:00:00.000Z',
+      lastSeenAt: '2026-07-22T08:00:00.000Z',
+    } as ErrorSnapshotDocument;
+    await writeFile(
+      join(tempDir, 'LYClaw-2026-07-22.snapshot.jsonl'),
+      `${JSON.stringify(legacy)}\n${JSON.stringify(incompleteBlocking)}\n${JSON.stringify(eligible)}\n`,
+    );
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const forwarder = new LogForwarder({
+      spoolDir: tempDir,
+      client: { send },
+      now: () => '2026-07-22T08:01:00.000Z',
+    });
+
+    await forwarder.flushOnce();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].map((item) => item.snapshotId)).toEqual(['blocking-p0']);
+    const ack = JSON.parse(await readFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.ack.json'), 'utf8'));
+    const spoolBody = await readFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.jsonl'), 'utf8');
+    expect(ack).toEqual(expect.objectContaining({
+      file: 'LYClaw-2026-07-22.snapshot.jsonl',
+      ackedOffset: Buffer.byteLength(spoolBody, 'utf8'),
+      ackedLine: 3,
+      lastSnapshotId: 'blocking-p0',
+    }));
+  });
+
+  it('does not send malformed or non-snapshot JSON from the spool', async () => {
+    const invalid = {
+      ...snapshot('invalid-document', 'p0'),
+      documentType: 'regular_log',
+    };
+    const spoolFile = join(tempDir, 'LYClaw-2026-07-22.snapshot.jsonl');
+    await writeFile(spoolFile, `${JSON.stringify(invalid)}\n`);
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const forwarder = new LogForwarder({
+      spoolDir: tempDir,
+      client: { send },
+      now: () => '2026-07-22T08:01:00.000Z',
+    });
+
+    await forwarder.flushOnce();
+
+    expect(send).not.toHaveBeenCalled();
+    const ack = JSON.parse(await readFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.ack.json'), 'utf8'));
+    expect(ack).toEqual(expect.objectContaining({
+      ackedOffset: Buffer.byteLength(await readFile(spoolFile, 'utf8'), 'utf8'),
+      ackedLine: 1,
+      lastSnapshotId: 'invalid-document',
+    }));
+  });
+
+  it('migrates legacy sentSnapshotIds acknowledgements without resending snapshots', async () => {
+    const spoolFile = join(tempDir, 'LYClaw-2026-07-22.snapshot.jsonl');
+    const spoolBody = `${JSON.stringify(snapshot('legacy-sent-p0', 'p0'))}\n${JSON.stringify(snapshot('legacy-skipped-p1', 'p1'))}\n`;
+    await writeFile(spoolFile, spoolBody);
+    await writeFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.ack.json'), `${JSON.stringify({
+      sentSnapshotIds: ['legacy-sent-p0', 'legacy-skipped-p1'],
+      lastAckId: null,
+      updatedAt: '2026-07-22T08:00:30.000Z',
+    })}\n`);
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const forwarder = new LogForwarder({
+      spoolDir: tempDir,
+      client: { send },
+      now: () => '2026-07-22T08:01:00.000Z',
+    });
+
+    await forwarder.flushOnce();
+
+    expect(send).not.toHaveBeenCalled();
+    const ack = JSON.parse(await readFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.ack.json'), 'utf8'));
+    expect(ack).toEqual(expect.objectContaining({
+      file: 'LYClaw-2026-07-22.snapshot.jsonl',
+      ackedOffset: Buffer.byteLength(spoolBody, 'utf8'),
+      ackedLine: 2,
+      lastSnapshotId: 'legacy-skipped-p1',
+    }));
+    expect(ack.sentSnapshotIds).toBeUndefined();
+  });
+
   it('serializes spool appends across overlapping writer flushes', async () => {
     const queue = createSnapshotWriteQueue({ maxItems: 1000, maxBytes: 8 * 1024 * 1024 });
     queue.enqueue(snapshot('writer-first', 'p0'));
@@ -79,6 +181,27 @@ describe('log forwarder spool', () => {
 
     expect(append).toHaveBeenCalledTimes(2);
     expect(maxActiveAppends).toBe(1);
+  });
+
+  it('restores a drained P0 batch when appending the spool fails', async () => {
+    const queue = createSnapshotWriteQueue({ maxItems: 1000, maxBytes: 8 * 1024 * 1024 });
+    queue.enqueue(snapshot('writer-retry', 'p0'));
+    const append = vi.fn()
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockResolvedValueOnce(undefined);
+    const writer = new SnapshotSpoolWriter({
+      spoolDir: tempDir,
+      queue,
+      now: () => '2026-07-22T08:00:00.000Z',
+      append,
+    });
+
+    await expect(writer.flush()).rejects.toThrow('disk full');
+    expect(queue.size()).toBe(1);
+
+    await writer.flush();
+    expect(queue.size()).toBe(0);
+    expect(append).toHaveBeenCalledTimes(2);
   });
 
   it('sends a snapshot batch as newline-delimited JSON over one TCP connection', async () => {
@@ -281,10 +404,16 @@ describe('log forwarder spool', () => {
     await forwarder.flushOnce();
 
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][0].map((item) => item.snapshotId)).toEqual(['p0-first', 'p1-later']);
+    expect(send.mock.calls[0][0].map((item) => item.snapshotId)).toEqual(['p0-first']);
     const ack = JSON.parse(await readFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.ack.json'), 'utf8'));
-    expect(ack.sentSnapshotIds).toEqual(['p0-first', 'p1-later']);
-    expect(ack.lastAckId).toBe('ack-2');
+    const spoolBody = await readFile(spoolFile, 'utf8');
+    expect(ack).toEqual(expect.objectContaining({
+      file: 'LYClaw-2026-07-22.snapshot.jsonl',
+      ackedOffset: Buffer.byteLength(spoolBody, 'utf8'),
+      ackedLine: 2,
+      lastSnapshotId: 'p1-later',
+    }));
+    expect(ack.lastAckId).toBe('ack-1');
   });
 
   it('keeps local spool when disabled or unreachable and backs off retries', async () => {

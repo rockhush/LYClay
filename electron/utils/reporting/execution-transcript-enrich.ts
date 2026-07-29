@@ -260,7 +260,43 @@ export async function enrichExecutionRecordsFromTranscripts(
   return next;
 }
 
+export async function readSessionTranscriptContent(sessionKey: string): Promise<string | null> {
+  if (!sessionKey.startsWith('agent:')) return null;
+  const parts = sessionKey.split(':');
+  if (parts.length < 3) return null;
+
+  const agentId = parts[1] ?? '';
+  if (!SAFE_AGENT_ID.test(agentId)) return null;
+
+  const sessionsDir = join(getOpenClawConfigDir(), 'agents', agentId, 'sessions');
+  const sessionsJsonPath = join(sessionsDir, 'sessions.json');
+  const sessionsJson = await readSessionsJson(sessionsJsonPath);
+
+  let transcriptPath = sessionsJson
+    ? resolveTranscriptPathFromIndex(sessionKey, agentId, sessionsDir, sessionsJson)
+    : join(sessionsDir, `${parts.slice(2).join(':')}.jsonl`);
+
+  if (!transcriptPath) return null;
+
+  if (!(await fileExists(transcriptPath))) {
+    const fallback = join(sessionsDir, `${parts.slice(2).join(':')}.jsonl`);
+    if (fallback !== transcriptPath && await fileExists(fallback)) {
+      transcriptPath = fallback;
+    } else {
+      return null;
+    }
+  }
+
+  try {
+    return await readFile(transcriptPath, 'utf8');
+  } catch (error) {
+    logger.debug(`[UsageReport] execution enrich: failed to read ${transcriptPath}:`, error);
+    return null;
+  }
+}
+
 export {
+  loadUsageEntriesForSessionKey,
   parseReportDateTimeLocal,
   pickBestUsageEntry,
   needsTokenEnrichment,

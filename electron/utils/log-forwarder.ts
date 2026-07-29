@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm, stat, writeFile, appendFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { join } from 'node:path';
-import type { ErrorSnapshotDocument, SnapshotPriority, SnapshotWriteQueue } from './error-snapshot';
+import { isElkEligibleSnapshot, type ErrorSnapshotDocument, type SnapshotPriority, type SnapshotWriteQueue } from './error-snapshot';
 
 export type LogServerReachability = 'unknown' | 'reachable' | 'unreachable' | 'rejected';
 
@@ -24,13 +24,20 @@ function scheduleUnrefTimeout(callback: () => void, delayMs: number): () => void
 interface SpoolEntry {
   fileName: string;
   fileDate: string;
-  snapshot: ErrorSnapshotDocument;
+  snapshot: unknown;
+  snapshotId: string | null;
+  endOffset: number;
+  lineNumber: number;
 }
 
 interface SnapshotAckFile {
-  sentSnapshotIds: string[];
+  file: string;
+  ackedOffset: number;
+  ackedLine: number;
+  lastSnapshotId: string | null;
   lastAckId: string | null;
   updatedAt: string;
+  legacySentSnapshotIds?: string[];
 }
 
 const SNAPSHOT_FILE_PATTERN = /^LYClaw-(\d{4}-\d{2}-\d{2})\.snapshot\.jsonl$/;
@@ -57,17 +64,30 @@ function toTime(iso: string): number {
   return Number.isFinite(time) ? time : Date.now();
 }
 
-async function readAck(spoolDir: string, date: string): Promise<SnapshotAckFile> {
+async function readAck(spoolDir: string, fileName: string, date: string): Promise<SnapshotAckFile> {
   try {
     const raw = await readFile(join(spoolDir, ackFileName(date)), 'utf8');
-    const parsed = JSON.parse(raw) as Partial<SnapshotAckFile>;
+    const parsed = JSON.parse(raw) as Partial<SnapshotAckFile> & { sentSnapshotIds?: unknown };
     return {
-      sentSnapshotIds: Array.isArray(parsed.sentSnapshotIds) ? parsed.sentSnapshotIds.filter((id): id is string => typeof id === 'string') : [],
+      file: typeof parsed.file === 'string' ? parsed.file : fileName,
+      ackedOffset: typeof parsed.ackedOffset === 'number' && parsed.ackedOffset >= 0 ? parsed.ackedOffset : 0,
+      ackedLine: typeof parsed.ackedLine === 'number' && parsed.ackedLine >= 0 ? parsed.ackedLine : 0,
+      lastSnapshotId: typeof parsed.lastSnapshotId === 'string' ? parsed.lastSnapshotId : null,
       lastAckId: typeof parsed.lastAckId === 'string' ? parsed.lastAckId : null,
       updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
+      legacySentSnapshotIds: Array.isArray(parsed.sentSnapshotIds)
+        ? parsed.sentSnapshotIds.filter((id): id is string => typeof id === 'string')
+        : undefined,
     };
   } catch {
-    return { sentSnapshotIds: [], lastAckId: null, updatedAt: new Date().toISOString() };
+    return {
+      file: fileName,
+      ackedOffset: 0,
+      ackedLine: 0,
+      lastSnapshotId: null,
+      lastAckId: null,
+      updatedAt: new Date().toISOString(),
+    };
   }
 }
 
@@ -78,6 +98,48 @@ async function writeAck(spoolDir: string, date: string, ack: SnapshotAckFile): P
 function sortSnapshots(a: ErrorSnapshotDocument, b: ErrorSnapshotDocument): number {
   if (a.priority !== b.priority) return a.priority === 'p0' ? -1 : 1;
   return toTime(a.ts) - toTime(b.ts);
+}
+
+function snapshotIdOf(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const snapshotId = (value as Record<string, unknown>).snapshotId;
+  return typeof snapshotId === 'string' && snapshotId.length > 0 ? snapshotId : null;
+}
+
+function parseSpoolEntries(options: {
+  body: Buffer;
+  fileName: string;
+  fileDate: string;
+  ackedOffset: number;
+  ackedLine: number;
+}): SpoolEntry[] {
+  const entries: SpoolEntry[] = [];
+  let cursor = Math.min(Math.max(0, options.ackedOffset), options.body.length);
+  let lineNumber = options.ackedLine;
+  while (cursor < options.body.length) {
+    const newline = options.body.indexOf(0x0a, cursor);
+    const endOffset = newline >= 0 ? newline + 1 : options.body.length;
+    const lineEnd = newline >= 0 ? newline : options.body.length;
+    const trimmed = options.body.subarray(cursor, lineEnd).toString('utf8').trim();
+    lineNumber += 1;
+    cursor = endOffset;
+    if (!trimmed) continue;
+    let snapshot: unknown = null;
+    try {
+      snapshot = JSON.parse(trimmed);
+    } catch {
+      // Malformed historical lines are locally acknowledged and never forwarded.
+    }
+    entries.push({
+      fileName: options.fileName,
+      fileDate: options.fileDate,
+      snapshot,
+      snapshotId: snapshotIdOf(snapshot),
+      endOffset,
+      lineNumber,
+    });
+  }
+  return entries;
 }
 
 async function listSpoolFiles(spoolDir: string): Promise<Array<{ fileName: string; date: string }>> {
@@ -99,23 +161,48 @@ async function readSpoolEntries(spoolDir: string): Promise<SpoolEntry[]> {
   const entries: SpoolEntry[] = [];
 
   for (const file of files) {
-    const ack = await readAck(spoolDir, file.date);
-    const sent = new Set(ack.sentSnapshotIds);
-    const raw = await readFile(join(spoolDir, file.fileName), 'utf8');
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const snapshot = JSON.parse(trimmed) as ErrorSnapshotDocument;
-        if (!snapshot.snapshotId || sent.has(snapshot.snapshotId)) continue;
-        entries.push({ fileName: file.fileName, fileDate: file.date, snapshot });
-      } catch {
-        continue;
+    const ack = await readAck(spoolDir, file.fileName, file.date);
+    const body = await readFile(join(spoolDir, file.fileName));
+    let ackedOffset = ack.file === file.fileName ? ack.ackedOffset : 0;
+    let ackedLine = ack.file === file.fileName ? ack.ackedLine : 0;
+    if (ackedOffset === 0 && ack.legacySentSnapshotIds?.length) {
+      const sent = new Set(ack.legacySentSnapshotIds);
+      const legacyEntries = parseSpoolEntries({
+        body,
+        fileName: file.fileName,
+        fileDate: file.date,
+        ackedOffset: 0,
+        ackedLine: 0,
+      });
+      const acknowledgedPrefix: SpoolEntry[] = [];
+      for (const entry of legacyEntries) {
+        if (!entry.snapshotId || !sent.has(entry.snapshotId)) break;
+        acknowledgedPrefix.push(entry);
+      }
+      const last = acknowledgedPrefix[acknowledgedPrefix.length - 1];
+      if (last) {
+        ackedOffset = last.endOffset;
+        ackedLine = last.lineNumber;
+        await writeAck(spoolDir, file.date, {
+          file: file.fileName,
+          ackedOffset,
+          ackedLine,
+          lastSnapshotId: last.snapshotId,
+          lastAckId: ack.lastAckId,
+          updatedAt: ack.updatedAt,
+        });
       }
     }
+    entries.push(...parseSpoolEntries({
+      body,
+      fileName: file.fileName,
+      fileDate: file.date,
+      ackedOffset,
+      ackedLine,
+    }));
   }
 
-  return entries.sort((a, b) => sortSnapshots(a.snapshot, b.snapshot));
+  return entries;
 }
 
 export class SnapshotSpoolWriter {
@@ -147,10 +234,15 @@ export class SnapshotSpoolWriter {
     const snapshots = this.queue.drain(priority).sort(sortSnapshots);
     if (snapshots.length === 0) return;
 
-    await mkdir(this.spoolDir, { recursive: true });
-    const filePath = join(this.spoolDir, snapshotFileName(this.now()));
-    const body = snapshots.map((snapshot) => JSON.stringify(snapshot)).join('\n');
-    await this.append(filePath, `${body}\n`, 'utf8');
+    try {
+      await mkdir(this.spoolDir, { recursive: true });
+      const filePath = join(this.spoolDir, snapshotFileName(this.now()));
+      const body = snapshots.map((snapshot) => JSON.stringify(snapshot)).join('\n');
+      await this.append(filePath, `${body}\n`, 'utf8');
+    } catch (error) {
+      this.queue.restore(snapshots);
+      throw error;
+    }
   }
 }
 
@@ -256,7 +348,15 @@ export class LogForwarder {
     const entries = await readSpoolEntries(this.spoolDir);
     if (entries.length === 0) return;
 
-    const result = await this.client.send(entries.map((entry) => entry.snapshot));
+    const eligibleEntries = entries
+      .filter((entry): entry is SpoolEntry & { snapshot: ErrorSnapshotDocument } => isElkEligibleSnapshot(entry.snapshot))
+      .sort((a, b) => sortSnapshots(a.snapshot, b.snapshot));
+    if (eligibleEntries.length === 0) {
+      await this.recordAck(entries, null, nowIso);
+      return;
+    }
+
+    const result = await this.client.send(eligibleEntries.map((entry) => entry.snapshot));
     if (result.ok === true) {
       this.reachability = 'reachable';
       this.failureCount = 0;
@@ -266,6 +366,8 @@ export class LogForwarder {
       await this.recordAck(entries, result.ackId ?? null, nowIso);
       return;
     }
+
+    await this.ackLeadingSkippedEntries(entries, nowIso);
 
     const failure = result as Extract<LogForwardResult, { ok: false }>;
     if (failure.reason === 'disabled') {
@@ -290,21 +392,46 @@ export class LogForwarder {
   }
 
   private async recordAck(entries: SpoolEntry[], ackId: string | null, nowIso: string): Promise<void> {
-    const byDate = new Map<string, string[]>();
+    const byDate = new Map<string, SpoolEntry[]>();
     for (const entry of entries) {
-      const ids = byDate.get(entry.fileDate) ?? [];
-      ids.push(entry.snapshot.snapshotId);
-      byDate.set(entry.fileDate, ids);
+      const grouped = byDate.get(entry.fileDate) ?? [];
+      grouped.push(entry);
+      byDate.set(entry.fileDate, grouped);
     }
 
-    for (const [date, ids] of byDate) {
-      const ack = await readAck(this.spoolDir, date);
-      const sent = new Set([...ack.sentSnapshotIds, ...ids]);
+    for (const [date, grouped] of byDate) {
+      const ordered = grouped.sort((a, b) => a.endOffset - b.endOffset);
+      const last = ordered[ordered.length - 1];
+      const ack = await readAck(this.spoolDir, last.fileName, date);
+      const lastSnapshotId = [...ordered].reverse().find((entry) => entry.snapshotId)?.snapshotId
+        ?? ack.lastSnapshotId;
       await writeAck(this.spoolDir, date, {
-        sentSnapshotIds: Array.from(sent),
+        file: last.fileName,
+        ackedOffset: Math.max(ack.ackedOffset, last.endOffset),
+        ackedLine: Math.max(ack.ackedLine, last.lineNumber),
+        lastSnapshotId,
         lastAckId: ackId,
         updatedAt: nowIso,
       });
+    }
+  }
+
+  private async ackLeadingSkippedEntries(entries: SpoolEntry[], nowIso: string): Promise<void> {
+    const byFile = new Map<string, SpoolEntry[]>();
+    for (const entry of entries) {
+      const grouped = byFile.get(entry.fileName) ?? [];
+      grouped.push(entry);
+      byFile.set(entry.fileName, grouped);
+    }
+    const leadingSkipped: SpoolEntry[] = [];
+    for (const grouped of byFile.values()) {
+      for (const entry of grouped.sort((a, b) => a.endOffset - b.endOffset)) {
+        if (isElkEligibleSnapshot(entry.snapshot)) break;
+        leadingSkipped.push(entry);
+      }
+    }
+    if (leadingSkipped.length > 0) {
+      await this.recordAck(leadingSkipped, null, nowIso);
     }
   }
 }

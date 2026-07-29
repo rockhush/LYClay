@@ -1,7 +1,7 @@
 import type { ExecutionRecord } from './types';
 import {
   resolveExecutionReportAgentId,
-  resolveExecutionReportConversationId,
+  resolveExecutionReportConversationIdForUpload,
 } from '../../../shared/reporting/execution-report-agent-id';
 
 /** Backend POST body for `/management/claw/report/execution` (camelCase). */
@@ -42,8 +42,9 @@ export function toExecutionUploadPayload(
   );
   const payload: ExecutionUploadPayload = {
     executionId: record.execution_id,
-    conversationId: resolveExecutionReportConversationId(
+    conversationId: resolveExecutionReportConversationIdForUpload(
       record.conversation_id,
+      record.entry_source,
       runtimeAgentId,
       reportAgentId,
     ),

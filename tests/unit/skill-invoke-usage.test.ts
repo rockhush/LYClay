@@ -27,6 +27,34 @@ vi.mock('@/stores/skills', () => ({
       skills: [
         { id: 'pptx', slug: 'pptx', name: 'pptx', source: 'bundled' },
         { id: 'AOI外观AI分析', slug: 'AOI外观AI分析', name: 'AOI外观AI分析', source: 'local' },
+        { id: 'dqe-sip-create', slug: 'dqe-sip-create', name: 'dqe-sip-create', source: 'local' },
+      ],
+    }),
+  },
+}));
+
+vi.mock('@/stores/agents', () => ({
+  useAgentsStore: {
+    getState: () => ({
+      agents: [
+        {
+          id: 'dqe-quality-specialist-0206ab31',
+          name: 'DQE质量流程数字员工',
+          isDigitalEmployee: true,
+        },
+      ],
+    }),
+  },
+}));
+
+vi.mock('@/stores/digital-employees', () => ({
+  useDigitalEmployeesStore: {
+    getState: () => ({
+      employees: [
+        {
+          agentId: 'dqe-quality-specialist-0206ab31',
+          name: 'DQE质量流程数字员工',
+        },
       ],
     }),
   },
@@ -50,6 +78,7 @@ describe('skill-invoke-usage', () => {
     hostApiFetchMock.mockClear();
     resetSkillInvokeTurnTracking();
     trackerState.executionId = 'exec-1';
+    trackerState.agentId = 'main';
   });
 
   it('reports success when read SKILL.md is observed before finalize', () => {
@@ -221,6 +250,50 @@ describe('skill-invoke-usage', () => {
       status: 'success',
       invoke_time: formatSkillInvokeDateTimeMs(readStartMs),
       invoke_end_time: formatSkillInvokeDateTimeMs(turnEndMs),
+    });
+  });
+
+  it('reports digital employee skill with display name and digital_employee source', () => {
+    trackerState.executionId = 'exec-de-1';
+    trackerState.agentId = 'dqe-quality-specialist-0206ab31';
+
+    ensureSkillInvokeTurnTracking({
+      executionId: 'exec-de-1',
+      agentId: 'dqe-quality-specialist-0206ab31',
+      sessionStartedAtMs: trackerState.sessionStartedAtMs,
+      turnStartedAtMs: trackerState.startedAtMs,
+    });
+
+    const readStartMs = Date.parse('2026-07-27T09:22:05');
+    const turnEndMs = Date.parse('2026-07-27T09:22:20');
+    const skillPath = '~/.openclaw/digital-employees/dqe-quality-specialist-0206ab31/skills/dqe-sip-create/SKILL.md';
+    const assistant: RawMessage = {
+      role: 'assistant',
+      timestamp: readStartMs,
+      content: [
+        { type: 'tool_use', id: 'call-de-1', name: 'read', input: { path: skillPath } },
+      ],
+    };
+    const get = () => ({
+      messages: [assistant],
+      streamingMessage: null,
+      currentAgentId: 'dqe-quality-specialist-0206ab31',
+    }) as never;
+
+    finalizeSkillInvokeReports(get, 'run-de-1', {
+      role: 'assistant',
+      timestamp: turnEndMs,
+      content: 'SIP 制作完成',
+    }, turnEndMs);
+
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(hostApiFetchMock.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({
+      skillId: 'dqe-sip-create',
+      agent_id: 'DQE质量流程数字员工',
+      skill_source: 'digital_employee',
+      invoke_mode: 'model_selected',
+      status: 'success',
     });
   });
 });

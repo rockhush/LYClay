@@ -29,6 +29,7 @@ import {
 import { syncProxyConfigToOpenClaw } from '../utils/openclaw-proxy';
 import { buildOpenClawControlUiUrl } from '../utils/openclaw-control-ui';
 import { logger } from '../utils/logger';
+import { recordLogEvent } from '../utils/log-observability';
 import { resolveAgentIdFromChannel } from '../utils/agent-config';
 import { installLocalSkillZip } from '../utils/local-skill-upload';
 import {
@@ -1421,11 +1422,12 @@ function registerGatewayHandlers(
   // Renderer must not call gateway HTTP directly (CORS); all HTTP traffic
   // should go through this main-process proxy.
   ipcMain.handle('gateway:httpProxy', async (_, request: GatewayHttpProxyRequest) => {
+    const startedAt = Date.now();
+    const path = request?.path && request.path.startsWith('/') ? request.path : '/';
+    const method = (request?.method || 'GET').toUpperCase();
     try {
       const status = gatewayManager.getStatus();
       const port = status.port || 18789;
-      const path = request?.path && request.path.startsWith('/') ? request.path : '/';
-      const method = (request?.method || 'GET').toUpperCase();
       const timeoutMs =
         typeof request?.timeoutMs === 'number' && request.timeoutMs > 0
           ? request.timeoutMs
@@ -1479,6 +1481,17 @@ function registerGatewayHandlers(
         }
       })();
 
+      recordLogEvent({
+        eventName: 'gateway.http_proxy',
+        component: 'gateway-http-proxy',
+        source: 'gateway',
+        method,
+        route: path,
+        status: response.ok ? 'ok' : 'failed',
+        statusCode: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
       if (contentType.includes('application/json')) {
         const rawJson = await response.json();
@@ -1506,6 +1519,15 @@ function registerGatewayHandlers(
         text,
       };
     } catch (error) {
+      recordLogEvent({
+        eventName: 'gateway.http_proxy',
+        component: 'gateway-http-proxy',
+        source: 'gateway',
+        method,
+        route: path,
+        status: String(error).toLowerCase().includes('abort') ? 'timeout' : 'failed',
+        durationMs: Date.now() - startedAt,
+      });
       return {
         success: false,
         error: String(error),
