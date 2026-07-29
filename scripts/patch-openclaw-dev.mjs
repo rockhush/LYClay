@@ -14,6 +14,10 @@ import {
   applyOpenClawElectronShellSnapshotPatch,
   isOpenClawShellSnapshotBundle,
 } from './openclaw-shell-snapshot-patches.mjs';
+import {
+  applyOpenClawToolResultContextGuardPatches,
+  hasOpenClawToolResultContextGuardPatches,
+} from './openclaw-tool-result-context-guard-patches.mjs';
 
 const ROOT = process.cwd();
 const openclawCandidates = [
@@ -204,6 +208,32 @@ function main() {
   }
   if (silentReplyPatched === 0) {
     console.warn('[patch-openclaw-dev] WARN: no selection bundle received silent-reply patch.');
+  }
+
+  let toolResultContextGuardMatched = 0;
+  let toolResultContextGuardPatched = 0;
+  for (const name of readdirSync(distDir)) {
+    if (!/^selection-.*\.js$/.test(name)) continue;
+    const filePath = join(distDir, name);
+    const content = readFileSync(filePath, 'utf8');
+    if (!content.includes('function installToolResultContextGuard(params)')) continue;
+    toolResultContextGuardMatched += 1;
+    const result = applyOpenClawToolResultContextGuardPatches(content);
+    if (!result.patched) {
+      console.log(
+        `[patch-openclaw-dev] ${name}: tool-result-context-guard=${hasOpenClawToolResultContextGuardPatches(content) ? 'already' : 'missing'}`,
+      );
+      continue;
+    }
+    writeFileSync(filePath, result.source, 'utf8');
+    toolResultContextGuardPatched += 1;
+    changedCount += 1;
+    console.log(`[patch-openclaw-dev] ${name}: tool-result-context-guard=applied (written)`);
+  }
+  if (toolResultContextGuardMatched === 0) {
+    console.warn('[patch-openclaw-dev] WARN: no selection bundle received tool-result context guard patch.');
+  } else if (toolResultContextGuardPatched === 0) {
+    console.log('[patch-openclaw-dev] tool-result-context-guard already patched.');
   }
 
   let shellSnapshotMatched = 0;

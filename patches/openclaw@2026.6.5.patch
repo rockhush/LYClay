@@ -427,6 +427,28 @@ index 8fabdd4..d26472f 100644
  /** Cancels the active or named run for a chat session. */
  const ChatAbortParamsSchema = Type.Object({
  	sessionKey: NonEmptyString,
+diff --git a/dist/selection-But6hGR0.js b/dist/selection-But6hGR0.js
+index 83884ab..63a9e14 100644
+--- a/dist/selection-But6hGR0.js
++++ b/dist/selection-But6hGR0.js
+@@ -7320,10 +7320,16 @@ function installToolResultContextGuard(params) {
+ 			}
+ 			lastSeenLength = contextMessages.length;
+ 		}
+-		if (exceedsPreemptiveOverflowThreshold({
++		// LYCLAW_TOOL_RESULT_CONTEXT_GUARD_PATCH: the coarse char-based guard is too conservative for large-context models.
++		// Only hard-fail here when the explicit mid-turn precheck mode is enabled.
++		if (params.midTurnPrecheck?.enabled === true && exceedsPreemptiveOverflowThreshold({
+ 			messages: contextMessages,
+ 			maxContextChars
+ 		})) throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
++		if (params.midTurnPrecheck?.enabled !== true && exceedsPreemptiveOverflowThreshold({
++			messages: contextMessages,
++			maxContextChars
++		})) log$2.warn(`[tool-result-context-guard] skipped preemptive overflow throw because midTurnPrecheck is disabled; messages=${contextMessages.length} maxContextChars=${maxContextChars}`);
+ 		return contextMessages;
+ 	});
+ 	return () => {
 diff --git a/dist/workspace-P8p68RCT.js b/dist/workspace-P8p68RCT.js
 index be7afdd..098700b 100644
 --- a/dist/workspace-P8p68RCT.js

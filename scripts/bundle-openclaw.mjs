@@ -32,6 +32,10 @@ import {
   applyOpenClawSilentReplyPatches,
   hasOpenClawSilentReplyPatches,
 } from './openclaw-silent-reply-patches.mjs';
+import {
+  applyOpenClawToolResultContextGuardPatches,
+  hasOpenClawToolResultContextGuardPatches,
+} from './openclaw-tool-result-context-guard-patches.mjs';
 import { inspectOpenClawDigitalEmployeeIsolation } from './openclaw-digital-employee-isolation-check.mjs';
 import { applyOpenClawWebFetchHtmlSniffPatches, hasOpenClawWebFetchHtmlSniffPatches } from './openclaw-web-fetch-patches.mjs';
 import {
@@ -625,6 +629,32 @@ function patchBundledOpenClawSilentReply(outputDir) {
   }
 }
 
+function patchBundledOpenClawToolResultContextGuard(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return;
+
+  const selectionFiles = fs.readdirSync(distDir).filter((name) => /^selection-.*\.js$/.test(name));
+  if (selectionFiles.length === 0) return;
+
+  let patched = false;
+  for (const selFile of selectionFiles) {
+    const filePath = path.join(distDir, selFile);
+    const source = fs.readFileSync(filePath, 'utf8');
+    if (!source.includes('function installToolResultContextGuard(params)')) continue;
+    if (hasOpenClawToolResultContextGuardPatches(source)) continue;
+
+    const result = applyOpenClawToolResultContextGuardPatches(source);
+    if (!result.patched) continue;
+    fs.writeFileSync(filePath, result.source, 'utf8');
+    patched = true;
+    echo`   🩹 Patched ${selFile} tool-result context guard to respect midTurnPrecheck`;
+  }
+
+  if (!patched) {
+    echo`   ✓ selection files already patched for tool-result context guard`;
+  }
+}
+
 function patchBundledOpenClawElectronShellSnapshot(outputDir) {
   const distDir = path.join(outputDir, 'dist');
   if (!fs.existsSync(distDir)) return false;
@@ -740,6 +770,7 @@ if (!patchBundledOpenClawElectronShellSnapshot(OUTPUT)) {
   process.exit(1);
 }
 patchBundledOpenClawSilentReply(OUTPUT);
+patchBundledOpenClawToolResultContextGuard(OUTPUT);
 patchBundledOpenClawSessionId(OUTPUT);
 patchBundledOpenClawPromptCache(OUTPUT);
 patchBundledExtensionPackageJsons(extensionsDir);
