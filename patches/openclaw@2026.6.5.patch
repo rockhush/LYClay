@@ -623,7 +623,7 @@ diff --git a/dist/openclaw-tools-YEJwiczM.js b/dist/openclaw-tools-YEJwiczM.js
 -		description: `Manage Gateway cron jobs and wake events: reminders, check-back-later, delayed follow-ups, recurring work. Do not emulate scheduling with exec sleep/process polling.
 +		description: `Manage Gateway cron jobs and wake events for reminders, delayed follow-ups, recurring work, and background tasks. Do not use exec sleep or polling.
  
--Main cron => system events for heartbeat. Isolated cron => background task in `openclaw tasks`.
+-Main cron => system events for heartbeat. Isolated cron => background task in \`openclaw tasks\`.
 +Actions: status/list/get/add/update/remove/run/runs/wake. get/remove/run/runs need jobId; update needs jobId+patch; add needs job. list supports includeDisabled. wake needs text, optional mode "next-heartbeat" or "now".
  
 -ACTIONS:
