@@ -280,6 +280,9 @@ function App() {
       void (async () => {
         const chat = useChatStore.getState();
         try {
+          // Cold start / first entry after login: land on a fresh scratchpad so
+          // Chat shows the welcome screen instead of restoring a historical session.
+          chat.newSession();
           await chat.loadSessions();
           if (postLoginBootstrapRef.current === bootstrapKey && useChatStore.getState().messages.length === 0) {
             await useChatStore.getState().loadHistory();
