@@ -109,12 +109,12 @@ export function buildFailedSkillInvokeReport(input: {
   invokeMode: 'user_selected' | 'model_selected';
   invokeTimeMs: number;
   invokeEndTimeMs: number;
+  status: 'success' | 'failed' | 'cancelled';
   errorMessage?: string;
 }): SkillInvokeReportInput {
   return buildReadSkillInvokeReport({
     ...input,
-    status: 'failed',
-    errorMessage: input.errorMessage ?? 'Skill read step was not observed',
+    errorMessage: input.errorMessage,
   });
 }
 

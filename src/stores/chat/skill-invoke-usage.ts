@@ -13,11 +13,13 @@ import { useSkillsStore } from '@/stores/skills';
 import { useAgentsStore } from '@/stores/agents';
 import { useDigitalEmployeesStore } from '@/stores/digital-employees';
 import type { RawMessage } from './types';
+import { hasVisibleAssistantContent } from './helpers';
 import {
   extractSkillInvocationFromToolCall,
   findAssistantMessageForToolCall,
   findToolCallInAssistantMessage,
   isSuccessfulToolResultMessage,
+  isToolResultLikeRole,
   resolveToolCallIdFromToolResultMessage,
 } from './usage-report-extract';
 import { extractToolUse } from '@/pages/Chat/message-utils';
@@ -25,6 +27,23 @@ import type { ChatGet } from './store-api';
 
 type SkillLike = { id?: string; slug?: string; name?: string };
 type SkillInvokeMode = 'user_selected' | 'model_selected';
+
+export type SkillInvokeTurnOutcome = {
+  status: 'success' | 'failed' | 'cancelled';
+  errorMessage?: string;
+};
+
+const DEFAULT_SKILL_INVOKE_TURN_OUTCOME: SkillInvokeTurnOutcome = { status: 'success' };
+
+function resolveSkillInvokeReportErrorMessage(
+  turnOutcome: SkillInvokeTurnOutcome,
+  contextCached: boolean,
+): string | undefined {
+  if (turnOutcome.status === 'success') {
+    return contextCached ? '调用上下文' : undefined;
+  }
+  return turnOutcome.errorMessage?.trim() || undefined;
+}
 
 type ObservedSkillRead = {
   skillId: string;
@@ -43,6 +62,8 @@ type ActiveSkillInvokeTurn = {
   userSelectedSkillIds: string[];
   reads: Map<string, ObservedSkillRead>;
   finalized: boolean;
+  /** Latest tool-result timestamp observed this turn (any tool, success or failure). */
+  lastToolResultMs: number | null;
 };
 
 let activeTurn: ActiveSkillInvokeTurn | null = null;
@@ -87,12 +108,78 @@ function resolveReadInvokeTimeMs(
   return ms ?? fallbackMs;
 }
 
-function resolveTurnEndTimeMs(
-  terminalMessage: RawMessage | undefined,
-  fallbackMs: number,
-): number {
-  const ms = normalizeTimestampToMs(terminalMessage?.timestamp);
-  return ms ?? fallbackMs;
+function collectTurnMessages(state: {
+  messages: RawMessage[];
+  streamingMessage?: RawMessage | null;
+}): RawMessage[] {
+  let userIdx = -1;
+  for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+    if (state.messages[i].role === 'user') {
+      userIdx = i;
+      break;
+    }
+  }
+  return userIdx >= 0 ? state.messages.slice(userIdx + 1) : [...state.messages];
+}
+
+function noteToolResultActivity(
+  turn: ActiveSkillInvokeTurn,
+  toolResultMessage: RawMessage,
+): void {
+  if (!isToolResultLikeRole(toolResultMessage.role)) return;
+  const ts = normalizeTimestampToMs(toolResultMessage.timestamp);
+  if (ts == null) return;
+  if (turn.lastToolResultMs == null || ts > turn.lastToolResultMs) {
+    turn.lastToolResultMs = ts;
+  }
+}
+
+/** Skill execution end: last tool result after start, else first visible assistant, else fallback. */
+function resolveSkillExecutionEndTimeMs(input: {
+  turnMessages: RawMessage[];
+  skillStartMs: number;
+  trackedLastToolResultMs: number | null;
+  terminalMessage?: RawMessage;
+  fallbackMs: number;
+}): number {
+  const { turnMessages, skillStartMs, trackedLastToolResultMs, terminalMessage, fallbackMs } = input;
+  const startCutoffMs = skillStartMs - 1000;
+
+  let lastToolMs = trackedLastToolResultMs;
+  if (lastToolMs != null && lastToolMs < startCutoffMs) {
+    lastToolMs = null;
+  }
+  for (const message of turnMessages) {
+    const ts = normalizeTimestampToMs(message.timestamp);
+    if (ts != null && ts < startCutoffMs) continue;
+    if (isToolResultLikeRole(message.role) && ts != null) {
+      if (lastToolMs == null || ts > lastToolMs) lastToolMs = ts;
+    }
+  }
+  if (terminalMessage) {
+    const ts = normalizeTimestampToMs(terminalMessage.timestamp);
+    if (ts != null && ts >= startCutoffMs && isToolResultLikeRole(terminalMessage.role)) {
+      if (lastToolMs == null || ts > lastToolMs) lastToolMs = ts;
+    }
+  }
+  if (lastToolMs != null) return lastToolMs;
+
+  for (const message of turnMessages) {
+    const ts = normalizeTimestampToMs(message.timestamp);
+    if (ts != null && ts < startCutoffMs) continue;
+    if (message.role === 'assistant' && hasVisibleAssistantContent(message)) {
+      return ts ?? fallbackMs;
+    }
+  }
+  if (
+    terminalMessage?.role === 'assistant'
+    && hasVisibleAssistantContent(terminalMessage)
+  ) {
+    const ts = normalizeTimestampToMs(terminalMessage.timestamp);
+    if (ts == null || ts >= startCutoffMs) return ts ?? fallbackMs;
+  }
+
+  return fallbackMs;
 }
 
 function ensureActiveTurn(input: {
@@ -115,6 +202,7 @@ function ensureActiveTurn(input: {
     userSelectedSkillIds: [],
     reads: new Map(),
     finalized: false,
+    lastToolResultMs: null,
   };
   return activeTurn;
 }
@@ -290,26 +378,24 @@ export function reportUsageFromToolResult(
   get: ChatGet,
 ): void {
   if (!toolResultMessage) return;
+  const executionId = (getActiveExecutionId() || '').trim();
+  if (executionId && activeTurn && activeTurn.executionId === executionId && !activeTurn.finalized) {
+    noteToolResultActivity(activeTurn, toolResultMessage);
+  }
   observeReadFromToolResult(toolResultMessage, runId, get);
 }
 
 export function scanTurnForUnreportedSkillInvokes(get: ChatGet, runId: string): void {
   const state = get();
-  let userIdx = -1;
-  for (let i = state.messages.length - 1; i >= 0; i -= 1) {
-    if (state.messages[i].role === 'user') {
-      userIdx = i;
-      break;
-    }
-  }
-  const turnMessages = userIdx >= 0 ? state.messages.slice(userIdx + 1) : state.messages;
+  const turnMessages = collectTurnMessages(state);
   for (const message of turnMessages) {
     if (message.role === 'assistant') {
       observeReadFromAssistantMessage(message, runId);
       continue;
     }
-    if (message.role !== 'toolResult' && message.role !== 'tool_result' && message.role !== 'tool') {
-      continue;
+    if (!isToolResultLikeRole(message.role)) continue;
+    if (activeTurn && !activeTurn.finalized) {
+      noteToolResultActivity(activeTurn, message);
     }
     observeReadFromToolResult(message, runId, get);
   }
@@ -330,6 +416,7 @@ export function finalizeSkillInvokeReports(
   runId: string,
   terminalMessage?: RawMessage,
   endMs = Date.now(),
+  turnOutcome: SkillInvokeTurnOutcome = DEFAULT_SKILL_INVOKE_TURN_OUTCOME,
 ): void {
   const audit = getActiveExecutionAuditContext();
   const executionId = (audit.executionId || getActiveExecutionId() || '').trim();
@@ -343,12 +430,21 @@ export function finalizeSkillInvokeReports(
   scanTurnForUnreportedSkillInvokes(get, runId);
   activeTurn.finalized = true;
 
+  const state = get();
+  const turnMessages = collectTurnMessages(state);
   const skills = useSkillsStore.getState().skills;
   const agentId = resolveSkillInvokeAgentId(
     audit.agentId ?? get().currentAgentId ?? activeTurn.agentId ?? 'main',
   );
-  const invokeEndTimeMs = resolveTurnEndTimeMs(terminalMessage, endMs);
   const reportedSkillIds = new Set<string>();
+
+  const resolveEndForSkill = (skillStartMs: number): number => resolveSkillExecutionEndTimeMs({
+    turnMessages,
+    skillStartMs,
+    trackedLastToolResultMs: activeTurn!.lastToolResultMs,
+    terminalMessage,
+    fallbackMs: endMs,
+  });
 
   for (const pendingSkillId of activeTurn.userSelectedSkillIds) {
     const read = [...activeTurn.reads.values()].find((entry) =>
@@ -358,6 +454,9 @@ export function finalizeSkillInvokeReports(
     const canonicalKey = canonicalSkillId.trim().toLowerCase();
     if (reportedSkillIds.has(canonicalKey)) continue;
     reportedSkillIds.add(canonicalKey);
+
+    const skillStartMs = read?.invokeTimeMs ?? activeTurn.turnStartedAtMs;
+    const invokeEndTimeMs = resolveEndForSkill(skillStartMs);
 
     if (read) {
       queueSkillInvokeReport(executionId, buildReadSkillInvokeReport({
@@ -370,7 +469,8 @@ export function finalizeSkillInvokeReports(
         invokeMode: 'user_selected',
         invokeTimeMs: read.invokeTimeMs,
         invokeEndTimeMs,
-        status: 'success',
+        status: turnOutcome.status,
+        errorMessage: resolveSkillInvokeReportErrorMessage(turnOutcome, false),
       }));
     } else {
       queueSkillInvokeReport(executionId, buildFailedSkillInvokeReport({
@@ -382,6 +482,8 @@ export function finalizeSkillInvokeReports(
         invokeMode: 'user_selected',
         invokeTimeMs: activeTurn.turnStartedAtMs,
         invokeEndTimeMs,
+        status: turnOutcome.status,
+        errorMessage: resolveSkillInvokeReportErrorMessage(turnOutcome, true),
       }));
     }
   }
@@ -399,8 +501,9 @@ export function finalizeSkillInvokeReports(
       sessionStartedAtMs: activeTurn.sessionStartedAtMs,
       invokeMode: 'model_selected',
       invokeTimeMs: read.invokeTimeMs,
-      invokeEndTimeMs,
-      status: 'success',
+      invokeEndTimeMs: resolveEndForSkill(read.invokeTimeMs),
+      status: turnOutcome.status,
+      errorMessage: resolveSkillInvokeReportErrorMessage(turnOutcome, false),
     }));
   }
 

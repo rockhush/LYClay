@@ -91,6 +91,7 @@ describe('skill-invoke-usage', () => {
     });
 
     const readStartMs = Date.parse('2026-07-27T09:22:05');
+    const toolResultMs = Date.parse('2026-07-27T09:22:06');
     const turnEndMs = Date.parse('2026-07-27T09:22:20');
     const assistant: RawMessage = {
       role: 'assistant',
@@ -101,7 +102,7 @@ describe('skill-invoke-usage', () => {
     };
     const toolResult: RawMessage = {
       role: 'toolResult',
-      timestamp: Date.parse('2026-07-27T09:22:06'),
+      timestamp: toolResultMs,
       toolCallId: 'call-1',
       content: 'skill body',
     };
@@ -132,7 +133,7 @@ describe('skill-invoke-usage', () => {
       invoke_mode: 'user_selected',
       status: 'success',
       invoke_time: formatSkillInvokeDateTimeMs(readStartMs),
-      invoke_end_time: formatSkillInvokeDateTimeMs(turnEndMs),
+      invoke_end_time: formatSkillInvokeDateTimeMs(toolResultMs),
     });
   });
 
@@ -174,10 +175,11 @@ describe('skill-invoke-usage', () => {
       execution_id: 'exec-1',
       invoke_mode: 'user_selected',
       status: 'success',
+      invoke_end_time: formatSkillInvokeDateTimeMs(readStartMs),
     });
   });
 
-  it('reports failed when user selected skill never read SKILL.md', () => {
+  it('reports context-cached success when user selected skill never read SKILL.md', () => {
     registerPendingUserSelectedSkills({
       executionId: 'exec-1',
       agentId: 'main',
@@ -201,7 +203,8 @@ describe('skill-invoke-usage', () => {
       skillId: 'pptx',
       execution_id: 'exec-1',
       invoke_mode: 'user_selected',
-      status: 'failed',
+      status: 'success',
+      error_message: '调用上下文',
       invoke_end_time: formatSkillInvokeDateTimeMs(turnEndMs),
     });
   });
@@ -295,5 +298,79 @@ describe('skill-invoke-usage', () => {
       invoke_mode: 'model_selected',
       status: 'success',
     });
+  });
+
+  it('reports failed when turn ends with error and skill was read', () => {
+    registerPendingUserSelectedSkills({
+      executionId: 'exec-1',
+      agentId: 'main',
+      skillIds: ['pptx'],
+      sessionStartedAtMs: trackerState.sessionStartedAtMs,
+      turnStartedAtMs: trackerState.startedAtMs,
+    });
+
+    const readStartMs = Date.parse('2026-07-27T09:22:05');
+    const turnEndMs = Date.parse('2026-07-27T09:22:20');
+    const assistant: RawMessage = {
+      role: 'assistant',
+      timestamp: readStartMs,
+      content: [
+        { type: 'tool_use', id: 'call-1', name: 'read', input: { path: '~/.openclaw/skills/pptx/SKILL.md' } },
+      ],
+    };
+    const get = () => ({
+      messages: [assistant],
+      streamingMessage: null,
+      currentAgentId: 'main',
+    }) as never;
+
+    finalizeSkillInvokeReports(
+      get,
+      'run-1',
+      undefined,
+      turnEndMs,
+      { status: 'failed', errorMessage: 'Gateway timeout' },
+    );
+
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(hostApiFetchMock.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({
+      skillId: 'pptx',
+      status: 'failed',
+      error_message: 'Gateway timeout',
+    });
+  });
+
+  it('reports cancelled for context-cached skill when user aborts turn', () => {
+    registerPendingUserSelectedSkills({
+      executionId: 'exec-1',
+      agentId: 'main',
+      skillIds: ['pptx'],
+      sessionStartedAtMs: trackerState.sessionStartedAtMs,
+      turnStartedAtMs: trackerState.startedAtMs,
+    });
+
+    const turnEndMs = Date.parse('2026-07-27T09:22:20');
+    const get = () => ({
+      messages: [],
+      streamingMessage: null,
+      currentAgentId: 'main',
+    }) as never;
+
+    finalizeSkillInvokeReports(
+      get,
+      'run-1',
+      undefined,
+      turnEndMs,
+      { status: 'cancelled' },
+    );
+
+    expect(hostApiFetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(hostApiFetchMock.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({
+      skillId: 'pptx',
+      status: 'cancelled',
+    });
+    expect(body.error_message).toBeUndefined();
   });
 });

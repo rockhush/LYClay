@@ -19,6 +19,7 @@ import {
   registerPendingUserSelectedSkills,
   ensureSkillInvokeTurnTracking,
   reportUsageFromToolResult,
+  type SkillInvokeTurnOutcome,
 } from '@/stores/chat/skill-invoke-usage';
 import { isRetiredDigitalEmployeeAgent, resolveActiveDigitalEmployeeExecutionAgent } from '@/lib/retired-digital-employees';
 import { toUserMessage, normalizeAppError } from '@/lib/api-client';
@@ -281,11 +282,14 @@ function flushSkillInvokeReportsForTurn(
   get: () => ChatState,
   runId?: string | null,
   terminalMessage?: RawMessage,
+  turnOutcome?: SkillInvokeTurnOutcome,
 ): void {
   finalizeSkillInvokeReports(
     get,
     (runId ?? get().activeRunId ?? '').trim(),
     terminalMessage,
+    Date.now(),
+    turnOutcome,
   );
 }
 
@@ -5862,7 +5866,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           clearHistoryPoll();
           const normalizedError = normalizeAppError(new Error(errorMsg));
           const failureState = get();
-          flushSkillInvokeReportsForTurn(get, failureState.activeRunId);
+          flushSkillInvokeReportsForTurn(get, failureState.activeRunId, undefined, {
+            status: 'failed',
+            errorMessage: toUserMessage(normalizedError),
+          });
           finalizeExecutionTurn({
             status: 'failed',
             messages: failureState.messages,
@@ -6983,7 +6990,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
               runId,
             });
             const preErrorState = get();
-            flushSkillInvokeReportsForTurn(get, runId);
+            flushSkillInvokeReportsForTurn(get, runId, undefined, {
+              status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
+              errorMessage: displayError,
+            });
             finalizeExecutionTurn({
               status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
               messages: preErrorState.messages,
@@ -7007,7 +7017,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
           const displayError = resolveRunFailureErrorMessage(rawErrorMsg);
           const preErrorState = get();
-          flushSkillInvokeReportsForTurn(get, runId);
+          flushSkillInvokeReportsForTurn(get, runId, undefined, {
+            status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
+            errorMessage: displayError,
+          });
           finalizeExecutionTurn({
             status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
             messages: preErrorState.messages,
@@ -7037,7 +7050,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             runId,
           });
           const preErrorState = get();
-          flushSkillInvokeReportsForTurn(get, runId);
+          flushSkillInvokeReportsForTurn(get, runId, undefined, {
+            status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
+            errorMessage: displayError,
+          });
           finalizeExecutionTurn({
             status: isAbortErrorMessage(rawErrorMsg) ? 'cancelled' : 'failed',
             messages: preErrorState.messages,
@@ -7104,7 +7120,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
           const keepAbortShield = isUserAbortedSession(foregroundSessionKey) || get().runAborted;
           const preAbortState = get();
-          flushSkillInvokeReportsForTurn(get, runId);
+          flushSkillInvokeReportsForTurn(get, runId, undefined, { status: 'cancelled' });
           finalizeExecutionTurn({
             status: 'cancelled',
             messages: preAbortState.messages,
@@ -7147,7 +7163,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const lastUser = getLastRealUserSnapshot(get().messages);
         const workspaceId = useWorkspacesStore.getState().currentWorkspaceId;
         const preAbortState = get();
-        flushSkillInvokeReportsForTurn(get, runId);
+        flushSkillInvokeReportsForTurn(get, runId, undefined, {
+          status: 'failed',
+          errorMessage: displayError,
+        });
         finalizeExecutionTurn({
           status: 'failed',
           messages: preAbortState.messages,
