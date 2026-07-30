@@ -32,16 +32,13 @@ import {
   applyOpenClawSilentReplyPatches,
   hasOpenClawSilentReplyPatches,
 } from './openclaw-silent-reply-patches.mjs';
-import {
-  applyOpenClawToolResultContextGuardPatches,
-  hasOpenClawToolResultContextGuardPatches,
-} from './openclaw-tool-result-context-guard-patches.mjs';
 import { inspectOpenClawDigitalEmployeeIsolation } from './openclaw-digital-employee-isolation-check.mjs';
 import { applyOpenClawWebFetchHtmlSniffPatches, hasOpenClawWebFetchHtmlSniffPatches } from './openclaw-web-fetch-patches.mjs';
 import {
   applyOpenClawElectronShellSnapshotPatch,
   isOpenClawShellSnapshotBundle,
 } from './openclaw-shell-snapshot-patches.mjs';
+import { applyOpenClawLyclawPatches } from './openclaw-lyclaw-patches.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
@@ -450,6 +447,29 @@ if (mirroredExtRuntimeDeps > 0) {
   echo`   Mirrored ${mirroredExtRuntimeDeps} extension runtime deps into dist/extensions/*/node_modules`;
 }
 
+function patchBundledOpenClawLyclaw(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return false;
+
+  let patched = false;
+  for (const name of fs.readdirSync(distDir)) {
+    if (!name.endsWith('.js')) continue;
+    const filePath = path.join(distDir, name);
+    const source = fs.readFileSync(filePath, 'utf8');
+    const result = applyOpenClawLyclawPatches(source);
+    if (!result.patched) continue;
+    fs.writeFileSync(filePath, result.source, 'utf8');
+    patched = true;
+    echo`   🩹 Patched ${name} with LYClaw core runtime changes`;
+  }
+
+  if (!patched) {
+    echo`   ✓ LYClaw core runtime patches already present`;
+  }
+
+  return true;
+}
+
 function patchBundledOpenClawAnthropicTransport(outputDir) {
   const distDir = path.join(outputDir, 'dist');
   if (!fs.existsSync(distDir)) return false;
@@ -629,32 +649,6 @@ function patchBundledOpenClawSilentReply(outputDir) {
   }
 }
 
-function patchBundledOpenClawToolResultContextGuard(outputDir) {
-  const distDir = path.join(outputDir, 'dist');
-  if (!fs.existsSync(distDir)) return;
-
-  const selectionFiles = fs.readdirSync(distDir).filter((name) => /^selection-.*\.js$/.test(name));
-  if (selectionFiles.length === 0) return;
-
-  let patched = false;
-  for (const selFile of selectionFiles) {
-    const filePath = path.join(distDir, selFile);
-    const source = fs.readFileSync(filePath, 'utf8');
-    if (!source.includes('function installToolResultContextGuard(params)')) continue;
-    if (hasOpenClawToolResultContextGuardPatches(source)) continue;
-
-    const result = applyOpenClawToolResultContextGuardPatches(source);
-    if (!result.patched) continue;
-    fs.writeFileSync(filePath, result.source, 'utf8');
-    patched = true;
-    echo`   🩹 Patched ${selFile} tool-result context guard to respect midTurnPrecheck`;
-  }
-
-  if (!patched) {
-    echo`   ✓ selection files already patched for tool-result context guard`;
-  }
-}
-
 function patchBundledOpenClawElectronShellSnapshot(outputDir) {
   const distDir = path.join(outputDir, 'dist');
   if (!fs.existsSync(distDir)) return false;
@@ -753,6 +747,9 @@ function patchBundledOpenClawPromptCache(outputDir) {
   echo`   🩹 Patched openai-transport for ly-auto prompt cache key`;
 }
 
+if (!patchBundledOpenClawLyclaw(OUTPUT)) {
+  echo`   ⚠ LYClaw core runtime patch step skipped (dist missing)`;
+}
 if (!patchBundledOpenClawAnthropicTransport(OUTPUT)) {
   echo`❌ Failed to patch Anthropic transport for model params`;
   process.exit(1);
@@ -770,7 +767,6 @@ if (!patchBundledOpenClawElectronShellSnapshot(OUTPUT)) {
   process.exit(1);
 }
 patchBundledOpenClawSilentReply(OUTPUT);
-patchBundledOpenClawToolResultContextGuard(OUTPUT);
 patchBundledOpenClawSessionId(OUTPUT);
 patchBundledOpenClawPromptCache(OUTPUT);
 patchBundledExtensionPackageJsons(extensionsDir);

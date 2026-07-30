@@ -1,6 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
 import { completeSetup, expect, test } from './fixtures/electron';
-import { enableDeveloperMode } from './helpers/developer-mode';
 
 async function ensureSwitchState(toggle: Locator, checked: boolean): Promise<void> {
   const currentState = await toggle.getAttribute('data-state');
@@ -18,14 +17,15 @@ async function readProxyEnabled(page: Page): Promise<boolean> {
 }
 
 test.describe('ClawX developer proxy settings', () => {
-  test.skip(true, 'Developer settings UI is temporarily hidden (SHOW_DEVELOPER_SETTINGS=false)');
-
   test('keeps proxy save available when disabling proxy in developer mode', async ({ page }) => {
     await completeSetup(page);
 
-    await enableDeveloperMode(page);
     await page.getByTestId('sidebar-nav-settings').click();
     await expect(page.getByTestId('settings-page')).toBeVisible();
+
+    const devModeToggle = page.getByTestId('settings-dev-mode-switch');
+    await expect(devModeToggle).toBeVisible();
+    await ensureSwitchState(devModeToggle, true);
 
     const proxySection = page.getByTestId('settings-proxy-section');
     const proxyToggle = page.getByTestId('settings-proxy-toggle');
@@ -50,9 +50,11 @@ test.describe('ClawX developer proxy settings', () => {
   test('shows chrome devtools action when developer mode is enabled', async ({ page }) => {
     await completeSetup(page);
 
-    await enableDeveloperMode(page);
     await page.getByTestId('sidebar-nav-settings').click();
     await expect(page.getByTestId('settings-page')).toBeVisible();
+
+    const devModeToggle = page.getByTestId('settings-dev-mode-switch');
+    await ensureSwitchState(devModeToggle, true);
 
     const devToolsButton = page.getByTestId('settings-open-chrome-devtools-button');
     await expect(devToolsButton).toBeVisible();

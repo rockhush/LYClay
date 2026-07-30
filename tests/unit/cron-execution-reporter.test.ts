@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const testOpenClawConfigDir = join(tmpdir(), 'lyclaw-tests', 'cron-execution-reporter');
 const recordExecutionMock = vi.fn(async () => {});
-const recordSkillInvokeMock = vi.fn(async () => {});
 const getQueueSnapshotMock = vi.fn(async () => ({
   tokenConsume: [],
   skillDownload: [],
@@ -19,7 +18,6 @@ vi.mock('@electron/utils/paths', () => ({
 
 vi.mock('../../electron/utils/reporting/index', () => ({
   recordExecution: (...args: unknown[]) => recordExecutionMock(...args),
-  recordSkillInvoke: (...args: unknown[]) => recordSkillInvokeMock(...args),
 }));
 
 vi.mock('../../electron/utils/reporting/queue', () => ({
@@ -53,7 +51,6 @@ describe('cron execution reporter', () => {
   beforeEach(() => {
     clearCronExecutionPendingState();
     recordExecutionMock.mockClear();
-    recordSkillInvokeMock.mockClear();
     getQueueSnapshotMock.mockReset();
     getQueueSnapshotMock.mockResolvedValue({
       tokenConsume: [],
@@ -71,7 +68,6 @@ describe('cron execution reporter', () => {
       acceptedAtMs: Date.now(),
     });
     expect(recordExecutionMock).not.toHaveBeenCalled();
-    expect(recordSkillInvokeMock).not.toHaveBeenCalled();
   });
 
   it('normalizes bare auto model id with transcript provider', async () => {
@@ -180,63 +176,6 @@ describe('cron execution reporter', () => {
     expect(record.first_response_ms).toBe(800);
   });
 
-  it('queues skill-invoke records from transcript read tool calls', async () => {
-    const userTs = 1_700_000_000_000;
-    const assistantTs = userTs + 4_000;
-    writeTranscript([
-      {
-        type: 'message',
-        timestamp: new Date(userTs).toISOString(),
-        message: {
-          role: 'user',
-          content: 'Run docx task',
-          timestamp: userTs / 1000,
-        },
-      },
-      {
-        type: 'message',
-        timestamp: new Date(assistantTs).toISOString(),
-        message: {
-          role: 'assistant',
-          timestamp: assistantTs / 1000,
-          content: [
-            {
-              type: 'tool_use',
-              id: 'call-docx',
-              name: 'read',
-              input: { path: '~/.openclaw/skills/docx/SKILL.md' },
-            },
-          ],
-        },
-      },
-    ]);
-
-    registerCronExecutionPending({
-      runId,
-      sessionKey,
-      agentId,
-      registeredAtMs: userTs,
-    });
-
-    await reportCronExecutionOnRunTerminal({
-      runId,
-      sessionKey,
-      state: 'final',
-      acceptedAtMs: userTs + 100,
-    });
-
-    expect(recordExecutionMock).toHaveBeenCalledTimes(1);
-    expect(recordSkillInvokeMock).toHaveBeenCalledTimes(1);
-    const executionId = (recordExecutionMock.mock.calls[0]?.[0] as { execution_id?: string }).execution_id;
-    const skillRecord = recordSkillInvokeMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(skillRecord.skillId).toBe('docx');
-    expect(skillRecord.execution_id).toBe(executionId);
-    expect(skillRecord.agent_id).toBe(agentId);
-    expect(skillRecord.invoke_mode).toBe('model_selected');
-    expect(skillRecord.skill_source).toBe('builtin');
-    expect(skillRecord.status).toBe('success');
-  });
-
   it('skips duplicate schedule turn already present in queue', async () => {
     getQueueSnapshotMock.mockResolvedValue({
       tokenConsume: [],
@@ -265,7 +204,6 @@ describe('cron execution reporter', () => {
     });
 
     expect(recordExecutionMock).not.toHaveBeenCalled();
-    expect(recordSkillInvokeMock).not.toHaveBeenCalled();
   });
 
   it('reports failed status for terminal error state', async () => {

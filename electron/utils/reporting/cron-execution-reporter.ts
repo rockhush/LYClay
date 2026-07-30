@@ -27,7 +27,6 @@ import {
 } from './execution-transcript-enrich';
 import { getUsageReportQueueSnapshot } from './queue';
 import { recordExecution } from './index';
-import { reportCronSkillInvokesFromTranscript } from './cron-skill-invoke-reporter';
 import type { ExecutionRecord } from './types';
 
 const TURN_MATCH_TOLERANCE_MS = 2 * 60 * 1000;
@@ -261,10 +260,8 @@ export async function reportCronExecutionOnRunTerminal(args: {
     endedAtMs,
   );
 
-  const executionId = randomUUID();
-
   await recordExecution({
-    execution_id: executionId,
+    execution_id: randomUUID(),
     conversation_id: resolvedSessionKey,
     turn_index: turnIndex,
     entry_source: 'schedule',
@@ -285,18 +282,6 @@ export async function reportCronExecutionOnRunTerminal(args: {
     ...(errorStage ? { error_stage: errorStage } : {}),
     ...(errorMessage ? { error_message: errorMessage } : {}),
   });
-
-  if (transcript?.trim()) {
-    await reportCronSkillInvokesFromTranscript({
-      transcript,
-      executionId,
-      agentId: pending.agentId,
-      sessionStartedAtMs,
-      turnStartedAtMs: startedAtMs,
-      turnEndedAtMs: endedAtMs,
-      executionStatus: status,
-    });
-  }
 
   markCronExecutionReported(args.runId);
 

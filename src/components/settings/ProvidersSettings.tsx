@@ -163,9 +163,6 @@ interface ProvidersSettingsProps {
   addDialogInitialProvider?: ProviderType | null;
 }
 
-/** 「发送统计」按钮暂时隐藏；后台自动上报逻辑不受影响 */
-const SHOW_SEND_USAGE_REPORT_BUTTON = false;
-
 export function ProvidersSettings({ addDialogInitialProvider = null }: ProvidersSettingsProps = {}) {
   const { t } = useTranslation('settings');
   const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
@@ -297,7 +294,6 @@ export function ProvidersSettings({ addDialogInitialProvider = null }: Providers
           {t('aiProviders.title', 'AI Providers')}
         </h2>
         <div className="flex items-center gap-2">
-          {SHOW_SEND_USAGE_REPORT_BUTTON && (
           <Button
             data-testid="providers-send-usage-report-button"
             onClick={handleSendUsageReport}
@@ -312,7 +308,6 @@ export function ProvidersSettings({ addDialogInitialProvider = null }: Providers
             )}
             {t('aiProviders.sendUsageReport', { defaultValue: '发送统计' })}
           </Button>
-          )}
           <Button data-testid="providers-add-button" onClick={() => setShowAddDialog(true)} className="rounded-lg px-3 h-8 font-medium text-[13px] bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm">
             <Plus className="h-3.5 w-3.5 mr-1" />
             {t('aiProviders.add')}

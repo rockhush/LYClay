@@ -205,10 +205,15 @@ export function extractInvokedSkillIds(message: RawMessage | undefined | null): 
   return out;
 }
 
-export {
-  extractSkillSlugFromSkillMdPath,
-  extractSkillInvocationFromToolCall,
-} from '../../../shared/reporting/skill-invoke-transcript';
+const SKILL_MD_PATH_PATTERN = /[/\\]skills[/\\]([^/\\]+)[/\\]SKILL\.md$/i;
+
+export function extractSkillSlugFromSkillMdPath(path: string | undefined | null): string | null {
+  const trimmed = (path ?? '').trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(/^~(?=$|[/\\])/, '').replace(/\\/g, '/');
+  const match = normalized.match(SKILL_MD_PATH_PATTERN);
+  return match?.[1]?.trim() || null;
+}
 
 function readToolCallInput(
   block: Record<string, unknown>,
@@ -228,6 +233,18 @@ function readToolCallInput(
     }
   }
   return undefined;
+}
+
+export function extractSkillInvocationFromToolCall(
+  name: string | undefined,
+  input?: Record<string, unknown>,
+): { skillId: string; skillPath: string } | null {
+  const toolName = (name ?? '').trim().toLowerCase();
+  if (toolName !== 'read') return null;
+  const path = typeof input?.path === 'string' ? input.path : '';
+  const skillId = extractSkillSlugFromSkillMdPath(path);
+  if (!skillId) return null;
+  return { skillId, skillPath: path };
 }
 
 export function isToolResultLikeRole(role: unknown): boolean {

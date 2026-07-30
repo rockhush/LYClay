@@ -28,7 +28,6 @@ import {
   LogOut,
   User,
   MoreHorizontal,
-  Trash2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { rendererExtensionRegistry } from '@/extensions/registry';
@@ -1068,16 +1067,14 @@ export function Sidebar() {
         event.stopPropagation();
         setBatchDeleteOpen(true);
       }}
-      aria-label={t('common:sidebar.batchDelete')}
-      title={t('common:sidebar.batchDelete')}
       className={cn(
-        'flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors',
+        'shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-muted-foreground transition-colors',
         'hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10',
         'disabled:cursor-not-allowed disabled:opacity-40',
         className,
       )}
     >
-      <Trash2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+      {t('common:sidebar.batchDelete')}
     </button>
   );
 
@@ -1315,14 +1312,13 @@ export function Sidebar() {
           {/* Workspaces */}
           {allWorkspaces.length > 0 && (!isSessionSearchActive || Object.keys(filteredSessionsByWorkspaceId).length > 0) && (
             <div data-testid="sidebar-workspaces-section" className="pb-2">
-              <div className="flex items-center justify-between gap-1 px-2.5 pb-1">
+              <div className="flex items-center justify-between gap-1 px-2.5 py-2 rounded-lg hover:bg-white dark:hover:bg-white/10">
                 <button
                   type="button"
-                  className="flex min-w-0 flex-1 cursor-pointer text-left"
+                  className="flex min-w-0 flex-1 items-center cursor-pointer"
                   onClick={toggleWorkspaceSection}
-                  aria-expanded={!workspacesCollapsed}
                 >
-                  <span className="text-[11px] font-medium text-muted-foreground/60 tracking-tight">
+                  <span className="text-[14px] font-medium text-foreground tracking-tight">
                     {t('sidebar.workspaces')}
                   </span>
                 </button>
