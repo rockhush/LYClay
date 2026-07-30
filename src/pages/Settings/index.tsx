@@ -50,6 +50,9 @@ type ControlUiInfo = {
   port: number;
 };
 
+/** 开发者设置区块暂时隐藏（Chrome DevTools、Gateway Proxy、CLI、Doctor 等） */
+const SHOW_DEVELOPER_SETTINGS = false;
+
 export function Settings() {
   const { t } = useTranslation('settings');
   const {
@@ -76,7 +79,6 @@ export function Settings() {
     autoDownloadUpdate,
     setAutoDownloadUpdate,
     devModeUnlocked,
-    setDevModeUnlocked,
   } = useSettingsStore();
 
   const { status: gatewayStatus, restart: restartGateway } = useGatewayStore();
@@ -644,30 +646,8 @@ export function Settings() {
             </div>
           </div>
 
-          <div data-testid="settings-advanced-section">
-            <h2 className="text-base font-semibold text-foreground mb-2">
-              {t('advanced.title')}
-            </h2>
-            <div className="flex items-center justify-between">
-              <div>
-                <Label className="text-sm font-medium text-foreground/70">
-                  {t('advanced.devMode')}
-                </Label>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  {t('advanced.devModeDesc')}
-                </p>
-              </div>
-              <Switch
-                size="sm"
-                checked={devModeUnlocked}
-                onCheckedChange={setDevModeUnlocked}
-                data-testid="settings-dev-mode-switch"
-              />
-            </div>
-          </div>
-
-          {/* Developer */}
-          {devModeUnlocked && (
+          {/* 开发者区块暂时隐藏，恢复时将 SHOW_DEVELOPER_SETTINGS 改回 true */}
+          {SHOW_DEVELOPER_SETTINGS && devModeUnlocked && (
             <>
               <div data-testid="settings-developer-section">
                 <h2 data-testid="settings-developer-title" className="text-3xl font-serif text-foreground mb-6 font-normal tracking-tight" style={{ fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif' }}>
