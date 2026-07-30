@@ -7,6 +7,7 @@ const assertMcpServerAllowedWithConfirmationMock = vi.fn();
 const readMcpConfigMock = vi.fn();
 const validateMcpConfigNetworkPolicyMock = vi.fn();
 const parseJsonBodyMock = vi.fn();
+const discoverMcpToolsForServerMock = vi.fn();
 
 vi.mock('@electron/api/route-utils', () => ({
   parseJsonBody: (...args: unknown[]) => parseJsonBodyMock(...args),
@@ -31,7 +32,7 @@ vi.mock('@electron/security/confirmation-service', () => ({
 }));
 
 vi.mock('@electron/utils/mcp-gateway-tools', () => ({
-  fetchGatewayToolNamesForServer: vi.fn(),
+  discoverMcpToolsForServer: (...args: unknown[]) => discoverMcpToolsForServerMock(...args),
 }));
 
 describe('MCP server authorization routes', () => {
@@ -91,6 +92,36 @@ describe('MCP server authorization routes', () => {
       error: 'Error: denied',
     });
   });
+
+  it('returns the scoped discovery source and tools from the selected MCP server', async () => {
+    readMcpConfigMock.mockResolvedValue({
+      servers: {
+        example: { type: 'sse', url: 'http://10.3.32.208:8080/sse' },
+      },
+    });
+    discoverMcpToolsForServerMock.mockResolvedValue({
+      tools: ['check_connection', 'query'],
+      source: 'direct',
+    });
+    const { handleMcpRoutes } = await import('@electron/api/routes/mcp');
+
+    await handleMcpRoutes(
+      { method: 'GET' } as IncomingMessage,
+      {} as ServerResponse,
+      new URL('http://127.0.0.1:13210/api/mcp/servers/example/tools'),
+      { gatewayManager: {} } as never,
+    );
+
+    expect(sendJsonMock).toHaveBeenCalledWith(expect.anything(), 200, {
+      tools: ['check_connection', 'query'],
+      denied: [],
+      allowed: null,
+      gateway: false,
+      discoverySource: 'direct',
+      discoveryError: null,
+    });
+  });
+
   it('hides digital employee MCP servers from the connectors list', async () => {
     readMcpConfigMock.mockResolvedValue({
       servers: {

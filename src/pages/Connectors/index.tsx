@@ -76,6 +76,7 @@ export function Connectors() {
           </div>
           <Button
             type="button"
+            data-testid="connectors-add-custom"
             className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors shrink-0"
             onClick={() => {
               setConnectorPageTab('custom');

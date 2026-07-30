@@ -52,6 +52,9 @@ import {
 } from '@/lib/provider-accounts';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+
+/** Hide manual usage-report flush from Models settings UI. */
+const SHOW_SEND_USAGE_REPORT_BUTTON = false;
 import { useTranslation } from 'react-i18next';
 import { flushUsageReports } from '@/lib/usage-reporter';
 import { invokeIpc } from '@/lib/api-client';
@@ -294,20 +297,22 @@ export function ProvidersSettings({ addDialogInitialProvider = null }: Providers
           {t('aiProviders.title', 'AI Providers')}
         </h2>
         <div className="flex items-center gap-2">
-          <Button
-            data-testid="providers-send-usage-report-button"
-            onClick={handleSendUsageReport}
-            disabled={usageReportSending}
-            variant="outline"
-            className="rounded-lg px-3 h-8 font-medium text-[13px] border-black/10 dark:border-white/15 bg-transparent hover:bg-black/5 dark:hover:bg-white/10"
-          >
-            {usageReportSending ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-            ) : (
-              <Send className="h-3.5 w-3.5 mr-1.5" />
-            )}
-            {t('aiProviders.sendUsageReport', { defaultValue: '发送统计' })}
-          </Button>
+          {SHOW_SEND_USAGE_REPORT_BUTTON ? (
+            <Button
+              data-testid="providers-send-usage-report-button"
+              onClick={handleSendUsageReport}
+              disabled={usageReportSending}
+              variant="outline"
+              className="rounded-lg px-3 h-8 font-medium text-[13px] border-black/10 dark:border-white/15 bg-transparent hover:bg-black/5 dark:hover:bg-white/10"
+            >
+              {usageReportSending ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5 mr-1.5" />
+              )}
+              {t('aiProviders.sendUsageReport', { defaultValue: '发送统计' })}
+            </Button>
+          ) : null}
           <Button data-testid="providers-add-button" onClick={() => setShowAddDialog(true)} className="rounded-lg px-3 h-8 font-medium text-[13px] bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm">
             <Plus className="h-3.5 w-3.5 mr-1" />
             {t('aiProviders.add')}

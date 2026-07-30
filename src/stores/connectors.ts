@@ -40,6 +40,8 @@ interface ConnectorsState {
     denied: string[];
     allowed: string[] | null;
     gateway: boolean;
+    discoverySource: 'gateway' | 'direct' | 'unavailable';
+    discoveryError: string | null;
   }>;
   denyMcpTool: (serverName: string, toolName: string) => Promise<void>;
   undenyMcpTool: (serverName: string, toolName: string) => Promise<void>;
@@ -182,6 +184,8 @@ export const useConnectorsStore = create<ConnectorsState>((set, get) => ({
       denied: string[];
       allowed: string[] | null;
       gateway: boolean;
+      discoverySource: 'gateway' | 'direct' | 'unavailable';
+      discoveryError: string | null;
     }>(`/api/mcp/servers/${encodeURIComponent(serverName)}/tools`);
   },
 

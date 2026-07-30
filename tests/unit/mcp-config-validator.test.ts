@@ -52,6 +52,25 @@ describe('validateMcpConfig', () => {
     expect(r.valid).toBe(true);
   });
 
+  it('accepts http url for sse', () => {
+    const r = validateMcpConfig({
+      servers: {
+        x: { type: 'sse', url: 'http://10.3.32.208:8080/sse', disabled: true },
+      },
+    });
+    expect(r.valid).toBe(true);
+  });
+
+  it('rejects unsupported remote MCP protocols', () => {
+    const r = validateMcpConfig({
+      servers: {
+        x: { type: 'sse', url: 'ftp://example.com/sse', disabled: true },
+      },
+    });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('http, https, ws, or wss'))).toBe(true);
+  });
+
   it('accepts secure websocket urls structurally', () => {
     const r = validateMcpConfig({
       servers: {
@@ -122,6 +141,86 @@ describe('validateMcpConfig', () => {
         decision: 'allow',
       }),
     ]);
+  });
+
+  it('allows a granted private HTTP MCP target and audits the destination', async () => {
+    await grantDomainAccess('10.3.32.208', {
+      source: 'settings:security',
+    });
+
+    const r = await validateMcpConfigNetworkPolicy({
+      servers: {
+        mysql: {
+          type: 'sse',
+          url: 'http://10.3.32.208:8080/sse?token=test-query-secret',
+          disabled: true,
+        },
+      },
+    });
+
+    expect(r.valid).toBe(true);
+    expect(querySecurityAuditEvents({ capability: 'network', limit: 10 })).toEqual([
+      expect.objectContaining({
+        source: 'settings:mcp-config',
+        target: 'http://10.3.32.208:8080/sse',
+        decision: 'allow',
+      }),
+    ]);
+  });
+
+  it('rejects an ungranted private HTTP MCP target', async () => {
+    const r = await validateMcpConfigNetworkPolicy({
+      servers: {
+        mysql: {
+          type: 'sse',
+          url: 'http://10.3.32.208:8080/sse',
+          disabled: true,
+        },
+      },
+    });
+
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('Private IPv4'))).toBe(true);
+  });
+
+  it('allows explicit MCP query credentials without exposing them in network audit', async () => {
+    await grantDomainAccess('example.com', {
+      source: 'settings:security',
+    });
+
+    const r = await validateMcpConfigNetworkPolicy({
+      servers: {
+        sql: {
+          type: 'sse',
+          url: 'https://example.com/mcp/sse?token=test-query-secret&api_key=another-secret#fragment',
+          disabled: true,
+        },
+      },
+    });
+
+    expect(r.valid).toBe(true);
+    expect(querySecurityAuditEvents({ capability: 'network', limit: 10 })).toEqual([
+      expect.objectContaining({
+        source: 'settings:mcp-config',
+        target: 'https://example.com/mcp/sse',
+        decision: 'allow',
+      }),
+    ]);
+  });
+
+  it('does not let MCP query credentials bypass private-address policy', async () => {
+    const r = await validateMcpConfigNetworkPolicy({
+      servers: {
+        metadata: {
+          type: 'sse',
+          url: 'https://169.254.169.254/latest/meta-data?token=test-query-secret',
+          disabled: true,
+        },
+      },
+    });
+
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('metadata') || e.includes('Link-local'))).toBe(true);
   });
 
   it('rejects unknown remote MCP domains during network preflight', async () => {

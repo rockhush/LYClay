@@ -10,9 +10,10 @@ import {
   type McpServerEntry,
 } from '../../utils/mcp-json';
 import { coerceMcpConfig, validateMcpConfigNetworkPolicy } from '../../utils/mcp-config-validator';
-import { fetchGatewayToolNamesForServer } from '../../utils/mcp-gateway-tools';
+import { discoverMcpToolsForServer } from '../../utils/mcp-gateway-tools';
 import { assertMcpServerAllowedWithConfirmation } from '../../security/confirmation-service';
 import { buildMcpServerFingerprint } from '../../security/mcp-server-policy';
+import { redactSecrets } from '../../security/secret-scanner';
 import { isDigitalEmployeeMcpServer } from '../../utils/digital-employee-mcp';
 
 function reloadGatewayMcp(ctx: HostApiContext): void {
@@ -131,14 +132,25 @@ export async function handleMcpRoutes(
         return true;
       }
       const { allow, deny } = readToolsFilter(server);
-      let discovered: string[] = [];
+      let discovery: Awaited<ReturnType<typeof discoverMcpToolsForServer>> = {
+        tools: [],
+        source: 'unavailable',
+        error: 'Tool discovery did not run',
+      };
       try {
-        discovered = await fetchGatewayToolNamesForServer(ctx.gatewayManager, name);
-      } catch {
-        discovered = [];
+        discovery = await discoverMcpToolsForServer(ctx.gatewayManager, name, server);
+      } catch (error) {
+        discovery = { tools: [], source: 'unavailable', error: redactSecrets(String(error)) };
       }
-      const tools = mergeToolInventory(discovered, allow, deny);
-      sendJson(res, 200, { tools, denied: deny, allowed: allow ?? null, gateway: discovered.length > 0 });
+      const tools = mergeToolInventory(discovery.tools, allow, deny);
+      sendJson(res, 200, {
+        tools,
+        denied: deny,
+        allowed: allow ?? null,
+        gateway: discovery.source === 'gateway',
+        discoverySource: discovery.source,
+        discoveryError: discovery.error ?? null,
+      });
     } catch (error) {
       sendJson(res, 500, { success: false, error: String(error) });
     }

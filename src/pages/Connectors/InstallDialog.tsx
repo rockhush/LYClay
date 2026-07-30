@@ -193,12 +193,19 @@ export function InstallDialog({
         <CardContent className="space-y-4 pt-3 overflow-y-auto flex-1 px-6 pb-6" onClick={() => setTransportMenuOpen(false)}>
           <div className="space-y-2">
             <Label className={labelClasses}>{t('dialog.custom.name')}</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" className={inputClasses} />
+            <Input
+              data-testid="connector-custom-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my-server"
+              className={inputClasses}
+            />
           </div>
           <div className="space-y-2">
             <Label className={labelClasses}>{t('dialog.custom.type')}</Label>
             <div className="relative" ref={transportMenuRef} onClick={(e) => e.stopPropagation()}>
               <button
+                data-testid="connector-custom-transport"
                 onClick={() => setTransportMenuOpen(!transportMenuOpen)}
                 className="w-full h-9 bg-white dark:bg-muted border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-foreground text-[13px] font-medium px-3 rounded-lg flex items-center justify-between"
               >
@@ -217,6 +224,7 @@ export function InstallDialog({
                     stdio
                   </button>
                   <button
+                    data-testid="connector-custom-transport-streamable-http"
                     className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${transport === 'streamable-http' ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
                     onClick={() => {
                       setTransport('streamable-http');
@@ -226,6 +234,7 @@ export function InstallDialog({
                     streamable-http
                   </button>
                   <button
+                    data-testid="connector-custom-transport-sse"
                     className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${transport === 'sse' ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}
                     onClick={() => {
                       setTransport('sse');
@@ -253,7 +262,13 @@ export function InstallDialog({
             <>
               <div className="space-y-2">
                 <Label className={labelClasses}>{t('dialog.custom.url')}</Label>
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" className={inputClasses} />
+                <Input
+                  data-testid="connector-custom-url"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://…"
+                  className={inputClasses}
+                />
               </div>
               <div className="space-y-2">
                 <Label className={labelClasses}>{t('dialog.custom.headers')}</Label>
@@ -277,7 +292,12 @@ export function InstallDialog({
           </div>
           <div className="flex items-center justify-between bg-[#F8F9F9] px-3.5 py-3 rounded-lg">
             <Label className={labelClasses}>{t('dialog.custom.disabled')}</Label>
-            <Switch size="sm" checked={disabled} onCheckedChange={setDisabled} />
+            <Switch
+              data-testid="connector-custom-disabled"
+              size="sm"
+              checked={disabled}
+              onCheckedChange={setDisabled}
+            />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button
@@ -290,6 +310,7 @@ export function InstallDialog({
             </Button>
             <Button
               type="button"
+              data-testid="connector-custom-save"
               onClick={() => void handleCustomSubmit()}
               disabled={busy || !name.trim()}
               className="h-8 text-[13px] font-medium rounded-lg px-4 bg-[#FF922B] hover:bg-[#FE7B00] text-white shadow-sm shadow-[#FF922B]/25 transition-colors"

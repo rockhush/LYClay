@@ -133,6 +133,10 @@ Skills 页面可展示来自多个 OpenClaw 来源的技能（托管目录、wor
 ### 🔌 MCP 连接器
 在侧栏 **连接器** 管理 Model Context Protocol 服务（内置 Notion / GitHub 引导与自定义 MCP）。也可直接打开 `#/settings/mcp`（MCP 服务）与 `#/settings/mcp/config`（编辑 MCP JSON）。配置写入 `~/.openclaw/mcp.json`，保存后会尽量触发本机 OpenClaw Gateway 重载。启用新增或配置已变化的 MCP 服务时需要明确授权；stdio 服务会启动本地进程，因此按高风险处理。
 
+远程 SSE 与 streamable HTTP 连接器支持 `http`、`https`、`ws` 和 `wss` URL，包括已明确授权的 HTTP 内网目标。所有协议仍会经过目标网络策略检查：私网地址需要先添加域名/IP 授权，link-local 与 metadata 目标继续禁止。服务商要求的凭据或签名可以保留在 URL 查询参数中；安全审计会忽略 query 和 fragment，原始 URL 仍保存在本机 MCP 配置中供运行时使用，连接器卡片和授权摘要则会遮蔽查询参数值。服务商支持时仍建议优先使用请求头鉴权。
+
+连接器卡片只显示可明确归属于该 MCP 服务的工具。ClawX 会优先读取 Gateway 中按服务划分的工具目录；若没有，则对远程 SSE 或 streamable HTTP 服务直接执行 MCP `tools/list` 发现。未区分服务的 OpenClaw 全局工具不会再作为连接器工具展示，发现失败会直接显示在卡片上。
+
 岗位助理广场可通过 Host API 安装岗位助理包。渲染进程只传递广场列表项的 `id`，主进程通过 `https://ai.lingyiitech.com/management/agents/download/<id>/` 下载，且不接受渲染进程指定任意包地址。ZIP 下载上限为 512 MiB，解压内容上限为 1 GiB。LYClaw 会校验并解压到 `~/.openclaw/digital-employees/<package-slug>--<short-id>`，自动创建一个 ID 为 `employee-<package-slug>-<short-id>` 的独占本地 OpenClaw Agent，安全应用包内 Agent 模板，将可移植的 Agent 工作空间描述复制到新工作空间，并保留员工包内的专属 Skill 和 MCP 配置。安装阶段不会把员工包内 MCP 注册到全局 `openclaw.json`；后续使用岗位助理时由运行时从当前员工目录读取。安装状态与资源归属记录在 `install.json` 中，不依赖 SQLite。
 岗位助理广场页面已直接接入该安装流程，卡片会展示安装进度及成功或失败提示，并根据本地岗位助理记录判断是否已安装。
 当员工包明确设置 `"allowMultipleInstances": false` 时，LYClaw 会在创建 Agent 前检查同一 `packageId`，已安装则拒绝重复安装；未配置或设置为 `true` 时允许多实例。

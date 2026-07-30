@@ -11,6 +11,7 @@ import { useConnectorsStore } from '@/stores/connectors';
 import { toast } from 'sonner';
 import { toUserMessage } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
+import { redactMcpUrlForDisplay } from '../../../shared/mcp-url-display';
 
 export function CustomMcpConnectorCard({
   server,
@@ -28,17 +29,23 @@ export function CustomMcpConnectorCard({
   const [tools, setTools] = useState<string[]>([]);
   const [denied, setDenied] = useState<string[]>(server.deniedTools ?? []);
   const [loading, setLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [toggleBusy, setToggleBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setDiscoveryError(null);
     try {
       const r = await fetchMcpServerTools(server.name);
       setTools(r.tools);
       setDenied(r.denied);
+      setDiscoveryError(r.discoveryError);
     } catch (error) {
-      toast.error(toUserMessage(error));
+      const message = toUserMessage(error);
+      setTools([]);
+      setDiscoveryError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -81,7 +88,8 @@ export function CustomMcpConnectorCard({
     }
   };
 
-  const summary = [server.type, server.url || server.command].filter(Boolean).join(' · ') || 'MCP';
+  const displayTarget = server.url ? redactMcpUrlForDisplay(server.url) : server.command;
+  const summary = [server.type, displayTarget].filter(Boolean).join(' · ') || 'MCP';
 
   return (
     <>
@@ -166,7 +174,14 @@ export function CustomMcpConnectorCard({
         <CardContent className="space-y-3">
           <CardDescription className="break-all text-sm leading-relaxed">{summary}</CardDescription>
           {!loading && tools.length === 0 && (
-            <p className="text-xs text-muted-foreground">{t('customCard.emptyToolsHint')}</p>
+            <p
+              className={cn('text-xs', discoveryError ? 'text-destructive' : 'text-muted-foreground')}
+              data-testid={discoveryError ? 'connector-tool-discovery-error' : undefined}
+            >
+              {discoveryError
+                ? t('customCard.toolDiscoveryFailed', { error: discoveryError })
+                : t('customCard.emptyToolsHint')}
+            </p>
           )}
           {tools.length > 0 && (
             <div className="flex flex-wrap gap-2">

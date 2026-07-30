@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { McpServerEntry } from '../utils/mcp-json';
+import { redactMcpUrlForDisplay } from '../../shared/mcp-url-display';
 
 const FINGERPRINT_KEYS = [
   'type',
@@ -44,7 +45,7 @@ export function describeMcpServer(server: McpServerEntry): string {
   if (transport === 'stdio') {
     return [server.command, ...(server.args ?? [])].filter(Boolean).join(' ');
   }
-  return server.url ?? transport;
+  return server.url ? redactMcpUrlForDisplay(server.url) : transport;
 }
 
 export function getMcpServerConfirmationRisk(server: McpServerEntry): 'medium' | 'high' {

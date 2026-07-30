@@ -76,8 +76,8 @@ function validateMcpPromptInjection(name: string, entry: Record<string, unknown>
   return errors;
 }
 
-function isSecureRemoteMcpProtocol(protocol: string): boolean {
-  return protocol === 'https:' || protocol === 'wss:';
+function isRemoteMcpProtocol(protocol: string): boolean {
+  return protocol === 'http:' || protocol === 'https:' || protocol === 'ws:' || protocol === 'wss:';
 }
 
 function isRemoteMcpType(type: string | undefined): boolean {
@@ -103,6 +103,17 @@ function collectRemoteMcpUrls(name: string, entry: Record<string, unknown>): Arr
     }
   }
   return urls;
+}
+
+function remoteMcpNetworkPolicyUrl(parsed: URL): string {
+  const policyUrl = new URL(parsed);
+  // Remote MCP providers commonly require credentials or signed values in the
+  // query string. The user is explicitly configuring that connection, so run
+  // the shared network boundary checks against the destination only. Keeping
+  // query/fragment data out of the policy request also keeps it out of audits.
+  policyUrl.search = '';
+  policyUrl.hash = '';
+  return policyUrl.toString();
 }
 
 export function validateMcpServerEntry(name: string, entry: unknown): string[] {
@@ -151,8 +162,8 @@ export function validateMcpServerEntry(name: string, entry: unknown): string[] {
     } else {
       try {
         const u = new URL(s.url);
-        if (!isSecureRemoteMcpProtocol(u.protocol)) {
-          errors.push(`Server "${name}": url must use https or wss`);
+        if (!isRemoteMcpProtocol(u.protocol)) {
+          errors.push(`Server "${name}": url must use http, https, ws, or wss`);
         }
       } catch {
         errors.push(`Server "${name}": url is not a valid URL`);
@@ -249,11 +260,11 @@ export async function validateMcpConfigNetworkPolicy(config: unknown): Promise<{
       } catch {
         continue;
       }
-      if (!isSecureRemoteMcpProtocol(parsed.protocol)) continue;
+      if (!isRemoteMcpProtocol(parsed.protocol)) continue;
 
       const result = await evaluateSecurityPolicy({
         kind: 'network',
-        url: parsed.toString(),
+        url: remoteMcpNetworkPolicyUrl(parsed),
         source: 'settings:mcp-config',
       });
       if (result.decision.action !== 'allow') {

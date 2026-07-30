@@ -120,6 +120,7 @@
     "dependencies": {
         "@langfuse/otel": "^5.4.1",
         "@langfuse/tracing": "^5.4.1",
+        "@modelcontextprotocol/sdk": "^1.29.0",
         "@monaco-editor/react": "^4.7.0",
         "@opentelemetry/sdk-node": "^0.208.0",
         "@sinclair/typebox": "^0.34.48",
