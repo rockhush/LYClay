@@ -25,8 +25,10 @@
                 "x64",
                 "arm64"
             ]
+        },
+        "patchedDependencies": {
+            "openclaw@2026.6.5": "patches/openclaw@2026.6.5.patch"
         }
-
     },
     "description": "LYClaw - Graphical AI Assistant based on LYClaw",
     "main": "dist-electron/main/index.js",
@@ -37,7 +39,7 @@
         "lyclaw-marketplace": "./scripts/lyclaw-marketplace-cli.mjs"
     },
     "scripts": {
-        "postinstall": "node scripts/patch-browser-hint.mjs && node scripts/patch-openclaw-dev.mjs",
+        "postinstall": "node scripts/patch-browser-hint.mjs",
         "init": "pnpm install && pnpm run uv:download && node scripts/ensure-win-binaries.mjs",
         "predev": "node scripts/generate-ext-bridge.mjs && node scripts/ensure-win-binaries.mjs && node scripts/patch-openclaw-dev.mjs && zx scripts/prepare-preinstalled-skills-dev.mjs",
         "dev": "vite",
