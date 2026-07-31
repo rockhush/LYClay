@@ -17,6 +17,7 @@ import {
   type ChannelType,
 } from '@/types/channel';
 import { usesPluginManagedQrAccounts } from '@/lib/channel-alias';
+import { filterAgentsForAgentPicker, resolveAgentPickerLabel } from '@/lib/agent-picker-options';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -91,6 +92,7 @@ function isGatewayDiagnosticSnapshot(value: unknown): value is GatewayDiagnostic
 interface AgentItem {
   id: string;
   name: string;
+  isDigitalEmployee?: boolean;
 }
 
 interface DeleteTarget {
@@ -157,7 +159,10 @@ export function Channels() {
 
   const displayedChannelTypes = getPrimaryChannels();
   const visibleChannelGroups = channelGroups;
-  const visibleAgents = agents;
+  const visibleAgents = useMemo(
+    () => filterAgentsForAgentPicker(agents),
+    [agents],
+  );
   const hasStableValue = visibleChannelGroups.length > 0 || visibleAgents.length > 0;
   const isUsingStableValue = hasStableValue && (loading || Boolean(error));
 
@@ -759,7 +764,9 @@ export function Channels() {
                                   className="h-8 w-[120px] max-w-[120px] bg-[#FF922B] hover:bg-[#FE7B00] transition-colors text-white text-[13px] font-medium px-3 rounded-lg flex items-center gap-1.5 shadow-sm shadow-[#FF922B]/25"
                                 >
                                   <span className="min-w-0 flex-1 truncate text-left">
-                                    {account.agentId ? visibleAgents.find((a) => a.id === account.agentId)?.name || account.agentId : t('account.unassigned')}
+                                    {account.agentId
+                                      ? resolveAgentPickerLabel(account.agentId, agents, t('account.unassigned'))
+                                      : t('account.unassigned')}
                                   </span>
                                   <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-90" />
                                 </button>

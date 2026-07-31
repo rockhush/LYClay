@@ -24,8 +24,9 @@ import {
 import { scanTranscriptsForTokenConsume } from './transcript-scan';
 import { enrichExecutionRecordsFromTranscripts } from './execution-transcript-enrich';
 import { buildExecutionReportAgentIdLookup } from './execution-report-agent-id-lookup';
-import { toExecutionUploadPayloads } from './execution-upload-payload';
+import { toExecutionUploadPayloads, type ExecutionUploadLookups } from './execution-upload-payload';
 import { enrichSkillInvokeRecordsForUpload } from './skill-invoke-enrich';
+import { buildSkillInvokeAgentNameLookup } from './skill-invoke-agent-id-lookup';
 import { toSkillInvokeUploadPayloads } from './skill-invoke-upload-payload';
 import {
   applyWorkNoToQueueSnapshot,
@@ -52,10 +53,10 @@ function truncate(text: string, limit = RESPONSE_BODY_LOG_LIMIT): string {
 function recordsForBackendUpload(
   channel: ReportingChannel,
   records: unknown[],
-  executionAgentIdLookup?: ReadonlyMap<string, string>,
+  executionUploadLookups?: ExecutionUploadLookups,
 ): unknown[] {
   if (channel === 'execution') {
-    return toExecutionUploadPayloads(records as ExecutionRecord[], executionAgentIdLookup);
+    return toExecutionUploadPayloads(records as ExecutionRecord[], executionUploadLookups);
   }
   if (channel === 'skillInvoke') {
     return toSkillInvokeUploadPayloads(records as SkillInvokeRecord[]);
@@ -67,9 +68,9 @@ function recordsForBackendUpload(
 function diagnosticRequestBody(
   channel: ReportingChannel,
   records: unknown[],
-  executionAgentIdLookup?: ReadonlyMap<string, string>,
+  executionUploadLookups?: ExecutionUploadLookups,
 ): string {
-  return JSON.stringify(recordsForBackendUpload(channel, records, executionAgentIdLookup));
+  return JSON.stringify(recordsForBackendUpload(channel, records, executionUploadLookups));
 }
 
 let inFlight: Promise<ReportingFlushResult> | null = null;
@@ -91,9 +92,9 @@ async function postRecords(
   channel: ReportingChannel,
   url: string,
   records: unknown[],
-  executionAgentIdLookup?: ReadonlyMap<string, string>,
+  executionUploadLookups?: ExecutionUploadLookups,
 ): Promise<ReportingChannelDiagnostic> {
-  const uploadRecords = recordsForBackendUpload(channel, records, executionAgentIdLookup);
+  const uploadRecords = recordsForBackendUpload(channel, records, executionUploadLookups);
   const body = JSON.stringify(uploadRecords);
   logger.info(
     `[UsageReport][${channel}] >>> POST ${url} `
@@ -104,7 +105,7 @@ async function postRecords(
     url,
     method: 'POST',
     count: records.length,
-    requestBody: diagnosticRequestBody(channel, records, executionAgentIdLookup),
+    requestBody: diagnosticRequestBody(channel, records, executionUploadLookups),
     status: null,
     statusText: null,
     durationMs: 0,
@@ -218,13 +219,17 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       logger.info(`[UsageReport] flush(${reason}) backfilled empty workNo with ${workNo}`);
     }
 
-    let executionAgentIdLookup: Map<string, string> | undefined;
+    let executionUploadLookups: ExecutionUploadLookups | undefined;
     if (detached.execution.length > 0) {
       try {
-        executionAgentIdLookup = await buildExecutionReportAgentIdLookup();
+        const [marketIdLookup, agentNameLookup] = await Promise.all([
+          buildExecutionReportAgentIdLookup(),
+          buildSkillInvokeAgentNameLookup(),
+        ]);
+        executionUploadLookups = { marketIdLookup, agentNameLookup };
       } catch (error) {
-        logger.warn(`[UsageReport] flush(${reason}) execution agent-id lookup failed:`, error);
-        executionAgentIdLookup = new Map();
+        logger.warn(`[UsageReport] flush(${reason}) execution upload lookups failed:`, error);
+        executionUploadLookups = { marketIdLookup: new Map(), agentNameLookup: new Map() };
       }
     }
 
@@ -268,7 +273,7 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
       requestBody: diagnosticRequestBody(
         task.channel,
         task.records,
-        task.channel === 'execution' ? executionAgentIdLookup : undefined,
+        task.channel === 'execution' ? executionUploadLookups : undefined,
       ),
       status: null,
       statusText: null,
@@ -284,7 +289,7 @@ export async function flushUsageReports(reason: string): Promise<ReportingFlushR
           task.channel,
           task.url,
           task.records,
-          task.channel === 'execution' ? executionAgentIdLookup : undefined,
+          task.channel === 'execution' ? executionUploadLookups : undefined,
         );
         channelDiags.set(task.channel, diag);
         result.uploaded[task.channel] = task.records.length;

@@ -4,6 +4,14 @@ import {
   resolveExecutionReportConversationIdForUpload,
 } from '../../../shared/reporting/execution-report-agent-id';
 
+/** Lookup tables applied only at execution upload time (queue storage unchanged). */
+export interface ExecutionUploadLookups {
+  /** Runtime agentId -> marketEmployeeId; drives conversationId normalization only. */
+  marketIdLookup?: ReadonlyMap<string, string>;
+  /** Runtime agentId -> display name; drives upload payload agentId only. */
+  agentNameLookup?: ReadonlyMap<string, string>;
+}
+
 /** Backend POST body for `/management/claw/report/execution` (camelCase). */
 export interface ExecutionUploadPayload {
   executionId: string;
@@ -32,26 +40,29 @@ export interface ExecutionUploadPayload {
 
 export function toExecutionUploadPayload(
   record: ExecutionRecord,
-  agentIdLookup?: ReadonlyMap<string, string>,
+  lookups?: ExecutionUploadLookups,
 ): ExecutionUploadPayload {
   const runtimeAgentId = record.agent_id;
-  const reportAgentId = resolveExecutionReportAgentId(
+  const conversationAgentId = resolveExecutionReportAgentId(
     runtimeAgentId,
     record.agent_type,
-    agentIdLookup,
+    lookups?.marketIdLookup,
   );
+  const trimmedRuntimeAgentId = runtimeAgentId.trim();
+  const uploadAgentId = lookups?.agentNameLookup?.get(trimmedRuntimeAgentId)?.trim()
+    || conversationAgentId;
   const payload: ExecutionUploadPayload = {
     executionId: record.execution_id,
     conversationId: resolveExecutionReportConversationIdForUpload(
       record.conversation_id,
       record.entry_source,
       runtimeAgentId,
-      reportAgentId,
+      conversationAgentId,
     ),
     workNo: record.work_no,
     entrySource: record.entry_source,
     agentType: record.agent_type,
-    agentId: reportAgentId,
+    agentId: uploadAgentId,
     modelId: record.model_id,
     status: record.status,
   };
@@ -82,7 +93,7 @@ export function toExecutionUploadPayload(
 
 export function toExecutionUploadPayloads(
   records: ExecutionRecord[],
-  agentIdLookup?: ReadonlyMap<string, string>,
+  lookups?: ExecutionUploadLookups,
 ): ExecutionUploadPayload[] {
-  return records.map((record) => toExecutionUploadPayload(record, agentIdLookup));
+  return records.map((record) => toExecutionUploadPayload(record, lookups));
 }

@@ -1175,7 +1175,7 @@ export function Sidebar() {
 
       {!sidebarCollapsed && (
         <div className="px-2 pb-2 pt-0">
-          <div className="relative ml-2 flex h-8 w-[calc(100%-0.9rem)] items-center rounded-lg border border-black/10 bg-white px-3 transition-colors focus-within:border-[#FFD79A] dark:border-white/10 dark:bg-muted">
+          <div className="relative ml-2 flex h-8 w-[calc(100%-0.9rem)] items-center rounded-lg border-0 bg-white px-3 transition-colors dark:bg-muted">
             <Search className="h-3.5 w-3.5 shrink-0 text-[#FF922B]" />
             <input
               type="text"

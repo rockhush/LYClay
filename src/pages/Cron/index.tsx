@@ -2,7 +2,7 @@
  * Cron Page
  * Manage scheduled tasks
  */
-import { useEffect, useState, useCallback, useRef, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -44,6 +44,7 @@ import type { CronJob, CronJobCreateInput, ScheduleType } from '@/types/cron';
 import { CHANNEL_ICONS, CHANNEL_NAMES, type ChannelType } from '@/types/channel';
 import { useTranslation } from 'react-i18next';
 import { formatCronRelativeTime, resolveCronAgentLabel, translateCronError } from '@/lib/cron-error-i18n';
+import { filterAgentsForAgentPicker, resolveAgentPickerLabel } from '@/lib/agent-picker-options';
 import { subscribeHostEvent } from '@/lib/host-events';
 import type { TFunction } from 'i18next';
 
@@ -252,6 +253,7 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
   const [saving, setSaving] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const agents = useAgentsStore((s) => s.agents);
+  const pickerAgents = useMemo(() => filterAgentsForAgentPicker(agents), [agents]);
   const agentMenuRef = useRef<HTMLDivElement>(null);
 
   const [name, setName] = useState(job?.name || '');
@@ -504,12 +506,12 @@ function TaskDialog({ job, configuredChannels, onClose, onSave }: TaskDialogProp
                 onClick={() => setAgentMenuOpen(!agentMenuOpen)}
                 className="w-full h-9 bg-white dark:bg-muted border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-foreground text-[13px] font-medium px-3 rounded-lg flex items-center justify-between"
               >
-                {agents.find((a) => a.id === selectedAgentId)?.name || t('dialog.selectAgent')}
+                {resolveAgentPickerLabel(selectedAgentId, agents, t('dialog.selectAgent'))}
                 <ChevronDown className="h-4 w-4 opacity-90" />
               </button>
               {agentMenuOpen && (
                 <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-card shadow-lg shadow-black/10 overflow-hidden z-20 py-1">
-                  {agents.map((agent) => (
+                  {pickerAgents.map((agent) => (
                     <button
                       key={agent.id}
                       className={`w-full px-3 py-2 text-left text-sm hover:bg-black/5 dark:hover:bg-white/5 ${selectedAgentId === agent.id ? 'bg-[#FF922B]/10 text-[#FF922B]' : ''}`}

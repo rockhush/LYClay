@@ -101,15 +101,35 @@ describe('toExecutionUploadPayload', () => {
       status: 'success',
     });
 
-    expect(toExecutionUploadPayload(record, new Map([
-      ['employee-recruitment-specialist-8f6b71f4', '7'],
-    ]))).toEqual({
+    expect(toExecutionUploadPayload(record, {
+      marketIdLookup: new Map([
+        ['employee-recruitment-specialist-8f6b71f4', '7'],
+      ]),
+    })).toEqual({
       executionId: 'exec-de-1',
       conversationId: 'agent:7:session-1',
       workNo: '11427193',
       entrySource: 'digital_employee',
       agentType: 'digital_employee',
       agentId: '7',
+      modelId: 'ly-auto/auto',
+      status: 'success',
+    });
+
+    expect(toExecutionUploadPayload(record, {
+      marketIdLookup: new Map([
+        ['employee-recruitment-specialist-8f6b71f4', '7'],
+      ]),
+      agentNameLookup: new Map([
+        ['employee-recruitment-specialist-8f6b71f4', '招聘数字员工'],
+      ]),
+    })).toEqual({
+      executionId: 'exec-de-1',
+      conversationId: 'agent:7:session-1',
+      workNo: '11427193',
+      entrySource: 'digital_employee',
+      agentType: 'digital_employee',
+      agentId: '招聘数字员工',
       modelId: 'ly-auto/auto',
       status: 'success',
     });
