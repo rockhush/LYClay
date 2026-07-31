@@ -52,10 +52,8 @@ import {
 } from '@/lib/provider-accounts';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-
-/** Hide manual usage-report flush from Models settings UI. */
-const SHOW_SEND_USAGE_REPORT_BUTTON = false;
 import { useTranslation } from 'react-i18next';
+import { useShowSendUsageReportButton } from '@/lib/send-usage-report-button-visibility';
 import { flushUsageReports } from '@/lib/usage-reporter';
 import { invokeIpc } from '@/lib/api-client';
 import { useSettingsStore } from '@/stores/settings';
@@ -168,6 +166,7 @@ interface ProvidersSettingsProps {
 
 export function ProvidersSettings({ addDialogInitialProvider = null }: ProvidersSettingsProps = {}) {
   const { t } = useTranslation('settings');
+  const showSendUsageReportButton = useShowSendUsageReportButton();
   const devModeUnlocked = useSettingsStore((state) => state.devModeUnlocked);
   const {
     statuses,
@@ -297,7 +296,7 @@ export function ProvidersSettings({ addDialogInitialProvider = null }: Providers
           {t('aiProviders.title', 'AI Providers')}
         </h2>
         <div className="flex items-center gap-2">
-          {SHOW_SEND_USAGE_REPORT_BUTTON ? (
+          {showSendUsageReportButton ? (
             <Button
               data-testid="providers-send-usage-report-button"
               onClick={handleSendUsageReport}

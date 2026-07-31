@@ -14,6 +14,7 @@
         "devConsole": "Developer Console",
         "models": "Models",
         "workspaces": "Workspaces",
+        "newSessionInWorkspace": "New chat in this workspace",
         "deleteSessionConfirm": "Are you sure you want to delete session \"{{label}}\"?",
         "deleteWorkspaceConfirm": "Are you sure you want to delete workspace \"{{label}}\"?",
         "renameSession": "Rename session",

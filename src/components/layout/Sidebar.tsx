@@ -202,6 +202,7 @@ export function Sidebar() {
   const sessionStreamingStates = useChatStore((s) => s.sessionStreamingStates);
   const switchSession = useChatStore((s) => s.switchSession);
   const newSession = useChatStore((s) => s.newSession);
+  const bindCurrentSessionWorkspace = useChatStore((s) => s.bindCurrentSessionWorkspace);
   const clearSessionWorkspaceBindings = useChatStore((s) => s.clearSessionWorkspaceBindings);
   const unbindSessionWorkspace = useChatStore((s) => s.unbindSessionWorkspace);
   const toggleSessionPinned = useChatStore((s) => s.toggleSessionPinned);
@@ -269,6 +270,7 @@ export function Sidebar() {
 
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const temporaryWorkspaces = useWorkspacesStore((s) => s.temporaryWorkspaces);
+  const setCurrentWorkspace = useWorkspacesStore((s) => s.setCurrentWorkspace);
   const removeTemporaryWorkspace = useWorkspacesStore((s) => s.removeTemporaryWorkspace);
   const dingtalkUser = useDingTalkAuthStore((s) => s.user);
   const dingtalkLoading = useDingTalkAuthStore((s) => s.loading);
@@ -519,6 +521,14 @@ export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const isOnChat = location.pathname === '/';
+
+  const handleWorkspaceNewSession = useCallback((workspaceId: string) => {
+    newSession();
+    bindCurrentSessionWorkspace(workspaceId);
+    setCurrentWorkspace(workspaceId);
+    navigate('/');
+  }, [bindCurrentSessionWorkspace, navigate, newSession, setCurrentWorkspace]);
+
   const [moreNavOpen, setMoreNavOpen] = useState(false);
   const [moreNavAnchor, setMoreNavAnchor] = useState<{ top: number; left: number } | null>(null);
   const moreNavMenuRef = useRef<HTMLDivElement | null>(null);
@@ -716,7 +726,7 @@ export function Sidebar() {
     }
   };
 
-  const renderHistorySectionHeader = (key: HistorySectionKey, label: string) => {
+  const renderHistorySectionHeader = (key: HistorySectionKey, label: string, count: number) => {
     const expanded = isHistorySectionExpanded(key);
     return (
       <div className="flex items-center justify-between gap-1 px-2.5 pb-1">
@@ -726,8 +736,11 @@ export function Sidebar() {
           onClick={() => toggleHistorySection(key)}
           aria-expanded={expanded}
         >
-          <span className="text-[11px] font-medium text-muted-foreground/60 tracking-tight">
-            {label}
+          <span
+            className="text-[11px] font-medium text-muted-foreground/60 tracking-tight"
+            data-testid={`sidebar-history-section-header-${key}`}
+          >
+            {label}({count})
           </span>
         </button>
         <button
@@ -818,6 +831,11 @@ export function Sidebar() {
     }
     return next;
   }, [allWorkspaces, sessionsByWorkspaceId, isSessionSearchActive, sessionMatchesSearch]);
+
+  const totalWorkspaceSessionCount = useMemo(
+    () => Object.values(filteredSessionsByWorkspaceId).reduce((sum, list) => sum + list.length, 0),
+    [filteredSessionsByWorkspaceId],
+  );
 
   const hasAnySessionSearchMatch = useMemo(() => {
     if (!isSessionSearchActive) return true;
@@ -1156,8 +1174,8 @@ export function Sidebar() {
       </div>
 
       {!sidebarCollapsed && (
-        <div className="px-2 pb-2">
-          <div className="relative flex h-9 items-center rounded-lg border border-black/10 bg-white px-3 transition-colors focus-within:border-[#FFD79A] dark:border-white/10 dark:bg-muted">
+        <div className="px-2 pb-2 pt-0">
+          <div className="relative ml-2 flex h-8 w-[calc(100%-0.9rem)] items-center rounded-lg border border-black/10 bg-white px-3 transition-colors focus-within:border-[#FFD79A] dark:border-white/10 dark:bg-muted">
             <Search className="h-3.5 w-3.5 shrink-0 text-[#FF922B]" />
             <input
               type="text"
@@ -1322,8 +1340,11 @@ export function Sidebar() {
                   onClick={toggleWorkspaceSection}
                   aria-expanded={!workspacesCollapsed}
                 >
-                  <span className="text-[11px] font-medium text-muted-foreground/60 tracking-tight">
-                    {t('sidebar.workspaces')}
+                  <span
+                    className="text-[11px] font-medium text-muted-foreground/60 tracking-tight"
+                    data-testid="sidebar-workspaces-section-header"
+                  >
+                    {t('sidebar.workspaces')}({totalWorkspaceSessionCount})
                   </span>
                 </button>
                 {renderBatchDeleteButton()}
@@ -1411,6 +1432,23 @@ export function Sidebar() {
                             <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 type="button"
+                                data-testid={`sidebar-workspace-new-session-${workspace.id}`}
+                                className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                }}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleWorkspaceNewSession(workspace.id);
+                                }}
+                                title={t('sidebar.newSessionInWorkspace')}
+                              >
+                                <Plus className="h-3 w-3 text-muted-foreground" />
+                              </button>
+                              <button
+                                type="button"
                                 className="flex shrink-0 items-center justify-center w-5 h-5 hover:bg-black/10 dark:hover:bg-white/10 rounded"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -1483,7 +1521,11 @@ export function Sidebar() {
             <div className="space-y-0.5">
               {filteredPinnedHistorySessions.length > 0 ? (
                 <div className="pt-2">
-                  {renderHistorySectionHeader('pinned', t('chat:historyBuckets.pinned'))}
+                  {renderHistorySectionHeader(
+                    'pinned',
+                    t('chat:historyBuckets.pinned'),
+                    filteredPinnedHistorySessions.length,
+                  )}
                   {isHistorySectionExpanded('pinned')
                     ? filteredPinnedHistorySessions.map((session) => renderChatSessionRow(session))
                     : null}
@@ -1492,7 +1534,7 @@ export function Sidebar() {
               {filteredSessionBuckets.map((bucket) => (
                 bucket.sessions.length > 0 ? (
                   <div key={bucket.key} className="pt-2">
-                    {renderHistorySectionHeader(bucket.key, bucket.label)}
+                    {renderHistorySectionHeader(bucket.key, bucket.label, bucket.sessions.length)}
                     {isHistorySectionExpanded(bucket.key)
                       ? bucket.sessions.map((session) => renderChatSessionRow(session))
                       : null}

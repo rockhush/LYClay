@@ -14,7 +14,7 @@ import { useProviderStore } from '@/stores/providers';
 import { useAgentsStore } from '@/stores/agents';
 import { useDingTalkAuthStore } from '@/stores/dingtalk-auth';
 import { useDigitalEmployeesStore } from '@/stores/digital-employees';
-import { isRetiredDigitalEmployeeAgent } from '@/lib/retired-digital-employees';
+import { isRetiredDigitalEmployeeAgent, resolveActiveDigitalEmployeeExecutionAgent } from '@/lib/retired-digital-employees';
 import { hostApiFetch } from '@/lib/host-api';
 import { LoaderBadge } from '@/components/common/LoadingSpinner';
 import { ChatMessage } from './ChatMessage';
@@ -59,7 +59,9 @@ import { formatWelcomeDisplayName } from '@/lib/welcome-display-name';
 import { rewriteRuntimeSkillMentionsToDisplayInText } from '@/lib/skill-runtime-aliases';
 import {
   WELCOME_QUICK_ACTIONS,
+  buildDigitalEmployeeWelcomeComposerTextFromName,
   buildQuickActionComposerText,
+  resolveDigitalEmployeeWelcomeSkillItems,
   findSkillForQuickAction,
 } from './welcome-quick-actions';
 
@@ -1725,20 +1727,52 @@ export function Chat() {
 function WelcomeScreen() {
   const { t } = useTranslation('chat');
   const dingtalkUser = useDingTalkAuthStore((s) => s.user);
+  const currentAgentId = useChatStore((s) => s.currentAgentId);
   const setPrefilledInput = useChatStore((s) => s.setPrefilledInput);
   const skills = useSkillsStore((s) => s.skills);
   const skillsLoading = useSkillsStore((s) => s.loading);
   const fetchSkills = useSkillsStore((s) => s.fetchSkills);
+  const agents = useAgentsStore((s) => s.agents);
+  const digitalEmployees = useDigitalEmployeesStore((s) => s.employees);
+  const digitalEmployeesLoading = useDigitalEmployeesStore((s) => s.loading);
+  const fetchDigitalEmployees = useDigitalEmployeesStore((s) => s.fetchEmployees);
   const displayName = formatWelcomeDisplayName(dingtalkUser?.name || dingtalkUser?.nickname);
   const greetingText = displayName
     ? t('welcome.greeting', { name: displayName })
     : t('welcome.greetingFallback', { defaultValue: '你好～' });
+
+  const activeDigitalEmployee = useMemo(
+    () => resolveActiveDigitalEmployeeExecutionAgent(currentAgentId, { agents, digitalEmployees }),
+    [agents, currentAgentId, digitalEmployees],
+  );
+
+  const activeEmployeeRecord = useMemo(
+    () => (activeDigitalEmployee
+      ? digitalEmployees.find((employee) => employee.agentId === activeDigitalEmployee.agentId)
+      : undefined),
+    [activeDigitalEmployee, digitalEmployees],
+  );
+
+  const digitalEmployeeWelcomeSkills = useMemo(
+    () => (activeEmployeeRecord
+      ? resolveDigitalEmployeeWelcomeSkillItems(activeEmployeeRecord, skills)
+      : []),
+    [activeEmployeeRecord, skills],
+  );
 
   useEffect(() => {
     if (skills.length === 0 && !skillsLoading) {
       void fetchSkills();
     }
   }, [skills.length, skillsLoading, fetchSkills]);
+
+  useEffect(() => {
+    if (!activeDigitalEmployee || digitalEmployeesLoading) return;
+    const record = digitalEmployees.find((employee) => employee.agentId === activeDigitalEmployee.agentId);
+    if (digitalEmployees.length === 0 || !record || record.welcomeSkills === undefined) {
+      void fetchDigitalEmployees();
+    }
+  }, [activeDigitalEmployee, digitalEmployees, digitalEmployeesLoading, fetchDigitalEmployees]);
 
   const handleQuickAction = useCallback((action: typeof WELCOME_QUICK_ACTIONS[number]) => {
     const skill = findSkillForQuickAction(skills, action.skillNames);
@@ -1749,6 +1783,19 @@ function WelcomeScreen() {
       toast.warning(t('welcome.skillNotInstalled', { name: fallbackName }));
     }
   }, [skills, setPrefilledInput, t]);
+
+  const handleDigitalEmployeeSkill = useCallback((skill: { name: string }) => {
+    setPrefilledInput(buildDigitalEmployeeWelcomeComposerTextFromName(skill.name));
+  }, [setPrefilledInput]);
+
+  const showMainQuickActions = !activeDigitalEmployee;
+  const welcomeActionsLoading = showMainQuickActions
+    ? skillsLoading
+    : (skillsLoading || digitalEmployeesLoading);
+  const showWelcomeActionRow = showMainQuickActions
+    || welcomeActionsLoading
+    || digitalEmployeeWelcomeSkills.length > 0;
+  const showCanHelpPrefix = showMainQuickActions || digitalEmployeeWelcomeSkills.length > 0;
 
   return (
     <div
@@ -1775,11 +1822,14 @@ function WelcomeScreen() {
         </h1>
       </div>
 
+      {showWelcomeActionRow ? (
       <div className="flex flex-wrap items-center justify-center gap-2.5 max-w-2xl w-full">
-        <span className="text-[13px] text-foreground/55 mr-1">
-          {t('welcome.canHelpPrefix', { defaultValue: '我可以' })}
-        </span>
-        {WELCOME_QUICK_ACTIONS.map((action) => (
+        {showCanHelpPrefix ? (
+          <span className="text-[13px] text-foreground/55 mr-1">
+            {t('welcome.canHelpPrefix', { defaultValue: '我可以' })}
+          </span>
+        ) : null}
+        {showMainQuickActions ? WELCOME_QUICK_ACTIONS.map((action) => (
           <button
             key={action.key}
             type="button"
@@ -1789,8 +1839,26 @@ function WelcomeScreen() {
           >
             {t(action.labelKey)}
           </button>
-        ))}
+        )) : (
+          welcomeActionsLoading && digitalEmployeeWelcomeSkills.length === 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-[13px] text-foreground/55">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {t('welcome.loadingSkills', { defaultValue: '加载技能中...' })}
+            </span>
+          ) : digitalEmployeeWelcomeSkills.map((skill) => (
+            <button
+              key={skill.id}
+              type="button"
+              data-testid={`chat-welcome-de-skill-${skill.id}`}
+              onClick={() => handleDigitalEmployeeSkill(skill)}
+              className="px-3.5 py-1 rounded-full text-[13px] text-[#FF922B] bg-[#FF922B]/10 hover:bg-[#FF922B]/15 dark:bg-white/5 dark:text-foreground/80 dark:hover:bg-white/10 transition-colors"
+            >
+              {skill.name}
+            </button>
+          ))
+        )}
       </div>
+      ) : null}
     </div>
   );
 }

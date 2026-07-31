@@ -5,6 +5,7 @@ export type {
   DigitalEmployeeMcpBinding,
   DigitalEmployeePackageManifest,
   DigitalEmployeePackageSkill,
+  DigitalEmployeeWelcomeSkill,
   InstallDigitalEmployeeInput,
   InstallDigitalEmployeeResult,
   InstalledDigitalEmployeeMcpServer,

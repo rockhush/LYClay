@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Skill } from '@/types/skill';
 import {
+  buildDigitalEmployeeWelcomeComposerText,
+  buildDigitalEmployeeWelcomeComposerTextFromName,
   buildQuickActionComposerText,
   buildSkillMentionWithHint,
+  filterSkillsForDigitalEmployeeInstall,
   findSkillForQuickAction,
+  resolveDigitalEmployeeWelcomeSkillItems,
 } from '../../src/pages/Chat/welcome-quick-actions';
 
 const mockSkills: Skill[] = [
@@ -72,5 +76,76 @@ describe('welcome-quick-actions', () => {
 
   it('builds skill mention with invocation hint for composer pickers', () => {
     expect(buildSkillMentionWithHint('翻译工具')).toBe('@翻译工具 请使用这个技能，帮我');
+  });
+
+  it('filters skills under a digital employee install directory', () => {
+    const skills: Skill[] = [
+      ...mockSkills,
+      {
+        id: 'de-sip',
+        slug: 'dqe-sip-create',
+        name: 'SIP制作',
+        description: '',
+        enabled: true,
+        source: 'digital_employee',
+        baseDir: 'C:\\Users\\me\\.openclaw\\digital-employees\\recruit-de-1\\skills\\dqe-sip-create',
+      },
+      {
+        id: 'global-ppt',
+        slug: 'pptx',
+        name: 'PPT生成',
+        description: '',
+        enabled: true,
+        baseDir: 'C:\\Users\\me\\.openclaw\\skills\\pptx',
+      },
+    ];
+
+    const filtered = filterSkillsForDigitalEmployeeInstall(skills, {
+      instanceId: 'recruit-de-1',
+      installPath: 'C:\\Users\\me\\.openclaw\\digital-employees\\recruit-de-1',
+    });
+
+    expect(filtered.map((skill) => skill.id)).toEqual(['de-sip']);
+  });
+
+  it('builds digital employee welcome composer text', () => {
+    expect(buildDigitalEmployeeWelcomeComposerText({
+      id: 'de-sip',
+      slug: 'dqe-sip-create',
+      name: 'SIP制作',
+      description: '',
+      enabled: true,
+    })).toBe('@SIP制作 请使用这个技能，帮我');
+  });
+
+  it('builds digital employee welcome composer text from display name', () => {
+    expect(buildDigitalEmployeeWelcomeComposerTextFromName('SIP制作')).toBe('@SIP制作 请使用这个技能，帮我');
+  });
+
+  it('prefers install-dir welcomeSkills over global skills filter', () => {
+    const items = resolveDigitalEmployeeWelcomeSkillItems(
+      {
+        instanceId: 'dqe-quality-specialist-0206ab31',
+        installPath: 'C:\\Users\\me\\.openclaw\\digital-employees\\dqe-quality-specialist-0206ab31',
+        welcomeSkills: [
+          {
+            slug: 'dqe-sip-create',
+            name: 'SIP制作',
+            baseDir: 'C:\\Users\\me\\.openclaw\\digital-employees\\dqe-quality-specialist-0206ab31\\skills\\dqe-sip-create',
+          },
+          {
+            slug: 'dqe-cpk-report',
+            name: 'CPK报告',
+            baseDir: 'C:\\Users\\me\\.openclaw\\digital-employees\\dqe-quality-specialist-0206ab31\\skills\\dqe-cpk-report',
+          },
+        ],
+      },
+      [],
+    );
+
+    expect(items).toEqual([
+      { id: 'dqe-sip-create', name: 'SIP制作' },
+      { id: 'dqe-cpk-report', name: 'CPK报告' },
+    ]);
   });
 });

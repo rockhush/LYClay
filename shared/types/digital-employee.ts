@@ -108,6 +108,13 @@ export interface DigitalEmployeeInstallRecord {
   warnings: string[];
 }
 
+/** Skill chip shown on a digital employee welcome screen (from install dir + SKILL.md). */
+export interface DigitalEmployeeWelcomeSkill {
+  slug: string;
+  name: string;
+  baseDir: string;
+}
+
 export interface LocalDigitalEmployee {
   instanceId: string;
   marketEmployeeId: string;
@@ -123,6 +130,8 @@ export interface LocalDigitalEmployee {
   status: Exclude<DigitalEmployeeInstallStatus, 'preparing'>;
   enabled: boolean;
   warnings: string[];
+  /** Packaged skills resolved from install.json + local SKILL.md (welcome page). */
+  welcomeSkills?: DigitalEmployeeWelcomeSkill[];
 }
 
 export interface SetDigitalEmployeeEnabledInput {

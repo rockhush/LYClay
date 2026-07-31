@@ -7,6 +7,7 @@ import type {
   LocalDigitalEmployee,
 } from '../../shared/types/digital-employee';
 import { getDigitalEmployeesDir, getLegacyDigitalEmployeesDir } from './paths';
+import { listDigitalEmployeeWelcomeSkills } from './digital-employee-welcome-skills';
 
 const INSTALL_FILE = 'install.json';
 const MANIFEST_FILE = 'employee.json';
@@ -100,6 +101,7 @@ export async function listLocalDigitalEmployees(): Promise<LocalDigitalEmployee[
         readInstalledManifest(installDir),
       ]);
       if (!isVisibleStatus(record.status)) continue;
+      const welcomeSkills = await listDigitalEmployeeWelcomeSkills(record);
       employees.push({
         instanceId: record.instanceId,
         marketEmployeeId: record.marketEmployeeId,
@@ -115,6 +117,7 @@ export async function listLocalDigitalEmployees(): Promise<LocalDigitalEmployee[
         status: record.status,
         enabled: record.userEnabled !== false,
         warnings: record.warnings,
+        welcomeSkills,
       });
     } catch {
       // Broken entries are intentionally omitted until repair support handles them.
