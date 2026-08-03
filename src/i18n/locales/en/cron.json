@@ -3,6 +3,15 @@
     "subtitle": "Automate AI workflows with scheduled tasks",
     "newTask": "New Task",
     "refresh": "Refresh",
+    "sort": "Sort",
+    "sortDialog": {
+        "title": "Custom order",
+        "subtitle": "{{count}} tasks total",
+        "hint": "Click and drag a task to reorder",
+        "confirm": "Confirm",
+        "cancel": "Cancel",
+        "saved": "Order saved"
+    },
     "gatewayWarning": "Gateway is not running. Scheduled tasks cannot be managed without an active Gateway.",
     "stats": {
         "total": "Total Tasks",

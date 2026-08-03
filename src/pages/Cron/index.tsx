@@ -22,6 +22,7 @@ import {
   Pause,
   ChevronDown,
   Bot,
+  ArrowUpDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -45,6 +46,14 @@ import { CHANNEL_ICONS, CHANNEL_NAMES, type ChannelType } from '@/types/channel'
 import { useTranslation } from 'react-i18next';
 import { formatCronRelativeTime, resolveCronAgentLabel, translateCronError } from '@/lib/cron-error-i18n';
 import { filterAgentsForAgentPicker, resolveAgentPickerLabel } from '@/lib/agent-picker-options';
+import {
+  applyCronJobOrder,
+  loadCronJobOrder,
+  mergeCronJobOrder,
+  removeCronJobIdFromOrder,
+  saveCronJobOrder,
+} from '@/lib/cron-job-order';
+import { CronJobSortDialog } from '@/components/cron/CronJobSortDialog';
 import { subscribeHostEvent } from '@/lib/host-events';
 import type { TFunction } from 'i18next';
 
@@ -882,6 +891,7 @@ function CronJobCard({ job, deliveryAccountName, onToggle, onEdit, onDelete, onT
     <div
       role="button"
       tabIndex={0}
+      data-testid={`cron-job-card-${job.id}`}
       onClick={onEdit}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -1014,6 +1024,8 @@ export function Cron() {
   const { jobs, loading, error, fetchJobs, createJob, updateJob, toggleJob, deleteJob, triggerJob } = useCronStore();
   const gatewayStatus = useGatewayStore((state) => state.status);
   const [showDialog, setShowDialog] = useState(false);
+  const [showSortDialog, setShowSortDialog] = useState(false);
+  const [jobOrder, setJobOrder] = useState<string[]>([]);
   const [editingJob, setEditingJob] = useState<CronJob | undefined>();
   const [jobToDelete, setJobToDelete] = useState<{ id: string } | null>(null);
   const [configuredChannels, setConfiguredChannels] = useState<DeliveryChannelGroup[]>([]);
@@ -1033,6 +1045,12 @@ export function Cron() {
       console.warn('Failed to load delivery channels:', fetchError);
       setConfiguredChannels([]);
     }
+  }, []);
+
+  useEffect(() => {
+    void loadCronJobOrder().then((order) => {
+      setJobOrder(order);
+    });
   }, []);
 
   // Fetch jobs on mount; nudge supervisor so missed/failed runs catch up without waiting for periodic pass.
@@ -1058,8 +1076,8 @@ export function Cron() {
   // manual refresh. fetchJobs merges results (never clears on empty), so this
   // does not cause flicker.
   useEffect(() => {
-    if (!isGatewayRunning || showDialog) {
-      // Pause polling while the create/edit dialog is open so it doesn't
+    if (!isGatewayRunning || showDialog || showSortDialog) {
+      // Pause polling while the create/edit or sort dialog is open so it doesn't
       // clobber in-progress edits with stale server data.
       return undefined;
     }
@@ -1100,7 +1118,7 @@ export function Cron() {
         document.removeEventListener('visibilitychange', onVisibility);
       }
     };
-  }, [fetchJobs, isGatewayRunning, showDialog]);
+  }, [fetchJobs, isGatewayRunning, showDialog, showSortDialog]);
 
   useEffect(() => {
     void fetchConfiguredChannels();
@@ -1108,6 +1126,22 @@ export function Cron() {
 
   // Statistics
   const safeJobs = Array.isArray(jobs) ? jobs : [];
+  useEffect(() => {
+    if (!Array.isArray(jobs) || jobs.length === 0) return;
+    setJobOrder((prev) => mergeCronJobOrder(prev, jobs));
+  }, [jobs]);
+  const orderedJobs = useMemo(
+    () => applyCronJobOrder(safeJobs, jobOrder),
+    [safeJobs, jobOrder],
+  );
+  const sortDialogOrder = useMemo(
+    () => mergeCronJobOrder(jobOrder, safeJobs),
+    [jobOrder, safeJobs],
+  );
+  const sortDialogItems = useMemo(
+    () => safeJobs.map((job) => ({ id: job.id, title: job.name })),
+    [safeJobs],
+  );
   const activeJobs = safeJobs.filter((j) => j.enabled);
   const pausedJobs = safeJobs.filter((j) => !j.enabled);
   const failedJobs = safeJobs.filter((j) => j.lastRun && !j.lastRun.success);
@@ -1153,6 +1187,16 @@ export function Cron() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              onClick={() => setShowSortDialog(true)}
+              disabled={!isGatewayRunning || safeJobs.length === 0}
+              data-testid="cron-sort-button"
+              className="h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors"
+            >
+              <ArrowUpDown className="h-3.5 w-3.5 mr-2" />
+              {t('sort')}
+            </Button>
             <Button
               variant="outline"
               onClick={() => {
@@ -1257,8 +1301,8 @@ export function Cron() {
               </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
-              {safeJobs.map((job) => {
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4" data-testid="cron-job-grid">
+              {orderedJobs.map((job) => {
                 const channelGroup = configuredChannels.find((group) => group.channelType === job.delivery?.channel);
                 const account = channelGroup?.accounts.find((item) => item.accountId === job.delivery?.accountId);
                 const deliveryAccountName = account ? getDeliveryAccountDisplayName(account, t) : undefined;
@@ -1296,6 +1340,23 @@ export function Cron() {
         />
       )}
 
+      <CronJobSortDialog
+        open={showSortDialog}
+        onOpenChange={setShowSortDialog}
+        items={sortDialogItems}
+        initialOrder={sortDialogOrder}
+        title={t('sortDialog.title')}
+        subtitle={t('sortDialog.subtitle', { count: safeJobs.length })}
+        hint={t('sortDialog.hint')}
+        cancelLabel={t('sortDialog.cancel')}
+        confirmLabel={t('sortDialog.confirm')}
+        onConfirm={async (nextOrder) => {
+          setJobOrder(nextOrder);
+          await saveCronJobOrder(nextOrder);
+          toast.success(t('sortDialog.saved'));
+        }}
+      />
+
       <ConfirmDialog
         open={!!jobToDelete}
         title={t('common:actions.confirm', 'Confirm')}
@@ -1306,6 +1367,9 @@ export function Cron() {
         onConfirm={async () => {
           if (jobToDelete) {
             await deleteJob(jobToDelete.id);
+            const nextOrder = removeCronJobIdFromOrder(jobOrder, jobToDelete.id);
+            setJobOrder(nextOrder);
+            void saveCronJobOrder(nextOrder).catch(() => {});
             setJobToDelete(null);
             toast.success(t('toast.deleted'));
           }

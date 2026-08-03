@@ -65,6 +65,9 @@ export interface LyclawUiState {
     cachedDisplayMetadata: Record<string, CachedDigitalEmployeeDisplayMetadata>;
     retiredAgents: Record<string, RetiredDigitalEmployeeRecord>;
   };
+  cron: {
+    jobOrder: string[];
+  };
 }
 
 const UI_STATE_FILE = 'lyclaw-ui-state.json';
@@ -95,6 +98,9 @@ export function createEmptyUiState(): LyclawUiState {
     digitalEmployees: {
       cachedDisplayMetadata: {},
       retiredAgents: {},
+    },
+    cron: {
+      jobOrder: [],
     },
   };
 }
@@ -270,6 +276,14 @@ function sanitizeWorkspaceEntry(raw: unknown): UiStateWorkspaceEntry | null {
   };
 }
 
+function sanitizeStringArray(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function sanitizeWorkspaceEntries(input: unknown): UiStateWorkspaceEntry[] {
   if (!Array.isArray(input)) return [];
   return input.map(sanitizeWorkspaceEntry).filter((entry): entry is UiStateWorkspaceEntry => entry != null);
@@ -296,6 +310,10 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
     && typeof digitalEmployeesRaw === 'object'
     && !Array.isArray(digitalEmployeesRaw)
     ? digitalEmployeesRaw as Record<string, unknown>
+    : {};
+  const cronRaw = data.cron;
+  const cronObj = cronRaw && typeof cronRaw === 'object' && !Array.isArray(cronRaw)
+    ? cronRaw as Record<string, unknown>
     : {};
 
   return {
@@ -328,6 +346,9 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
         digitalEmployeesObj.cachedDisplayMetadata,
       ),
       retiredAgents: sanitizeRetiredDigitalEmployeeRecordMap(digitalEmployeesObj.retiredAgents),
+    },
+    cron: {
+      jobOrder: sanitizeStringArray(cronObj.jobOrder),
     },
   };
 }
@@ -371,6 +392,7 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
   const replaceChat = patch.chat != null;
   const replaceSkills = patch.skills != null;
   const replaceDigitalEmployees = patch.digitalEmployees != null;
+  const replaceCron = patch.cron != null;
 
   const temporaryWorkspaces = replaceWorkspaces
     ? normalizedPatch.workspaces.temporaryWorkspaces
@@ -425,6 +447,13 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
             ...base.digitalEmployees.retiredAgents,
             ...normalizedPatch.digitalEmployees.retiredAgents,
           },
+    },
+    cron: {
+      jobOrder: replaceCron
+        ? normalizedPatch.cron.jobOrder
+        : normalizedPatch.cron.jobOrder.length > 0
+          ? normalizedPatch.cron.jobOrder
+          : base.cron.jobOrder,
     },
   };
 }

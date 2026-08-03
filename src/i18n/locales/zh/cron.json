@@ -3,6 +3,15 @@
     "subtitle": "通过定时任务自动化 AI 工作流",
     "newTask": "新建任务",
     "refresh": "刷新",
+    "sort": "排序",
+    "sortDialog": {
+        "title": "自定义排序",
+        "subtitle": "共 {{count}} 个任务",
+        "hint": "点击任务并拖动可调整顺序",
+        "confirm": "确定",
+        "cancel": "取消",
+        "saved": "排序已保存"
+    },
     "gatewayWarning": "网关未运行。没有活跃的网关，无法管理定时任务。",
     "stats": {
         "total": "任务总数",
