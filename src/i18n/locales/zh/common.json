@@ -39,9 +39,9 @@
         "batchDeleteNoSessions": "暂无可删除的对话",
         "batchDeleteSuccess": "已删除 {{count}} 条对话",
         "batchDeleteWorkspaceGroup": "工作空间 · {{name}}",
-        "searchSessions": "搜索会话",
+        "searchSessions": "搜索会话/Agent",
         "clearSessionSearch": "清空搜索",
-        "searchSessionsEmpty": "未找到匹配的会话"
+        "searchSessionsEmpty": "未找到匹配的会话或 Agent"
     },
     "actions": {
         "save": "保存",

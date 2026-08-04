@@ -37,9 +37,9 @@
         "batchDeleteNoSessions": "Нет чатов для удаления",
         "batchDeleteSuccess": "Удалено чатов: {{count}}",
         "batchDeleteWorkspaceGroup": "Рабочая область · {{name}}",
-        "searchSessions": "Поиск сессий",
+        "searchSessions": "Поиск сессий/Agent",
         "clearSessionSearch": "Очистить поиск",
-        "searchSessionsEmpty": "Подходящие сессии не найдены"
+        "searchSessionsEmpty": "Подходящие сессии или Agent не найдены"
     },
     "actions": {
         "save": "Сохранить",

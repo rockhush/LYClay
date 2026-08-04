@@ -37,9 +37,9 @@
         "batchDeleteNoSessions": "削除できる会話がありません",
         "batchDeleteSuccess": "{{count}} 件の会話を削除しました",
         "batchDeleteWorkspaceGroup": "ワークスペース · {{name}}",
-        "searchSessions": "セッションを検索",
+        "searchSessions": "セッション/Agentを検索",
         "clearSessionSearch": "検索をクリア",
-        "searchSessionsEmpty": "一致するセッションが見つかりません"
+        "searchSessionsEmpty": "一致するセッションまたは Agent が見つかりません"
     },
     "actions": {
         "save": "保存",

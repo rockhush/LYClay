@@ -800,10 +800,22 @@ export function Sidebar() {
   }, [sessionSearchQuery, debouncedSessionSearchQuery]);
   const isSessionSearchActive = sessionSearchQuery.trim().length > 0;
 
+  const agentNameBySessionKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const session of sessions) {
+      const agentId = getAgentIdFromSessionKey(session.key);
+      map.set(session.key, resolveAgentDisplayName(agentId, { agents, digitalEmployees }));
+    }
+    return map;
+  }, [sessions, agents, digitalEmployees]);
+
   const sessionMatchesSearch = useCallback((session: ChatSession) => {
     if (!isSessionSearchActive) return true;
-    return getSessionLabel(session).toLowerCase().includes(normalizedSessionSearchQuery);
-  }, [getSessionLabel, isSessionSearchActive, normalizedSessionSearchQuery]);
+    const query = normalizedSessionSearchQuery;
+    const labelMatch = getSessionLabel(session).toLowerCase().includes(query);
+    const agentMatch = (agentNameBySessionKey.get(session.key) ?? '').toLowerCase().includes(query);
+    return labelMatch || agentMatch;
+  }, [getSessionLabel, agentNameBySessionKey, isSessionSearchActive, normalizedSessionSearchQuery]);
 
   const filteredPinnedHistorySessions = useMemo(
     () => (isSessionSearchActive ? pinnedHistorySessions.filter(sessionMatchesSearch) : pinnedHistorySessions),
@@ -891,15 +903,6 @@ export function Sidebar() {
     sessionStreamingStates,
     streamingMessage,
   ]);
-
-  const agentNameBySessionKey = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const session of sessions) {
-      const agentId = getAgentIdFromSessionKey(session.key);
-      map.set(session.key, resolveAgentDisplayName(agentId, { agents, digitalEmployees }));
-    }
-    return map;
-  }, [sessions, agents, digitalEmployees]);
 
   const handleSessionSelect = useCallback((sessionKey: string) => {
     if (sessionKey === currentSessionKey) {
