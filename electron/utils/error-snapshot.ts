@@ -96,6 +96,7 @@ export interface SnapshotWriteQueue {
 
 const MAX_RECENT_EVENTS = 50;
 const MAX_SNAPSHOT_BYTES = 64 * 1024;
+const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 function cleanString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -109,6 +110,21 @@ function cleanNumber(value: unknown): number | undefined {
 
 function cleanBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+export function formatBeijingLogTimestamp(value: string): string {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return value;
+  const date = new Date(time + BEIJING_OFFSET_MS);
+  return [
+    date.getUTCFullYear(),
+    pad2(date.getUTCMonth() + 1),
+    pad2(date.getUTCDate()),
+  ].join('-') + ` ${pad2(date.getUTCHours())}${pad2(date.getUTCMinutes())}${pad2(date.getUTCSeconds())}`;
 }
 
 export function sanitizeBaseUrl(input: string): string | null {
@@ -198,21 +214,25 @@ export async function buildErrorSnapshot(options: {
   contextBuffer: LogContextBuffer;
   input: ErrorSnapshotInput;
 }): Promise<ErrorSnapshotDocument> {
-  const ts = options.now();
+  const observedAt = options.now();
+  const ts = formatBeijingLogTimestamp(observedAt);
   const identity = await options.identity();
   const input = options.input;
   const baseUrl = input.baseUrl ? sanitizeBaseUrl(input.baseUrl) ?? undefined : undefined;
   const route = sanitizeUrlWithoutQuery(input.route);
   const metadata = sanitizeMetadata(input.metadata) ?? {};
   const recentEvents = options.contextBuffer.collect({
-    at: ts,
+    at: observedAt,
     requestId: input.requestId,
     runId: input.runId,
     sessionId: input.sessionKey,
     modelId: input.modelId,
     baseUrl,
     limit: MAX_RECENT_EVENTS,
-  });
+  }).map((event) => ({
+    ...event,
+    ts: formatBeijingLogTimestamp(event.ts),
+  }));
 
   const snapshot: ErrorSnapshotDocument = {
     documentType: 'error_snapshot',
@@ -225,8 +245,8 @@ export async function buildErrorSnapshot(options: {
     failureStage: cleanString(input.failureStage) ?? 'unknown',
     fingerprint: cleanString(input.fingerprint) ?? '',
     occurrenceCount: Math.max(1, Math.trunc(cleanNumber(input.occurrenceCount) ?? 1)),
-    firstSeenAt: cleanString(input.firstSeenAt) ?? ts,
-    lastSeenAt: cleanString(input.lastSeenAt) ?? ts,
+    firstSeenAt: formatBeijingLogTimestamp(cleanString(input.firstSeenAt) ?? observedAt),
+    lastSeenAt: formatBeijingLogTimestamp(cleanString(input.lastSeenAt) ?? observedAt),
     level: cleanString(input.level) ?? 'error',
     source: cleanString(input.source) ?? 'unknown',
     eventName: cleanString(input.eventName) ?? 'unknown.error',

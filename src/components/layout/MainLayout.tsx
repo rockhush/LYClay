@@ -6,8 +6,11 @@ import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TitleBar } from './TitleBar';
 import { UpdateAvailableDialog } from '@/components/update/UpdateAvailableDialog';
+import { useStartupSkillUpdateDetection } from '@/hooks/useStartupSkillUpdateDetection';
 
 export function MainLayout() {
+  useStartupSkillUpdateDetection();
+
   return (
     <div data-testid="main-layout" className="flex h-screen flex-col overflow-hidden bg-background">
       <UpdateAvailableDialog />

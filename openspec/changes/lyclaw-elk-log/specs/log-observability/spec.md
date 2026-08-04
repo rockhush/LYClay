@@ -28,6 +28,7 @@ ELK-bound 快照文档 MUST 使用 `documentType = "error_snapshot"` 和 `schema
 - **THEN** 快照必须包含 `snapshotId`、`ts`、`priority`、`userImpact`、`operationKind`、`failureStage`、`fingerprint`、`occurrenceCount`、`firstSeenAt`、`lastSeenAt`、`level`、`source`、`eventName`、`component`、`errorCode`、`message`、`workNo`、`userName`、`identityMissingReason`、`requestId`、`runId`、`modelId`、`baseUrl`、`method`、`route`、`status`、`statusCode`、`durationMs`、`retryCount`、`fallbackUsed`、`recovered`、`recentEvents`、`metadata`、`truncated`
 - **AND** `priority` 必须是 `p0`
 - **AND** `userImpact` 必须是 `blocking`
+- **AND** 顶层 `ts`、`firstSeenAt`、`lastSeenAt` 和 `recentEvents[].ts` 必须使用北京时间 `yyyy-MM-dd HHmmss` 格式
 - **AND** `level` 必须是 `error` 或 `warn`。
 
 #### Scenario: 快照写入本地 JSONL
@@ -103,6 +104,7 @@ LYClaw MUST 在 Main 进程维护已脱敏的 `recentEventsBuffer`，用于快�
 
 - **WHEN** 组装快照
 - **THEN** 必须考虑错误发生前 30 秒内的事件
+- **AND** `recentEvents[].ts` 必须使用北京时间 `yyyy-MM-dd HHmmss` 格式
 - **AND** 必须优先保留相同 `requestId`、`runId`、runtime session key 或 `modelId/baseUrl` 的事件
 - **AND** recent event 的 `sessionId` 必须继续保存 runtime session key，用于现有事件关联
 - **AND** 快照组装必须使用顶层 `sessionKey` 收集相关事件，不得使用 transcript UUID 替代该关联键
@@ -185,6 +187,7 @@ LYClaw MUST 在入队前按稳定 fingerprint 合并重复的 blocking P0 错误
 - **WHEN** 某 fingerprint 在当前进程中首次出现
 - **THEN** LYClaw MUST 立即生成快照
 - **AND** 设置 `occurrenceCount = 1`、`firstSeenAt = lastSeenAt`。
+- **AND** `firstSeenAt` 和 `lastSeenAt` 必须使用北京时间 `yyyy-MM-dd HHmmss` 格式。
 
 #### Scenario: 五分钟内重复
 
@@ -204,6 +207,7 @@ LYClaw MUST 在入队前按稳定 fingerprint 合并重复的 blocking P0 错误
 - **WHEN** 同一 fingerprint 距上次上传已达到 5 分钟并再次发生
 - **THEN** LYClaw MUST 生成新快照
 - **AND** 携带当前进程内累计 `occurrenceCount`、`firstSeenAt` 和 `lastSeenAt`。
+- **AND** `firstSeenAt` 和 `lastSeenAt` 必须使用北京时间 `yyyy-MM-dd HHmmss` 格式。
 
 #### Scenario: 聚合状态有界
 

@@ -84,17 +84,56 @@ describe('log observability pipeline', () => {
 
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     expect(send.mock.calls[0][0][0]).toEqual(expect.objectContaining({
+      ts: '2026-07-28 200100',
       priority: 'p0',
       userImpact: 'blocking',
       operationKind: 'user_chat',
       failureStage: 'gateway_rpc',
       fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
       occurrenceCount: 1,
-      firstSeenAt: '2026-07-28T12:01:00.000Z',
-      lastSeenAt: '2026-07-28T12:01:00.000Z',
+      firstSeenAt: '2026-07-28 200100',
+      lastSeenAt: '2026-07-28 200100',
       sessionKey: 'agent:main:session-1',
       sessionId: transcriptSessionId,
     }));
+  });
+
+  it('formats recent event timestamps as Beijing log timestamps in snapshot documents', async () => {
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-08-03T02:12:09.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      client: { send },
+    });
+
+    pipeline.recordEvent({
+      ts: '2026-08-03T02:11:45.152Z',
+      eventName: 'gateway.rpc',
+      component: 'gateway',
+      source: 'gateway',
+      method: 'chat.history',
+      status: 'ok',
+      sessionId: 'agent:main:session-1',
+    });
+
+    await pipeline.captureSnapshot({
+      userImpact: 'blocking',
+      operationKind: 'user_chat',
+      failureStage: 'agent_lifecycle',
+      level: 'error',
+      source: 'chat',
+      eventName: 'chat.run_error',
+      errorCode: 'CHAT_RUN_ERROR',
+      message: 'LLM request timed out.',
+      sessionKey: 'agent:main:session-1',
+      status: 'failed',
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0][0][0].recentEvents).toEqual([
+      expect.objectContaining({ ts: '2026-08-03 101145' }),
+    ]);
   });
 
   it('uses transcript UUID for fingerprint and falls back to sessionKey when resolution fails', async () => {
@@ -173,8 +212,9 @@ describe('log observability pipeline', () => {
     expect(send.mock.calls[1][0][0]).toEqual(expect.objectContaining({
       fingerprint: send.mock.calls[0][0][0].fingerprint,
       occurrenceCount: 3,
-      firstSeenAt: '2026-07-28T12:02:00.000Z',
-      lastSeenAt: '2026-07-28T12:07:00.000Z',
+      ts: '2026-07-28 200700',
+      firstSeenAt: '2026-07-28 200200',
+      lastSeenAt: '2026-07-28 200700',
     }));
   });
 

@@ -5,6 +5,7 @@ scenario: gateway-backend-communication
 taskType: runtime-bridge
 intent: Ensure LYClaw clears a completed chat run when the runtime has produced a final assistant answer, and avoid appending duplicate assistant output when the same final answer is observed more than once.
 touchedAreas:
+  - harness/specs/tasks/fix-chat-finalization-and-duplicate-output.md
   - src/stores/chat.ts
   - src/stores/chat/run-lifecycle.ts
   - src/stores/chat/runtime-event-handlers.ts
@@ -15,9 +16,11 @@ touchedAreas:
   - tests/unit/chat-event-dedupe.test.ts
   - tests/unit/subagent-delegation-transcript-settle.test.ts
   - tests/unit/task-visualization.test.ts
+  - tests/e2e/chat-first-response-progress.spec.ts
   - tests/e2e/chat-task-visualizer.spec.ts
 expectedUserBehavior:
   - A normal assistant text final after a user task clears the chat execution state instead of leaving the session stuck as running.
+  - A delayed final from the previous turn cannot become the answer to a newly submitted, unrelated user message while the new chat.send RPC is still pending.
   - Tool-use finals and interim narration before tool execution still keep the run open.
   - Replayed or duplicated final events do not duplicate the visible assistant answer.
   - A cumulative final remains visible while authoritative transcript history is delayed.
@@ -29,12 +32,15 @@ requiredTests:
   - pnpm harness validate --spec harness/specs/tasks/fix-chat-finalization-and-duplicate-output.md
   - pnpm exec vitest run tests/unit/chat-event-dedupe.test.ts tests/unit/session-backend-bridge.test.ts
   - pnpm exec vitest run tests/unit/chat-runtime-event-handlers.test.ts tests/unit/chat-final-folding-state-machine.test.ts
+  - pnpm exec playwright test tests/e2e/chat-first-response-progress.spec.ts -g "ignores a delayed previous-run final"
   - pnpm exec playwright test tests/e2e/chat-task-visualizer.spec.ts -g "cumulative final"
 acceptance:
   - Renderer continues to use existing store and host-api/api-client paths; no direct Gateway HTTP calls or direct component IPC are added.
   - Ambiguous text finals without tool calls may finalize when they are the visible assistant answer for the current turn.
   - Finals that contain tool-use blocks or are clearly tool-round plumbing remain active.
   - Duplicate final answers are detected even when the replayed payload lacks a stable id.
+  - A newly submitted user turn is bound to its generated idempotency key before awaiting chat.send, so a stale terminal event from the previous run is reconciled without mutating the new turn.
+  - If chat.send returns a different runId, the provisional binding is replaced while the new turn is still active.
   - Existing empty-final diagnostic and recovery behavior remains intact.
   - The cumulative-final handoff never leaves the renderer with neither a committed reply nor a streaming reply.
   - Subagent waiting notices remain folded, while completed explanatory answers are not classified from subagent terminology alone.

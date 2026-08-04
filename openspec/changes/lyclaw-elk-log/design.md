@@ -51,6 +51,8 @@ ELK 只接收 `documentType = "error_snapshot"` 的文档。
 - `metadata`
 - `truncated`
 
+顶层 `ts`、`firstSeenAt`、`lastSeenAt` 以及 `recentEvents[].ts` 必须使用北京时间字符串格式 `yyyy-MM-dd HHmmss`，例如 `2026-07-28 200100`。内部去重、上下文窗口计算和事件关联可以继续使用可解析的时间戳，但进入 ELK-bound 快照文档和本地 snapshot JSONL 前必须转换为北京时间格式。
+
 会话关联字段按可用性输出：
 
 - `sessionKey`：原始 OpenClaw runtime session key，例如 `agent:main:session-1785285317125`。失败入口能获得 runtime session key 时必须保留该字段。

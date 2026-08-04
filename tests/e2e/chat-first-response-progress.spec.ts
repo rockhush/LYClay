@@ -12,6 +12,144 @@ function stableStringify(value: unknown): string {
 }
 
 test.describe('Chat first response progress', () => {
+  test('ignores a delayed previous-run final while the next send is awaiting its run id', async ({ launchElectronApp }) => {
+    const app = await launchElectronApp({ skipSetup: true });
+    const firstQuestion = 'First unrelated question';
+    const firstAnswer = 'First answer';
+    const secondQuestion = 'Second completely different question';
+    const secondAnswer = 'Second answer';
+    const initialHistory = [
+      { role: 'user', id: 'user-1', content: firstQuestion, timestamp: Date.now() },
+      { role: 'assistant', id: 'answer-1', content: firstAnswer, timestamp: Date.now() + 1 },
+    ];
+
+    try {
+      const gatewayStatus = {
+        state: 'running',
+        port: 18789,
+        pid: 12345,
+        gatewayReady: true,
+        warmupStatus: 'ready',
+      };
+      await installIpcMocks(app, {
+        gatewayStatus,
+        gatewayRpc: {
+          [stableStringify(['sessions.list', {}])]: {
+            success: true,
+            result: { sessions: [{ key: MAIN_SESSION_KEY, displayName: 'main' }] },
+          },
+          [stableStringify(['chat.history', { sessionKey: MAIN_SESSION_KEY, limit: 200 }])]: {
+            success: true,
+            result: { messages: initialHistory },
+          },
+          [stableStringify(['chat.history', { sessionKey: MAIN_SESSION_KEY, limit: 1000 }])]: {
+            success: true,
+            result: { messages: initialHistory },
+          },
+        },
+        hostApi: {
+          [stableStringify(['/api/gateway/status', 'GET'])]: {
+            ok: true,
+            data: { status: 200, ok: true, json: gatewayStatus },
+          },
+          [stableStringify(['/api/agents', 'GET'])]: {
+            ok: true,
+            data: {
+              status: 200,
+              ok: true,
+              json: { success: true, agents: [{ id: 'main', name: 'main' }] },
+            },
+          },
+        },
+      });
+
+      const page = await getStableWindow(app);
+      try {
+        await page.reload();
+      } catch (error) {
+        if (!String(error).includes('ERR_FILE_NOT_FOUND')) throw error;
+      }
+      await expect(page.getByText(firstAnswer, { exact: true })).toBeVisible({ timeout: 30_000 });
+
+      await app.evaluate(async (_electron, history) => {
+        const { ipcMain } = process.mainModule!.require('electron') as typeof import('electron');
+        const runtimeGlobal = globalThis as typeof globalThis & {
+          __pendingChatRunId?: string;
+          __pendingChatSendResolved?: boolean;
+        };
+        ipcMain.removeHandler('gateway:rpc');
+        ipcMain.handle('gateway:rpc', async (_event: unknown, method: string, payload: Record<string, unknown>) => {
+          if (method === 'chat.history') return { success: true, result: { messages: history } };
+          if (method !== 'chat.send') return { success: true, result: {} };
+          runtimeGlobal.__pendingChatRunId = String(payload.idempotencyKey ?? '');
+          runtimeGlobal.__pendingChatSendResolved = false;
+          await new Promise((resolve) => setTimeout(resolve, 2_500));
+          runtimeGlobal.__pendingChatSendResolved = true;
+          return {
+            success: true,
+            result: { runId: runtimeGlobal.__pendingChatRunId },
+          };
+        });
+      }, initialHistory);
+
+      await page.getByTestId('chat-composer-input').fill(secondQuestion);
+      await page.getByTestId('chat-composer-send').click();
+      await expect(page.getByText(secondQuestion, { exact: true })).toBeVisible();
+      await expect.poll(() => app.evaluate(async () => {
+        const runtimeGlobal = globalThis as typeof globalThis & { __pendingChatRunId?: string };
+        return runtimeGlobal.__pendingChatRunId ?? '';
+      })).not.toBe('');
+
+      await app.evaluate(async ({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows().at(-1)?.webContents.send('gateway:chat-message', {
+          message: {
+            state: 'final',
+            runId: 'run-1',
+            sessionKey: 'agent:main:main',
+            message: {
+              role: 'assistant',
+              id: 'late-answer-1',
+              stopReason: 'stop',
+              content: [{ type: 'text', text: 'First answer' }],
+            },
+          },
+        });
+      });
+
+      await expect(page.getByText(firstAnswer, { exact: true })).toHaveCount(1);
+      await expect(page.getByTestId('chat-composer-send')).toHaveAttribute('title', '停止');
+
+      await expect.poll(() => app.evaluate(async () => {
+        const runtimeGlobal = globalThis as typeof globalThis & { __pendingChatSendResolved?: boolean };
+        return runtimeGlobal.__pendingChatSendResolved ?? false;
+      })).toBe(true);
+      const runId = await app.evaluate(async () => {
+        const runtimeGlobal = globalThis as typeof globalThis & {
+          __pendingChatRunId?: string;
+        };
+        return runtimeGlobal.__pendingChatRunId ?? '';
+      });
+      await app.evaluate(async ({ BrowserWindow }, payload) => {
+        BrowserWindow.getAllWindows().at(-1)?.webContents.send('gateway:chat-message', { message: payload });
+      }, {
+        state: 'final',
+        runId,
+        sessionKey: MAIN_SESSION_KEY,
+        message: {
+          role: 'assistant',
+          id: 'answer-2',
+          stopReason: 'stop',
+          content: [{ type: 'text', text: secondAnswer }],
+        },
+      });
+
+      await expect(page.getByText(secondAnswer, { exact: true })).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText(firstAnswer, { exact: true })).toHaveCount(1);
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
+
   test('shows live run activity instead of a bare typing indicator', async ({ launchElectronApp }) => {
     const app = await launchElectronApp({ skipSetup: true });
 

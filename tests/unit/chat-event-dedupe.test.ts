@@ -702,6 +702,81 @@ describe('chat event dedupe', () => {
     await vi.waitFor(() => expect(hostApiFetchMock).toHaveBeenCalled());
   });
 
+  it('does not append a delayed previous-run final while the next send RPC is pending', async () => {
+    const { useChatStore } = await import('@/stores/chat');
+    let resolveSend!: (value: { runId: string }) => void;
+    const pendingSend = new Promise<{ runId: string }>((resolve) => {
+      resolveSend = resolve;
+    });
+    gatewayRpcMock.mockImplementation((method: string) => {
+      if (method === 'chat.send') return pendingSend;
+      return Promise.resolve({});
+    });
+
+    useChatStore.setState({
+      currentSessionKey: 'agent:main:main',
+      currentAgentId: 'main',
+      sessions: [{ key: 'agent:main:main' }],
+      messages: [
+        { role: 'user', id: 'user-1', content: 'First unrelated question' },
+        { role: 'assistant', id: 'answer-1', content: 'First answer' },
+      ],
+      sessionLabels: {},
+      sessionLastActivity: {},
+      sessionStreamingStates: {},
+      sending: false,
+      activeRunId: null,
+      streamingText: '',
+      streamingMessage: null,
+      streamingTools: [],
+      pendingFinal: false,
+      lastUserMessageAt: null,
+      pendingToolImages: [],
+      error: null,
+      loading: false,
+      thinkingLevel: null,
+    });
+
+    const sendPromise = useChatStore.getState().sendMessage('Second completely different question');
+    await vi.waitFor(() => {
+      expect(gatewayRpcMock).toHaveBeenCalledWith(
+        'chat.send',
+        expect.objectContaining({ message: expect.stringContaining('Second completely different question') }),
+        expect.any(Number),
+      );
+    });
+    const sendCall = gatewayRpcMock.mock.calls.find(([method]) => method === 'chat.send');
+    const provisionalRunId = String(sendCall?.[1]?.idempotencyKey ?? '');
+    expect(provisionalRunId).not.toBe('');
+    expect(useChatStore.getState().activeRunId).toBe(provisionalRunId);
+
+    useChatStore.getState().handleChatEvent({
+      state: 'final',
+      runId: 'run-1',
+      sessionKey: 'agent:main:main',
+      message: {
+        role: 'assistant',
+        id: 'late-answer-1',
+        stopReason: 'stop',
+        content: [{ type: 'text', text: 'First answer' }],
+      },
+    });
+
+    const pendingState = useChatStore.getState();
+    expect(pendingState.messages.map((message) => extractText(message))).toEqual([
+      'First unrelated question',
+      'First answer',
+      'Second completely different question',
+    ]);
+    expect(pendingState.sending).toBe(true);
+    expect(pendingState.activeRunId).toBe(provisionalRunId);
+
+    resolveSend({ runId: 'run-2' });
+    await sendPromise;
+    expect(useChatStore.getState().sending).toBe(true);
+    expect(useChatStore.getState().activeRunId).toBe('run-2');
+  });
+
   it('closes a text final even when prior messages used tools', async () => {
     const { useChatStore } = await import('@/stores/chat');
 

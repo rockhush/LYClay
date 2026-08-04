@@ -5496,6 +5496,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
       && Boolean(trimmed)
       && !get().sessionLabels[currentSessionKey];
     const selectedWorkspaceId = useWorkspacesStore.getState().currentWorkspaceId;
+    const idempotencyKey = crypto.randomUUID();
+    const clearProvisionalRunAfterSendFailure = (patch: Partial<ChatState>) => {
+      set((s) => {
+        const sessionState = s.sessionStreamingStates[currentSessionKey];
+        const ownsForegroundRun = s.currentSessionKey === currentSessionKey
+          && s.activeRunId === idempotencyKey;
+        const ownsSessionRun = sessionState?.activeRunId === idempotencyKey;
+        return {
+          ...patch,
+          ...(ownsForegroundRun ? { sending: false, activeRunId: null } : {}),
+          ...(ownsSessionRun ? {
+            sessionStreamingStates: {
+              ...s.sessionStreamingStates,
+              [currentSessionKey]: {
+                ...sessionState,
+                sending: false,
+                activeRunId: null,
+              },
+            },
+          } : {}),
+        };
+      });
+    };
 
     set((s) => {
       const boundWorkspaceId = s.sessionWorkspaceIds[currentSessionKey] ?? selectedWorkspaceId ?? null;
@@ -5528,7 +5551,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isFirstMessageEver: _isFirstMessageEver, // Store flag in state for UI access
         runAborted: false,
         runError: null,
-        activeRunId: null,
+        activeRunId: idempotencyKey,
         sessions: ensureSessionEntry(s.sessions, currentSessionKey).map((session) => (
           session.key === currentSessionKey
             ? { ...session, lastMessageAt: nowMs }
@@ -5545,7 +5568,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...s.sessionStreamingStates,
           [currentSessionKey]: {
             ...prevStream,
-            activeRunId: null,
+            activeRunId: idempotencyKey,
             activeTool: null,
             streamingText: '',
             streamingMessage: null,
@@ -5764,7 +5787,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
     setTimeout(checkStuck, 30_000);
 
-    const idempotencyKey = crypto.randomUUID();
     if (_deIsDigital && _resolvedTargetAgentId) {
       _digitalEmployeeRuns.set(idempotencyKey, {
         agentId: _resolvedTargetAgentId,
@@ -5859,7 +5881,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (isUserSecurityDenialMessage(errorMsg)) {
           clearHistoryPoll();
           _pendingComplexTaskPlans.delete(currentSessionKey);
-          set(buildSecurityDenialState(errorMsg));
+          clearProvisionalRunAfterSendFailure(buildSecurityDenialState(errorMsg));
         } else if (isRecoverableChatSendTimeout(errorMsg)) {
           console.warn(`[sendMessage] Recoverable chat.send timeout, keeping poll alive: ${errorMsg}`);
         } else {
@@ -5876,7 +5898,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             lastUserMessageAt: failureState.lastUserMessageAt,
             errorMessage: toUserMessage(normalizedError),
           });
-          set({ error: toUserMessage(normalizedError), sending: false });
+          clearProvisionalRunAfterSendFailure({ error: toUserMessage(normalizedError) });
         }
       } else if (
         result.result?.runId
@@ -5928,13 +5950,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (isUserSecurityDenialMessage(errStr)) {
         clearHistoryPoll();
         _pendingComplexTaskPlans.delete(currentSessionKey);
-        set(buildSecurityDenialState(errStr));
+        clearProvisionalRunAfterSendFailure(buildSecurityDenialState(errStr));
       } else if (isRecoverableChatSendTimeout(errStr)) {
         console.warn(`[sendMessage] Recoverable chat.send timeout, keeping poll alive: ${errStr}`);
       } else {
         clearHistoryPoll();
         const normalizedError = normalizeAppError(err);
-        set({ error: toUserMessage(normalizedError), sending: false });
+        clearProvisionalRunAfterSendFailure({ error: toUserMessage(normalizedError) });
       }
     }
   },
