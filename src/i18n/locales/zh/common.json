@@ -41,7 +41,14 @@
         "batchDeleteWorkspaceGroup": "工作空间 · {{name}}",
         "searchSessions": "搜索会话/Agent",
         "clearSessionSearch": "清空搜索",
-        "searchSessionsEmpty": "未找到匹配的会话或 Agent"
+        "searchSessionsEmpty": "未找到匹配的会话或 Agent",
+        "sessionFilter": "筛选会话",
+        "sessionFilterCategory": "分类",
+        "sessionFilterAll": "全部",
+        "sessionFilterCron": "定时任务",
+        "sessionFilterSession": "普通会话",
+        "sessionFilterReset": "重置",
+        "sessionFilterEmpty": "没有符合筛选条件的会话"
     },
     "actions": {
         "save": "保存",

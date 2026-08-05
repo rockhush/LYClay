@@ -39,7 +39,14 @@
         "batchDeleteWorkspaceGroup": "ワークスペース · {{name}}",
         "searchSessions": "セッション/Agentを検索",
         "clearSessionSearch": "検索をクリア",
-        "searchSessionsEmpty": "一致するセッションまたは Agent が見つかりません"
+        "searchSessionsEmpty": "一致するセッションまたは Agent が見つかりません",
+        "sessionFilter": "セッションを絞り込み",
+        "sessionFilterCategory": "分類",
+        "sessionFilterAll": "すべて",
+        "sessionFilterCron": "定期タスク",
+        "sessionFilterSession": "通常セッション",
+        "sessionFilterReset": "リセット",
+        "sessionFilterEmpty": "条件に一致するセッションがありません"
     },
     "actions": {
         "save": "保存",

@@ -40,7 +40,14 @@
         "batchDeleteWorkspaceGroup": "Workspace · {{name}}",
         "searchSessions": "Search sessions/Agent",
         "clearSessionSearch": "Clear search",
-        "searchSessionsEmpty": "No matching sessions or agents found"
+        "searchSessionsEmpty": "No matching sessions or agents found",
+        "sessionFilter": "Filter sessions",
+        "sessionFilterCategory": "Category",
+        "sessionFilterAll": "All",
+        "sessionFilterCron": "Scheduled tasks",
+        "sessionFilterSession": "Chat sessions",
+        "sessionFilterReset": "Reset",
+        "sessionFilterEmpty": "No sessions match the current filter"
     },
     "actions": {
         "save": "Save",

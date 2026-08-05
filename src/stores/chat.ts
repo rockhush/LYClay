@@ -3669,8 +3669,18 @@ function mergePreservedSessionsIntoGatewayList(
   for (const s of prevSessions) {
     if (keys.has(s.key)) continue;
     if (sessionLabels[s.key] || sessionLastActivity[s.key] || sessionWorkspaceIds[s.key]) {
-      addIfMissing(s.key, s.displayName);
+      keys.add(s.key);
+      out.push(s);
     }
+  }
+
+  // Cold start: ui-state bindings survive reload but prevSessions is empty.
+  for (const sessionKey of new Set([
+    ...Object.keys(sessionWorkspaceIds),
+    ...Object.keys(sessionLastActivity),
+  ])) {
+    if (keys.has(sessionKey)) continue;
+    addIfMissing(sessionKey, sessionLabels[sessionKey]);
   }
 
   // Always preserve the session the user is currently viewing, even if it
@@ -4070,11 +4080,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
               return;
             }
 
+            const preservedShells = mergePreservedSessionsIntoGatewayList([], get(), get().currentSessionKey);
+            let preservedLocalPreviews: ChatSession[] = [];
+            if (preservedShells.length > 0) {
+              try {
+                const state = get();
+                const previewAgentIds = collectAgentIdsFromSessionKeys([
+                  ...preservedShells.map((session) => session.key),
+                  ...Object.keys(state.sessionWorkspaceIds),
+                  ...Object.keys(state.sessionLastActivity),
+                ]);
+                preservedLocalPreviews = await loadLocalSessionSummariesForAgentIds(previewAgentIds);
+              } catch (error) {
+                console.warn('[Sessions] Failed to load local previews for preserved sessions:', error);
+              }
+            }
+            const enrichedPreserved = mergeSessionSummariesWithLocalPreviews(preservedShells, preservedLocalPreviews)
+              .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills) as ChatSession);
             const orphanOnlySessions = filterUserFacingSessions(
-              await appendOrphanRecoverySessions(
-                mergePreservedSessionsIntoGatewayList([], get(), get().currentSessionKey),
-                Date.now(),
-              ),
+              await appendOrphanRecoverySessions(enrichedPreserved, Date.now()),
             );
             if (orphanOnlySessions.length > 0) {
               const { currentSessionKey } = get();
@@ -4124,9 +4148,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
             .filter((session): session is ChatSession => session != null);
           let localPreviewSessions: ChatSession[] = [];
           try {
-            const previewAgentIds = collectAgentIdsFromSessionKeys(
-              gatewaySessions.map((session) => session.key),
-            );
+            const state = get();
+            const previewAgentIds = collectAgentIdsFromSessionKeys([
+              ...gatewaySessions.map((session) => session.key),
+              ...Object.keys(state.sessionWorkspaceIds),
+              ...Object.keys(state.sessionLastActivity),
+            ]);
             localPreviewSessions = await loadLocalSessionSummariesForAgentIds(previewAgentIds);
           } catch (error) {
             console.warn('[Sessions] Failed to load local session previews for Gateway list:', error);
@@ -4155,7 +4182,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
 
           const mergedWithPreserved = mergePreservedSessionsIntoGatewayList(dedupedSessions, get(), get().currentSessionKey);
-          const mergedWithOrphanRecovery = await appendOrphanRecoverySessions(mergedWithPreserved, Date.now());
+          const mergedWithLocalPreviews = mergeSessionSummariesWithLocalPreviews(mergedWithPreserved, localPreviewSessions)
+            .map((session) => normalizeSessionSummaryForDisplay(session, useSkillsStore.getState().skills) as ChatSession);
+          const mergedWithOrphanRecovery = await appendOrphanRecoverySessions(mergedWithLocalPreviews, Date.now());
           const userFacingSessions = filterUserFacingSessions(mergedWithOrphanRecovery);
 
           const { currentSessionKey, sessions: localSessions } = get();

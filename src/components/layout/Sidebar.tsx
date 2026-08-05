@@ -25,6 +25,7 @@ import {
   Loader2,
   X,
   Search,
+  ListFilter,
   LogOut,
   User,
   MoreHorizontal,
@@ -72,7 +73,12 @@ import { buildBatchDeleteSessionGroups } from '@/lib/session-batch-delete-groups
 import { BatchDeleteSessionsDialog } from '@/components/chat/BatchDeleteSessionsDialog';
 import { SidebarMoreNavPanel } from '@/components/layout/SidebarMoreNavPanel';
 import { SidebarSessionRow } from '@/components/layout/SidebarSessionRow';
+import { SidebarSessionFilterPopover } from '@/components/layout/SidebarSessionFilterPopover';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
+import {
+  matchesSidebarSessionCategoryFilter,
+  type SidebarSessionCategoryFilter,
+} from '@/lib/session-category-filter';
 import { isUserFacingSessionKey } from '@/lib/session-key-utils';
 import { resolveSessionDisplayLabel, isPlaceholderSessionTitle } from '@/lib/session-label-utils';
 import {
@@ -608,6 +614,11 @@ export function Sidebar() {
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const debouncedSessionSearchQuery = useDebouncedValue(sessionSearchQuery, 200);
+  const [sessionCategoryFilter, setSessionCategoryFilter] = useState<SidebarSessionCategoryFilter>('all');
+  const [sessionFilterOpen, setSessionFilterOpen] = useState(false);
+  const [sessionFilterAnchor, setSessionFilterAnchor] = useState<{ top: number; left: number } | null>(null);
+  const sessionFilterTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const sessionFilterPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (sessionToRename) {
@@ -688,6 +699,21 @@ export function Sidebar() {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [openSessionMenuKey]);
+
+  useEffect(() => {
+    if (!sessionFilterOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (sessionFilterPanelRef.current?.contains(target)) return;
+      if (sessionFilterTriggerRef.current?.contains(target)) return;
+      setSessionFilterOpen(false);
+      setSessionFilterAnchor(null);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [sessionFilterOpen]);
 
   useEffect(() => {
     if (!moreNavOpen) return;
@@ -799,6 +825,8 @@ export function Sidebar() {
     return debouncedSessionSearchQuery.trim().toLowerCase();
   }, [sessionSearchQuery, debouncedSessionSearchQuery]);
   const isSessionSearchActive = sessionSearchQuery.trim().length > 0;
+  const isSessionCategoryFilterActive = sessionCategoryFilter !== 'all';
+  const isSessionListQueryActive = isSessionSearchActive || isSessionCategoryFilterActive;
 
   const agentNameBySessionKey = useMemo(() => {
     const map = new Map<string, string>();
@@ -809,6 +837,14 @@ export function Sidebar() {
     return map;
   }, [sessions, agents, digitalEmployees]);
 
+  const sessionFilterLabels = useMemo(() => ({
+    category: t('common:sidebar.sessionFilterCategory'),
+    all: t('common:sidebar.sessionFilterAll'),
+    cron: t('common:sidebar.sessionFilterCron'),
+    session: t('common:sidebar.sessionFilterSession'),
+    reset: t('common:sidebar.sessionFilterReset'),
+  }), [t]);
+
   const sessionMatchesSearch = useCallback((session: ChatSession) => {
     if (!isSessionSearchActive) return true;
     const query = normalizedSessionSearchQuery;
@@ -817,46 +853,56 @@ export function Sidebar() {
     return labelMatch || agentMatch;
   }, [getSessionLabel, agentNameBySessionKey, isSessionSearchActive, normalizedSessionSearchQuery]);
 
+  const sessionMatchesListFilters = useCallback((session: ChatSession) => {
+    if (!matchesSidebarSessionCategoryFilter(session.key, sessionCategoryFilter)) {
+      return false;
+    }
+    return sessionMatchesSearch(session);
+  }, [sessionCategoryFilter, sessionMatchesSearch]);
+
   const filteredPinnedHistorySessions = useMemo(
-    () => (isSessionSearchActive ? pinnedHistorySessions.filter(sessionMatchesSearch) : pinnedHistorySessions),
-    [pinnedHistorySessions, isSessionSearchActive, sessionMatchesSearch],
+    () => {
+      if (!isSessionListQueryActive) return pinnedHistorySessions;
+      return pinnedHistorySessions.filter(sessionMatchesListFilters);
+    },
+    [pinnedHistorySessions, isSessionListQueryActive, sessionMatchesListFilters],
   );
 
   const filteredSessionBuckets = useMemo(() => {
-    if (!isSessionSearchActive) return sessionBuckets;
+    if (!isSessionListQueryActive) return sessionBuckets;
     return sessionBuckets
       .map((bucket) => ({
         ...bucket,
-        sessions: bucket.sessions.filter(sessionMatchesSearch),
+        sessions: bucket.sessions.filter(sessionMatchesListFilters),
       }))
       .filter((bucket) => bucket.sessions.length > 0);
-  }, [sessionBuckets, isSessionSearchActive, sessionMatchesSearch]);
+  }, [sessionBuckets, isSessionListQueryActive, sessionMatchesListFilters]);
 
   const filteredSessionsByWorkspaceId = useMemo(() => {
-    if (!isSessionSearchActive) return sessionsByWorkspaceId;
+    if (!isSessionListQueryActive) return sessionsByWorkspaceId;
     const next: Record<string, ChatSession[]> = {};
     for (const workspace of allWorkspaces) {
-      const matched = (sessionsByWorkspaceId[workspace.id] ?? []).filter(sessionMatchesSearch);
+      const matched = (sessionsByWorkspaceId[workspace.id] ?? []).filter(sessionMatchesListFilters);
       if (matched.length > 0) {
         next[workspace.id] = matched;
       }
     }
     return next;
-  }, [allWorkspaces, sessionsByWorkspaceId, isSessionSearchActive, sessionMatchesSearch]);
+  }, [allWorkspaces, sessionsByWorkspaceId, isSessionListQueryActive, sessionMatchesListFilters]);
 
   const totalWorkspaceSessionCount = useMemo(
     () => Object.values(filteredSessionsByWorkspaceId).reduce((sum, list) => sum + list.length, 0),
     [filteredSessionsByWorkspaceId],
   );
 
-  const hasAnySessionSearchMatch = useMemo(() => {
-    if (!isSessionSearchActive) return true;
+  const hasAnySessionListMatch = useMemo(() => {
+    if (!isSessionListQueryActive) return true;
     const workspaceMatches = Object.values(filteredSessionsByWorkspaceId).some((list) => list.length > 0);
     const historyMatches = filteredPinnedHistorySessions.length > 0
       || filteredSessionBuckets.some((bucket) => bucket.sessions.length > 0);
     return workspaceMatches || historyMatches;
   }, [
-    isSessionSearchActive,
+    isSessionListQueryActive,
     filteredSessionsByWorkspaceId,
     filteredPinnedHistorySessions,
     filteredSessionBuckets,
@@ -917,6 +963,11 @@ export function Sidebar() {
   const handleSessionMenuClose = useCallback(() => {
     setOpenSessionMenuKey(null);
     setSessionMenuAnchor(null);
+  }, []);
+
+  const closeSessionFilter = useCallback(() => {
+    setSessionFilterOpen(false);
+    setSessionFilterAnchor(null);
   }, []);
 
   const handleSessionMenuToggle = useCallback((
@@ -1178,27 +1229,72 @@ export function Sidebar() {
 
       {!sidebarCollapsed && (
         <div className="px-2 pb-2 pt-0">
-          <div className="relative ml-2 flex h-8 w-[calc(100%-0.9rem)] items-center rounded-lg border-0 bg-white px-3 transition-colors dark:bg-muted">
-            <Search className="h-3.5 w-3.5 shrink-0 text-[#FF922B]" />
-            <input
-              type="text"
-              data-testid="sidebar-session-search"
-              placeholder={t('common:sidebar.searchSessions')}
-              value={sessionSearchQuery}
-              onChange={(event) => setSessionSearchQuery(event.target.value)}
-              className="ml-2 w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-foreground/40"
+          <div className="ml-2 flex h-8 w-[calc(100%-0.9rem)] items-center gap-1">
+            <div className="relative flex h-8 min-w-0 flex-1 items-center rounded-lg border-0 bg-white px-3 transition-colors dark:bg-muted">
+              <Search className="h-3.5 w-3.5 shrink-0 text-[#FF922B]" />
+              <input
+                type="text"
+                data-testid="sidebar-session-search"
+                placeholder={t('common:sidebar.searchSessions')}
+                value={sessionSearchQuery}
+                onChange={(event) => setSessionSearchQuery(event.target.value)}
+                className="ml-2 w-full min-w-0 bg-transparent text-[13px] text-foreground outline-none placeholder:text-foreground/40"
+              />
+              {sessionSearchQuery ? (
+                <button
+                  type="button"
+                  data-testid="sidebar-session-search-clear"
+                  aria-label={t('common:sidebar.clearSessionSearch')}
+                  onClick={() => setSessionSearchQuery('')}
+                  className="ml-1 shrink-0 text-foreground/40 transition-colors hover:text-foreground/70"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              ) : null}
+            </div>
+            <button
+              ref={sessionFilterTriggerRef}
+              type="button"
+              data-testid="sidebar-session-filter-trigger"
+              aria-label={t('common:sidebar.sessionFilter')}
+              aria-expanded={sessionFilterOpen}
+              onClick={(event) => {
+                if (sessionFilterOpen) {
+                  setSessionFilterOpen(false);
+                  setSessionFilterAnchor(null);
+                  return;
+                }
+                const rect = event.currentTarget.getBoundingClientRect();
+                setSessionFilterAnchor({
+                  top: rect.top,
+                  left: rect.right + 6,
+                });
+                setSessionFilterOpen(true);
+              }}
+              className={cn(
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white transition-colors dark:bg-muted',
+                isSessionCategoryFilterActive
+                  ? 'text-[#FF922B] ring-1 ring-[#FF922B]/30'
+                  : 'text-[#FF922B] hover:bg-black/[0.03] dark:hover:bg-white/10',
+              )}
+            >
+              <ListFilter className="h-3.5 w-3.5" />
+            </button>
+            <SidebarSessionFilterPopover
+              open={sessionFilterOpen}
+              anchor={sessionFilterAnchor}
+              value={sessionCategoryFilter}
+              panelRef={sessionFilterPanelRef}
+              labels={sessionFilterLabels}
+              onChange={(value) => {
+                setSessionCategoryFilter(value);
+                closeSessionFilter();
+              }}
+              onReset={() => {
+                setSessionCategoryFilter('all');
+                closeSessionFilter();
+              }}
             />
-            {sessionSearchQuery ? (
-              <button
-                type="button"
-                data-testid="sidebar-session-search-clear"
-                aria-label={t('common:sidebar.clearSessionSearch')}
-                onClick={() => setSessionSearchQuery('')}
-                className="ml-1 shrink-0 text-foreground/40 transition-colors hover:text-foreground/70"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            ) : null}
           </div>
         </div>
       )}
@@ -1334,7 +1430,7 @@ export function Sidebar() {
       {!sidebarCollapsed && (
         <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 pb-2 space-y-2 pt-4">
           {/* Workspaces */}
-          {allWorkspaces.length > 0 && (!isSessionSearchActive || Object.keys(filteredSessionsByWorkspaceId).length > 0) && (
+          {allWorkspaces.length > 0 && (!isSessionListQueryActive || totalWorkspaceSessionCount > 0) && (
             <div data-testid="sidebar-workspaces-section" className="pb-2">
               <div className="flex items-center justify-between gap-1 px-2.5 pb-1">
                 <button
@@ -1370,7 +1466,7 @@ export function Sidebar() {
                   {allWorkspaces
                     .slice()
                     .sort((a, b) => b.createdAt - a.createdAt)
-                    .filter((workspace) => !isSessionSearchActive || Boolean(filteredSessionsByWorkspaceId[workspace.id]?.length))
+                    .filter((workspace) => !isSessionListQueryActive || Boolean(filteredSessionsByWorkspaceId[workspace.id]?.length))
                     .map((workspace) => {
                       const displayName = workspace.name;
                       const workspaceSessions = filteredSessionsByWorkspaceId[workspace.id] ?? [];
@@ -1510,15 +1606,19 @@ export function Sidebar() {
               {renderBatchDeleteButton()}
             </div>
           )}
-          {isSessionSearchActive && !hasAnySessionSearchMatch ? (
+          {isSessionListQueryActive && !hasAnySessionListMatch ? (
             <div
               data-testid="sidebar-session-search-empty"
               className="px-2.5 py-4 text-center text-[12px] text-muted-foreground/70"
             >
-              {t('common:sidebar.searchSessionsEmpty')}
+              {isSessionSearchActive && isSessionCategoryFilterActive
+                ? t('common:sidebar.searchSessionsEmpty')
+                : isSessionCategoryFilterActive
+                  ? t('common:sidebar.sessionFilterEmpty')
+                  : t('common:sidebar.searchSessionsEmpty')}
             </div>
           ) : null}
-          {(!isSessionSearchActive
+          {(!isSessionListQueryActive
             ? orderedSidebarSessions.some((s) => !isSessionListedUnderWorkspace(s.key))
             : filteredPinnedHistorySessions.length > 0 || filteredSessionBuckets.some((bucket) => bucket.sessions.length > 0)) && (
             <div className="space-y-0.5">

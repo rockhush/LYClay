@@ -39,7 +39,14 @@
         "batchDeleteWorkspaceGroup": "Рабочая область · {{name}}",
         "searchSessions": "Поиск сессий/Agent",
         "clearSessionSearch": "Очистить поиск",
-        "searchSessionsEmpty": "Подходящие сессии или Agent не найдены"
+        "searchSessionsEmpty": "Подходящие сессии или Agent не найдены",
+        "sessionFilter": "Фильтр сессий",
+        "sessionFilterCategory": "Категория",
+        "sessionFilterAll": "Все",
+        "sessionFilterCron": "Запланированные задачи",
+        "sessionFilterSession": "Обычные сессии",
+        "sessionFilterReset": "Сбросить",
+        "sessionFilterEmpty": "Нет сессий, подходящих под фильтр"
     },
     "actions": {
         "save": "Сохранить",
