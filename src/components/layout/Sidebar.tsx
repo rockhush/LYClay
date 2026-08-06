@@ -28,6 +28,7 @@ import {
   ListFilter,
   LogOut,
   User,
+  Megaphone,
   MoreHorizontal,
   Trash2,
 } from 'lucide-react';
@@ -59,6 +60,11 @@ import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { flushUiStateSync } from '@/lib/ui-state-persistence';
 import { invokeIpc, toUserMessage } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
+import {
+  hasPendingStartupSkillNotifications,
+  useStartupSkillNotificationStore,
+} from '@/lib/startup-skill-notification-state';
+import { showStartupSkillNotificationToast } from '@/lib/show-startup-skill-notification-toast';
 import { toast } from 'sonner';
 import i18n from '@/i18n';
 import { isFirstResponsePreparing } from '@/lib/chat-first-response-preparing';
@@ -189,7 +195,7 @@ const STARTUP_LOAD_SESSIONS_DELAY_MS = 0;
 const STARTING_FALLBACK_LOAD_SESSIONS_DELAY_MS = 5_000;
 
 export function Sidebar() {
-  const { t } = useTranslation(['common', 'chat', 'settings', 'cron']);
+  const { t } = useTranslation(['common', 'chat', 'settings', 'cron', 'skills']);
   const sidebarCollapsed = useSettingsStore((state) => state.sidebarCollapsed);
   const setSidebarCollapsed = useSettingsStore((state) => state.setSidebarCollapsed);
 
@@ -282,6 +288,25 @@ export function Sidebar() {
   const dingtalkUser = useDingTalkAuthStore((s) => s.user);
   const dingtalkLoading = useDingTalkAuthStore((s) => s.loading);
   const logoutDingTalk = useDingTalkAuthStore((s) => s.logout);
+  const startupNotificationUpdatable = useStartupSkillNotificationStore((s) => s.updatable);
+  const startupNotificationNewSkills = useStartupSkillNotificationStore((s) => s.newSkills);
+  const startupNotificationReady = useStartupSkillNotificationStore((s) => s.ready);
+  const showSkillNotificationIcon = hasPendingStartupSkillNotifications({
+    ready: startupNotificationReady,
+    updatable: startupNotificationUpdatable,
+    newSkills: startupNotificationNewSkills,
+  });
+  const { t: tSkills } = useTranslation('skills');
+
+  const handleOpenSkillNotification = useCallback(() => {
+    showStartupSkillNotificationToast(
+      {
+        updatable: startupNotificationUpdatable,
+        newSkills: startupNotificationNewSkills,
+      },
+      tSkills,
+    );
+  }, [startupNotificationUpdatable, startupNotificationNewSkills, tSkills]);
 
   // Only user-created workspaces are shown; agent/default folders are not
   // mounted automatically to avoid background reads of large directories.
@@ -1696,33 +1721,50 @@ export function Sidebar() {
               </div>
             )}
 
-            <button
-              type="button"
-              data-testid="sidebar-user-profile"
-              onClick={() => setUserMenuOpen((open) => !open)}
-              className={cn(
-                'flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-black/10 dark:hover:bg-white/10',
-                sidebarCollapsed ? 'justify-center' : '',
-              )}
-            >
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-black/10 text-[12px] font-semibold text-foreground dark:bg-white/10">
-                {dingtalkUser.avatar ? (
-                  <img src={dingtalkUser.avatar} alt={dingtalkUser.name} className="h-full w-full object-cover" />
-                ) : (
-                  <User className="h-4 w-4 text-muted-foreground" />
+            <div className={cn('flex items-center gap-1', sidebarCollapsed ? 'flex-col' : '')}>
+              <button
+                type="button"
+                data-testid="sidebar-user-profile"
+                onClick={() => setUserMenuOpen((open) => !open)}
+                className={cn(
+                  'flex min-w-0 items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-black/10 dark:hover:bg-white/10',
+                  sidebarCollapsed ? 'justify-center w-full' : 'flex-1',
                 )}
-              </div>
-              {!sidebarCollapsed && (
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-medium text-foreground">
-                    {dingtalkUser.name || dingtalkUser.nickname || t('settings:dingtalk.account')}
-                  </div>
-                  <div className="truncate text-[11px] text-muted-foreground">
-                    {dingtalkOrg || t('settings:dingtalk.account')}
-                  </div>
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-black/10 text-[12px] font-semibold text-foreground dark:bg-white/10">
+                  {dingtalkUser.avatar ? (
+                    <img src={dingtalkUser.avatar} alt={dingtalkUser.name} className="h-full w-full object-cover" />
+                  ) : (
+                    <User className="h-4 w-4 text-muted-foreground" />
+                  )}
                 </div>
+                {!sidebarCollapsed && (
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-medium text-foreground">
+                      {dingtalkUser.name || dingtalkUser.nickname || t('settings:dingtalk.account')}
+                    </div>
+                    <div className="truncate text-[11px] text-muted-foreground">
+                      {dingtalkOrg || t('settings:dingtalk.account')}
+                    </div>
+                  </div>
+                )}
+              </button>
+              {showSkillNotificationIcon && (
+                <button
+                  type="button"
+                  data-testid="sidebar-skill-notification"
+                  title={tSkills('toast.updateReminder')}
+                  aria-label={tSkills('toast.updateReminder')}
+                  onClick={handleOpenSkillNotification}
+                  className={cn(
+                    'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#FF922B] transition-colors hover:bg-[#FFF2E5] dark:hover:bg-white/10',
+                    sidebarCollapsed ? 'w-full' : '',
+                  )}
+                >
+                  <Megaphone className="h-4 w-4" strokeWidth={2} />
+                </button>
               )}
-            </button>
+            </div>
           </>
         ) : (
           <NavLink

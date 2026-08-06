@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import type { NewSkillInfo, UpdatableSkillInfo } from '@/lib/skill-update-check';
 import { runSilentSkillNotificationAction } from '@/lib/startup-skill-notification-actions';
+import { refreshStartupSkillNotificationState } from '@/lib/startup-skill-notification-state';
 
 type StartupSkillNotificationToastProps = {
   toastId: string | number;
@@ -171,6 +172,9 @@ export function StartupSkillNotificationToast({
       ...prev,
       [item.key]: result === 'success' ? 'success' : 'failed',
     }));
+    if (result === 'success') {
+      void refreshStartupSkillNotificationState();
+    }
   }, []);
 
   const installLabel = t('toast.notificationInstall', { defaultValue: '安装' });

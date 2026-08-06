@@ -1,16 +1,21 @@
 /**
  * On app startup: after skills list loads, run batch update detection (check-only)
  * for installed skills, then detect newly listed uninstalled skills, and show a
- * single persistent toast when either category has results.
+ * single persistent toast only when unseen update/new entries are detected.
  */
-import { createElement, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
-import { StartupSkillNotificationToast } from '@/components/skills/StartupSkillNotificationToast';
 import {
   detectNewUninstalledSkills,
   detectUpdatableInstalledSkills,
 } from '@/lib/skill-update-check';
+import { showStartupSkillNotificationToast } from '@/lib/show-startup-skill-notification-toast';
+import {
+  evaluateStartupSkillNotification,
+  loadSeenStartupSkillNotificationKeys,
+  saveSeenStartupSkillNotificationKeys,
+} from '@/lib/startup-skill-notification-seen';
+import { useStartupSkillNotificationStore } from '@/lib/startup-skill-notification-state';
 import { useGatewayStore } from '@/stores/gateway';
 import { useSkillsStore } from '@/stores/skills';
 
@@ -39,22 +44,19 @@ export function useStartupSkillUpdateDetection(): void {
         const updatable = await detectUpdatableInstalledSkills();
         const newSkills = detectNewUninstalledSkills();
 
-        if (updatable.length === 0 && newSkills.length === 0) return;
+        useStartupSkillNotificationStore.getState().setPending(updatable, newSkills);
 
-        toast.custom(
-          (toastId) => createElement(StartupSkillNotificationToast, {
-            toastId,
-            title: t('toast.updateReminder'),
-            updatable,
-            newSkills,
-            updatePrefix: t('toast.skillUpdatePrefix'),
-            newPrefix: t('toast.skillNewPrefix'),
-          }),
-          {
-            duration: Infinity,
-            unstyled: true,
-          },
+        const seenKeys = loadSeenStartupSkillNotificationKeys();
+        const { shouldShow, nextSeenKeys } = evaluateStartupSkillNotification(
+          updatable,
+          newSkills,
+          seenKeys,
         );
+
+        if (!shouldShow) return;
+
+        saveSeenStartupSkillNotificationKeys(nextSeenKeys);
+        showStartupSkillNotificationToast({ updatable, newSkills }, t);
       } catch (error) {
         console.warn('[Startup] Skill update detection failed (silent):', error);
       } finally {
