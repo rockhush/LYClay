@@ -32,7 +32,7 @@ export type SkillUpdateCheckResult =
   | { status: 'skipped'; latestVersion: string }
   | { status: 'failed'; error?: string };
 
-function resolveMarketplaceSkillBySlug(slug: string): MarketplaceSkill | undefined {
+export function resolveMarketplaceSkillBySlug(slug: string): MarketplaceSkill | undefined {
   const { searchResults, companyInstallEntries, companyInstallByPackageSlug } = useSkillsStore.getState();
   const fromSearch = searchResults.find(
     (item) => item.slug === slug || String(item.id) === slug,
