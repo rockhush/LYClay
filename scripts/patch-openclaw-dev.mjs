@@ -18,6 +18,10 @@ import {
   applyOpenClawToolResultContextGuardPatches,
   hasOpenClawToolResultContextGuardPatches,
 } from './openclaw-tool-result-context-guard-patches.mjs';
+import {
+  applyOpenClawQueuedFollowupAbortPatches,
+  hasOpenClawQueuedFollowupAbortPatches,
+} from './openclaw-queued-followup-abort-patches.mjs';
 
 const ROOT = process.cwd();
 const openclawCandidates = [
@@ -234,6 +238,31 @@ function main() {
     console.warn('[patch-openclaw-dev] WARN: no selection bundle received tool-result context guard patch.');
   } else if (toolResultContextGuardPatched === 0) {
     console.log('[patch-openclaw-dev] tool-result-context-guard already patched.');
+  }
+
+  let queuedFollowupAbortMatched = 0;
+  let queuedFollowupAbortVerified = 0;
+  for (const name of readdirSync(distDir)) {
+    if (!/^get-reply-.*\.js$/.test(name)) continue;
+    const filePath = join(distDir, name);
+    const source = readFileSync(filePath, 'utf8');
+    if (!source.includes('const queuedFollowupAbortSignal =')) continue;
+    queuedFollowupAbortMatched += 1;
+    const result = applyOpenClawQueuedFollowupAbortPatches(source);
+    if (result.patched) {
+      writeFileSync(filePath, result.source, 'utf8');
+      changedCount += 1;
+    }
+    if (hasOpenClawQueuedFollowupAbortPatches(result.source)) {
+      queuedFollowupAbortVerified += 1;
+      console.log(
+        `[patch-openclaw-dev] ${name}: queued-followup-abort=${result.patched ? 'applied' : 'already'}`,
+      );
+    }
+  }
+  if (queuedFollowupAbortMatched === 0 || queuedFollowupAbortVerified !== queuedFollowupAbortMatched) {
+    console.error('[patch-openclaw-dev] ERROR: Failed to patch queued webchat follow-up abort propagation');
+    process.exit(1);
   }
 
   let shellSnapshotMatched = 0;

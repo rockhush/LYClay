@@ -53,8 +53,9 @@ afterEach(async () => {
 });
 
 describe('log forwarder spool', () => {
-  it('locally acknowledges historical non-blocking snapshots without sending them', async () => {
-    const legacy = snapshot('legacy-p1', 'p1');
+  it('locally acknowledges malformed historical snapshots without sending them, but forwards eligible P1', async () => {
+    // Legacy/malformed records missing required fields are skipped and acked locally.
+    const legacyMalformed = { ...snapshot('legacy-p1', 'p1'), fingerprint: '' } as ErrorSnapshotDocument;
     const incompleteBlocking = {
       ...snapshot('incomplete-blocking', 'p0'),
       fingerprint: '',
@@ -69,9 +70,18 @@ describe('log forwarder spool', () => {
       firstSeenAt: '2026-07-22T08:00:00.000Z',
       lastSeenAt: '2026-07-22T08:00:00.000Z',
     } as ErrorSnapshotDocument;
+    const eligibleP1 = {
+      ...snapshot('tool-p1', 'p1'),
+      userImpact: 'non-blocking',
+      operationKind: 'app_runtime',
+      failureStage: 'tool_execution',
+      eventName: 'chat.tool_failure',
+      errorCode: 'TOOL_EXECUTION_FAILED',
+      level: 'warn',
+    } as ErrorSnapshotDocument;
     await writeFile(
       join(tempDir, 'LYClaw-2026-07-22.snapshot.jsonl'),
-      `${JSON.stringify(legacy)}\n${JSON.stringify(incompleteBlocking)}\n${JSON.stringify(eligible)}\n`,
+      `${JSON.stringify(legacyMalformed)}\n${JSON.stringify(incompleteBlocking)}\n${JSON.stringify(eligible)}\n${JSON.stringify(eligibleP1)}\n`,
     );
     const send = vi.fn(async () => ({ ok: true as const }));
     const forwarder = new LogForwarder({
@@ -82,15 +92,16 @@ describe('log forwarder spool', () => {
 
     await forwarder.flushOnce();
 
+    // P0 leads, then eligible P1; malformed records are skipped and acked.
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][0].map((item) => item.snapshotId)).toEqual(['blocking-p0']);
+    expect(send.mock.calls[0][0].map((item) => item.snapshotId)).toEqual(['blocking-p0', 'tool-p1']);
     const ack = JSON.parse(await readFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.ack.json'), 'utf8'));
     const spoolBody = await readFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.jsonl'), 'utf8');
     expect(ack).toEqual(expect.objectContaining({
       file: 'LYClaw-2026-07-22.snapshot.jsonl',
       ackedOffset: Buffer.byteLength(spoolBody, 'utf8'),
-      ackedLine: 3,
-      lastSnapshotId: 'blocking-p0',
+      ackedLine: 4,
+      lastSnapshotId: 'tool-p1',
     }));
   });
 
@@ -371,7 +382,8 @@ describe('log forwarder spool', () => {
 
   it('writes complete snapshot JSONL and records ack only after client success', async () => {
     const queue = createSnapshotWriteQueue({ maxItems: 1000, maxBytes: 8 * 1024 * 1024 });
-    queue.enqueue(snapshot('p1-later', 'p1'));
+    const p1Doc = { ...snapshot('p1-later', 'p1'), userImpact: 'non-blocking' as const, level: 'warn' as const };
+    queue.enqueue(p1Doc);
     queue.enqueue(snapshot('p0-first', 'p0'));
 
     const writer = new SnapshotSpoolWriter({
@@ -404,7 +416,7 @@ describe('log forwarder spool', () => {
     await forwarder.flushOnce();
 
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][0].map((item) => item.snapshotId)).toEqual(['p0-first']);
+    expect(send.mock.calls[0][0].map((item) => item.snapshotId)).toEqual(['p0-first', 'p1-later']);
     const ack = JSON.parse(await readFile(join(tempDir, 'LYClaw-2026-07-22.snapshot.ack.json'), 'utf8'));
     const spoolBody = await readFile(spoolFile, 'utf8');
     expect(ack).toEqual(expect.objectContaining({
@@ -413,7 +425,7 @@ describe('log forwarder spool', () => {
       ackedLine: 2,
       lastSnapshotId: 'p1-later',
     }));
-    expect(ack.lastAckId).toBe('ack-1');
+    expect(ack.lastAckId).toBe('ack-2');
   });
 
   it('keeps local spool when disabled or unreachable and backs off retries', async () => {

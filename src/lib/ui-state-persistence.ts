@@ -74,6 +74,13 @@ const SESSION_LAST_ACTIVITY_KEYS = [
   'clawx:chat:session-last-activity',
 ];
 
+// var avoids TDZ when workspaces/chat stores trigger hydrate during circular import.
+var hydratePromise: Promise<void> | null = null;
+var uiStateModuleReady = false;
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let syncSubscribed = false;
+let lastSyncedPayload = '';
+
 function readJsonRecord(raw: string | null): Record<string, string> {
   if (!raw) return {};
   try {
@@ -203,48 +210,57 @@ export function isNonEmptyWorkspaceState(workspaces: LyclawUiState['workspaces']
     || (typeof workspaces.currentWorkspacePath === 'string' && workspaces.currentWorkspacePath.trim() !== '');
 }
 
-export function isNonEmptyChatState(chat: LyclawUiState['chat']): boolean {
-  return Object.keys(chat.sessionWorkspaceIds).length > 0
-    || Object.keys(chat.customSessionLabels).length > 0
-    || Object.keys(chat.sessionPinnedAt).length > 0
-    || Object.keys(chat.sessionLastActivity).length > 0
-    || Object.keys(chat.sessionCompressionState).length > 0;
+export function isNonEmptyChatState(chat: LyclawUiState['chat'] | null | undefined): boolean {
+  if (!chat) return false;
+  return Object.keys(chat.sessionWorkspaceIds ?? {}).length > 0
+    || Object.keys(chat.customSessionLabels ?? {}).length > 0
+    || Object.keys(chat.sessionPinnedAt ?? {}).length > 0
+    || Object.keys(chat.sessionLastActivity ?? {}).length > 0
+    || Object.keys(chat.sessionCompressionState ?? {}).length > 0;
 }
 
-export function isNonEmptySkillsState(skills: LyclawUiState['skills']): boolean {
-  return Object.keys(skills.cachedDisplayMetadata).length > 0;
+export function isNonEmptySkillsState(skills: LyclawUiState['skills'] | null | undefined): boolean {
+  if (!skills) return false;
+  return Object.keys(skills.cachedDisplayMetadata ?? {}).length > 0;
 }
 
 export function isNonEmptyDigitalEmployeesState(
-  digitalEmployees: LyclawUiState['digitalEmployees'],
+  digitalEmployees: LyclawUiState['digitalEmployees'] | null | undefined,
 ): boolean {
-  return Object.keys(digitalEmployees.cachedDisplayMetadata).length > 0
+  if (!digitalEmployees) return false;
+  return Object.keys(digitalEmployees.cachedDisplayMetadata ?? {}).length > 0
     || Object.keys(digitalEmployees.retiredAgents ?? {}).length > 0;
 }
 
 function mergeDigitalEmployeesState(
   disk: LyclawUiState['digitalEmployees'] | undefined,
-  local: LyclawUiState['digitalEmployees'],
+  local: LyclawUiState['digitalEmployees'] | undefined,
 ): LyclawUiState['digitalEmployees'] {
-  const diskHasMetadata = disk ? isNonEmptyDigitalEmployeesState(disk) : false;
-  const localHasMetadata = isNonEmptyDigitalEmployeesState(local);
+  const empty: LyclawUiState['digitalEmployees'] = {
+    cachedDisplayMetadata: {},
+    retiredAgents: {},
+  };
+  const diskState = disk ?? empty;
+  const localState = local ?? empty;
+  const diskHasMetadata = isNonEmptyDigitalEmployeesState(diskState);
+  const localHasMetadata = isNonEmptyDigitalEmployeesState(localState);
   const base = diskHasMetadata && !localHasMetadata
-    ? disk!
+    ? diskState
     : localHasMetadata && !diskHasMetadata
-      ? local
+      ? localState
       : {
           cachedDisplayMetadata: {
-            ...(disk?.cachedDisplayMetadata ?? {}),
-            ...local.cachedDisplayMetadata,
+            ...diskState.cachedDisplayMetadata,
+            ...localState.cachedDisplayMetadata,
           },
           retiredAgents: {
-            ...(disk?.retiredAgents ?? {}),
-            ...local.retiredAgents,
+            ...(diskState.retiredAgents ?? {}),
+            ...(localState.retiredAgents ?? {}),
           },
         };
   return {
     cachedDisplayMetadata: { ...base.cachedDisplayMetadata },
-    retiredAgents: { ...base.retiredAgents },
+    retiredAgents: { ...base.retiredAgents ?? {} },
   };
 }
 
@@ -360,11 +376,6 @@ function buildUiStateFromStores(): LyclawUiState {
   };
 }
 
-let hydratePromise: Promise<void> | null = null;
-let syncTimer: ReturnType<typeof setTimeout> | null = null;
-let syncSubscribed = false;
-let lastSyncedPayload = '';
-
 async function persistUiStateToDisk(state: LyclawUiState): Promise<void> {
   const payload = JSON.stringify(state);
   if (payload === lastSyncedPayload) return;
@@ -420,10 +431,25 @@ export function startUiStateSync(): void {
   });
 }
 
+/** Wait until ui-state (workspace bindings, session activity, etc.) is merged into stores. */
+export function whenUiStateHydrated(): Promise<void> {
+  if (hydratePromise) return hydratePromise;
+  return hydrateUiStateFromDisk();
+}
+
+async function waitForUiStateModuleReady(): Promise<void> {
+  while (!uiStateModuleReady) {
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+  }
+}
+
 export async function hydrateUiStateFromDisk(): Promise<void> {
   if (hydratePromise) return hydratePromise;
 
   hydratePromise = (async () => {
+    await waitForUiStateModuleReady();
     const local = readLocalUiState();
     let disk: LyclawUiState | null = null;
     try {
@@ -448,6 +474,14 @@ export async function hydrateUiStateFromDisk(): Promise<void> {
 
     startUiStateSync();
 
+    // Cold start can run loadSessions before hydrate finishes, leaving preserved
+    // session keys / preview agent ids empty. Re-enrich once ui-state is applied.
+    try {
+      await useChatStore.getState().loadSessions(true);
+    } catch (error) {
+      console.warn('[ui-state] Failed to refresh sessions after hydrate:', error);
+    }
+
     try {
       await flushUiStateSync();
     } catch (error) {
@@ -457,3 +491,5 @@ export async function hydrateUiStateFromDisk(): Promise<void> {
 
   return hydratePromise;
 }
+
+uiStateModuleReady = true;

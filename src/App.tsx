@@ -47,7 +47,7 @@ import {
 } from './lib/host-api';
 import { flushUsageReports } from './lib/usage-reporter';
 import { estimateGatewayWarmupProgress } from './lib/gateway-warmup-progress';
-import { hydrateUiStateFromDisk } from './lib/ui-state-persistence';
+import { hydrateUiStateFromDisk, whenUiStateHydrated } from './lib/ui-state-persistence';
 
 /**
  * Error Boundary to catch and display React rendering errors
@@ -283,7 +283,8 @@ function App() {
           // Cold start / first entry after login: land on a fresh scratchpad so
           // Chat shows the welcome screen instead of restoring a historical session.
           chat.newSession();
-          await chat.loadSessions();
+          await whenUiStateHydrated();
+          await chat.loadSessions(true);
           if (postLoginBootstrapRef.current === bootstrapKey && useChatStore.getState().messages.length === 0) {
             await useChatStore.getState().loadHistory();
           }

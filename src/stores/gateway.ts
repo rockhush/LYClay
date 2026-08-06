@@ -10,6 +10,11 @@ import type { GatewayStatus } from '../types/gateway';
 import { isEmptyChatScratchpad } from '@/lib/chat-scratchpad';
 import { isExternalChannelCronSessionForJobs } from './chat/cron-session-utils';
 import { reabortPersistedUserSessions } from './chat/user-aborted-sessions';
+import { backendActivityForSession } from './chat/user-turn-lifecycle';
+import type {
+  GatewayBackgroundActivity,
+  SessionBackendActivity,
+} from './chat/user-turn-lifecycle';
 
 let gatewayInitPromise: Promise<void> | null = null;
 let gatewayEventUnsubscribers: Array<() => void> | null = null;
@@ -171,11 +176,29 @@ export function shouldProcessGatewayEvent(event: Record<string, unknown>): boole
 type SessionRefreshState = {
   activeRunId?: string | null;
   sending?: boolean;
+  currentSessionKey?: string;
+  sessionBackendActivity?: SessionBackendActivity | null;
+  gatewayBackgroundActivity?: GatewayBackgroundActivity | null;
   loadSessions: (force?: boolean) => Promise<void>;
 };
 
-function isChatRunActiveForSessionRefresh(state: Pick<SessionRefreshState, 'activeRunId' | 'sending'>): boolean {
-  return Boolean(state.sending || state.activeRunId);
+function isChatRunActiveForSessionRefresh(state: SessionRefreshState): boolean {
+  if (state.sending || state.activeRunId) return true;
+
+  const sessionKey = state.currentSessionKey?.trim();
+  if (!sessionKey) return false;
+
+  const backendActivity = backendActivityForSession(state.sessionBackendActivity, sessionKey);
+  const backendStatus = backendActivity?.status?.toLowerCase();
+  if (
+    backendActivity?.processing
+    || backendStatus === 'processing'
+    || backendStatus === 'running'
+  ) {
+    return true;
+  }
+
+  return state.gatewayBackgroundActivity?.processingSessionKeys.includes(sessionKey) === true;
 }
 
 function scheduleDeferredSessionRefresh(force = false): void {

@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/lib/ui-state-persistence', () => ({
+  flushUiStateSync: vi.fn(async () => undefined),
+  hydrateUiStateFromDisk: vi.fn(async () => undefined),
+  scheduleUiStateSync: vi.fn(),
+  startUiStateSync: vi.fn(),
+}));
+
 const clearErrorRecoveryTimer = vi.fn();
 const clearHistoryPoll = vi.fn();
 const collectToolUpdates = vi.fn(() => []);

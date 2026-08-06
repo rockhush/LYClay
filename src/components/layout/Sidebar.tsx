@@ -74,6 +74,7 @@ import { BatchDeleteSessionsDialog } from '@/components/chat/BatchDeleteSessions
 import { SidebarMoreNavPanel } from '@/components/layout/SidebarMoreNavPanel';
 import { SidebarSessionRow } from '@/components/layout/SidebarSessionRow';
 import { SidebarSessionFilterPopover } from '@/components/layout/SidebarSessionFilterPopover';
+import { whenUiStateHydrated } from '@/lib/ui-state-persistence';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import {
   matchesSidebarSessionCategoryFilter,
@@ -140,7 +141,7 @@ function NavItem({ to, icon, label, badge, collapsed, end, onClick, testId }: Na
       data-testid={testId}
       className={({ isActive }) =>
         cn(
-          'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-all',
+          'group flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium transition-all',
           !isActive &&
             'hover:bg-white/60 hover:shadow-sm dark:hover:bg-white/10 dark:hover:shadow-md dark:hover:shadow-white/[0.12]',
           isActive
@@ -480,14 +481,18 @@ export function Sidebar() {
       timer = setTimeout(() => {
         void (async () => {
           if (cancelled) return;
-          await loadSessions();
+          await whenUiStateHydrated();
+          if (cancelled) return;
+          await loadSessions(true);
         })();
       }, STARTUP_LOAD_SESSIONS_DELAY_MS);
     } else if (gatewayStatus.state === 'starting') {
       timer = setTimeout(() => {
         void (async () => {
           if (cancelled) return;
-          await loadSessions();
+          await whenUiStateHydrated();
+          if (cancelled) return;
+          await loadSessions(true);
         })();
       }, STARTING_FALLBACK_LOAD_SESSIONS_DELAY_MS);
     }
@@ -842,7 +847,6 @@ export function Sidebar() {
     all: t('common:sidebar.sessionFilterAll'),
     cron: t('common:sidebar.sessionFilterCron'),
     session: t('common:sidebar.sessionFilterSession'),
-    reset: t('common:sidebar.sessionFilterReset'),
   }), [t]);
 
   const sessionMatchesSearch = useCallback((session: ChatSession) => {
@@ -1290,10 +1294,6 @@ export function Sidebar() {
                 setSessionCategoryFilter(value);
                 closeSessionFilter();
               }}
-              onReset={() => {
-                setSessionCategoryFilter('all');
-                closeSessionFilter();
-              }}
             />
           </div>
         </div>
@@ -1337,7 +1337,7 @@ export function Sidebar() {
               : undefined
           }
           className={cn(
-            'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-all mb-2 border border-transparent',
+            'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium transition-all border border-transparent',
             isNewChatActive
               ? 'bg-white text-[#FF922B] shadow-sm shadow-black/[0.04] hover:bg-white/80 dark:bg-accent dark:text-foreground dark:shadow-none'
               : 'text-foreground/80 hover:bg-white/60 hover:shadow-sm dark:hover:bg-white/10',
@@ -1384,7 +1384,7 @@ export function Sidebar() {
               setMoreNavOpen(true);
             }}
             className={cn(
-              'group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[14px] font-medium transition-all',
+              'group flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium transition-all',
               !isMoreNavActive &&
                 'hover:bg-white/60 hover:shadow-sm dark:hover:bg-white/10 dark:hover:shadow-md dark:hover:shadow-white/[0.12]',
               isMoreNavActive

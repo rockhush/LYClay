@@ -413,3 +413,26 @@ export async function recoverStaleSessionAfterEmptyFinal(sessionKey: string): Pr
     },
   );
 }
+
+export type RunFailureSnapshotPayload = {
+  runId?: string | null;
+  sessionKey: string;
+  errorCode?: string;
+  message?: string;
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * Report a Renderer-detected blocking failure (e.g. backendRunStopped) to the
+ * Main-owned log pipeline. Routed through the Host API so the Renderer never
+ * talks to ELK, Gateway HTTP, or direct IPC for snapshot delivery. Failures
+ * are fire-and-forget: callers should `void` the promise and ignore errors.
+ */
+export async function reportRunFailureSnapshot(
+  payload: RunFailureSnapshotPayload,
+): Promise<{ success: boolean }> {
+  return hostApiFetch<{ success: boolean }>('/api/log/run-failure', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}

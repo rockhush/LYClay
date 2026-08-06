@@ -10,7 +10,7 @@ import {
 import type { LogIdentityContext } from './log-identity-context';
 
 export type SnapshotPriority = 'p0' | 'p1';
-export type SnapshotUserImpact = 'blocking';
+export type SnapshotUserImpact = 'blocking' | 'non-blocking';
 export type SnapshotOperationKind = 'user_chat' | 'host_api_operation' | 'app_runtime';
 
 export interface ErrorSnapshotInput {
@@ -147,8 +147,8 @@ export function isElkEligibleSnapshot(snapshot: unknown): snapshot is ErrorSnaps
     && value.snapshotId.length > 0
     && typeof value.ts === 'string'
     && value.ts.length > 0
-    && value.priority === 'p0'
-    && value.userImpact === 'blocking'
+    && (value.priority === 'p0' || value.priority === 'p1')
+    && (value.userImpact === 'blocking' || value.userImpact === 'non-blocking')
     && (value.operationKind === 'user_chat'
       || value.operationKind === 'host_api_operation'
       || value.operationKind === 'app_runtime')

@@ -138,6 +138,28 @@ describe('chat run lifecycle helpers', () => {
     expect(findTerminalAssistantAfterLatestUser(messages)?.id).toBe('a2');
   });
 
+  it('rejects an interim stop snapshot when a later assistant tool-use round exists', () => {
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'fix the todo list', id: 'u1', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: 'The sample task is incorrectly marked complete. I will fix it.',
+        stopReason: 'stop',
+        id: 'a-interim-stop',
+        timestamp: 2000,
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'read-1', name: 'read', arguments: {} }],
+        stopReason: 'toolUse',
+        id: 'a-later-tool-use',
+        timestamp: 3000,
+      },
+    ];
+
+    expect(findTerminalAssistantAfterLatestUser(messages)).toBeUndefined();
+  });
+
   it('ignores a prior turn terminal assistant when the active turn started later', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: 'first', id: 'u1', timestamp: 1000 },

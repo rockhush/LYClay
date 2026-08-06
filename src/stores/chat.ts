@@ -5,7 +5,7 @@
  */
 import { create } from 'zustand';
 import i18n from '@/i18n';
-import { getEmptyFinalDiagnostic, hostApiFetch, recoverStaleSessionAfterEmptyFinal } from '@/lib/host-api';
+import { getEmptyFinalDiagnostic, hostApiFetch, recoverStaleSessionAfterEmptyFinal, reportRunFailureSnapshot } from '@/lib/host-api';
 import {
   beginExecutionTurn,
   finalizeExecutionTurn,
@@ -500,6 +500,51 @@ function persistSessionWorkspaceIdsIfChanged(ids: Record<string, string>): void 
 }
 
 _lastPersistedSessionWorkspaceIds = JSON.stringify(loadSessionWorkspaceIdsFromStorage());
+
+const SESSION_LAST_ACTIVITY_STORAGE_KEY = 'LYClaw:chat:session-last-activity';
+const LEGACY_SESSION_LAST_ACTIVITY_STORAGE_KEYS = [
+  'ClawX:chat:session-last-activity',
+  'clawx:chat:session-last-activity',
+] as const;
+
+function loadSessionLastActivityFromStorage(): Record<string, number> {
+  let out: Record<string, number> = {};
+  for (const key of [SESSION_LAST_ACTIVITY_STORAGE_KEY, ...LEGACY_SESSION_LAST_ACTIVITY_STORAGE_KEYS]) {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof k === 'string' && k && typeof v === 'number' && Number.isFinite(v) && v > 0) {
+          out[k] = v;
+        }
+      }
+    } catch {
+      // ignore malformed storage
+    }
+  }
+  return out;
+}
+
+function persistSessionLastActivityToStorage(activity: Record<string, number>): void {
+  try {
+    window.localStorage.setItem(SESSION_LAST_ACTIVITY_STORAGE_KEY, JSON.stringify(activity));
+  } catch {
+    // Ignore quota / private mode failures; in-memory state still reflects the change.
+  }
+}
+
+let _lastPersistedSessionLastActivity = '';
+
+function persistSessionLastActivityIfChanged(activity: Record<string, number>): void {
+  const serialized = JSON.stringify(activity);
+  if (serialized === _lastPersistedSessionLastActivity) return;
+  _lastPersistedSessionLastActivity = serialized;
+  persistSessionLastActivityToStorage(activity);
+}
+
+_lastPersistedSessionLastActivity = JSON.stringify(loadSessionLastActivityFromStorage());
 
 const CUSTOM_SESSION_LABELS_STORAGE_KEY = 'LYClaw:chat:custom-session-labels';
 
@@ -3909,7 +3954,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentAgentId: 'main',
   sessionLabels: {},
   customSessionLabels: loadCustomSessionLabelsFromStorage(),
-  sessionLastActivity: {},
+  sessionLastActivity: loadSessionLastActivityFromStorage(),
   sessionWorkspaceIds: loadSessionWorkspaceIdsFromStorage(),
   sessionPinnedAt: loadSessionPinnedAtFromStorage(),
   sessionStreamingStates: {},
@@ -5420,6 +5465,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await sleep(250);
       const afterAbortActivity = await refreshSessionBackendActivity(currentSessionKey);
       if (afterAbortActivity?.session.hasTrackedUserRun) {
+        const stuckRunId = afterAbortActivity.session.activeRunIds?.[0];
+        void reportRunFailureSnapshot({
+          runId: stuckRunId,
+          sessionKey: currentSessionKey,
+          errorCode: 'BACKEND_RUN_STOPPED',
+          message: i18n.t('chat:errors.backendRunStopped'),
+          metadata: { reason: 'hasTrackedUserRun-after-abort' },
+        }).catch((error) => {
+          console.warn('[chat] reportRunFailureSnapshot failed', { sessionKey: currentSessionKey, error: String(error) });
+        });
         set({ error: i18n.t('chat:errors.backendRunStopped'), sending: false });
         return;
       }
@@ -7519,4 +7574,5 @@ export function kickSessionBackendPolling(): void {
 useChatStore.subscribe((state) => {
   persistSessionWorkspaceIdsIfChanged(state.sessionWorkspaceIds);
   persistSessionPinnedAtIfChanged(state.sessionPinnedAt);
+  persistSessionLastActivityIfChanged(state.sessionLastActivity);
 });

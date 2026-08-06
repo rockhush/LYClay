@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createLogObservabilityPipeline,
   isUserBlockingGatewayRpcMethod,
+  isRuntimeSoftFailureNotice,
+  isToolFailureMessage,
   observeGatewayNotificationForLog,
 } from '@electron/utils/log-observability';
 import * as logObservabilityModule from '@electron/utils/log-observability';
@@ -582,5 +584,328 @@ describe('log observability pipeline', () => {
       message: 'LLM request timed out. Logs: openclaw logs --follow',
     }));
     expect(raw).not.toContain('must not persist user prompt');
+  });
+
+  it('captures a runtime soft-failure notice on the agent final stream', async () => {
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-07-23T11:00:00.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      resolveSessionContext: async (sessionKey) => ({ sessionKey, sessionId: transcriptSessionId }),
+    });
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-soft-1',
+        sessionKey: 'agent:main:main',
+        stream: 'final',
+        data: {
+          message: {
+            role: 'assistant',
+            content: '⚠️ Agent failed before reply: All models failed (1): custom/deepseek: timeout.',
+          },
+        },
+      },
+    }, {
+      pipeline,
+      isTrackedUserRun: ({ runId, sessionKey }) => (
+        runId === 'run-soft-1' && sessionKey === 'agent:main:main'
+      ),
+    });
+
+    const spoolPath = join(tempDir, 'LYClaw-2026-07-23.snapshot.jsonl');
+    await vi.waitFor(async () => {
+      await expect(readFile(spoolPath, 'utf8')).resolves.toContain('"agent_message_failure"');
+    });
+
+    const snapshot = JSON.parse((await readFile(spoolPath, 'utf8')).trim());
+    expect(snapshot).toEqual(expect.objectContaining({
+      documentType: 'error_snapshot',
+      eventName: 'chat.run_error',
+      errorCode: 'CHAT_RUN_ERROR',
+      failureStage: 'agent_message_failure',
+      operationKind: 'user_chat',
+      priority: 'p0',
+      userImpact: 'blocking',
+      runId: 'run-soft-1',
+      sessionKey: 'agent:main:main',
+      sessionId: transcriptSessionId,
+      message: '⚠️ Agent failed before reply: All models failed (1): custom/deepseek: timeout.',
+    }));
+  });
+
+  it('captures a runtime soft-failure notice containing "generate a response"', async () => {
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-07-23T11:30:00.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      resolveSessionContext: async (sessionKey) => ({ sessionKey, sessionId: transcriptSessionId }),
+      client: { send },
+    });
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-soft-2',
+        sessionKey: 'agent:main:main',
+        stream: 'final',
+        data: {
+          message: {
+            role: 'assistant',
+            content: `Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.`,
+          },
+        },
+      },
+    }, {
+      pipeline,
+      isTrackedUserRun: () => true,
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0][0][0]).toEqual(expect.objectContaining({
+      eventName: 'chat.run_error',
+      errorCode: 'CHAT_RUN_ERROR',
+      failureStage: 'agent_message_failure',
+      message: expect.stringContaining('generate a response'),
+    }));
+  });
+
+  it('dedupes a final soft-failure notice against an existing lifecycle error snapshot', async () => {
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-07-23T12:00:00.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      resolveSessionContext: async (sessionKey) => ({ sessionKey, sessionId: transcriptSessionId }),
+      client: { send },
+    });
+
+    const sharedContext = {
+      pipeline,
+      isTrackedUserRun: () => true,
+    } as const;
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-dedupe',
+        sessionKey: 'agent:main:main',
+        stream: 'lifecycle',
+        data: { phase: 'error', error: 'LLM request timed out.' },
+      },
+    }, sharedContext);
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-dedupe',
+        sessionKey: 'agent:main:main',
+        stream: 'final',
+        data: {
+          message: {
+            role: 'assistant',
+            content: '⚠️ Agent failed before reply: All models failed (1): timeout.',
+          },
+        },
+      },
+    }, sharedContext);
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not capture a non-soft-failure final message', async () => {
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-07-23T13:00:00.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      resolveSessionContext: async (sessionKey) => ({ sessionKey, sessionId: transcriptSessionId }),
+      client: { send },
+    });
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-normal',
+        sessionKey: 'agent:main:main',
+        stream: 'final',
+        data: { message: { role: 'assistant', content: 'Here is your answer.' } },
+      },
+    }, {
+      pipeline,
+      isTrackedUserRun: () => true,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(send).not.toHaveBeenCalled();
+    await expect(readFile(join(tempDir, 'LYClaw-2026-07-23.snapshot.jsonl'), 'utf8')).rejects.toThrow();
+  });
+
+  it('does not capture a soft-failure notice from a non-user run', async () => {
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-07-23T14:00:00.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      resolveSessionContext: async (sessionKey) => ({ sessionKey, sessionId: transcriptSessionId }),
+      client: { send },
+    });
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-bg',
+        sessionKey: 'agent:main:main',
+        stream: 'final',
+        data: { message: { role: 'assistant', content: 'All models failed (1): timeout.' } },
+      },
+    }, {
+      pipeline,
+      isTrackedUserRun: () => false,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'Write failed',
+    'Nodes failed',
+    'Apply Patch failed',
+    'Message failed',
+    'Cron failed',
+    'Exec failed',
+    'Canvas failed',
+    'Dir List: ~/.openclaw/skills failed',
+  ])('captures tool execution failure "%s" as a forwarded P1 snapshot', async (failureText) => {
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-07-23T15:00:00.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      resolveSessionContext: async (sessionKey) => ({ sessionKey, sessionId: transcriptSessionId }),
+      client: { send },
+      writerDelayMs: 1,
+    });
+
+    // Tool execution failures are P1: captured and forwarded, but non-blocking.
+    expect(isRuntimeSoftFailureNotice(failureText)).toBe(false);
+    expect(isToolFailureMessage({ role: 'tool', content: failureText })).toBe(true);
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-tool-fail',
+        sessionKey: 'agent:main:main',
+        stream: 'final',
+        data: { message: { role: 'tool', content: failureText } } },
+    }, {
+      pipeline,
+      isTrackedUserRun: () => true,
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const snapshot = send.mock.calls[0][0][0];
+    expect(snapshot).toEqual(expect.objectContaining({
+      documentType: 'error_snapshot',
+      eventName: 'chat.tool_failure',
+      errorCode: 'TOOL_EXECUTION_FAILED',
+      priority: 'p1',
+      userImpact: 'non-blocking',
+      operationKind: 'app_runtime',
+      failureStage: 'tool_execution',
+      level: 'warn',
+      runId: 'run-tool-fail',
+      sessionKey: 'agent:main:main',
+      sessionId: transcriptSessionId,
+      message: failureText,
+    }));
+  });
+
+  it('does not capture a tool failure from a non-user run as P1', async () => {
+    const send = vi.fn(async () => ({ ok: true as const }));
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-07-23T15:30:00.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      resolveSessionContext: async (sessionKey) => ({ sessionKey, sessionId: transcriptSessionId }),
+      client: { send },
+    });
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-bg-tool',
+        sessionKey: 'agent:cron:bg',
+        stream: 'item',
+        data: { message: { role: 'tool', content: 'Exec failed' } },
+      },
+    }, {
+      pipeline,
+      isTrackedUserRun: () => false,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('sorts P0 before P1 in a forwarded batch', async () => {
+    const sent: unknown[] = [];
+    const send = vi.fn(async (snapshots: unknown[]) => {
+      sent.push(...snapshots);
+      return { ok: true as const };
+    });
+    const pipeline = createLogObservabilityPipeline({
+      spoolDir: tempDir,
+      now: () => '2026-07-23T16:00:00.000Z',
+      identity: async () => ({ workNo: 'EMP00123', userName: '林一', identityMissingReason: null }),
+      resolveSessionContext: async (sessionKey) => ({ sessionKey, sessionId: transcriptSessionId }),
+      client: { send },
+      writerDelayMs: 1,
+    });
+
+    // Enqueue P1 tool failure first, then P0 lifecycle error — P0 must lead the batch.
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-mixed',
+        sessionKey: 'agent:main:main',
+        stream: 'item',
+        data: { message: { role: 'tool', content: 'Write failed' } },
+      },
+    }, { pipeline, isTrackedUserRun: () => true });
+
+    await observeGatewayNotificationForLog({
+      jsonrpc: '2.0',
+      method: 'agent',
+      params: {
+        runId: 'run-mixed',
+        sessionKey: 'agent:main:main',
+        stream: 'lifecycle',
+        data: { phase: 'error', error: 'LLM request timed out.' },
+      },
+    }, { pipeline, isTrackedUserRun: () => true });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalled());
+    const priorities = sent.map((s) => (s as Record<string, unknown>).priority);
+    const p0Index = priorities.indexOf('p0');
+    const p1Index = priorities.indexOf('p1');
+    expect(p0Index).toBeGreaterThanOrEqual(0);
+    expect(p1Index).toBeGreaterThanOrEqual(0);
+    expect(p0Index).toBeLessThan(p1Index);
   });
 });

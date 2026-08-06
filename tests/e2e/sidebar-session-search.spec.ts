@@ -412,7 +412,7 @@ test.describe('Sidebar session search', () => {
       await expect(normalRow).toHaveCount(0);
 
       await page.getByTestId('sidebar-session-filter-trigger').click();
-      await page.getByTestId('sidebar-session-filter-reset').click();
+      await page.getByTestId('sidebar-session-filter-option-all').click();
       await expect(page.getByTestId('sidebar-session-filter-panel')).toHaveCount(0);
       await expect(normalRow).toBeVisible();
       await expect(cronRow).toBeVisible();

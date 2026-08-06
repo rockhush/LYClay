@@ -11,6 +11,7 @@ import {
   type ErrorSnapshotInput,
   type SnapshotOperationKind,
   type SnapshotPriority,
+  type SnapshotUserImpact,
   type SnapshotWriteQueue,
 } from './error-snapshot';
 import { LogForwarder, SnapshotSpoolWriter, createDisabledLogForwardClient, createTcpLogForwardClient, type LogForwardClient, type LogServerReachability } from './log-forwarder';
@@ -22,7 +23,7 @@ export type LogSnapshotCaptureInput = Omit<
   'priority' | 'userImpact' | 'operationKind' | 'failureStage' | 'fingerprint' | 'occurrenceCount' | 'firstSeenAt' | 'lastSeenAt'
 > & {
   priority?: SnapshotPriority;
-  userImpact?: 'blocking';
+  userImpact?: 'blocking' | 'non-blocking';
   operationKind?: SnapshotOperationKind;
   failureStage?: string;
 };
@@ -172,12 +173,15 @@ export function createLogObservabilityPipeline(options: {
     }
   }
 
-  function hasBlockingAdmission(input: LogSnapshotCaptureInput): boolean {
-    return input.userImpact === 'blocking' && Boolean(input.operationKind) && Boolean(input.failureStage);
+  function hasAdmission(input: LogSnapshotCaptureInput): boolean {
+    if (!input.operationKind || !input.failureStage) return false;
+    if (input.userImpact === 'blocking') return true;
+    if (input.priority === 'p1') return true;
+    return false;
   }
 
   function admitInput(input: LogSnapshotCaptureInput, trackOccurrence = true): ErrorSnapshotInput | null {
-    if (!hasBlockingAdmission(input) || !input.operationKind || !input.failureStage) return null;
+    if (!hasAdmission(input) || !input.operationKind || !input.failureStage) return null;
 
     const observedAt = now();
     const observedAtMs = Date.parse(observedAt);
@@ -202,10 +206,12 @@ export function createLogObservabilityPipeline(options: {
       aggregate.emissionPending = true;
     }
 
+    const priority: SnapshotPriority = input.userImpact === 'blocking' ? 'p0' : (input.priority ?? 'p1');
+    const userImpact: SnapshotUserImpact = input.userImpact === 'blocking' ? 'blocking' : 'non-blocking';
     return {
       ...input,
-      priority: 'p0',
-      userImpact: 'blocking',
+      priority,
+      userImpact,
       operationKind: input.operationKind,
       failureStage: input.failureStage,
       fingerprint,
@@ -221,7 +227,7 @@ export function createLogObservabilityPipeline(options: {
       contextBuffer.record(event);
     },
     async captureSnapshot(input) {
-      if (!hasBlockingAdmission(input)) return;
+      if (!hasAdmission(input)) return;
       const admitted = admitInput(await enrichSessionContext(input));
       if (!admitted) return;
       try {
@@ -246,7 +252,7 @@ export function createLogObservabilityPipeline(options: {
       }
     },
     async buildSnapshot(input) {
-      if (!hasBlockingAdmission(input)) return null;
+      if (!hasAdmission(input)) return null;
       const admitted = admitInput(await enrichSessionContext(input), false);
       if (!admitted) return null;
       return await buildErrorSnapshot({
@@ -325,6 +331,53 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+/** Extract plain text from an assistant message content field (string or OpenClaw content blocks). */
+function extractAssistantMessageText(content: unknown): string | null {
+  if (typeof content === 'string') return content.trim() || null;
+  if (!Array.isArray(content)) return null;
+  let text = '';
+  for (const part of content) {
+    if (part && typeof part === 'object') {
+      const record = part as Record<string, unknown>;
+      if (record.type === 'text' && typeof record.text === 'string') {
+        text += record.text;
+      }
+    }
+  }
+  return text.trim() || null;
+}
+
+/**
+ * Runtime soft-failure notices are delivered as assistant message content on
+ * the `final` stream rather than as a `lifecycle/error` phase. Mirror the
+ * renderer `isEmbeddedAgentFailureNoticeAssistantMessage` rules and extend to
+ * the "couldn't generate a response" notice so Main can capture them too.
+ */
+export function isRuntimeSoftFailureNotice(content: unknown): boolean {
+  const text = extractAssistantMessageText(content);
+  if (!text) return false;
+  const normalized = text.toLowerCase();
+  if (/^\s*⚠️?\s*agent failed before reply:/i.test(text)) return true;
+  if (/^\s*all models failed\s*\(/i.test(text)) return true;
+  if (normalized.includes('generate a response')) return true;
+  return false;
+}
+
+/** Whether a tool-result message signals a tool execution failure (P1, forwarded but non-blocking). */
+export function isToolFailureMessage(message: unknown): boolean {
+  const record = asRecord(message);
+  if (!record) return false;
+  const role = typeof record.role === 'string' ? record.role.toLowerCase() : '';
+  if (role !== 'tool' && role !== 'function') return false;
+  if (record.isError === true || record.is_error === true) return true;
+  const content = record.content;
+  const text = extractAssistantMessageText(content);
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return lower.endsWith('failed') || lower.includes('failed:');
+}
+
+
 export async function observeGatewayNotificationForLog(
   notification: JsonRpcNotification,
   options: {
@@ -339,44 +392,140 @@ export async function observeGatewayNotificationForLog(
   const data = asRecord(params?.data);
   const stream = stringValue(params?.stream);
   const phase = stringValue(data?.phase ?? params?.phase);
-  if (stream !== 'lifecycle' || phase !== 'error') return;
-
   const runId = stringValue(params?.runId ?? data?.runId);
   const sessionKey = stringValue(params?.sessionKey ?? data?.sessionKey);
-  const message = stringValue(data?.error ?? params?.error ?? data?.errorMessage ?? params?.errorMessage)
-    ?? 'Gateway agent run failed before reply';
 
-  pipeline.recordEvent({
-    eventName: 'gateway.agent_lifecycle',
-    component: 'gateway',
-    source: 'chat',
-    runId,
-    sessionId: sessionKey,
-    status: 'failed',
-    metadata: {
-      stream,
-      phase,
-    },
-  });
+  if (stream === 'lifecycle' && phase === 'error') {
+    const message = stringValue(data?.error ?? params?.error ?? data?.errorMessage ?? params?.errorMessage)
+      ?? 'Gateway agent run failed before reply';
 
-  if (!runId || !options.isTrackedUserRun?.({ runId, sessionKey })) return;
+    pipeline.recordEvent({
+      eventName: 'gateway.agent_lifecycle',
+      component: 'gateway',
+      source: 'chat',
+      runId,
+      sessionId: sessionKey,
+      status: 'failed',
+      metadata: {
+        stream,
+        phase,
+      },
+    });
 
-  await pipeline.captureSnapshot({
-    userImpact: 'blocking',
-    operationKind: 'user_chat',
-    failureStage: 'agent_lifecycle',
-    level: 'error',
-    source: 'chat',
-    eventName: 'chat.run_error',
-    component: 'gateway-agent',
-    errorCode: 'CHAT_RUN_ERROR',
-    message,
-    runId,
-    sessionKey,
-    status: 'failed',
-    metadata: {
-      stream,
-      phase,
-    },
-  });
+    if (!runId || !options.isTrackedUserRun?.({ runId, sessionKey })) return;
+
+    await pipeline.captureSnapshot({
+      userImpact: 'blocking',
+      operationKind: 'user_chat',
+      failureStage: 'agent_lifecycle',
+      level: 'error',
+      source: 'chat',
+      eventName: 'chat.run_error',
+      component: 'gateway-agent',
+      errorCode: 'CHAT_RUN_ERROR',
+      message,
+      runId,
+      sessionKey,
+      status: 'failed',
+      metadata: {
+        stream,
+        phase,
+      },
+    });
+    return;
+  }
+
+  // Runtime soft-failure notices (e.g. "Agent failed before reply:", "All
+  // models failed", "Agent couldn't generate a response") arrive on the
+  // `final` stream as assistant message content, not as a lifecycle/error
+  // phase. Capture them as the same chat.run_error P0 so the shared
+  // fingerprint dedupes against any lifecycle/error snapshot for this run.
+  if (stream === 'final') {
+    const messagePayload = asRecord(data?.message ?? params?.message);
+    const content = messagePayload?.content;
+    if (!isRuntimeSoftFailureNotice(content)) {
+      // Not a soft-failure notice; fall through to tool-failure handling below.
+    } else {
+
+    pipeline.recordEvent({
+      eventName: 'gateway.agent_final',
+      component: 'gateway',
+      source: 'chat',
+      runId,
+      sessionId: sessionKey,
+      status: 'failed',
+      metadata: {
+        stream,
+      },
+    });
+
+    if (!runId || !options.isTrackedUserRun?.({ runId, sessionKey })) return;
+
+    const noticeMessage = extractAssistantMessageText(content) ?? 'Agent failed to generate a response';
+
+    await pipeline.captureSnapshot({
+      userImpact: 'blocking',
+      operationKind: 'user_chat',
+      failureStage: 'agent_message_failure',
+      level: 'error',
+      source: 'chat',
+      eventName: 'chat.run_error',
+      component: 'gateway-agent',
+      errorCode: 'CHAT_RUN_ERROR',
+      message: noticeMessage,
+      runId,
+      sessionKey,
+      status: 'failed',
+      metadata: {
+        stream,
+      },
+    });
+    return;
+    }
+  }
+
+  // Tool execution failures (Write/Apply Patch/Exec/Canvas/Dir List failed,
+  // tool result isError=true) arrive as tool-role messages on the item or
+  // final stream. They are P1: forwarded to ELK but non-blocking, scheduled
+  // in batches, and never preempt P0.
+  if (stream === 'item' || stream === 'final') {
+    const messagePayload = asRecord(data?.message ?? params?.message);
+    if (!isToolFailureMessage(messagePayload)) return;
+
+    pipeline.recordEvent({
+      eventName: 'gateway.tool_failure',
+      component: 'gateway',
+      source: 'chat',
+      runId,
+      sessionId: sessionKey,
+      status: 'failed',
+      metadata: {
+        stream,
+      },
+    });
+
+    if (!runId || !options.isTrackedUserRun?.({ runId, sessionKey })) return;
+
+    const toolMessage = extractAssistantMessageText((messagePayload as Record<string, unknown>)?.content)
+      ?? 'Tool execution failed';
+
+    await pipeline.captureSnapshot({
+      priority: 'p1',
+      userImpact: 'non-blocking',
+      operationKind: 'app_runtime',
+      failureStage: 'tool_execution',
+      level: 'warn',
+      source: 'chat',
+      eventName: 'chat.tool_failure',
+      component: 'gateway-tool',
+      errorCode: 'TOOL_EXECUTION_FAILED',
+      message: toolMessage,
+      runId,
+      sessionKey,
+      status: 'failed',
+      metadata: {
+        stream,
+      },
+    });
+  }
 }

@@ -556,12 +556,32 @@ function normalizeComplexTaskControlUserMessages(messages: RawMessage[]): RawMes
   return visibleMessages;
 }
 
-export function getComparableAttachmentSignature(message: Pick<RawMessage, '_attachedFiles'>): string {
-  const files = (message._attachedFiles || [])
-    .map((file) => file.filePath || `${file.fileName}|${file.mimeType}|${file.fileSize}`)
+function normalizeComparableAttachmentRef(filePath: string): string {
+  const trimmed = filePath.trim();
+  const windowsPath = /^[a-z]:[\\/]/i.test(trimmed) || trimmed.startsWith('\\\\');
+  const normalized = trimmed.replace(/\\/g, '/');
+  return windowsPath ? normalized.toLowerCase() : normalized;
+}
+
+export function getComparableAttachmentSignature(
+  message: Pick<RawMessage, '_attachedFiles' | 'content'>,
+): string {
+  const structuredPaths = (message._attachedFiles || [])
+    .map((file) => file.filePath)
+    .filter((filePath): filePath is string => Boolean(filePath?.trim()));
+  const markerPaths = preferAuthoritativeMediaRefs(
+    extractMediaAttachedRefs(getMessageText(message.content)),
+  ).map((ref) => ref.filePath);
+  const paths = [...new Set(
+    [...structuredPaths, ...markerPaths].map(normalizeComparableAttachmentRef),
+  )].sort();
+  if (paths.length > 0) return paths.join('::');
+
+  return (message._attachedFiles || [])
+    .map((file) => `${file.fileName}|${file.mimeType}|${file.fileSize}`)
     .filter(Boolean)
-    .sort();
-  return files.join('::');
+    .sort()
+    .join('::');
 }
 
 /** Placeholder user bubble synthesized from a truncated sidebar label — not a real send. */
@@ -590,6 +610,7 @@ function matchesOptimisticUserMessage(
   const optimisticAttachments = getComparableAttachmentSignature(optimistic);
   const candidateAttachments = getComparableAttachmentSignature(candidate);
   const sameAttachments = optimisticAttachments.length > 0 && optimisticAttachments === candidateAttachments;
+  const hasAttachments = optimisticAttachments.length > 0 || candidateAttachments.length > 0;
 
   const hasOptimisticTimestamp = Number.isFinite(optimisticTimestampMs) && optimisticTimestampMs > 0;
   const hasCandidateTimestamp = candidate.timestamp != null;
@@ -599,9 +620,11 @@ function matchesOptimisticUserMessage(
   const timestampCompatible = timestampMatches || !hasCandidateTimestamp || !hasOptimisticTimestamp;
 
   if (sameText && sameAttachments) return true;
-  if (sameText && (!optimisticAttachments || !candidateAttachments) && timestampCompatible) return true;
+  if (sameText && !hasAttachments && timestampCompatible) return true;
   if (sameAttachments && (!optimisticText || !candidateText) && timestampCompatible) return true;
-  if (equivalentAttachmentOnlyTexts) return true;
+  if (equivalentAttachmentOnlyTexts) {
+    return optimisticAttachments && candidateAttachments ? sameAttachments : true;
+  }
   return false;
 }
 

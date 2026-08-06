@@ -1,4 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/ui-state-persistence', () => ({
+  flushUiStateSync: vi.fn(async () => undefined),
+  hydrateUiStateFromDisk: vi.fn(async () => undefined),
+  scheduleUiStateSync: vi.fn(),
+  startUiStateSync: vi.fn(),
+}));
 import {
   canSyncClearAfterAnnounceWrapUp,
   reconcileUserTurnAfterDelegationWrapUp,

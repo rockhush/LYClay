@@ -7,7 +7,6 @@ export interface SidebarSessionFilterPopoverLabels {
   all: string;
   cron: string;
   session: string;
-  reset: string;
 }
 
 interface SidebarSessionFilterPopoverProps {
@@ -17,7 +16,6 @@ interface SidebarSessionFilterPopoverProps {
   panelRef?: RefObject<HTMLDivElement | null>;
   labels: SidebarSessionFilterPopoverLabels;
   onChange: (value: SidebarSessionCategoryFilter) => void;
-  onReset: () => void;
 }
 
 const CATEGORY_OPTIONS: Array<{ value: SidebarSessionCategoryFilter; labelKey: keyof SidebarSessionFilterPopoverLabels }> = [
@@ -35,7 +33,6 @@ export function SidebarSessionFilterPopover({
   panelRef,
   labels,
   onChange,
-  onReset,
 }: SidebarSessionFilterPopoverProps) {
   if (!open || !anchor) return null;
 
@@ -47,10 +44,10 @@ export function SidebarSessionFilterPopover({
       className="fixed z-50 w-[220px] overflow-hidden rounded-xl bg-white shadow-[0_4px_16px_rgba(15,23,42,0.10)] dark:bg-card dark:shadow-[0_4px_16px_rgba(0,0,0,0.35)]"
     >
       <div className="flex">
-        <div className="flex w-[72px] shrink-0 flex-col border-r border-black/5 dark:border-white/10">
+        <div className="flex w-[72px] shrink-0 flex-col self-stretch bg-black/[0.04] dark:bg-white/10">
           <div
             data-testid="sidebar-session-filter-category-tab"
-            className="flex h-9 items-center bg-black/[0.04] px-3 dark:bg-white/10"
+            className="flex h-9 items-center px-3"
           >
             <span className="-mt-px text-[12px] font-medium leading-none text-foreground/85">
               {labels.category}
@@ -70,7 +67,7 @@ export function SidebarSessionFilterPopover({
                   OPTION_ROW_CLASS,
                   'transition-colors',
                   selected
-                    ? 'bg-black/[0.04] font-medium text-foreground dark:bg-white/10'
+                    ? 'bg-black/[0.04] font-medium text-[#FF922B] dark:bg-white/10 dark:text-[#FF922B]'
                     : 'text-foreground/80 hover:bg-black/[0.03] dark:hover:bg-white/5',
                 )}
               >
@@ -79,16 +76,6 @@ export function SidebarSessionFilterPopover({
             );
           })}
         </div>
-      </div>
-      <div className="flex justify-end border-t border-black/5 px-3 py-2 dark:border-white/10">
-        <button
-          type="button"
-          data-testid="sidebar-session-filter-reset"
-          onClick={onReset}
-          className="text-[12px] text-foreground/55 transition-colors hover:text-foreground/80"
-        >
-          {labels.reset}
-        </button>
       </div>
     </div>
   );

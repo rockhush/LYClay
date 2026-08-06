@@ -12,6 +12,7 @@ import {
   resolveCompanyMarketplaceUpdateSlug,
 } from '@/lib/skill-metadata';
 import { resolveInstalledVersionForMarketplaceSkill } from '@/lib/skill-update-verification';
+import { isNewSkillByCreateTime } from '@/lib/skill-marketplace-time';
 import { useSkillsStore } from '@/stores/skills';
 import type { MarketplaceSkill, Skill } from '@/types/skill';
 
@@ -19,6 +20,11 @@ export type UpdatableSkillInfo = {
   slug: string;
   name: string;
   latestVersion: string;
+};
+
+export type NewSkillInfo = {
+  slug: string;
+  name: string;
 };
 
 export type SkillUpdateCheckResult =
@@ -117,33 +123,44 @@ export function buildInstalledSkillsForBatchUpdate(input: {
 
 export async function prepareSkillUpdateCheck(): Promise<void> {
   try {
-    await useSkillsStore.getState().searchSkills('', '', '-download_count');
-    const installMapResponse = await hostApiFetch<{
-      success: boolean;
-      installs?: Record<string, string>;
-      entries?: Record<string, {
-        packageSlug: string;
-        name: string;
-        version: string;
-        author?: string;
-        description?: string;
-      }>;
-      byPackageSlug?: Record<string, {
-        packageSlug: string;
-        name: string;
-        version: string;
-        author?: string;
-        description?: string;
-        marketplaceId: string;
-      }>;
-    }>('/api/clawhub/company-install-map');
-    if (installMapResponse.success) {
-      useSkillsStore.setState({
-        companyInstallMap: installMapResponse.installs ?? useSkillsStore.getState().companyInstallMap,
-        companyInstallEntries: installMapResponse.entries ?? useSkillsStore.getState().companyInstallEntries,
-        companyInstallByPackageSlug: installMapResponse.byPackageSlug
-          ?? useSkillsStore.getState().companyInstallByPackageSlug,
-      });
+    const initial = useSkillsStore.getState();
+    if (!initial.marketplaceCatalogLoaded && initial.searchResults.length === 0) {
+      await initial.searchSkills('', '', '-download_count');
+    }
+
+    const current = useSkillsStore.getState();
+    const hasCompanyInstallState = Object.keys(current.companyInstallMap).length > 0
+      || Object.keys(current.companyInstallEntries).length > 0
+      || Object.keys(current.companyInstallByPackageSlug).length > 0;
+    if (!hasCompanyInstallState) {
+      const installMapResponse = await hostApiFetch<{
+        success: boolean;
+        installs?: Record<string, string>;
+        entries?: Record<string, {
+          packageSlug: string;
+          name: string;
+          version: string;
+          author?: string;
+          description?: string;
+        }>;
+        byPackageSlug?: Record<string, {
+          packageSlug: string;
+          name: string;
+          version: string;
+          author?: string;
+          description?: string;
+          marketplaceId: string;
+        }>;
+      }>('/api/clawhub/company-install-map');
+      if (installMapResponse.success) {
+        const latest = useSkillsStore.getState();
+        useSkillsStore.setState({
+          companyInstallMap: installMapResponse.installs ?? latest.companyInstallMap,
+          companyInstallEntries: installMapResponse.entries ?? latest.companyInstallEntries,
+          companyInstallByPackageSlug: installMapResponse.byPackageSlug
+            ?? latest.companyInstallByPackageSlug,
+        });
+      }
     }
   } catch (error) {
     console.warn('[SkillUpdateCheck] Catalog refresh failed (continuing):', error);
@@ -264,4 +281,31 @@ export async function detectUpdatableInstalledSkills(): Promise<UpdatableSkillIn
   }
 
   return updatable;
+}
+
+/** Detect uninstalled marketplace skills created within the last 3 days. */
+export function detectNewUninstalledSkills(now = Date.now()): NewSkillInfo[] {
+  const state = useSkillsStore.getState();
+  const seenSlugs = new Set<string>();
+  const newSkills: NewSkillInfo[] = [];
+
+  for (const skill of state.searchResults) {
+    if (isMarketplaceSkillInstalledOnDisk(skill, state.skills, state.companyInstallMap)) {
+      continue;
+    }
+    if (!isNewSkillByCreateTime(skill.create_time, now)) {
+      continue;
+    }
+
+    const slug = skill.slug?.trim();
+    if (!slug || seenSlugs.has(slug)) continue;
+    seenSlugs.add(slug);
+
+    const name = resolveSkillDisplayName(skill) || skill.name || slug;
+    if (!name) continue;
+
+    newSkills.push({ slug, name });
+  }
+
+  return newSkills;
 }

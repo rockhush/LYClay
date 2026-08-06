@@ -44,6 +44,7 @@ interface CompanySkill {
   version: string;
   author: string;
   download_count: number;
+  create_time?: string;
   update_time: string;
 }
 
@@ -232,6 +233,7 @@ class CompanyMarketplaceExtension implements MarketplaceProviderExtension {
         author: skill.author,
         downloads: skill.download_count,
         category: skill.category,
+        create_time: skill.create_time,
         update_time: skill.update_time,
       }));
 

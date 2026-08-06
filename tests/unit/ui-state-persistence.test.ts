@@ -6,6 +6,23 @@ import {
   type LyclawUiState,
 } from '../../src/lib/ui-state-persistence';
 
+const emptyChat: LyclawUiState['chat'] = {
+  sessionWorkspaceIds: {},
+  customSessionLabels: {},
+  sessionPinnedAt: {},
+  sessionLastActivity: {},
+  sessionCompressionState: {},
+};
+
+const emptySkills: LyclawUiState['skills'] = {
+  cachedDisplayMetadata: {},
+};
+
+const emptyDigitalEmployees: LyclawUiState['digitalEmployees'] = {
+  cachedDisplayMetadata: {},
+  retiredAgents: {},
+};
+
 const emptyLocal: LyclawUiState = {
   version: 1,
   updatedAt: 1,
@@ -14,11 +31,9 @@ const emptyLocal: LyclawUiState = {
     currentWorkspacePath: null,
     temporaryWorkspaces: [],
   },
-  chat: {
-    sessionWorkspaceIds: {},
-    customSessionLabels: {},
-    sessionPinnedAt: {},
-  },
+  chat: emptyChat,
+  skills: emptySkills,
+  digitalEmployees: emptyDigitalEmployees,
 };
 
 const diskWithWorkspace: LyclawUiState = {
@@ -41,7 +56,11 @@ const diskWithWorkspace: LyclawUiState = {
     sessionWorkspaceIds: { 'agent:main:session-a': 'temp-1' },
     customSessionLabels: { 'agent:main:session-a': 'My chat' },
     sessionPinnedAt: { 'agent:main:session-a': 1000 },
+    sessionLastActivity: {},
+    sessionCompressionState: {},
   },
+  skills: emptySkills,
+  digitalEmployees: emptyDigitalEmployees,
 };
 
 describe('ui-state persistence hydrate merge', () => {
@@ -97,8 +116,7 @@ describe('ui-state persistence hydrate merge', () => {
     const localWithPinnedSession: LyclawUiState = {
       ...emptyLocal,
       chat: {
-        sessionWorkspaceIds: {},
-        customSessionLabels: {},
+        ...emptyChat,
         sessionPinnedAt: {
           'agent:main:session-a': 2000,
           'agent:main:session-b': 3000,

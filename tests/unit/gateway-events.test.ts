@@ -21,6 +21,17 @@ const {
     currentSessionKey: 'agent:main:main',
     activeRunId: 'run-1',
     sending: true,
+    sessionBackendActivity: null as null | {
+      sessionKey: string;
+      status: string | null;
+      processing: boolean;
+      hasTrackedUserRun: boolean;
+      activeRunIds: string[];
+    },
+    gatewayBackgroundActivity: null as null | {
+      hasBackgroundProcessing: boolean;
+      processingSessionKeys: string[];
+    },
     messages: [] as unknown[],
     sessionLabels: {} as Record<string, string>,
     sessionLastActivity: {} as Record<string, number>,
@@ -63,6 +74,8 @@ describe('gateway store event wiring', () => {
     chatStateMock.currentSessionKey = 'agent:main:main';
     chatStateMock.activeRunId = 'run-1';
     chatStateMock.sending = true;
+    chatStateMock.sessionBackendActivity = null;
+    chatStateMock.gatewayBackgroundActivity = null;
     chatStateMock.messages = [];
     chatStateMock.sessionLabels = {};
     chatStateMock.sessionLastActivity = {};
@@ -217,6 +230,110 @@ describe('gateway store event wiring', () => {
     await vi.waitFor(() => {
       expect(chatLoadSessionsMock).toHaveBeenCalledWith(true);
     }, { timeout: 2_000 });
+  });
+
+  it('defers session refresh while backend still processes the current session after foreground state clears', async () => {
+    hostApiFetchMock.mockResolvedValue({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    chatStateMock.sending = false;
+    chatStateMock.activeRunId = null;
+    chatStateMock.sessionBackendActivity = {
+      sessionKey: 'agent:main:main',
+      status: 'running',
+      processing: false,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+
+    handlers.get('session:updated')?.({ sessionKey: 'agent:main:main', reason: 'transcript' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chatLoadSessionsMock).not.toHaveBeenCalled();
+
+    chatStateMock.sessionBackendActivity = null;
+    await vi.waitFor(() => {
+      expect(chatLoadSessionsMock).toHaveBeenCalledTimes(1);
+      expect(chatLoadSessionsMock).toHaveBeenCalledWith(true);
+    }, { timeout: 2_000 });
+  });
+
+  it('defers session refresh while Gateway reports the current session as processing', async () => {
+    hostApiFetchMock.mockResolvedValue({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    chatStateMock.sending = false;
+    chatStateMock.activeRunId = null;
+    chatStateMock.gatewayBackgroundActivity = {
+      hasBackgroundProcessing: true,
+      processingSessionKeys: ['agent:main:main'],
+    };
+
+    handlers.get('session:updated')?.({ sessionKey: 'agent:main:main', reason: 'transcript' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chatLoadSessionsMock).not.toHaveBeenCalled();
+
+    chatStateMock.gatewayBackgroundActivity = null;
+    await vi.waitFor(() => {
+      expect(chatLoadSessionsMock).toHaveBeenCalledTimes(1);
+      expect(chatLoadSessionsMock).toHaveBeenCalledWith(true);
+    }, { timeout: 2_000 });
+  });
+
+  it('coalesces repeated active-session updates into one refresh after backend activity settles', async () => {
+    hostApiFetchMock.mockResolvedValue({ state: 'running', port: 18789 });
+
+    const handlers = new Map<string, (payload: unknown) => void>();
+    subscribeHostEventMock.mockImplementation((eventName: string, handler: (payload: unknown) => void) => {
+      handlers.set(eventName, handler);
+      return () => {};
+    });
+
+    const { useGatewayStore } = await import('@/stores/gateway');
+    await useGatewayStore.getState().init();
+
+    chatStateMock.sending = false;
+    chatStateMock.activeRunId = null;
+    chatStateMock.sessionBackendActivity = {
+      sessionKey: 'agent:main:main',
+      status: 'processing',
+      processing: true,
+      hasTrackedUserRun: false,
+      activeRunIds: [],
+    };
+
+    for (let index = 0; index < 3; index += 1) {
+      handlers.get('session:updated')?.({
+        sessionKey: 'agent:main:main',
+        reason: 'transcript',
+        changedAt: index,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chatLoadSessionsMock).not.toHaveBeenCalled();
+
+    chatStateMock.sessionBackendActivity = null;
+    await vi.waitFor(() => {
+      expect(chatLoadSessionsMock).toHaveBeenCalledTimes(1);
+      expect(chatLoadSessionsMock).toHaveBeenCalledWith(true);
+    }, { timeout: 2_000 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(chatLoadSessionsMock).toHaveBeenCalledTimes(1);
   });
 
   it('skips forced session list refresh for bulk sessions.json updates on an empty scratchpad', async () => {

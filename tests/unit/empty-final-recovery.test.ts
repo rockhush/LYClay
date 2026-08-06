@@ -1,17 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RawMessage } from '@/stores/chat/types';
 
+const deferClearUserTurnForOpenDelegationMock = vi.hoisted(() => vi.fn(() => true));
+
 vi.mock('@/lib/host-api', () => ({
   getEmptyFinalDiagnostic: vi.fn(),
 }));
 
-vi.mock('@/stores/chat/finalize-turn-bridge', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/stores/chat/finalize-turn-bridge')>();
-  return {
-    ...actual,
-    deferClearUserTurnForOpenDelegation: vi.fn(() => true),
-  };
-});
+vi.mock('@/stores/chat/finalize-turn-bridge', () => ({
+  deferClearUserTurnForOpenDelegation: deferClearUserTurnForOpenDelegationMock,
+}));
 
 import { getEmptyFinalDiagnostic } from '@/lib/host-api';
 import { deferClearUserTurnForOpenDelegation } from '@/stores/chat/finalize-turn-bridge';

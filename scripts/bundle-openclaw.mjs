@@ -42,6 +42,10 @@ import {
   applyOpenClawElectronShellSnapshotPatch,
   isOpenClawShellSnapshotBundle,
 } from './openclaw-shell-snapshot-patches.mjs';
+import {
+  applyOpenClawQueuedFollowupAbortPatches,
+  hasOpenClawQueuedFollowupAbortPatches,
+} from './openclaw-queued-followup-abort-patches.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
@@ -684,6 +688,31 @@ function patchBundledOpenClawElectronShellSnapshot(outputDir) {
   return matched > 0 && verified === matched;
 }
 
+function patchBundledOpenClawQueuedFollowupAbort(outputDir) {
+  const distDir = path.join(outputDir, 'dist');
+  if (!fs.existsSync(distDir)) return false;
+
+  let matched = 0;
+  let verified = 0;
+  for (const name of fs.readdirSync(distDir)) {
+    if (!/^get-reply-.*\.js$/.test(name)) continue;
+    const filePath = path.join(distDir, name);
+    const source = fs.readFileSync(filePath, 'utf8');
+    if (!source.includes('const queuedFollowupAbortSignal =')) continue;
+    matched += 1;
+    const result = applyOpenClawQueuedFollowupAbortPatches(source);
+    if (result.patched) {
+      fs.writeFileSync(filePath, result.source, 'utf8');
+      echo`   Patched ${name} to retain queued webchat request cancellation`;
+    }
+    if (hasOpenClawQueuedFollowupAbortPatches(result.source)) {
+      verified += 1;
+    }
+  }
+
+  return matched > 0 && verified === matched;
+}
+
 function patchBundledOpenClawSessionId(outputDir) {
   const distDir = path.join(outputDir, 'dist');
   if (!fs.existsSync(distDir)) return;
@@ -767,6 +796,10 @@ if (!patchBundledOpenClawWebFetchHtmlSniff(OUTPUT)) {
 }
 if (!patchBundledOpenClawElectronShellSnapshot(OUTPUT)) {
   echo`❌ Failed to patch Electron shell snapshot runtime`;
+  process.exit(1);
+}
+if (!patchBundledOpenClawQueuedFollowupAbort(OUTPUT)) {
+  echo`Failed to patch queued webchat follow-up abort propagation`;
   process.exit(1);
 }
 patchBundledOpenClawSilentReply(OUTPUT);

@@ -87,11 +87,15 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function renameWithRetry(source: string, target: string): Promise<void> {
+export async function renameWithRetry(
+  source: string,
+  target: string,
+  renameFn: (source: string, target: string) => Promise<void> = rename,
+): Promise<void> {
   const maxAttempts = process.platform === 'win32' ? 6 : 1;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      await rename(source, target);
+      await renameFn(source, target);
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -99,6 +103,17 @@ async function renameWithRetry(source: string, target: string): Promise<void> {
         attempt === maxAttempts
         || (code !== 'EPERM' && code !== 'EBUSY')
       ) {
+        // Windows 上 rename 整个目录可能因文件锁或 Defender 实时扫描持续 EPERM；
+        // 上次 rm 失败导致 target 残留时 rename 会 ENOTEMPTY。
+        // 两种情况都回退到逐文件 copy + remove，比原子 rename 更宽容。
+        if (code === 'EPERM' || code === 'EBUSY' || code === 'ENOTEMPTY' || code === 'EEXIST') {
+          // target 可能残留旧文件，先清再覆盖
+          await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }).catch(() => undefined);
+          await cp(source, target, { recursive: true, force: true });
+          // source 可能因文件锁删不掉，容错不阻塞更新
+          await rm(source, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }).catch(() => undefined);
+          return;
+        }
         throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, attempt * 50));

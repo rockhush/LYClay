@@ -66,6 +66,8 @@ export interface ClawHubSkillResult {
     author?: string;
     downloads?: number;
     stars?: number;
+    create_time?: string;
+    update_time?: string;
 }
 
 export interface ClawHubInstalledSkillResult {

@@ -104,7 +104,9 @@ export const useWorkspacesStore = create<WorkspacesState>()(
       }),
       onRehydrateStorage: () => (state) => {
         state?.refreshWorkspaces();
-        void import('@/lib/ui-state-persistence').then(({ hydrateUiStateFromDisk }) => hydrateUiStateFromDisk());
+        queueMicrotask(() => {
+          void import('@/lib/ui-state-persistence').then(({ hydrateUiStateFromDisk }) => hydrateUiStateFromDisk());
+        });
       },
     }
   )

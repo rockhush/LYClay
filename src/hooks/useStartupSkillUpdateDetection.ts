@@ -1,11 +1,16 @@
 /**
  * On app startup: after skills list loads, run batch update detection (check-only)
- * and show a single persistent toast when updates are available.
+ * for installed skills, then detect newly listed uninstalled skills, and show a
+ * single persistent toast when either category has results.
  */
 import { createElement, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { detectUpdatableInstalledSkills } from '@/lib/skill-update-check';
+import { StartupSkillNotificationToast } from '@/components/skills/StartupSkillNotificationToast';
+import {
+  detectNewUninstalledSkills,
+  detectUpdatableInstalledSkills,
+} from '@/lib/skill-update-check';
 import { useGatewayStore } from '@/stores/gateway';
 import { useSkillsStore } from '@/stores/skills';
 
@@ -32,26 +37,24 @@ export function useStartupSkillUpdateDetection(): void {
     void (async () => {
       try {
         const updatable = await detectUpdatableInstalledSkills();
-        if (updatable.length === 0) return;
+        const newSkills = detectNewUninstalledSkills();
 
-        const description = createElement(
-          'div',
-          { className: 'mt-1 max-h-48 overflow-y-auto pr-1 flex flex-col gap-0.5 text-[12px] leading-5' },
-          updatable.map((item) => createElement(
-            'div',
-            {
-              key: item.slug,
-              className: 'whitespace-normal break-words',
-            },
-            item.name,
-          )),
+        if (updatable.length === 0 && newSkills.length === 0) return;
+
+        toast.custom(
+          (toastId) => createElement(StartupSkillNotificationToast, {
+            toastId,
+            title: t('toast.updateReminder'),
+            updatable,
+            newSkills,
+            updatePrefix: t('toast.skillUpdatePrefix'),
+            newPrefix: t('toast.skillNewPrefix'),
+          }),
+          {
+            duration: Infinity,
+            unstyled: true,
+          },
         );
-
-        toast.success(t('toast.updatesFound', { count: updatable.length }), {
-          description,
-          duration: Infinity,
-          closeButton: true,
-        });
       } catch (error) {
         console.warn('[Startup] Skill update detection failed (silent):', error);
       } finally {

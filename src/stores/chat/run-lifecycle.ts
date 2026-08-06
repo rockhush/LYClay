@@ -234,13 +234,23 @@ export function findLatestVisibleUserIndex(messages: RawMessage[]): number {
 export function findTerminalAssistantAfterLatestUser(messages: RawMessage[]): RawMessage | undefined {
   const userIdx = findLatestVisibleUserIndex(messages);
   const afterUser = userIdx >= 0 ? messages.slice(userIdx + 1) : messages;
-  return [...afterUser].reverse().find((message) =>
-    message.role === 'assistant'
-    && !isRendererSyntheticRunMessage(message)
-    && !isSubagentCompletionEventMessage(message)
-    && !isPartialDelegationWaitReply(message)
-    && isRunTerminalAssistantMessage(message),
-  );
+  let hasLaterToolUse = false;
+
+  for (let index = afterUser.length - 1; index >= 0; index -= 1) {
+    const message = afterUser[index];
+    if (!message || message.role !== 'assistant') continue;
+    if (messageHasToolUse(message)) {
+      hasLaterToolUse = true;
+      continue;
+    }
+    if (hasLaterToolUse) continue;
+    if (isRendererSyntheticRunMessage(message)) continue;
+    if (isSubagentCompletionEventMessage(message)) continue;
+    if (isPartialDelegationWaitReply(message)) continue;
+    if (isRunTerminalAssistantMessage(message)) return message;
+  }
+
+  return undefined;
 }
 
 function toMs(ts: number): number {

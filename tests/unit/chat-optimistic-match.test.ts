@@ -48,6 +48,65 @@ describe('matchesOptimisticUserMessage', () => {
     expect(matchesOptimisticUserMessage(candidate, optimistic, 1_700_000_000_000)).toBe(true);
   });
 
+  it('does not match an aborted text-only turn to a later same-text media turn', () => {
+    const optimistic = {
+      role: 'user',
+      content: 'Fix the task shown in the screenshot',
+      timestamp: 1_785_894_615,
+      _attachedFiles: [
+        {
+          fileName: 'task.png',
+          mimeType: 'image/png',
+          fileSize: 123,
+          preview: null,
+          filePath: 'C:\\tmp\\task.png',
+        },
+      ],
+    } as const;
+    const delayedAbortedTurn = {
+      role: 'user',
+      content: 'Fix the task shown in the screenshot',
+    } as const;
+
+    expect(matchesOptimisticUserMessage(
+      delayedAbortedTurn,
+      optimistic,
+      1_785_894_615_000,
+    )).toBe(false);
+  });
+
+  it('does not match equal text when the Gateway media marker points to another file', () => {
+    const optimistic = {
+      role: 'user',
+      content: 'Fix the task shown in the screenshot',
+      timestamp: 1_785_894_615,
+      _attachedFiles: [
+        {
+          fileName: 'second.png',
+          mimeType: 'image/png',
+          fileSize: 123,
+          preview: null,
+          filePath: 'C:\\tmp\\second.png',
+        },
+      ],
+    } as const;
+    const firstTurnEcho = {
+      role: 'user',
+      content: [
+        'Fix the task shown in the screenshot',
+        '',
+        '[media attached: C:\\tmp\\first.png (image/png) | C:\\tmp\\first.png]',
+      ].join('\n'),
+      timestamp: 1_785_894_615,
+    } as const;
+
+    expect(matchesOptimisticUserMessage(
+      firstTurnEcho,
+      optimistic,
+      1_785_894_615_000,
+    )).toBe(false);
+  });
+
   it('matches when the server strips a [message_id: ...] tag from the user message', () => {
     const optimistic = { role: 'user', content: 'hello world', timestamp: 1_700_000_000 } as const;
     const candidate = {

@@ -299,7 +299,7 @@ ClawXは、**デュアルプロセス + Host API 統一アクセス**構成を�
 - Gateway の readiness は `system-presence`、`health`、`status` などの OpenClaw コア信号を基準にし、memory、Dreams、チャネルの失敗はグローバルな Gateway 障害ではなく capability degradation として表示します。
 - `openclaw.json` に少なくとも1つのチャネルが設定されている場合、ClawX は `OPENCLAW_SKIP_CHANNELS` を付与せず、Gateway 起動時にチャネルアダプタを読み込みます（DingTalk Stream などがこれに依存します）。チャネル未設定のときのみ、起動を速くするためにチャネル読み込みを省略します。
 - **Gateway ログの見え方**: OpenClaw は通常のチャネルログを **stdout**、警告を **stderr** に出すことがあります。ClawX は stderr をアプリログに `[Gateway stderr]` として転送します。stdout は **debug** レベルで `[Gateway stdout]` としてミラーします。DingTalk などの stdout を追う場合は詳細ログを有効にするか、ターミナルで OpenClaw の `gateway` を直接実行して生ストリームを確認してください。
-- **エラースナップショット**: Host API、Gateway RPC、セキュリティ監査の重要な失敗は、アプリの userData 配下 `logs/snapshots/LYClaw-YYYY-MM-DD.snapshot.jsonl` にも記録されます。各行は完全で秘匿済みの `error_snapshot` JSON ドキュメントで、サニタイズ済みの recent context を含みます。Main プロセスは永続化済みスナップショットを NDJSON として TCP `10.0.1.62:5213` へ転送し、送信失敗時はローカル spool を保持してアプリの主要フローをブロックしません。
+- **エラースナップショット**: Host API、Gateway RPC、セキュリティ監査の重要な失敗に加え、runtime のソフト失敗 notice（`Agent failed before reply:`、`All models failed`、`Agent couldn't generate a response` など）やバックエンド Agent の停止（`backendRunStopped`）も、アプリの userData 配下 `logs/snapshots/LYClaw-YYYY-MM-DD.snapshot.jsonl` に記録されます。各行は完全で秘匿済みの `error_snapshot` JSON ドキュメントで、サニタイズ済みの recent context を含みます。Main プロセスは永続化済みスナップショットを NDJSON として TCP `10.0.1.62:5213` へ転送し、送信失敗時はローカル spool を保持してアプリの主要フローをブロックしません。P1 ツール実行失敗（`Write failed`、`Apply Patch failed`、`Exec failed` など）もスプールされて転送されますが、P0 より優先度が低く（P0 が P1 を優先、P1 はバッチスケジュール）、ユーザーによる停止や `sessions.abort`/`aborted` 状態はスナップショットを生成しません。
 - Listen プロセスの確認例:
   - macOS/Linux: `lsof -nP -iTCP:18789 -sTCP:LISTEN`
   - Windows (PowerShell): `Get-NetTCPConnection -LocalPort 18789 -State Listen`

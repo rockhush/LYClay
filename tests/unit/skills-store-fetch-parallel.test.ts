@@ -10,8 +10,10 @@ vi.mock('@/lib/host-api', () => ({
 vi.mock('@/stores/gateway', () => ({
   useGatewayStore: {
     getState: () => ({
+      status: { state: 'stopped', gatewayReady: false },
       rpc: (...args: unknown[]) => rpcMock(...args),
     }),
+    subscribe: vi.fn(() => () => {}),
   },
 }));
 
@@ -49,7 +51,6 @@ describe('skills store fetch parallelization', () => {
     const fetchPromise = useSkillsStore.getState().fetchSkills();
     await Promise.resolve();
 
-    expect(rpcMock).toHaveBeenCalledWith('skills.status');
     expect(hostApiFetchMock).toHaveBeenCalledWith('/api/clawhub/list');
     expect(hostApiFetchMock).toHaveBeenCalledWith('/api/skills/configs');
     expect(rpcMock).toHaveBeenCalledWith('skills.status', undefined, 8000);

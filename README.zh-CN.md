@@ -303,7 +303,7 @@ ClawX 采用 **双进程 + Host API 统一接入架构**。渲染进程只调用
 - Gateway readiness 以 OpenClaw 的 `system-presence`、`health`、`status` 等核心信号为准；memory、Dreams 或频道失败会显示为能力降级，而不是全局 Gateway 故障。
 - 当 `openclaw.json` 中至少配置了一个频道时，ClawX **不会**设置 `OPENCLAW_SKIP_CHANNELS`，Gateway 会在进程启动时加载频道适配器（钉钉 Stream 等依赖于此）；若未配置任何频道，则仍跳过频道以加快冷启动。
 - **网关日志可见性**：OpenClaw 常把日常频道日志写到 **stdout**，把告警写到 **stderr**。ClawX 会把 stderr 记入应用日志（前缀 `[Gateway stderr]`）；stdout 仅在 **debug** 级别镜像为 `[Gateway stdout]`。需要查看钉钉等 stdout 细节时，请打开更详细的日志级别，或直接在终端手动运行 OpenClaw 的 `gateway` 子命令查看完整输出。
-- **错误快照**：Host API、Gateway RPC 与安全审计的关键失败会额外写入应用 userData 目录下的 `logs/snapshots/LYClaw-YYYY-MM-DD.snapshot.jsonl`。每一行都是完整、已脱敏的 `error_snapshot` JSON 文档，并包含清洗后的 recent context。Main 进程会将已落盘快照以 NDJSON 转发到 TCP `10.0.1.62:5213`；发送失败时保留本地 spool，不阻塞应用主流程。
+- **错误快照**：Host API、Gateway RPC 与安全审计的关键失败，以及 runtime 软失败 notice（如 `Agent failed before reply:`、`All models failed`、`Agent couldn't generate a response`）和后端 Agent 卡死（`backendRunStopped`）会额外写入应用 userData 目录下的 `logs/snapshots/LYClaw-YYYY-MM-DD.snapshot.jsonl`。每一行都是完整、已脱敏的 `error_snapshot` JSON 文档，并包含清洗后的 recent context。Main 进程会将已落盘快照以 NDJSON 转发到 TCP `10.0.1.62:5213`；发送失败时保留本地 spool，不阻塞应用主流程。P1 级工具类调用失败（`Write failed`、`Apply Patch failed`、`Exec failed` 等）同样落盘并转发，但优先级低于 P0（P0 抢占 P1，P1 按批量调度）。用户主动停止与 `sessions.abort`/`aborted` 状态不生成快照。
 - 可用以下命令确认监听进程：
   - macOS/Linux：`lsof -nP -iTCP:18789 -sTCP:LISTEN`
   - Windows（PowerShell）：`Get-NetTCPConnection -LocalPort 18789 -State Listen`

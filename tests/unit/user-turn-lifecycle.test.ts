@@ -561,9 +561,57 @@ describe('user-turn-lifecycle', () => {
     )).toBe(true);
   });
 
+  it('does not force clear an interim stop snapshot followed by a later tool-use round', () => {
+    const sessionKey = 'agent:main:session-august-5';
+    const messages: RawMessage[] = [
+      { role: 'user', content: 'fix the todo list', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: 'The sample task is incorrectly marked complete. I will fix it.',
+        stopReason: 'stop',
+        timestamp: 2000,
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'read-1', name: 'read', arguments: {} }],
+        stopReason: 'toolUse',
+        timestamp: 3000,
+      },
+    ];
+    const backend = {
+      sessionKey,
+      status: 'running',
+      processing: true,
+      hasTrackedUserRun: true,
+      activeRunIds: ['run-august-5'],
+    };
+    const gatewayBackground = {
+      hasBackgroundProcessing: true,
+      processingSessionKeys: [sessionKey],
+    };
+
+    expect(canForceClearOnVisibleCommittedReply({
+      messages,
+      lastUserMessageAt: 1000,
+      backendActivity: backend,
+      gatewayBackground,
+    })).toBe(false);
+    expect(deriveIsExecuting(
+      { sending: true, activeRunId: 'run-august-5', pendingFinal: true },
+      backend,
+      { messages, lastUserMessageAt: 1000, gatewayBackground },
+    )).toBe(true);
+  });
+
   it('forces clear when gateway still lists the session as processing but transcript is settled', () => {
     const messages: RawMessage[] = [
       { role: 'user', content: 'question', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'read-before-final', name: 'read', arguments: {} }],
+        stopReason: 'toolUse',
+        timestamp: 1500,
+      },
       terminalAssistant,
     ];
     expect(canForceClearOnVisibleCommittedReply({
