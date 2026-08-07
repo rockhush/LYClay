@@ -29,6 +29,7 @@ import {
 import { syncProxyConfigToOpenClaw } from '../utils/openclaw-proxy';
 import { buildOpenClawControlUiUrl } from '../utils/openclaw-control-ui';
 import { logger } from '../utils/logger';
+import { readTextFile } from '../utils/text-file-encoding';
 import { recordLogEvent } from '../utils/log-observability';
 import { resolveAgentIdFromChannel } from '../utils/agent-config';
 import { installLocalSkillZip } from '../utils/local-skill-upload';
@@ -2744,9 +2745,8 @@ function registerFileHandlers(): void {
   // Read file content
   ipcMain.handle('fs:readFile', async (_, filePath: string) => {
     try {
-      const fsP = await import('fs/promises');
       const pathInfo = await assertPathAllowed({ path: filePath, capability: 'read', source: 'fs:readFile' });
-      const content = await fsP.readFile(pathInfo.realPath, 'utf-8');
+      const content = await readTextFile(pathInfo.realPath);
       return { success: true, content };
     } catch (error) {
       return { success: false, error: String(error) };

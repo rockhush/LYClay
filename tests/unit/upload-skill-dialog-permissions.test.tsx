@@ -39,14 +39,19 @@ const labels: Record<string, string> = {
   'upload.permissions.back': '返回',
   'upload.permissions.confirm': '确认安装',
   'upload.permissions.riskLevels.medium': '中',
+  'upload.securityBlocked': '安全检查未通过',
+  'upload.securityBlockedGuidance': '技能包中包含可能执行代码或不安全的文件，已停止安装。请确认文件来源，移除风险文件后重新上传。',
+  'upload.securityUnknownFinding': '检测到未分类的安全风险',
 };
+
+let activeLabels = labels;
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, params?: Record<string, unknown>) => {
       if (key === 'upload.permissions.risk') return `风险：${String(params?.risk ?? '')}`;
       if (key === 'upload.permissions.networkDomain') return `访问域名：${String(params?.domain ?? '')}`;
-      return labels[key] ?? key;
+      return activeLabels[key] ?? key;
     },
   }),
 }));
@@ -54,6 +59,7 @@ vi.mock('react-i18next', () => ({
 describe('UploadSkillDialog permission review', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    activeLabels = labels;
   });
 
   it('previews requested permissions before sending the install confirmation', async () => {
@@ -172,6 +178,11 @@ describe('UploadSkillDialog permission review', () => {
             message: 'Suspicious URL in "SKILL.md": Suspicious keyword in URL: "login" — https://example.com/login',
           },
           {
+            level: 'error',
+            category: 'file-type',
+            message: 'Blocked executable file: "AbnormalReportAnalysis/scripts/analyze.js" (extension .js)',
+          },
+          {
             level: 'warning',
             category: 'file-type',
             message: 'Potentially dangerous script file: "scripts/setup.sh" (extension .sh)',
@@ -203,5 +214,109 @@ describe('UploadSkillDialog permission review', () => {
       expect.stringContaining('scripts/setup.sh（.sh 脚本文件，仅提醒）'),
       expect.any(Object),
     );
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining('技能包中包含可能执行代码或不安全的文件，已停止安装'),
+      expect.any(Object),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining('AbnormalReportAnalysis/scripts/analyze.js（.js 禁止上传的可执行文件）'),
+      expect.any(Object),
+    );
+    expect(toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('Blocked executable file'),
+      expect.anything(),
+    );
+  });
+
+  it('hides raw security errors when an older backend returns no structured findings', async () => {
+    vi.mocked(invokeIpc).mockResolvedValueOnce({
+      success: false,
+      securityBlocked: true,
+      errorCode: 'SECURITY_BLOCKED',
+      error: 'Security check failed: Blocked executable file: "AbnormalReportAnalysis/scripts/analyze.js" (extension .js)',
+    });
+
+    render(
+      <UploadSkillDialog open onOpenChange={vi.fn()} onUploadComplete={vi.fn()} />,
+    );
+    const input = document.querySelector('#skill-upload-input') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [new File(['zip-content'], 'legacy-skill.zip', { type: 'application/zip' })],
+      },
+    });
+    fireEvent.click(screen.getByTestId('skill-upload-submit-button'));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('技能包中包含可能执行代码或不安全的文件，已停止安装'),
+        expect.any(Object),
+      );
+    });
+    expect(toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('Security check failed'),
+      expect.anything(),
+    );
+    expect(toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('AbnormalReportAnalysis/scripts/analyze.js'),
+      expect.anything(),
+    );
+  });
+
+  it('does not expose raw messages for unknown structured finding categories', async () => {
+    vi.mocked(invokeIpc).mockResolvedValueOnce({
+      success: false,
+      securityBlocked: true,
+      errorCode: 'SECURITY_BLOCKED',
+      validationResult: {
+        riskLevel: 'high',
+        findings: [{
+          level: 'error',
+          category: 'future-scanner-category',
+          message: 'ENOENT at "C:\\Users\\private-user\\.openclaw\\secret.txt"',
+        }],
+        summary: { errors: 1, warnings: 0 },
+        stage: 'post-extraction',
+      },
+    });
+
+    render(<UploadSkillDialog open onOpenChange={vi.fn()} onUploadComplete={vi.fn()} />);
+    const input = document.querySelector('#skill-upload-input') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(['zip-content'], 'unknown-finding.zip', { type: 'application/zip' })] },
+    });
+    fireEvent.click(screen.getByTestId('skill-upload-submit-button'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const displayed = String(vi.mocked(toast.error).mock.calls[0]?.[0] ?? '');
+    expect(displayed).not.toContain('private-user');
+    expect(displayed).not.toContain('ENOENT');
+    expect(displayed).toContain('检测到未分类的安全风险');
+  });
+
+  it('uses the localized security title when the interface language is English', async () => {
+    activeLabels = {
+      ...labels,
+      'upload.securityBlocked': 'Security Check Failed',
+      'upload.securityBlockedGuidance': 'Remove the risky files, then upload the package again.',
+    };
+    vi.mocked(invokeIpc).mockResolvedValueOnce({
+      success: false,
+      securityBlocked: true,
+      errorCode: 'SECURITY_BLOCKED',
+      error: 'Security check failed: C:\\Users\\private-user\\unsafe.js',
+    });
+
+    render(<UploadSkillDialog open onOpenChange={vi.fn()} onUploadComplete={vi.fn()} />);
+    const input = document.querySelector('#skill-upload-input') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(['zip-content'], 'blocked.zip', { type: 'application/zip' })] },
+    });
+    fireEvent.click(screen.getByTestId('skill-upload-submit-button'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const displayed = String(vi.mocked(toast.error).mock.calls[0]?.[0] ?? '');
+    expect(displayed).toContain('Security Check Failed');
+    expect(displayed).not.toContain('安全检查未通过');
   });
 });

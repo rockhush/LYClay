@@ -128,6 +128,7 @@
         "copiedPath": "Path copied",
         "failedCopyPath": "Failed to copy path",
         "failedOpenActualFolder": "Failed to open actual skill folder",
+        "skillFolderUnauthorized": "Security policy did not authorize access to this skill folder. Open it from an authorized workspace, or select or reinstall the skill and try again.",
         "searchTimeoutError": "Search timed out, check network or contact administrator.",
         "installTimeoutError": "Installation timed out, check network or contact administrator.",
         "searchRateLimitError": "Search rate limit exceeded, please try again later.",
@@ -222,6 +223,8 @@
         "zipOnly": "Only ZIP files are supported",
         "securityBlocked": "Security Check Failed",
         "securityBlockedDesc": "The skill package has been blocked due to security concerns.",
+        "securityBlockedGuidance": "This package contains executable or unsafe files, so installation was stopped. Verify the source, remove the risky files, and upload it again.",
+        "securityUnknownFinding": "An unclassified security risk was detected",
         "securityWarning": "Security Advisory",
         "permissions": {
             "reviewTitle": "Review Skill Permissions",

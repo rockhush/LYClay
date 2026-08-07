@@ -129,7 +129,8 @@
         "unknown": "Unknown"
     },
     "errors": {
-        "isolatedAgentSetupTimeout": "Isolated agent setup timed out before runner start",
+        "jobExecutionTimeout": "The scheduled task timed out while waiting for the model. Try Run Now again later.",
+        "isolatedAgentSetupTimeout": "The agent timed out before execution started. Retry manually, or restart the app if it keeps happening.",
         "jobInterruptedByGatewayRestart": "Job interrupted by gateway restart",
         "channelRequired": "Channel is required",
         "scheduledTaskFailed": "Scheduled task failed",

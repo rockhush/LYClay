@@ -101,17 +101,36 @@ async function closeElectronApp(app: ElectronApplication, timeoutMs = 5_000): Pr
     return;
   }
 
-  try {
-    await app.close();
-    return;
-  } catch {
-    // Fall through to process kill if Playwright cannot close the app cleanly.
-  }
+  let playwrightCloseCompleted = false;
+  await Promise.race([
+    app.close()
+      .then(() => {
+        playwrightCloseCompleted = true;
+      })
+      .catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+  if (playwrightCloseCompleted) return;
 
   try {
     app.process().kill('SIGKILL');
   } catch {
     // Ignore process kill failures during e2e teardown.
+  }
+}
+
+async function removeE2eTempDir(path: string): Promise<void> {
+  try {
+    await rm(path, { recursive: true, force: true });
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : '';
+    if (code === 'EBUSY' || code === 'EPERM') {
+      console.warn(`[e2e] temp directory cleanup deferred because another process holds a lock: ${path}`);
+      return;
+    }
+    throw error;
   }
 }
 
@@ -161,7 +180,7 @@ export const test = base.extend<ElectronFixtures>({
     try {
       await provideHomeDir(homeDir);
     } finally {
-      await rm(homeDir, { recursive: true, force: true });
+      await removeE2eTempDir(homeDir);
     }
   },
 
@@ -170,7 +189,7 @@ export const test = base.extend<ElectronFixtures>({
     try {
       await provideUserDataDir(userDataDir);
     } finally {
-      await rm(userDataDir, { recursive: true, force: true });
+      await removeE2eTempDir(userDataDir);
     }
   },
 

@@ -128,6 +128,7 @@
         "copiedPath": "路径已复制",
         "failedCopyPath": "复制路径失败",
         "failedOpenActualFolder": "打开技能实际目录失败",
+        "skillFolderUnauthorized": "安全策略未授权访问该技能目录。请从已授权工作区打开，或重新选择、安装该技能后再试。",
         "searchTimeoutError": "搜索超时，请检查网络或联系管理员。",
         "installTimeoutError": "安装超时，请检查网络或联系管理员。",
         "searchRateLimitError": "搜索请求过于频繁，请稍后再试。",
@@ -223,6 +224,8 @@
         "zipOnly": "仅支持 ZIP 格式的文件",
         "securityBlocked": "安全检查未通过",
         "securityBlockedDesc": "该技能包因安全问题被拦截。",
+        "securityBlockedGuidance": "技能包中包含可能执行代码或不安全的文件，已停止安装。请确认文件来源，移除风险文件后重新上传。",
+        "securityUnknownFinding": "检测到未分类的安全风险",
         "securityWarning": "安全提醒",
         "permissions": {
             "reviewTitle": "确认 Skill 权限",

@@ -120,6 +120,11 @@ test.describe('Skill upload permission review', () => {
                 message: 'Suspicious URL in "SKILL.md": Suspicious keyword in URL: "login" — https://example.com/login',
               },
               {
+                level: 'error',
+                category: 'file-type',
+                message: 'Blocked executable file: "AbnormalReportAnalysis/scripts/analyze.js" (extension .js)',
+              },
+              {
                 level: 'warning',
                 category: 'file-type',
                 message: 'Potentially dangerous script file: "scripts/setup.sh" (extension .sh)',
@@ -144,6 +149,8 @@ test.describe('Skill upload permission review', () => {
       await page.getByTestId('skill-upload-submit-button').click();
 
       await expect(page.getByText(/SKILL\.md（包含高风险链接，已阻止上传）/)).toBeVisible();
+      await expect(page.getByText(/技能包中包含可能执行代码或不安全的文件，已停止安装/)).toBeVisible();
+      await expect(page.getByText(/AbnormalReportAnalysis\/scripts\/analyze\.js（\.js 禁止上传的可执行文件）/)).toBeVisible();
       await expect(page.getByText(/scripts\/setup\.sh（\.sh 脚本文件，仅提醒）/)).toBeVisible();
     } finally {
       await closeElectronApp(app);

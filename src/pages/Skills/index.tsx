@@ -45,6 +45,7 @@ import { useMinLoading } from '@/hooks/use-min-loading';
 import { cn } from '@/lib/utils';
 import { invokeIpc } from '@/lib/api-client';
 import { hostApiFetch } from '@/lib/host-api';
+import { resolveSkillFolderOpenError } from './folder-error-presentation';
 import { trackUiEvent } from '@/lib/telemetry';
 import { toast } from 'sonner';
 import type { Skill, MarketplaceSkill } from '@/types/skill';
@@ -1160,7 +1161,8 @@ export function Skills() {
         throw new Error(result.error || 'Failed to open folder');
       }
     } catch (err) {
-      toast.error(t('toast.failedOpenActualFolder') + ': ' + String(err));
+      console.error('[Skills] open actual folder failed', err);
+      toast.error(resolveSkillFolderOpenError(err, t));
     }
   }, [t]);
 

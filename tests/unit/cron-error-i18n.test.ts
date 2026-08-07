@@ -20,7 +20,39 @@ describe('translateCronError', () => {
     const t = i18n.getFixedT('zh', 'cron');
     expect(
       translateCronError('cron: isolated agent setup timed out before runner start', t),
-    ).toBe('隔离智能体在运行器启动前初始化超时');
+    ).toBe('智能体启动超时，本次任务还没有开始执行。请手动重试，仍然失败可重启应用后再试。');
+  });
+
+  it('translates model-call job timeout with phase-specific retry guidance', () => {
+    const t = i18n.getFixedT('zh', 'cron');
+    expect(
+      translateCronError('cron: job execution timed out (last phase: model-call-started)', t),
+    ).toBe('定时任务等待大模型回复超时，本次执行未完成。请稍后点击“立即运行”重试。');
+  });
+
+  it('does not describe non-model timeout phases as waiting for the model', () => {
+    const t = i18n.getFixedT('zh', 'cron');
+    const translated = translateCronError(
+      'cron: job execution timed out (last phase: delivery-started)',
+      t,
+    );
+
+    expect(translated).toContain('超时');
+    expect(translated).not.toContain('等待大模型回复');
+  });
+
+  it('translates phase-bearing isolated setup and pre-run stall variants', () => {
+    const t = i18n.getFixedT('zh', 'cron');
+    const expected = '智能体启动超时，本次任务还没有开始执行。请手动重试，仍然失败可重启应用后再试。';
+
+    expect(translateCronError(
+      'cron: isolated agent setup timed out before runner start (last phase: context-engine)',
+      t,
+    )).toBe(expected);
+    expect(translateCronError(
+      'aborted | cron: isolated agent run stalled before execution start (last phase: context-engine)',
+      t,
+    )).toBe(expected);
   });
 
   it('translates run failed wrapper errors', () => {

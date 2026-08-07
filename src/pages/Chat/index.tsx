@@ -28,7 +28,8 @@ import { mergeDelegationBindingsWithLiveStream } from '@/lib/subagent-delegation
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
 import { cn } from '@/lib/utils';
-import { isSuppressedRunError, isAbortErrorMessage, truncateRunErrorMessage, isBackendRunFailureError, areEquivalentUserMessageTexts, areEquivalentAssistantMessageTexts, assistantTextMatchesNormalized } from '@/stores/chat/helpers';
+import { isSuppressedRunError, isAbortErrorMessage, areEquivalentUserMessageTexts, areEquivalentAssistantMessageTexts, assistantTextMatchesNormalized } from '@/stores/chat/helpers';
+import { resolveChatRunErrorPresentation, resolveEmptyFinalRecoveryMessage } from '@/stores/chat/error-presentation';
 import { deriveHasActiveRunSignal, deriveIsExecuting, backendActivityForSession } from '@/stores/chat/user-turn-lifecycle';
 import {
   hasCommittedUserReplyInMessages,
@@ -45,7 +46,6 @@ import { isInterimSubagentWaitAssistantReply, isSubagentSessionKey, summarizeChi
 import {
   detectStalledChildDelegation,
   isChildDelegationStillActive,
-  isSubagentStalledErrorMessage,
   type ChildTranscriptRevision,
 } from '@/lib/subagent-delegation-watch';
 import { useStickToBottomInstant } from '@/hooks/use-stick-to-bottom-instant';
@@ -136,72 +136,6 @@ function shouldHideRunError(error: string | null | undefined): boolean {
   if (isSuppressedRunError(error)) return true;
   if (isAbortErrorMessage(error)) return true;
   return false;
-}
-
-function describeRunTermination(error: string | null): { title: string; detail: string } | null {
-  if (!error) return null;
-  if (shouldHideRunError(error)) return null;
-  const normalized = error.toLowerCase();
-  const backendStoppedMessage = i18n.t('chat:errors.backendRunStopped');
-  const runAbortedBySystemMessage = i18n.t('chat:errors.runAbortedBySystem');
-  if (error === backendStoppedMessage || isBackendRunFailureError(error)) {
-    return {
-      title: '后端服务已停止',
-      detail: error === backendStoppedMessage ? error : backendStoppedMessage,
-    };
-  }
-  if (error === runAbortedBySystemMessage) {
-    return {
-      title: '运行已中断',
-      detail: runAbortedBySystemMessage,
-    };
-  }
-  if (isSubagentStalledErrorMessage(error)) {
-    return {
-      title: '子任务无响应',
-      detail: error,
-    };
-  }
-  if (normalized.includes('llm idle timeout')) {
-    return {
-      title: 'Run ended',
-      detail: 'The model stopped returning output for a while, so this run was ended automatically.',
-    };
-  }
-  if (normalized.includes('modelresponsetimeoutlong') || normalized.includes('model response timeout')) {
-    return {
-      title: 'Run timed out',
-      detail: 'Waiting for the model follow-up timed out, so the run was closed and the generated content was kept.',
-    };
-  }
-  if (normalized.includes('rpc timeout')) {
-    return {
-      title: 'Run ended',
-      detail: 'Communication with the service timed out, so the current flow did not continue.',
-    };
-  }
-  if (normalized.includes('list index out of range') || normalized.includes('tool call stream error')) {
-    return {
-      title: '执行失败',
-      detail: '执行失败，请重试！',
-    };
-  }
-  if (normalized.includes('context overflow')) {
-    return {
-      title: '上下文过长',
-      detail: '会话消息过多导致超出模型上下文窗口限制。建议开始新会话，或手动 /reset（/new）以刷新上下文。',
-    };
-  }
-  if (normalized.includes('toolexecutiontimeout') || normalized.includes('tool execution')) {
-    return {
-      title: '工具执行超时',
-      detail: '工具长时间无响应，任务已自动停止。请检查命令是否卡住，或缩小任务范围后重试。',
-    };
-  }
-  return {
-    title: 'Run ended',
-    detail: truncateRunErrorMessage(error),
-  };
 }
 
 // Keep the last non-empty execution-graph snapshot per session/run outside
@@ -1244,7 +1178,16 @@ export function Chat() {
     i18n,
   ]);
   const latestRunTriggerIndex = userRunCards.length > 0 ? userRunCards[userRunCards.length - 1]!.triggerIndex : null;
-  const terminationSummary = useMemo(() => describeRunTermination(terminalRunError), [terminalRunError]);
+  const terminationSummary = useMemo(
+    () => shouldHideRunError(terminalRunError)
+      ? null
+      : resolveChatRunErrorPresentation(terminalRunError, t),
+    [terminalRunError, t],
+  );
+  const errorPresentation = useMemo(
+    () => resolveChatRunErrorPresentation(error, t),
+    [error, t],
+  );
   const replyTextOverrides = useMemo(() => {
     const map = new Map<number, string>();
     for (const card of userRunCards) {
@@ -1615,15 +1558,7 @@ export function Chat() {
                 <Info className="h-4 w-4 shrink-0" />
               )}
               <span className="truncate">
-                {emptyFinalRecovery.status === 'stale'
-                  ? 'Session appears stale after an empty response. Recover it, then retry manually.'
-                  : emptyFinalRecovery.status === 'waiting'
-                    ? 'Session state is still being confirmed. Wait a moment, stop the run, or start a new session.'
-                    : emptyFinalRecovery.status === 'recovered'
-                      ? 'Session recovered. Retry your last message when ready.'
-                      : emptyFinalRecovery.status === 'failed'
-                        ? `Session recovery unavailable: ${emptyFinalRecovery.reason}`
-                        : 'Recovering session...'}
+                {resolveEmptyFinalRecoveryMessage(emptyFinalRecovery.status, t)}
               </span>
             </p>
             <div className="flex shrink-0 items-center gap-2">
@@ -1632,7 +1567,7 @@ export function Chat() {
                   onClick={() => void recoverCurrentSession()}
                   className="text-xs px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                 >
-                  Recover session
+                  {t('errors.recoverSessionAction')}
                 </button>
               )}
               {emptyFinalRecovery.status === 'waiting' && (
@@ -1640,12 +1575,12 @@ export function Chat() {
                   onClick={() => void abortRun()}
                   className="text-xs px-3 py-1 rounded bg-muted-foreground/10 text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  Stop run
+                  {t('errors.stopRunAction')}
                 </button>
               )}
               {(emptyFinalRecovery.status === 'waiting' || emptyFinalRecovery.status === 'failed') && (
                 <button
-                  onClick={newSession}
+                  onClick={() => newSession()}
                   className="text-xs text-muted-foreground/70 hover:text-foreground underline"
                 >
                   {t('common:actions.newSession')}
@@ -1662,7 +1597,7 @@ export function Chat() {
           <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
             <p className="text-sm text-destructive flex items-center gap-2 min-w-0">
               <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              <span className="truncate">{truncateRunErrorMessage(error)}</span>
+              <span className="truncate">{errorPresentation?.detail ?? error}</span>
             </p>
             <div className="flex items-center gap-2 flex-shrink-0">
               {error.toLowerCase().includes('context overflow') && (

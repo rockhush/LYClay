@@ -129,7 +129,8 @@
         "unknown": "未知"
     },
     "errors": {
-        "isolatedAgentSetupTimeout": "隔离智能体在运行器启动前初始化超时",
+        "jobExecutionTimeout": "定时任务等待大模型回复超时，本次执行未完成。请稍后点击“立即运行”重试。",
+        "isolatedAgentSetupTimeout": "智能体启动超时，本次任务还没有开始执行。请手动重试，仍然失败可重启应用后再试。",
         "jobInterruptedByGatewayRestart": "任务因网关重启被中断",
         "channelRequired": "需要配置消息通道",
         "scheduledTaskFailed": "定时任务执行失败",

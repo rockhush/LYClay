@@ -28,6 +28,8 @@ import {
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
 import { useChatStore } from '@/stores/chat';
 import { useDigitalEmployeesStore } from '@/stores/digital-employees';
+import { resolveDigitalEmployeeInstallError } from './install-error';
+import { resolveDigitalEmployeeUninstallError } from './uninstall-error';
 import {
   groupInstalledEmployeesByMarketId,
   mapInstalledEmployeeToMyAgent,
@@ -560,7 +562,8 @@ export function DigitalEmployee() {
       toast.success(`“${agent.name}”安装成功`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch (error) {
-      toast.error(`安装失败：${error instanceof Error ? error.message : String(error)}`);
+      console.error('[DigitalEmployee] install failed', error);
+      toast.error(resolveDigitalEmployeeInstallError(error));
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } finally {
       setIsUpdating(false);
@@ -576,7 +579,8 @@ export function DigitalEmployee() {
       await prefetchMarketplaceCatalog();
       toast.success(`“${displayName}”已卸载`);
     } catch (error) {
-      toast.error(`卸载失败：${error instanceof Error ? error.message : String(error)}`);
+      console.error('[DigitalEmployee] uninstall failed', error);
+      toast.error(resolveDigitalEmployeeUninstallError(error));
     }
   }, [uninstallMarketplaceEmployee, prefetchMarketplaceCatalog]);
 
@@ -599,7 +603,8 @@ export function DigitalEmployee() {
       await prefetchMarketplaceCatalog();
       toast.success(`“${agent.name}”已卸载`);
     } catch (error) {
-      toast.error(`卸载失败：${error instanceof Error ? error.message : String(error)}`);
+      console.error('[DigitalEmployee] uninstall failed', error);
+      toast.error(resolveDigitalEmployeeUninstallError(error));
     }
   }, [uninstallMarketplaceEmployee, prefetchMarketplaceCatalog]);
 

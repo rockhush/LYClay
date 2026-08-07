@@ -4,6 +4,12 @@ function stripCronErrorPrefixes(error: string): string {
   let message = error.trim();
 
   for (;;) {
+    const abortedPrefix = message.match(/^aborted\s*\|\s*(.+)$/i);
+    if (abortedPrefix) {
+      message = abortedPrefix[1].trim();
+      continue;
+    }
+
     const runFailed = message.match(/^run failed:\s*(.+)$/i);
     if (runFailed) {
       message = runFailed[1].trim();
@@ -30,7 +36,15 @@ type CronErrorMatcher = {
 
 const CRON_ERROR_MATCHERS: CronErrorMatcher[] = [
   {
-    test: (message) => /^isolated agent setup timed out before runner start$/i.test(message),
+    test: (message) => /^job execution timed out\s*\(last phase:\s*model-call-started\)$/i.test(message),
+    key: 'errors.jobExecutionTimeout',
+  },
+  {
+    test: (message) => /^isolated agent setup timed out before runner start(?:\s*\(last phase:\s*[^)]+\))?$/i.test(message),
+    key: 'errors.isolatedAgentSetupTimeout',
+  },
+  {
+    test: (message) => /^isolated agent run stalled before execution start(?:\s*\(last phase:\s*[^)]+\))?$/i.test(message),
     key: 'errors.isolatedAgentSetupTimeout',
   },
   {

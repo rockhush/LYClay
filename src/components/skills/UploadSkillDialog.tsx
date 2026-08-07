@@ -28,7 +28,7 @@ function extractExt(f: Finding): string {
 }
 
 /** Translate an English security finding message to a concise Chinese label */
-function translateMessage(f: Finding): string {
+function translateMessage(f: Finding, t: TFunction<'skills'>): string {
   const file = extractFile(f);
   const ext = extractExt(f);
 
@@ -41,7 +41,7 @@ function translateMessage(f: Finding): string {
         }
         return ext ? `${file}（${ext} 禁止上传的可执行文件）` : `${file}（禁止上传的可执行文件）`;
       }
-      return f.message;
+      return t('upload.securityUnknownFinding');
     }
     case 'path-traversal': {
       // "Path traversal detected in ZIP entry: "../../etc/passwd""
@@ -129,16 +129,15 @@ function translateMessage(f: Finding): string {
     case 'scan-error':
       return '文件扫描异常';
     default: {
-      if (file) return file;
-      return f.message;
+      return t('upload.securityUnknownFinding');
     }
   }
 }
 
 /** Format a security finding as a concise, fully-Chinese one-liner */
-function formatFinding(f: Finding): string {
+function formatFinding(f: Finding, t: TFunction<'skills'>): string {
   const icon = f.level === 'error' ? '❌' : '⚠️';
-  const label = translateMessage(f);
+  const label = translateMessage(f, t);
   return `${icon} ${label}`;
 }
 
@@ -197,17 +196,6 @@ function permissionIcon(permission: string) {
   if (permission.startsWith('network:')) return <Globe2 className="h-3.5 w-3.5 shrink-0" />;
   if (permission.startsWith('commands:')) return <Terminal className="h-3.5 w-3.5 shrink-0" />;
   return <FileArchive className="h-3.5 w-3.5 shrink-0" />;
-}
-
-/** Translate backend error codes to user-friendly Chinese messages */
-function translateErrorCode(errorCode: string, fallback: string): string {
-  const map: Record<string, string> = {
-    ZIP_EMPTY: 'ZIP 文件为空，请检查文件是否正确',
-    ZIP_READ_FAILED: 'ZIP 文件读取失败，文件可能已损坏或不是有效的格式',
-    SECURITY_BLOCKED: '安全检查未通过',
-    CONTENT_BLOCKED: '技能内容安全检查未通过',
-  };
-  return map[errorCode] || fallback;
 }
 
 interface UploadSkillDialogProps {
@@ -310,7 +298,7 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
         // If there were warnings, show them with Chinese-friendly format
         if (result.validationResult && result.validationResult.summary.warnings > 0) {
           const warnings = result.validationResult.findings.filter(f => f.level === 'warning');
-          const warningLines = warnings.slice(0, 2).map(f => formatFinding(f)).join('\n');
+          const warningLines = warnings.slice(0, 2).map(f => formatFinding(f, t)).join('\n');
           toast.warning(
             `${t('upload.successDesc', { name: result.skillName || selectedFile.name })}\n${t('upload.securityWarning', 'Security warnings found')}\n${warningLines}`,
             { duration: 6000 },
@@ -323,6 +311,11 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
         onOpenChange(false);
         onUploadComplete?.();
       } else if (result.securityBlocked) {
+        console.warn('[SkillUpload] security check blocked installation', {
+          errorCode: result.errorCode,
+          error: result.error,
+          validationResult: result.validationResult,
+        });
         // Security violation — show detailed reason in Chinese
         const findings = result.validationResult?.findings;
         if (findings && findings.length > 0) {
@@ -330,21 +323,22 @@ export function UploadSkillDialog({ open, onOpenChange, onUploadComplete }: Uplo
           const warningFindings = findings.filter(f => f.level === 'warning');
           const lines: string[] = [];
           if (errorFindings.length > 0) {
-            lines.push(...errorFindings.slice(0, 3).map(f => formatFinding(f)));
+            lines.push(...errorFindings.slice(0, 3).map(f => formatFinding(f, t)));
           }
           if (warningFindings.length > 0) {
-            lines.push(...warningFindings.slice(0, 1).map(f => formatFinding(f)));
+            lines.push(...warningFindings.slice(0, 1).map(f => formatFinding(f, t)));
           }
           toast.error(
-            `${t('upload.securityBlocked')}\n${lines.join('\n')}`,
+            `${t('upload.securityBlocked')}\n${t('upload.securityBlockedGuidance')}\n${lines.join('\n')}`,
             { duration: 8000 },
           );
         } else {
-          // No detailed findings — show translated error by code
-          const msg = result.errorCode
-            ? translateErrorCode(result.errorCode, result.error || t('upload.failed'))
-            : result.error || t('upload.failed');
-          toast.error(msg);
+          // Older backends may only return a raw error string. Keep it in the
+          // diagnostic log above and show stable guidance without local paths.
+          toast.error(
+            `${t('upload.securityBlocked')}\n${t('upload.securityBlockedGuidance')}`,
+            { duration: 8000 },
+          );
         }
       } else {
         throw new Error(result.error || t('upload.failed'));

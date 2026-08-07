@@ -10,6 +10,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { ModalOverlay } from '@/components/ui/modal-overlay';
 import { cn } from '@/lib/utils';
@@ -23,6 +24,7 @@ import {
   resolveMessageDisplayTimestamp,
 } from './message-utils';
 import { isVisibleExecutionGraphToolName } from './task-visualization';
+import { resolveEmbeddedAgentFailureMessage } from '@/stores/chat/error-presentation';
 
 interface ChatMessageProps {
   message: RawMessage;
@@ -120,10 +122,12 @@ export const ChatMessage = memo(function ChatMessage({
   onEditMessage,
   showEditButton = true,
 }: ChatMessageProps) {
+  const { t } = useTranslation('chat');
   const isUser = message.role === 'user';
   const role = typeof message.role === 'string' ? message.role.toLowerCase() : '';
   const isToolResult = role === 'toolresult' || role === 'tool_result';
-  const text = textOverride ?? extractText(message);
+  const rawText = textOverride ?? extractText(message);
+  const text = isUser ? rawText : (resolveEmbeddedAgentFailureMessage(rawText, t) ?? rawText);
   // When text is folded into an ExecutionGraphCard, treat the message as
   // having no text for rendering purposes. Keeping this behind a flag (vs
   // blanking `text` outright) lets future hover affordances still read the

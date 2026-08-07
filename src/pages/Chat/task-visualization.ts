@@ -9,6 +9,12 @@ import {
   isTerminalAssistantMessage,
   isToolUseStopReasonAssistantMessage,
 } from '@/stores/chat/run-lifecycle';
+import i18n from '@/i18n';
+import {
+  isNonBlockingToolFailureStep,
+  isNonActionableRunEnabledStep,
+  resolveExecutionStepPresentation,
+} from './execution-step-presentation';
 
 export type {
   ChildDelegationBinding,
@@ -721,7 +727,17 @@ export function deriveTaskSteps({
   }
 
   const topology = attachTopology(steps);
-  return includeHiddenToolSteps ? topology : filterHiddenExecutionGraphSteps(topology);
+  const visibleSteps = includeHiddenToolSteps ? topology : filterHiddenExecutionGraphSteps(topology);
+  const hasSuccessfulExecutionResult = replyIndex >= 0
+    && isTerminalAssistantMessage(messages[replyIndex]);
+  const t = i18n.getFixedT(i18n.language, 'chat');
+  return visibleSteps
+    .filter((step) => !isNonActionableRunEnabledStep(step))
+    .filter((step) => !hasSuccessfulExecutionResult || !isNonBlockingToolFailureStep(step))
+    .map((step) => ({
+      ...step,
+      ...resolveExecutionStepPresentation(step, t),
+    }));
 }
 
 export function findLatestSpawnStepId(steps: TaskStep[]): string | null {
