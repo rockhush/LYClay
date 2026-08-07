@@ -19,6 +19,15 @@
     "searchMarketplace": "Search marketplace...",
     "searchButton": "Search",
     "loadingMine": "Loading your skills...",
+    "sort": "Custom order",
+    "sortDialog": {
+        "title": "Custom order",
+        "subtitle": "{{count}} skills total",
+        "hint": "Click and drag a skill to reorder",
+        "confirm": "Confirm",
+        "cancel": "Cancel",
+        "saved": "Order saved"
+    },
     "actions": {
         "enableVisible": "Enable All",
         "disableVisible": "Disable All",

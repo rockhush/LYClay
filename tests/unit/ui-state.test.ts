@@ -198,4 +198,94 @@ describe('ui-state persistence', () => {
 
     expect(normalized.digitalEmployees.retiredAgents).toEqual({});
   });
+
+  it('preserves mySkillOrder when skills patch only updates display metadata', () => {
+    const base = normalizeUiState({
+      skills: {
+        cachedDisplayMetadata: {
+          'skill-a': { name: 'Alpha' },
+        },
+        mySkillOrder: ['skill-c', 'skill-a', 'skill-b'],
+      },
+    });
+
+    const patch = {
+      skills: {
+        cachedDisplayMetadata: {
+          'skill-a': { name: 'Alpha', version: '2.0.0' },
+          'skill-b': { name: 'Beta' },
+        },
+      },
+    };
+
+    const merged = mergeUiState(base, patch);
+    expect(merged.skills.mySkillOrder).toEqual(['skill-c', 'skill-a', 'skill-b']);
+    expect(merged.skills.cachedDisplayMetadata['skill-a']?.version).toBe('2.0.0');
+  });
+
+  it('updates mySkillOrder when patch explicitly includes mySkillOrder', () => {
+    const base = normalizeUiState({
+      skills: {
+        cachedDisplayMetadata: {
+          'skill-a': { name: 'Alpha' },
+        },
+        mySkillOrder: ['skill-a', 'skill-b'],
+      },
+    });
+
+    const merged = mergeUiState(base, {
+      skills: {
+        mySkillOrder: ['skill-b', 'skill-a'],
+      },
+    });
+
+    expect(merged.skills.mySkillOrder).toEqual(['skill-b', 'skill-a']);
+    expect(merged.skills.cachedDisplayMetadata['skill-a']?.name).toBe('Alpha');
+  });
+
+  it('preserves myEmployeeOrder when digitalEmployees patch only updates display metadata', () => {
+    const base = normalizeUiState({
+      digitalEmployees: {
+        cachedDisplayMetadata: {
+          '7': { name: 'Alpha Employee' },
+        },
+        retiredAgents: {},
+        myEmployeeOrder: ['emp-c', 'emp-a', 'emp-b'],
+      },
+    });
+
+    const patch = {
+      digitalEmployees: {
+        cachedDisplayMetadata: {
+          '7': { name: 'Alpha Employee', version: '2.0.0' },
+          '8': { name: 'Beta Employee' },
+        },
+      },
+    };
+
+    const merged = mergeUiState(base, patch);
+    expect(merged.digitalEmployees.myEmployeeOrder).toEqual(['emp-c', 'emp-a', 'emp-b']);
+    expect(merged.digitalEmployees.cachedDisplayMetadata['7']?.version).toBe('2.0.0');
+  });
+
+  it('updates myEmployeeOrder when patch explicitly includes myEmployeeOrder', () => {
+    const base = normalizeUiState({
+      digitalEmployees: {
+        cachedDisplayMetadata: {
+          '7': { name: 'Alpha Employee' },
+        },
+        retiredAgents: {},
+        myEmployeeOrder: ['emp-a', 'emp-b'],
+      },
+    });
+
+    const merged = mergeUiState(base, {
+      digitalEmployees: {
+        myEmployeeOrder: ['emp-b', 'emp-a'],
+      },
+    });
+
+    expect(merged.digitalEmployees.myEmployeeOrder).toEqual(['emp-b', 'emp-a']);
+    expect(merged.digitalEmployees.cachedDisplayMetadata['7']?.name).toBe('Alpha Employee');
+  });
 });

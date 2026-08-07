@@ -12,6 +12,7 @@ import {
   User as UserIcon,
   AlertCircle,
   MessageSquare,
+  ArrowUpDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -26,6 +27,14 @@ import {
   seedCachedDigitalEmployeeDisplayMetadata,
 } from '@/lib/digital-employee-display-cache';
 import { scheduleUiStateSync } from '@/lib/ui-state-persistence';
+import {
+  applyDigitalEmployeeOrder,
+  loadDigitalEmployeeOrder,
+  mergeDigitalEmployeeOrder,
+  removeDigitalEmployeeIdFromOrder,
+  saveDigitalEmployeeOrder,
+} from '@/lib/digital-employee-order';
+import { CronJobSortDialog } from '@/components/cron/CronJobSortDialog';
 import { useChatStore } from '@/stores/chat';
 import { useDigitalEmployeesStore } from '@/stores/digital-employees';
 import { resolveDigitalEmployeeInstallError } from './install-error';
@@ -375,6 +384,8 @@ export function DigitalEmployee() {
   const [installFilter, setInstallFilter] = useState<'all' | 'installed' | 'uninstalled'>('all');
   const [sortBy, setSortBy] = useState<'download_count' | 'update_time'>('download_count');
   const [isUpdating, setIsUpdating] = useState(false);
+  const [showSortDialog, setShowSortDialog] = useState(false);
+  const [employeeOrder, setEmployeeOrder] = useState<string[]>([]);
   const {
     employees,
     marketplaceCatalog,
@@ -393,6 +404,12 @@ export function DigitalEmployee() {
   useEffect(() => {
     void fetchEmployees();
   }, [fetchEmployees]);
+
+  useEffect(() => {
+    void loadDigitalEmployeeOrder().then((order) => {
+      setEmployeeOrder(order);
+    });
+  }, []);
 
   useEffect(() => {
     void prefetchMarketplaceCatalog();
@@ -494,9 +511,27 @@ export function DigitalEmployee() {
       return mapInstalledEmployeeToMyAgent(employee, marketplace, cached);
     }), [employees, marketplaceCatalogBySlug, resolveCachedDisplay, marketplaceCatalogLoading]);
 
+  useEffect(() => {
+    if (myAgents.length === 0) return;
+    setEmployeeOrder((prev) => mergeDigitalEmployeeOrder(prev, myAgents));
+  }, [myAgents]);
+
+  const orderedMyAgents = useMemo(
+    () => applyDigitalEmployeeOrder(myAgents, employeeOrder),
+    [myAgents, employeeOrder],
+  );
+  const sortDialogOrder = useMemo(
+    () => mergeDigitalEmployeeOrder(employeeOrder, myAgents),
+    [employeeOrder, myAgents],
+  );
+  const sortDialogItems = useMemo(
+    () => myAgents.map((agent) => ({ id: agent.id, title: agent.name })),
+    [myAgents],
+  );
+
   const filteredMyAgents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return myAgents
+    return orderedMyAgents
       .filter((agent) => {
         if (!q) return true;
         return (
@@ -504,13 +539,8 @@ export function DigitalEmployee() {
           || agent.description.toLowerCase().includes(q)
           || agent.author.toLowerCase().includes(q)
         );
-      })
-      .sort((a, b) => {
-        if (a.isCore && !b.isCore) return -1;
-        if (!a.isCore && b.isCore) return 1;
-        return a.name.localeCompare(b.name);
       });
-  }, [myAgents, searchQuery]);
+  }, [orderedMyAgents, searchQuery]);
 
   const resolvedMarketAgents = useMemo(() => marketAgents.map((agent) => ({
     ...agent,
@@ -601,12 +631,15 @@ export function DigitalEmployee() {
     try {
       await uninstallMarketplaceEmployee({ instanceId: agent.id });
       await prefetchMarketplaceCatalog();
+      const nextOrder = removeDigitalEmployeeIdFromOrder(employeeOrder, agent.id);
+      setEmployeeOrder(nextOrder);
+      await saveDigitalEmployeeOrder(nextOrder);
       toast.success(`“${agent.name}”已卸载`);
     } catch (error) {
       console.error('[DigitalEmployee] uninstall failed', error);
       toast.error(resolveDigitalEmployeeUninstallError(error));
     }
-  }, [uninstallMarketplaceEmployee, prefetchMarketplaceCatalog]);
+  }, [employeeOrder, uninstallMarketplaceEmployee, prefetchMarketplaceCatalog]);
 
   const handleUpdateMarketAgent = useCallback(async (agent: MarketplaceAgent) => {
     const installedEmployee = installedEmployeesByMarketId.get(agent.slug)?.[0];
@@ -646,6 +679,16 @@ export function DigitalEmployee() {
             <h1 className="text-[20px] font-bold text-foreground leading-tight">岗位助理</h1>
             <p className="text-[13px] text-muted-foreground mt-1">发现、启用并管理面向你工作的岗位助理</p>
           </div>
+          <Button
+            variant="outline"
+            onClick={() => setShowSortDialog(true)}
+            disabled={employeesLoading || isUpdating || myAgents.length === 0}
+            data-testid="digital-employee-sort-button"
+            className="h-8 text-[13px] font-medium rounded-lg px-4 border-black/10 dark:border-white/10 bg-white dark:bg-transparent hover:bg-black/5 dark:hover:bg-white/5 shadow-sm text-foreground/80 hover:text-foreground transition-colors"
+          >
+            <ArrowUpDown className="h-3.5 w-3.5 mr-2" />
+            自定义排序
+          </Button>
         </div>
 
         <div className="flex items-center justify-between gap-6 mb-4 shrink-0">
@@ -908,6 +951,24 @@ export function DigitalEmployee() {
           <LoaderBadge />
         </div>
       )}
+
+      <CronJobSortDialog
+        open={showSortDialog}
+        onOpenChange={setShowSortDialog}
+        items={sortDialogItems}
+        initialOrder={sortDialogOrder}
+        title="自定义排序"
+        subtitle={`共 ${myAgents.length} 个岗位助理`}
+        hint="点击并拖动岗位助理标题即可调整顺序"
+        cancelLabel="取消"
+        confirmLabel="确定"
+        testIdPrefix="digital-employee-sort"
+        onConfirm={async (nextOrder) => {
+          setEmployeeOrder(nextOrder);
+          await saveDigitalEmployeeOrder(nextOrder);
+          toast.success('排序已保存');
+        }}
+      />
     </div>
   );
 }

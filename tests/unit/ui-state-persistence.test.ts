@@ -134,4 +134,41 @@ describe('ui-state persistence hydrate merge', () => {
       'agent:main:session-b': 3000,
     });
   });
+
+  it('restores mySkillOrder from disk when local snapshot has none', () => {
+    const diskWithSkillOrder: LyclawUiState = {
+      ...diskWithWorkspace,
+      skills: {
+        cachedDisplayMetadata: { 'skill-a': { name: 'Alpha' } },
+        mySkillOrder: ['skill-b', 'skill-a'],
+      },
+    };
+
+    const merged = mergeHydratedUiState(diskWithSkillOrder, emptyLocal, {
+      preferLocalWorkspaces: false,
+      preferLocalChat: false,
+    });
+
+    expect(merged.skills.mySkillOrder).toEqual(['skill-b', 'skill-a']);
+    expect(merged.skills.cachedDisplayMetadata['skill-a']?.name).toBe('Alpha');
+  });
+
+  it('restores myEmployeeOrder from disk when local snapshot has none', () => {
+    const diskWithEmployeeOrder: LyclawUiState = {
+      ...diskWithWorkspace,
+      digitalEmployees: {
+        cachedDisplayMetadata: { '7': { name: 'Alpha Employee' } },
+        retiredAgents: {},
+        myEmployeeOrder: ['emp-b', 'emp-a'],
+      },
+    };
+
+    const merged = mergeHydratedUiState(diskWithEmployeeOrder, emptyLocal, {
+      preferLocalWorkspaces: false,
+      preferLocalChat: false,
+    });
+
+    expect(merged.digitalEmployees.myEmployeeOrder).toEqual(['emp-b', 'emp-a']);
+    expect(merged.digitalEmployees.cachedDisplayMetadata['7']?.name).toBe('Alpha Employee');
+  });
 });

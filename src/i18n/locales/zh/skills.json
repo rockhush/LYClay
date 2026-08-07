@@ -19,6 +19,15 @@
     "searchMarketplace": "请输入技能的名称、描述、上传者",
     "searchButton": "搜索",
     "loadingMine": "正在加载我的技能...",
+    "sort": "自定义排序",
+    "sortDialog": {
+        "title": "自定义排序",
+        "subtitle": "共 {{count}} 个技能",
+        "hint": "点击并拖动技能标题即可调整顺序",
+        "confirm": "确定",
+        "cancel": "取消",
+        "saved": "排序已保存"
+    },
     "actions": {
         "enableVisible": "批量启用",
         "disableVisible": "批量禁用",

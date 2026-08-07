@@ -1,4 +1,6 @@
 import { hostApiFetch } from '@/lib/host-api';
+import { getPersistedDigitalEmployeeOrder, setPersistedDigitalEmployeeOrder } from '@/lib/digital-employee-order';
+import { getPersistedSkillOrder, setPersistedSkillOrder } from '@/lib/skill-order';
 import {
   getSkillDisplayCacheSnapshot,
   loadSkillDisplayCacheLegacy,
@@ -38,9 +40,11 @@ export interface LyclawUiState {
   skills: {
     cachedDisplayMetadata: Record<string, CachedSkillDisplayMetadata>;
     cachedDisplayVersions?: Record<string, string>;
+    mySkillOrder?: string[];
   };
   digitalEmployees: {
     cachedDisplayMetadata: Record<string, CachedDigitalEmployeeDisplayMetadata>;
+    myEmployeeOrder?: string[];
   } & RetiredDigitalEmployeesState;
 }
 
@@ -167,11 +171,15 @@ function readLocalDigitalEmployeesState(): LyclawUiState['digitalEmployees'] {
   return {
     ...getDigitalEmployeeDisplayCacheSnapshot(),
     ...getRetiredDigitalEmployeesSnapshot(),
+    myEmployeeOrder: [...getPersistedDigitalEmployeeOrder()],
   };
 }
 
 function readLocalSkillsState(): LyclawUiState['skills'] {
-  return getSkillDisplayCacheSnapshot();
+  return {
+    ...getSkillDisplayCacheSnapshot(),
+    mySkillOrder: [...getPersistedSkillOrder()],
+  };
 }
 
 function readLocalUiState(): LyclawUiState {
@@ -239,6 +247,7 @@ function mergeDigitalEmployeesState(
   const empty: LyclawUiState['digitalEmployees'] = {
     cachedDisplayMetadata: {},
     retiredAgents: {},
+    myEmployeeOrder: [],
   };
   const diskState = disk ?? empty;
   const localState = local ?? empty;
@@ -258,9 +267,13 @@ function mergeDigitalEmployeesState(
             ...(localState.retiredAgents ?? {}),
           },
         };
+  const diskOrder = diskState.myEmployeeOrder ?? [];
+  const localOrder = localState.myEmployeeOrder ?? [];
+  const myEmployeeOrder = diskOrder.length > 0 ? diskOrder : localOrder;
   return {
     cachedDisplayMetadata: { ...base.cachedDisplayMetadata },
     retiredAgents: { ...base.retiredAgents ?? {} },
+    myEmployeeOrder: [...myEmployeeOrder],
   };
 }
 
@@ -316,10 +329,33 @@ export function mergeHydratedUiState(
     updatedAt: Date.now(),
     workspaces,
     chat,
-    skills: disk?.skills && isNonEmptySkillsState(disk.skills)
-      ? disk.skills
-      : local.skills,
+    skills: mergeSkillsState(disk?.skills, local.skills),
     digitalEmployees: mergeDigitalEmployeesState(disk?.digitalEmployees, local.digitalEmployees),
+  };
+}
+
+function mergeSkillsState(
+  disk: LyclawUiState['skills'] | undefined,
+  local: LyclawUiState['skills'] | undefined,
+): LyclawUiState['skills'] {
+  const diskSkills = disk ?? { cachedDisplayMetadata: {}, mySkillOrder: [] };
+  const localSkills = local ?? { cachedDisplayMetadata: {}, mySkillOrder: [] };
+  const diskHasMetadata = isNonEmptySkillsState(diskSkills);
+  const localHasMetadata = isNonEmptySkillsState(localSkills);
+  const cachedDisplayMetadata = diskHasMetadata && !localHasMetadata
+    ? diskSkills.cachedDisplayMetadata
+    : localHasMetadata && !diskHasMetadata
+      ? localSkills.cachedDisplayMetadata
+      : {
+          ...diskSkills.cachedDisplayMetadata,
+          ...localSkills.cachedDisplayMetadata,
+        };
+  const diskOrder = diskSkills.mySkillOrder ?? [];
+  const localOrder = localSkills.mySkillOrder ?? [];
+  const mySkillOrder = diskOrder.length > 0 ? diskOrder : localOrder;
+  return {
+    cachedDisplayMetadata: { ...cachedDisplayMetadata },
+    mySkillOrder: [...mySkillOrder],
   };
 }
 
@@ -329,7 +365,10 @@ function mergeUiState(disk: LyclawUiState | null, local: LyclawUiState): LyclawU
   // ~/.openclaw/lyclaw-ui-state.json as the source of truth.
   const preferLocalWorkspaces = hasLocalWorkspacePersist() && isNonEmptyWorkspaceState(local.workspaces);
   const preferLocalChat = hasLocalChatPersist() && isNonEmptyChatState(local.chat);
-  return mergeHydratedUiState(disk, local, { preferLocalWorkspaces, preferLocalChat });
+  const merged = mergeHydratedUiState(disk, local, { preferLocalWorkspaces, preferLocalChat });
+  setPersistedSkillOrder(merged.skills.mySkillOrder ?? []);
+  setPersistedDigitalEmployeeOrder(merged.digitalEmployees.myEmployeeOrder ?? []);
+  return merged;
 }
 
 function applyUiStateToStores(state: LyclawUiState): void {
@@ -368,10 +407,14 @@ function buildUiStateFromStores(): LyclawUiState {
       sessionLastActivity: chat.sessionLastActivity,
       sessionCompressionState: chat.sessionCompressionState as unknown as Record<string, unknown>,
     },
-    skills: getSkillDisplayCacheSnapshot(),
+    skills: {
+      ...getSkillDisplayCacheSnapshot(),
+      mySkillOrder: [...getPersistedSkillOrder()],
+    },
     digitalEmployees: {
       ...getDigitalEmployeeDisplayCacheSnapshot(),
       ...getRetiredDigitalEmployeesSnapshot(),
+      myEmployeeOrder: [...getPersistedDigitalEmployeeOrder()],
     },
   };
 }

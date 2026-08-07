@@ -3,7 +3,7 @@
     "subtitle": "通过定时任务自动化 AI 工作流",
     "newTask": "新建任务",
     "refresh": "刷新",
-    "sort": "排序",
+    "sort": "自定义排序",
     "sortDialog": {
         "title": "自定义排序",
         "subtitle": "共 {{count}} 个任务",

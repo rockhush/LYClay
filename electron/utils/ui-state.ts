@@ -60,10 +60,12 @@ export interface LyclawUiState {
   };
   skills: {
     cachedDisplayMetadata: Record<string, CachedSkillDisplayMetadata>;
+    mySkillOrder: string[];
   };
   digitalEmployees: {
     cachedDisplayMetadata: Record<string, CachedDigitalEmployeeDisplayMetadata>;
     retiredAgents: Record<string, RetiredDigitalEmployeeRecord>;
+    myEmployeeOrder: string[];
   };
   cron: {
     jobOrder: string[];
@@ -94,10 +96,12 @@ export function createEmptyUiState(): LyclawUiState {
     },
     skills: {
       cachedDisplayMetadata: {},
+      mySkillOrder: [],
     },
     digitalEmployees: {
       cachedDisplayMetadata: {},
       retiredAgents: {},
+      myEmployeeOrder: [],
     },
     cron: {
       jobOrder: [],
@@ -147,7 +151,8 @@ function sanitizeRetiredDigitalEmployeeRecord(
   agentId: string,
   input: unknown,
 ): RetiredDigitalEmployeeRecord | null {
-  if (!agentId.trim() || !input || typeof input !== 'object' || Array.isArray(input)) return null;
+  if (!agentId.trim() || !agentId.trim().startsWith('employee-')) return null;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const raw = input as Record<string, unknown>;
   const normalizedAgentId = typeof raw.agentId === 'string' && raw.agentId.trim()
     ? raw.agentId.trim()
@@ -340,12 +345,14 @@ export function normalizeUiState(raw: unknown): LyclawUiState {
         sanitizeCachedSkillDisplayMetadataRecord(skillsObj.cachedDisplayMetadata),
         sanitizeStringRecord(skillsObj.cachedDisplayVersions),
       ),
+      mySkillOrder: sanitizeStringArray(skillsObj.mySkillOrder),
     },
     digitalEmployees: {
       cachedDisplayMetadata: sanitizeCachedDigitalEmployeeDisplayMetadataRecord(
         digitalEmployeesObj.cachedDisplayMetadata,
       ),
       retiredAgents: sanitizeRetiredDigitalEmployeeRecordMap(digitalEmployeesObj.retiredAgents),
+      myEmployeeOrder: sanitizeStringArray(digitalEmployeesObj.myEmployeeOrder),
     },
     cron: {
       jobOrder: sanitizeStringArray(cronObj.jobOrder),
@@ -431,22 +438,30 @@ export function mergeUiState(base: LyclawUiState, patch: Partial<LyclawUiState>)
     },
     skills: {
       cachedDisplayMetadata: replaceSkills
+        && Object.keys(normalizedPatch.skills.cachedDisplayMetadata).length > 0
         ? normalizedPatch.skills.cachedDisplayMetadata
         : { ...base.skills.cachedDisplayMetadata, ...normalizedPatch.skills.cachedDisplayMetadata },
+      mySkillOrder: replaceSkills && patch.skills != null && 'mySkillOrder' in patch.skills
+        ? normalizedPatch.skills.mySkillOrder
+        : base.skills.mySkillOrder,
     },
     digitalEmployees: {
       cachedDisplayMetadata: replaceDigitalEmployees
+        && Object.keys(normalizedPatch.digitalEmployees.cachedDisplayMetadata).length > 0
         ? normalizedPatch.digitalEmployees.cachedDisplayMetadata
         : {
             ...base.digitalEmployees.cachedDisplayMetadata,
             ...normalizedPatch.digitalEmployees.cachedDisplayMetadata,
           },
-      retiredAgents: replaceDigitalEmployees
+      retiredAgents: replaceDigitalEmployees && patch.digitalEmployees != null && 'retiredAgents' in patch.digitalEmployees
         ? normalizedPatch.digitalEmployees.retiredAgents
         : {
             ...base.digitalEmployees.retiredAgents,
             ...normalizedPatch.digitalEmployees.retiredAgents,
           },
+      myEmployeeOrder: replaceDigitalEmployees && patch.digitalEmployees != null && 'myEmployeeOrder' in patch.digitalEmployees
+        ? normalizedPatch.digitalEmployees.myEmployeeOrder
+        : base.digitalEmployees.myEmployeeOrder,
     },
     cron: {
       jobOrder: replaceCron

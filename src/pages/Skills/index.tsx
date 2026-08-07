@@ -29,6 +29,7 @@ import {
   Tag,
   Copy,
   Check,
+  ArrowUpDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -71,6 +72,13 @@ import {
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { flushUiStateSync, scheduleUiStateSync } from '@/lib/ui-state-persistence';
+import {
+  applySkillOrder,
+  loadSkillOrder,
+  mergeSkillOrder,
+  saveSkillOrder,
+} from '@/lib/skill-order';
+import { CronJobSortDialog } from '@/components/cron/CronJobSortDialog';
 import {
   backfillSkillDisplayCacheAliases,
   commitCachedSkillDisplayMetadata,
@@ -722,6 +730,8 @@ export function Skills() {
   const [batchToggleSkillSnapshot, setBatchToggleSkillSnapshot] = useState<Skill[]>([]);
   const [activeTab, setActiveTab] = useState<'mine' | 'market'>('mine');
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [showSortDialog, setShowSortDialog] = useState(false);
+  const [skillOrder, setSkillOrder] = useState<string[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
   const [displayCacheRevision, setDisplayCacheRevision] = useState(0);
   const [, setUpdateFailureRevision] = useState(0);
@@ -753,6 +763,12 @@ export function Skills() {
   }, [fetchSkills]);
 
   useEffect(() => {
+    void loadSkillOrder().then((order) => {
+      setSkillOrder(order);
+    });
+  }, []);
+
+  useEffect(() => {
     if (!isGatewayReady) return;
     void fetchSkills();
   }, [isGatewayReady, fetchSkills]);
@@ -770,6 +786,24 @@ export function Skills() {
   }, [isGatewayRunning]);
 
   const safeSkills = Array.isArray(skills) ? skills : [];
+
+  useEffect(() => {
+    if (safeSkills.length === 0) return;
+    setSkillOrder((prev) => mergeSkillOrder(prev, safeSkills));
+  }, [safeSkills]);
+
+  const orderedSafeSkills = useMemo(
+    () => applySkillOrder(safeSkills, skillOrder),
+    [safeSkills, skillOrder],
+  );
+  const sortDialogOrder = useMemo(
+    () => mergeSkillOrder(skillOrder, safeSkills),
+    [skillOrder, safeSkills],
+  );
+  const sortDialogItems = useMemo(
+    () => safeSkills.map((skill) => ({ id: skill.id, title: skill.name })),
+    [safeSkills],
+  );
   
   // Build lookup tables so installed skills can borrow author / download
   // count from the marketplace (技能广场) response when available.
@@ -791,7 +825,7 @@ export function Skills() {
   }), [safeSkills, marketplaceLookup]);
 
   const filteredSkills = useMemo(() => {
-    return safeSkills.filter((skill) => {
+    return orderedSafeSkills.filter((skill) => {
       const q = searchQuery.toLowerCase().trim();
       const matchesSearch =
         q.length === 0 ||
@@ -815,12 +849,8 @@ export function Skills() {
       }
 
       return matchesSearch && matchesSource;
-    }).sort((a, b) => {
-      if (a.isCore && !b.isCore) return -1;
-      if (!a.isCore && b.isCore) return 1;
-      return a.name.localeCompare(b.name);
     });
-  }, [safeSkills, searchQuery, selectedSource, marketplaceLookup]);
+  }, [orderedSafeSkills, searchQuery, selectedSource, marketplaceLookup]);
 
   const marketplaceCategoryOptions = [
     { key: '', label: '全部' },
@@ -1760,6 +1790,18 @@ export function Skills() {
                 </button>
                 <div className="my-1 mx-3 h-px bg-black/5 dark:bg-white/10" />
                 <button
+                  data-testid="skills-sort-action"
+                  onClick={() => {
+                    setShowSortDialog(true);
+                    setAddMenuOpen(false);
+                  }}
+                  disabled={isUpdating || safeSkills.length === 0}
+                  className="group w-full flex items-center gap-2 px-3.5 py-2 text-[13px] text-foreground hover:bg-[#FFF2E5] hover:text-[#FF922B] dark:hover:bg-[#FF922B]/15 transition-colors text-left disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground group-hover:text-[#FF922B] shrink-0 transition-colors" />
+                  {t('sort')}
+                </button>
+                <button
                   onClick={() => {
                     handleOpenBatchUpdate();
                   }}
@@ -2185,6 +2227,26 @@ export function Skills() {
         progress={batchToggleProgress}
         onConfirm={(selectedSkills) => {
           void handleBatchToggleConfirm(selectedSkills);
+        }}
+      />
+
+      <CronJobSortDialog
+        open={showSortDialog}
+        onOpenChange={setShowSortDialog}
+        items={sortDialogItems}
+        initialOrder={sortDialogOrder}
+        title={t('sortDialog.title')}
+        subtitle={t('sortDialog.subtitle', { count: safeSkills.length })}
+        hint={t('sortDialog.hint')}
+        cancelLabel={t('sortDialog.cancel')}
+        confirmLabel={t('sortDialog.confirm')}
+        maxWidthClass="max-w-[920px]"
+        gridColsClass="grid-cols-4"
+        testIdPrefix="skills-sort"
+        onConfirm={async (nextOrder) => {
+          setSkillOrder(nextOrder);
+          await saveSkillOrder(nextOrder);
+          toast.success(t('sortDialog.saved'));
         }}
       />
 
